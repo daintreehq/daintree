@@ -634,33 +634,67 @@ describe("ReviewHub", () => {
     });
 
     // The hub's Escape listener is on the document in the capture phase and
-    // stops propagation, so without an explicit stand-aside it would close the
-    // whole hub instead of the open disclosure.
-    it("leaves Escape to the checks disclosure while it is open", async () => {
+    // stops propagation, so without the disclosure claiming Escape first it
+    // would close the whole hub instead of the thing the user is looking at.
+    it("gives Escape to the open checks disclosure, then back to the hub", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+        prCiStatus: "failure",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+      getChecksMock.mockResolvedValue({
+        checks: [{ name: "build", status: "completed", conclusion: "failure" }],
+      });
+      const onClose = vi.fn();
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      await waitFor(() => screen.getByText("#42"));
+
+      fireEvent.click(screen.getByText("#42"));
+      const list = await screen.findByTestId("pr-checks-list");
+      expect(list.textContent).toContain("build");
+
+      // First Escape dismisses the disclosure and leaves the hub standing.
+      fireEvent.keyDown(document, { key: "Escape" });
+      await waitFor(() => expect(screen.queryByTestId("pr-checks-list")).toBeNull());
+      expect(onClose).not.toHaveBeenCalled();
+
+      // Second one reaches the hub as normal.
+      fireEvent.keyDown(document, { key: "Escape" });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    });
+
+    it("drops a previous PR's checks when the chip switches PRs", async () => {
       setWorktreePR({
         prNumber: 42,
         prUrl: "https://github.com/test/repo/pull/42",
         prState: "open",
       });
       getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
-      const onClose = vi.fn();
+      getChecksMock.mockResolvedValue({
+        checks: [{ name: "pr-42-check", status: "completed", conclusion: "failure" }],
+      });
 
-      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={onClose} />);
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
       await waitFor(() => screen.getByText("#42"));
+      fireEvent.click(screen.getByText("#42"));
+      await screen.findByText("pr-42-check");
 
-      // Stand in for the portalled popover content, which is what the hub's
-      // handler actually looks for.
-      const marker = document.createElement("div");
-      marker.setAttribute("data-pr-checks-popover", "");
-      marker.setAttribute("data-state", "open");
-      document.body.appendChild(marker);
+      // The linked PR changes underneath an open disclosure. Its snapshot must
+      // not survive to be read — or sent to an agent — under the new number.
+      setWorktreePR({
+        prNumber: 77,
+        prUrl: "https://github.com/test/repo/pull/77",
+        prState: "open",
+      });
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
-      fireEvent.keyDown(document, { key: "Escape" });
-      expect(onClose).not.toHaveBeenCalled();
-
-      marker.remove();
-      fireEvent.keyDown(document, { key: "Escape" });
-      expect(onClose).toHaveBeenCalledTimes(1);
+      await waitFor(() => screen.getByText("#77"));
+      expect(screen.queryByText("pr-42-check")).toBeNull();
     });
   });
 

@@ -2,37 +2,37 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { ExternalLink, Send } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useDohertyGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
 import { forgeClient } from "@/clients/forgeClient";
 import { cn } from "@/lib/utils";
 import { composePrChecksAgentText, preparePrChecks, type PrCheckRow } from "./prChecks";
 
 /**
- * Marks the open content for `ReviewHubContent`'s document-capture Escape
- * handler, which would otherwise close the whole hub out from under this
- * popover. Radix's own Escape listener is on the same target and phase but
- * registers later, so the hub's wins unless it stands aside.
+ * Set on the trigger — which is always in the hub's own DOM — while the
+ * disclosure is open, so `ReviewHubContent`'s document-capture Escape handler
+ * can stand aside. It cannot key off the content instead: that is portalled,
+ * and before the lazy Radix bundle lands there is no content at all.
  */
-export const PR_CHECKS_POPOVER_ATTR = "data-pr-checks-popover";
+export const PR_CHECKS_OPEN_ATTR = "data-pr-checks-open";
 
 const FOCUS_RING =
   "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary";
 
 const ROW_ACTION_CLASS = cn(
-  "inline-flex items-center justify-center shrink-0 p-1 rounded",
-  "text-daintree-text/60 hover:bg-tint/5 hover:text-text-primary transition-colors cursor-pointer",
+  "inline-flex items-center justify-center shrink-0 p-1 rounded-sm",
+  "text-text-secondary hover:bg-tint/5 hover:text-text-primary transition-colors cursor-pointer",
   FOCUS_RING
 );
 
 const FOOTER_BUTTON_CLASS = cn(
-  "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded text-2xs font-medium transition-colors",
+  "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-sm text-2xs font-medium transition-colors",
   "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-text-primary cursor-pointer",
   FOCUS_RING
 );
 
 const LINK_BUTTON_CLASS = cn(
-  "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded text-2xs transition-colors",
+  "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-sm text-2xs transition-colors",
   "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06] cursor-pointer",
   FOCUS_RING
 );
@@ -72,6 +72,10 @@ interface PrChecksPopoverProps {
  * commit, attempt or run id, so there is nothing to dedupe a background refresh
  * against — fetching on the click bounds staleness to the click, which is the
  * only bound the contract can honestly offer.
+ *
+ * Callers must key this component by worktree and PR number: a snapshot read
+ * for one pull request must never be repainted, or handed to an agent, under
+ * another's identity.
  */
 export function PrChecksPopover({
   worktreePath,
@@ -86,8 +90,8 @@ export function PrChecksPopover({
   const [sendHint, setSendHint] = useState<string | null>(null);
 
   // Monotonic, not a cancelled flag: the popover can be closed and reopened, and
-  // Refresh re-fired, while an earlier read is still in flight. Only the newest
-  // request may paint — or open the palette.
+  // the reload re-fired, while an earlier read is still in flight. Only the
+  // newest request may paint — or open the palette.
   const requestIdRef = useRef(0);
   // One deliberate hand-off of focus to the palette. See `.claude/rules/overlay-focus.md`:
   // a consumer that preventDefaults close-autofocus owns the outcome, which is what
@@ -139,6 +143,23 @@ export function PrChecksPopover({
     [runFetch]
   );
 
+  // Escape belongs to the disclosure while it is open, and neither the hub nor
+  // Radix can be relied on to give it up: the hub's own handler is a
+  // document-capture listener that closes the whole hub, and Radix is not
+  // listening at all until its lazy bundle has landed. Window capture runs
+  // ahead of both, so this is the one place the claim is unconditional.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      event.preventDefault();
+      event.stopPropagation();
+      handleOpenChange(false);
+    };
+    window.addEventListener("keydown", onKeyDown, { capture: true });
+    return () => window.removeEventListener("keydown", onKeyDown, { capture: true });
+  }, [open, handleOpenChange]);
+
   const handleSend = useCallback(() => {
     if (state.kind !== "loaded") return;
     const text = composePrChecksAgentText({ prNumber, prUrl, worktreePath, rows: state.rows });
@@ -151,8 +172,12 @@ export function PrChecksPopover({
     setSendHint("Open an agent terminal, then try sending again.");
   }, [state, prNumber, prUrl, worktreePath]);
 
-  const showSkeleton = useDohertyGate(state.kind === "loading");
+  // The floor is the half that stops a glitch: the Doherty gate only suppresses
+  // an early skeleton, and without a minimum dwell a read landing at 410ms puts
+  // one on screen for a single frame.
+  const showSkeleton = useSkeletonFloor(useDohertyGate(state.kind === "loading"));
   const failingCount = state.kind === "loaded" ? state.rows.filter((r) => r.isFailure).length : 0;
+  const reloadLabel = state.kind === "error" || state.kind === "no-pr" ? "Retry" : "Refresh";
 
   return (
     <Popover open={open} onOpenChange={handleOpenChange}>
@@ -160,6 +185,7 @@ export function PrChecksPopover({
         type="button"
         data-testid="pr-checks-trigger"
         aria-label={triggerLabel}
+        {...{ [PR_CHECKS_OPEN_ATTR]: open ? "true" : undefined }}
         className={cn("inline-flex items-center rounded-sm cursor-pointer", FOCUS_RING)}
       >
         {children}
@@ -169,7 +195,6 @@ export function PrChecksPopover({
         sideOffset={8}
         aria-label={`CI checks for pull request #${prNumber}`}
         data-testid="pr-checks-popover"
-        {...{ [PR_CHECKS_POPOVER_ATTR]: "" }}
         className="p-1 min-w-72 max-w-md text-xs"
         onCloseAutoFocus={(event) => {
           if (!suppressCloseFocusRef.current) return;
@@ -177,136 +202,160 @@ export function PrChecksPopover({
           event.preventDefault();
         }}
       >
-        {state.kind === "loading" && showSkeleton && (
-          <Skeleton label="Loading CI checks" className="flex flex-col gap-1.5 px-2 py-1.5">
-            {/* `immediate`: the Doherty gate above already absorbed the anti-flicker delay. */}
-            <SkeletonBone immediate className="h-3 w-40 rounded" />
-            <SkeletonBone immediate className="h-3 w-32 rounded" />
-            <SkeletonBone immediate className="h-3 w-36 rounded" />
+        {/* One live region, mounted empty before it ever has something to say —
+            a status node inserted already populated is announced unreliably.
+            It carries a summary, never the whole list, which the reader can
+            walk itself. */}
+        <p role="status" aria-live="polite" className="sr-only">
+          {describeState(state, prNumber, showSkeleton, sendHint)}
+        </p>
+
+        {showSkeleton ? (
+          // `inert`: the single region above owns announcements, so the
+          // skeleton must not add an `aria-busy` region of its own.
+          <Skeleton
+            inert
+            data-testid="pr-checks-skeleton"
+            label="Loading CI checks"
+            className="flex flex-col gap-1.5 px-2 py-1.5"
+          >
+            {/* `immediate`: the Doherty gate already absorbed the anti-flicker delay. */}
+            <SkeletonBone immediate className="h-3 w-40 rounded-sm" />
+            <SkeletonBone immediate className="h-3 w-32 rounded-sm" />
+            <SkeletonBone immediate className="h-3 w-36 rounded-sm" />
           </Skeleton>
-        )}
-
-        {state.kind === "error" && (
-          <ChecksNotice
-            testId="pr-checks-error"
-            message="Couldn't load checks."
-            actionLabel="Retry"
-            onAction={runFetch}
-          />
-        )}
-
-        {state.kind === "no-pr" && (
-          <ChecksNotice
-            testId="pr-checks-missing"
-            message={`Pull request #${prNumber} wasn't found.`}
-            actionLabel="Retry"
-            onAction={runFetch}
-          />
-        )}
-
-        {state.kind === "empty" && (
-          <ChecksNotice
-            testId="pr-checks-empty"
-            message={`No CI checks reported on pull request #${prNumber}.`}
-            actionLabel="Refresh"
-            onAction={runFetch}
-          />
-        )}
-
-        {state.kind === "loaded" && (
+        ) : (
           <>
-            <ul
-              data-testid="pr-checks-list"
-              className="flex flex-col gap-0.5 max-h-64 overflow-y-auto"
-            >
-              {state.rows.map((row) => {
-                const { Icon, toneClass, label } = row.outcome;
-                const detailsUrl = row.detailsUrl;
-                return (
-                  <li key={row.key} className="flex items-start gap-2 px-2 py-1.5 rounded">
-                    <Icon
-                      className={cn("w-3.5 h-3.5 shrink-0 mt-px", toneClass)}
-                      aria-hidden="true"
-                    />
-                    <span className="min-w-0 flex-1">
-                      <span className="font-medium text-text-primary break-words">{row.name}</span>
-                      <span className="block text-text-secondary">
-                        {/* Requiredness is only stated when the provider reported it —
-                            an omitted `required` is unknown, not optional. */}
-                        {row.required === true ? `${label} · Required` : label}
-                      </span>
-                    </span>
-                    {detailsUrl && (
-                      <button
-                        type="button"
-                        onClick={() => onOpenExternal(detailsUrl)}
-                        aria-label={`Open details for ${row.name}`}
-                        className={ROW_ACTION_CLASS}
-                      >
-                        <ExternalLink className="w-3 h-3" aria-hidden="true" />
-                      </button>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-
-            {sendHint && (
-              <p
-                role="status"
-                data-testid="pr-checks-send-hint"
-                className="px-2 pt-1.5 text-2xs text-text-secondary"
-              >
-                {sendHint}
-              </p>
+            {state.kind === "error" && (
+              <ChecksNotice testId="pr-checks-error" message="Couldn't load checks." />
             )}
-
-            <div className="flex items-center justify-between gap-2 px-2 pt-1.5 pb-0.5 mt-1 border-t border-divider">
-              <button type="button" onClick={runFetch} className={LINK_BUTTON_CLASS}>
-                Refresh
-              </button>
-              {failingCount > 0 && (
-                <button
-                  type="button"
-                  data-testid="pr-checks-send"
-                  onClick={handleSend}
-                  className={FOOTER_BUTTON_CLASS}
-                >
-                  <Send className="w-3 h-3" aria-hidden="true" />
-                  Send to agent
-                </button>
-              )}
-            </div>
+            {state.kind === "no-pr" && (
+              <ChecksNotice
+                testId="pr-checks-missing"
+                message={`Pull request #${prNumber} wasn't found.`}
+              />
+            )}
+            {state.kind === "empty" && (
+              <ChecksNotice
+                testId="pr-checks-empty"
+                message={`No CI checks reported on pull request #${prNumber}.`}
+              />
+            )}
+            {state.kind === "loaded" && (
+              <ul
+                data-testid="pr-checks-list"
+                className="flex flex-col gap-0.5 max-h-64 overflow-y-auto"
+              >
+                {state.rows.map((row) => {
+                  const { Icon, toneClass } = row.outcome;
+                  const detailsUrl = row.detailsUrl;
+                  const outcomeText = describeOutcome(row);
+                  return (
+                    <li key={row.key} className="flex items-start gap-2 px-2 py-1.5 rounded-sm">
+                      <Icon
+                        className={cn("w-3.5 h-3.5 shrink-0 mt-px", toneClass)}
+                        aria-hidden="true"
+                      />
+                      <span className="min-w-0 flex-1">
+                        <span className="font-medium text-text-primary break-words">
+                          {row.name}
+                        </span>
+                        <span className="block text-text-secondary">{outcomeText}</span>
+                      </span>
+                      {detailsUrl && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenExternal(detailsUrl)}
+                          // Matrix jobs repeat names, so the name alone leaves two
+                          // buttons identically labelled when a reader tabs the list
+                          // without hearing the rows between them.
+                          aria-label={`Open details for ${row.name} (${outcomeText})`}
+                          className={ROW_ACTION_CLASS}
+                        >
+                          <ExternalLink className="w-3 h-3" aria-hidden="true" />
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </>
         )}
+
+        {sendHint && (
+          <p data-testid="pr-checks-send-hint" className="px-2 pt-1.5 text-2xs text-text-secondary">
+            {sendHint}
+          </p>
+        )}
+
+        {/* Mounted in every state on purpose. Re-reading used to unmount the
+            control that triggered it, which for a keyboard user dropped focus
+            onto `document.body` inside an open popover. */}
+        <div className="flex items-center justify-between gap-2 px-2 pt-1.5 pb-0.5 mt-1 border-t border-divider">
+          <button
+            type="button"
+            data-testid="pr-checks-reload"
+            onClick={runFetch}
+            className={LINK_BUTTON_CLASS}
+          >
+            {reloadLabel}
+          </button>
+          {failingCount > 0 && (
+            <button
+              type="button"
+              data-testid="pr-checks-send"
+              onClick={handleSend}
+              className={FOOTER_BUTTON_CLASS}
+            >
+              <Send className="w-3 h-3" aria-hidden="true" />
+              Send to agent
+            </button>
+          )}
+        </div>
       </PopoverContent>
     </Popover>
   );
 }
 
-function ChecksNotice({
-  testId,
-  message,
-  actionLabel,
-  onAction,
-}: {
-  testId: string;
-  message: string;
-  actionLabel: string;
-  onAction: () => void;
-}) {
+/** Requiredness is only stated where the provider reported it — omitted is unknown, not optional. */
+function describeOutcome(row: PrCheckRow): string {
+  if (row.required === true) return `${row.outcome.label} · Required`;
+  if (row.required === false) return `${row.outcome.label} · Not required`;
+  return row.outcome.label;
+}
+
+function describeState(
+  state: ChecksState,
+  prNumber: number,
+  showSkeleton: boolean,
+  sendHint: string | null
+): string {
+  if (sendHint) return sendHint;
+  if (showSkeleton) return "Loading CI checks";
+  switch (state.kind) {
+    case "error":
+      return "Couldn't load checks.";
+    case "no-pr":
+      return `Pull request #${prNumber} wasn't found.`;
+    case "empty":
+      return `No CI checks reported on pull request #${prNumber}.`;
+    case "loaded": {
+      const failing = state.rows.filter((row) => row.isFailure).length;
+      return `${state.rows.length} CI checks, ${failing} failing`;
+    }
+    default:
+      return "";
+  }
+}
+
+function ChecksNotice({ testId, message }: { testId: string; message: string }) {
+  // Inline and quiet, never a toast: this is a drill-down the user opened, and
+  // its failure is only meaningful inside the surface they opened. The live
+  // region above does the announcing; the footer below carries the recovery.
   return (
-    // Inline and polite, never a toast: this is a drill-down the user opened,
-    // and its failure is only meaningful inside the surface they opened.
-    <div
-      role="status"
-      data-testid={testId}
-      className="flex items-center justify-between gap-3 px-2 py-1.5"
-    >
-      <span className="text-text-secondary">{message}</span>
-      <button type="button" onClick={onAction} className={LINK_BUTTON_CLASS}>
-        {actionLabel}
-      </button>
+    <div data-testid={testId} className="px-2 py-1.5 text-text-secondary">
+      {message}
     </div>
   );
 }

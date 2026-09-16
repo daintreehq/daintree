@@ -128,9 +128,18 @@ export function getCheckOutcomeVisual(check: ForgeCheckRun): {
  * escape and control vocabulary first, then collapse the whitespace
  * `sanitizeErrorText` deliberately preserves (HT/LF/CR): a name carrying twenty
  * newlines is not dangerous, but it does turn one row into a wall.
+ *
+ * `$` and a backtick go too, and that one is not cosmetic. The hand-off is
+ * delivered by the send-to-agent palette, which falls back to a raw
+ * carriage-return-terminated write when the target pane is not in bracketed
+ * paste mode (`sendSelectionToTarget`) — a shell then executes each line. The
+ * name travels inside a double-quoted JSON string, and command substitution is
+ * the only thing that still expands there, so removing its two introducers
+ * removes the primitive. Losing a literal `$` from a job name is a trade worth
+ * making.
  */
 export function sanitizeCheckName(raw: string): string {
-  const collapsed = sanitizeErrorText(raw).replace(/\s+/g, " ").trim();
+  const collapsed = sanitizeErrorText(raw).replace(/[$`]/g, "").replace(/\s+/g, " ").trim();
   if (!collapsed) return "Unnamed check";
   return boundedErrorText(collapsed, CHECK_NAME_LIMIT);
 }
@@ -144,8 +153,10 @@ export function sanitizeCheckName(raw: string): string {
  */
 export function safeDetailsUrl(raw: string | undefined): string | undefined {
   if (!raw || raw.length > DETAILS_URL_LIMIT) return undefined;
-  // Anything the sanitizer would have removed has no business in a URL.
-  if (sanitizeErrorText(raw) !== raw) return undefined;
+  // Anything the sanitizer would have removed has no business in a URL — and
+  // nor has the whitespace it deliberately keeps: the URL parser silently
+  // deletes an embedded tab or newline, which is repair, not validation.
+  if (sanitizeErrorText(raw) !== raw || /\s/.test(raw)) return undefined;
   let parsed: URL;
   try {
     parsed = new URL(raw);
@@ -154,7 +165,11 @@ export function safeDetailsUrl(raw: string | undefined): string | undefined {
   }
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
   if (parsed.username || parsed.password) return undefined;
-  return parsed.toString();
+  const serialized = parsed.toString();
+  // Percent-encoding can multiply the length several times over, so the cap has
+  // to hold on what is actually handed to the OS opener, not on what arrived.
+  if (serialized.length > DETAILS_URL_LIMIT) return undefined;
+  return serialized;
 }
 
 /**
@@ -247,6 +262,8 @@ export function composePrChecksAgentText({
     "",
     JSON.stringify(payload, null, 2),
     "",
-    "Logs are not included — fetch them yourself (on GitHub: `gh run view --log-failed`), and check the results still match the PR's current head. Do not commit, push, merge, or rerun CI unless I ask.",
+    // No backticks in this prose, deliberately. The same raw-write fallback that
+    // makes a check name dangerous would expand our own command example too.
+    "Logs are not included — fetch them yourself (on GitHub, gh run view --log-failed), and check the results still match the PR's current head. Do not commit, push, merge, or rerun CI unless I ask.",
   ].join("\n");
 }

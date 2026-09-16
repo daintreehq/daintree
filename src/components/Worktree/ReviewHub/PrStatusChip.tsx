@@ -47,6 +47,10 @@ export function PrStatusChip({
         {/* Available whatever the roll-up says, including when it says nothing:
             an absent roll-up is not evidence that there are no checks. */}
         <PrChecksPopover
+          // Identity key, not decoration: a snapshot read for one pull request
+          // must never be repainted — or handed to an agent — under another's
+          // number. Remounting is the only reset that cannot be half-applied.
+          key={`${worktreePath}:${worktreePR.prNumber}`}
           worktreePath={worktreePath}
           prNumber={worktreePR.prNumber}
           prUrl={worktreePR.prUrl}

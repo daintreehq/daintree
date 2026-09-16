@@ -65,7 +65,7 @@ import {
 } from "./useReviewHubStagingActions";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
-import { PR_CHECKS_POPOVER_ATTR } from "./PrChecksPopover";
+import { PR_CHECKS_OPEN_ATTR } from "./PrChecksPopover";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
@@ -1624,12 +1624,11 @@ export function ReviewHubContent({
 
   const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (e.key === "Escape") {
-      // This listener is on the document in the CAPTURE phase, and Radix's own
-      // Escape handling is too — but it registers when a layer opens, i.e. after
-      // this one, so this handler runs first and its stopPropagation would close
-      // the whole hub instead of the disclosure the user is actually looking at.
-      // Stand aside while the PR checks popover is open and let Radix have it.
-      if (document.querySelector(`[${PR_CHECKS_POPOVER_ATTR}][data-state="open"]`)) return;
+      // Backstop. The checks disclosure claims Escape for itself on a
+      // window-capture listener, which runs ahead of this one — but this
+      // listener closes the entire hub, so it stands aside on the trigger's own
+      // open marker rather than relying on that ordering alone.
+      if (document.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
       e.preventDefault();
       e.stopPropagation();
       if (selectedFile) {
