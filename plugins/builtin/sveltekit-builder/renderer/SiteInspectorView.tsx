@@ -344,6 +344,13 @@ function SelectionBody({
           <p className="text-xs text-text-secondary">Source isn't available in preview-only mode</p>
         </section>
       );
+    case "settling":
+      return (
+        <InspectorNotice tone="warning" title="This file just changed — select again" role="status">
+          The preview may still be showing the old version. Wait a moment for it to update, then
+          click the element again.
+        </InspectorNotice>
+      );
     case "lost":
       return (
         <InspectorNotice tone="warning" title="Selection changed — select again" role="status">

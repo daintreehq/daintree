@@ -1,11 +1,14 @@
 import { useId, useRef, useState, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 
 /**
- * Literal text, edited as plain text. Enter saves, Escape puts the original
- * back; nothing is written until one of those, so a stray click away never
- * becomes a source change.
+ * Literal text, edited as plain text and written verbatim — main's decoded
+ * value includes its whitespace, so nothing is trimmed on the way back. Enter
+ * saves (Cmd or Ctrl+Enter for multi-line text), Escape puts the original back; nothing
+ * is written until one of those, so a stray click away never becomes a source
+ * change.
  */
 export function TextEditor({
   text,
@@ -30,19 +33,19 @@ export function TextEditor({
   };
 
   const save = () => {
-    const next = draft.trim();
-    if (next.length === 0) return;
-    if (next === text) {
+    if (draft.trim().length === 0) return;
+    if (draft === text) {
       cancel();
       return;
     }
-    onSave(next);
+    onSave(draft);
   };
 
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+  const multiline = text.includes("\n");
+  const onKeyDown = (event: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     // Keys typed into the field belong to the field, not to panel shortcuts.
     event.stopPropagation();
-    if (event.key === "Enter") {
+    if (event.key === "Enter" && (!multiline || event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       if (editable && !saving) save();
     } else if (event.key === "Escape") {
@@ -74,18 +77,34 @@ export function TextEditor({
   const empty = draft.trim().length === 0;
   return (
     <div className="flex flex-col gap-2">
-      <Input
-        density="compact"
-        aria-label="Text"
-        value={draft}
-        disabled={!editable && !saving}
-        readOnly={saving}
-        invalid={empty}
-        aria-describedby={empty ? errorId : undefined}
-        autoFocus
-        onChange={(event) => setDraft(event.target.value)}
-        onKeyDown={onKeyDown}
-      />
+      {multiline ? (
+        <Textarea
+          density="compact"
+          aria-label="Text"
+          value={draft}
+          disabled={!editable && !saving}
+          readOnly={saving}
+          invalid={empty}
+          aria-describedby={empty ? errorId : undefined}
+          autoFocus
+          rows={Math.min(8, text.split("\n").length)}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      ) : (
+        <Input
+          density="compact"
+          aria-label="Text"
+          value={draft}
+          disabled={!editable && !saving}
+          readOnly={saving}
+          invalid={empty}
+          aria-describedby={empty ? errorId : undefined}
+          autoFocus
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={onKeyDown}
+        />
+      )}
       {empty ? (
         <p id={errorId} className="text-xs text-status-error">
           Text can't be empty
@@ -104,7 +123,9 @@ export function TextEditor({
         <Button variant="ghost" size="xs" onClick={cancel}>
           Cancel
         </Button>
-        <span className="text-3xs text-text-secondary">Enter to save, Esc to cancel</span>
+        <span className="text-3xs text-text-secondary">
+          {multiline ? "Cmd or Ctrl+Enter to save, Esc to cancel" : "Enter to save, Esc to cancel"}
+        </span>
       </div>
     </div>
   );

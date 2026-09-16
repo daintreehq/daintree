@@ -1,6 +1,5 @@
 import type { SitePreviewDetachReason } from "@shared/types/ipc/sitePreview";
 import type { EditSupport, UnsupportedReason } from "../shared/model.js";
-import type { TextShapeReason } from "./sourceShape.js";
 import type { StaleReason } from "./inspectorController.js";
 
 export const UNSUPPORTED_REASON_COPY: Record<UnsupportedReason, string> = {
@@ -20,15 +19,6 @@ export const SUPPORT_LABEL: Record<EditSupport, string> = {
   direct: "Editable",
   "agent-assisted": "Needs an agent",
   "inspect-only": "Inspect only",
-};
-
-export const TEXT_SHAPE_COPY: Record<TextShapeReason, string> = {
-  "no-content": "This element has no text of its own",
-  "nested-markup": "The text is mixed with other markup",
-  expression: "The text includes an expression",
-  entity: "The text uses HTML entities — edit it in source",
-  empty: "This element has no text of its own",
-  multiline: "The text spans several lines — edit it in source",
 };
 
 export const STALE_COPY: Record<StaleReason, { title: string; detail: string }> = {

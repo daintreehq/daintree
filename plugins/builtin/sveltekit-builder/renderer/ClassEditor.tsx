@@ -3,7 +3,7 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Input } from "@/components/ui/input";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
-import { isValidClassToken, type ClassCompletion } from "./inspectorController.js";
+import { splitClassTokens, type ClassCompletion } from "./inspectorController.js";
 
 const COMPLETION_DEBOUNCE_MS = 120;
 const MAX_VISIBLE_CANDIDATES = 8;
@@ -15,9 +15,9 @@ interface Candidate {
 
 /**
  * The element's class tokens as removable chips, plus an add field completed
- * from the project's own Tailwind vocabulary. A token the project can't
- * generate is refused here, by name, rather than written and left to fail
- * silently in the page.
+ * from the project's own Tailwind vocabulary. Suggestions only suggest: a
+ * token outside them is said to be unlisted and written as typed, and any
+ * refusal comes from main, by name.
  */
 export function ClassEditor({
   tokens,
@@ -145,23 +145,15 @@ function ClassAddField({
   };
 
   const submit = async (value: string) => {
-    const next = value
-      .trim()
-      .split(/\s+/)
-      .filter((token) => token.length > 0);
+    const next = splitClassTokens(value);
     if (next.length === 0 || !editable || saving) return;
-    const invalid = next.find((token) => !isValidClassToken(token));
-    if (invalid) {
-      setError(`"${invalid}" isn't a valid class name`);
-      return;
-    }
     const duplicate = next.find((token) => tokens.includes(token));
     if (duplicate) {
       setError(`${duplicate} is already on this element`);
       return;
     }
-    // Suggestions are a bounded search, not a validity oracle: main compiles the
-    // candidate and refuses one Tailwind can't generate, by name.
+    // Suggestions are a bounded search, not a validity oracle, and nothing here
+    // or in main asks Tailwind: an unlisted token is written exactly as typed.
     setError(null);
     close();
     const saved = await onAdd(next);
@@ -246,7 +238,7 @@ function ClassAddField({
         <p className="text-xs text-text-secondary">No suggestions: {current.unavailable}</p>
       ) : current && !current.exact && !showList ? (
         <p className="text-xs text-text-secondary">
-          Not in this project's class list — it's checked when you add it
+          Not in the suggestion list — it'll be written as typed
         </p>
       ) : null}
     </div>
