@@ -1,3 +1,4 @@
+import { majorVersion } from "../project/versions.js";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
@@ -151,8 +152,11 @@ export async function loadTailwindDesignSystem(
   }
 
   const version = typeof manifest.version === "string" ? manifest.version : "";
-  const major = Number.parseInt(version.split(".")[0] ?? "", 10);
-  if (!Number.isInteger(major)) {
+  // One version parser across the plugin. Reading the major with a bare
+  // `split(".")` accepted `4.garbage` and rejected `v4.1.2`, which disagreed
+  // with the project model's verdict on the very same installed package.
+  const major = majorVersion(version);
+  if (major === null) {
     return unavailable(`tailwindcss reports an unreadable version ${JSON.stringify(version)}`);
   }
   if (major !== SUPPORTED_BASELINE.tailwindMajor) {

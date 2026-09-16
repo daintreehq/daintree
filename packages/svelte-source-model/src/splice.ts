@@ -50,6 +50,14 @@ export function applyReplacements(source: string, replacements: readonly Replace
   if (replacements.length === 0) return source;
 
   for (const r of replacements) {
+    // A fractional or non-finite offset slices silently and unpredictably, so
+    // it is rejected here rather than producing a plausible-looking wrong file.
+    if (!Number.isInteger(r.start) || !Number.isInteger(r.end)) {
+      throw new SpliceError(
+        "OUT_OF_BOUNDS",
+        `Replacement offsets must be integers; received [${r.start}, ${r.end}).`
+      );
+    }
     if (r.end < r.start) {
       throw new SpliceError(
         "INVERTED_RANGE",
@@ -71,17 +79,24 @@ export function applyReplacements(source: string, replacements: readonly Replace
     .map((r, index) => ({ ...r, index }))
     .sort((a, b) => a.start - b.start || a.end - b.end || a.index - b.index);
 
-  for (let i = 1; i < ordered.length; i++) {
-    const previous = ordered[i - 1]!;
-    const current = ordered[i]!;
+  // Track the furthest byte any earlier replacement claimed, not just the
+  // previous entry's. Comparing neighbours alone lets a zero-width insertion
+  // sit between two conflicting replacements and break the chain, so both are
+  // applied and the overlap goes unreported.
+  let claimedThrough = -1;
+  let claimedBy: Replacement | null = null;
+  for (const current of ordered) {
     // Zero-width ranges claim no bytes, so they can never overlap anything.
-    const previousClaimsBytes = previous.end > previous.start;
-    const currentClaimsBytes = current.end > current.start;
-    if (previousClaimsBytes && currentClaimsBytes && current.start < previous.end) {
+    if (current.end === current.start) continue;
+    if (claimedBy !== null && current.start < claimedThrough) {
       throw new SpliceError(
         "OVERLAPPING_RANGES",
-        `Replacement [${current.start}, ${current.end}) overlaps [${previous.start}, ${previous.end}).`
+        `Replacement [${current.start}, ${current.end}) overlaps [${claimedBy.start}, ${claimedBy.end}).`
       );
+    }
+    if (current.end > claimedThrough) {
+      claimedThrough = current.end;
+      claimedBy = current;
     }
   }
 
@@ -99,11 +114,15 @@ export function applyReplacements(source: string, replacements: readonly Replace
 }
 
 /**
- * True when applying `replacements` would leave `source` byte-identical.
+ * True when every replacement writes back exactly the bytes it covers.
  *
  * A no-op edit must not reach disk: it would churn the file's revision, wake
  * the dev server, and add a history entry the user cannot distinguish from a
  * real change.
+ *
+ * This is a **sufficient** test, not a complete one. Two replacements can each
+ * differ from the bytes they cover and still cancel out, which this reports as
+ * a change. A caller that needs certainty compares the spliced result instead.
  */
 export function isNoOp(source: string, replacements: readonly Replacement[]): boolean {
   return replacements.every((r) => source.slice(r.start, r.end) === r.text);

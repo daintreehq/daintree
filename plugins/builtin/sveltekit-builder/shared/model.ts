@@ -315,8 +315,3 @@ export const SUPPORTED_BASELINE = {
   kitMajor: 2,
   tailwindMajor: 4,
 } as const;
-
-/** Files whose markup is real but never user-editable. */
-export function isGeneratedSourceFile(file: string): boolean {
-  return file.startsWith(".svelte-kit/") || file.includes("/node_modules/");
-}

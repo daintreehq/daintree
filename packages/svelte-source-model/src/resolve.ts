@@ -86,7 +86,7 @@ export function resolveElementAtLocation(
   if (matches.length > 1) {
     return {
       status: "failed",
-      reason: "no-element-at-location",
+      reason: "ambiguous-location",
       detail: `${matches.length} elements start at offset ${offset}`,
     };
   }

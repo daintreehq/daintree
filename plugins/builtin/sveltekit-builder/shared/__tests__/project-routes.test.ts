@@ -93,8 +93,8 @@ describe("buildRouteTree", () => {
       "/go",
       "/orphan",
       "/pricing",
-      "/reports/monthly",
       "/settings",
+      "/statements/monthly",
     ]);
   });
 
@@ -188,10 +188,10 @@ describe("buildRouteTree", () => {
   it("resolves a named reset onto a segment whose name contains dots", async () => {
     const routes = await routesOf("grouped");
 
-    expect(byId(routes, "/reports/monthly").layoutFiles).toEqual([
+    expect(byId(routes, "/statements/monthly").layoutFiles).toEqual([
       "src/routes/+layout.svelte",
       "src/routes/(app.v2)/+layout.svelte",
-      "src/routes/(app.v2)/reports/+layout@(app.v2).svelte",
+      "src/routes/(app.v2)/statements/+layout@(app.v2).svelte",
     ]);
   });
 

@@ -73,23 +73,35 @@ describe("applyReplacements", () => {
     expect(code).toBe("OVERLAPPING_RANGES");
   });
 
-  it("misses an overlap that a zero-width insertion sits between", () => {
-    // Known defect in the frozen edit buffer: the overlap scan only compares
-    // neighbours in the sorted list, so an insertion between two conflicting
-    // replacements breaks the chain and both are applied. Pinned so the fix is
-    // visible as a test change rather than a silent behaviour shift.
-    const out = applyReplacements("abcdef", [
-      { start: 1, end: 4, text: "X" },
-      { start: 2, end: 2, text: "!" },
-      { start: 3, end: 5, text: "Y" },
-    ]);
-    expect(out).toBe("aX!Yf");
+  it("catches an overlap that a zero-width insertion sits between", () => {
+    // The scan tracks the furthest byte claimed so far rather than only the
+    // previous entry, so an insertion between two conflicting replacements
+    // cannot break the chain and let both through.
+    let code: string | undefined;
+    try {
+      applyReplacements("abcdef", [
+        { start: 1, end: 4, text: "X" },
+        { start: 2, end: 2, text: "!" },
+        { start: 3, end: 5, text: "Y" },
+      ]);
+    } catch (error) {
+      code = (error as SpliceError).code;
+    }
+    expect(code).toBe("OVERLAPPING_RANGES");
   });
 
   it("rejects inverted and out-of-bounds ranges", () => {
     expect(() => applyReplacements("abc", [{ start: 2, end: 1, text: "" }])).toThrow(SpliceError);
     expect(() => applyReplacements("abc", [{ start: 0, end: 9, text: "" }])).toThrow(SpliceError);
     expect(() => applyReplacements("abc", [{ start: -1, end: 1, text: "" }])).toThrow(SpliceError);
+  });
+
+  it("rejects fractional and non-finite offsets rather than slicing silently", () => {
+    expect(() => applyReplacements("abc", [{ start: 0.5, end: 2, text: "" }])).toThrow(SpliceError);
+    expect(() => applyReplacements("abc", [{ start: 0, end: NaN, text: "" }])).toThrow(SpliceError);
+    expect(() =>
+      applyReplacements("abc", [{ start: 0, end: Number.POSITIVE_INFINITY, text: "" }])
+    ).toThrow(SpliceError);
   });
 
   it("counts offsets in UTF-16 units, so an astral character spans two", () => {

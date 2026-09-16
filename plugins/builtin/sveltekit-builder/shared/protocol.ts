@@ -3,7 +3,6 @@ import {
   EditOperationSchema,
   EditReceiptSchema,
   RectSchema,
-  SelectedNodeSchema,
   SiteEditErrorCodeSchema,
   SiteSelectionSchema,
   SourceLocationSchema,
@@ -437,4 +436,4 @@ export const IssuePushSchema = z
   })
   .strict();
 
-export type { SelectedNode, SiteSelection };
+export type { SelectedNode, SiteSelection } from "./model.js";

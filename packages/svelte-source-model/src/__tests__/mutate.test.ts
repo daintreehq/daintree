@@ -439,12 +439,14 @@ describe("planSetClassTokens", () => {
     ).toBe("/pricing");
   });
 
-  it("escapes a token that carries markup characters, and matches it back decoded", () => {
+  it("writes a Tailwind arbitrary-variant token verbatim so the scanner can find it", () => {
     const element = resolveByTag(source, "section");
     const added = planned(planSetClassTokens(source, element, { add: ["[&>*]:p-2"], remove: [] }));
-    expect(classValueOf(added.after, "section")).toContain("&amp;");
-    // The compiler decodes it back to the token the caller asked for, and a
-    // later removal of that same token has to find it through the entity.
+    // Escaping the `&` here would be HTML-correct and useless: Tailwind reads
+    // source as plain text, so `[&amp;>*]:p-2` is not the candidate and no rule
+    // is generated. The `&` is followed by `>`, so it was never ambiguous.
+    expect(classValueOf(added.after, "section")).toContain("[&>*]:p-2");
+    expect(classValueOf(added.after, "section")).not.toContain("&amp;");
     const removed = planned(
       planSetClassTokens(added.after, resolveByTag(added.after, "section"), {
         add: [],
@@ -478,20 +480,18 @@ describe("planSetClassTokens", () => {
     });
   });
 
-  it("keeps a Tailwind arbitrary value with quotes and braces readable back", () => {
+  it("refuses a utility whose braces cannot survive as literal source text", () => {
     const element = resolveByTag(source, "section");
     const token = "before:content-['{x}']";
-    const plan = planned(planSetClassTokens(source, element, { add: [token], remove: [] }));
-    // The brace is escaped in the source but decodes back to the token asked for.
-    expect(classValueOf(plan.after, "section")).toContain("&#123;");
-    expect(classTokensOf(plan.after, "section")).toContain(token);
-    const undo = planned(
-      planSetClassTokens(plan.after, resolveByTag(plan.after, "section"), {
-        add: [],
-        remove: [token],
-      })
-    );
-    expect(undo.after).toBe(source);
+    const plan = planSetClassTokens(source, element, { add: [token], remove: [] });
+    // Svelte reads an unescaped `{` in markup as the start of an expression, so
+    // this token can only be written escaped — and Tailwind, which scans source
+    // as plain text, would then never see the candidate. Writing it would give
+    // a file that parses, a class that reaches the DOM, and no CSS. Refusing
+    // says so instead.
+    expect(plan.status).toBe("refused");
+    if (plan.status !== "refused") throw new Error("expected a refusal");
+    expect(plan.reason).toBe("token-not-writable-literally");
   });
 
   it("reads an entity that decodes to whitespace as a token separator", () => {

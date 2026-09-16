@@ -59,7 +59,12 @@ export type SvelteParse = (
  * in the inspector, not a silently disabled control.
  */
 export type ResolveFailureReason =
-  "location-out-of-range" | "no-element-at-location" | "generated-file" | "parse-failed";
+  | "location-out-of-range"
+  | "no-element-at-location"
+  /** More than one element starts at this offset; no edit may proceed. */
+  | "ambiguous-location"
+  | "generated-file"
+  | "parse-failed";
 
 export type ResolveResult =
   | { status: "resolved"; node: ResolvedElement }
@@ -71,7 +76,14 @@ export type SurfaceSupport =
   | { support: "unsupported"; reason: UnsupportedSurfaceReason };
 
 export type UnsupportedSurfaceReason =
+  /** No such attribute, prop or text child. */
   | "absent"
+  /**
+   * Present, but there is no range an edit may be written into: a bare boolean
+   * attribute, or an unquoted value (`class=p-4` parses, and writing into it
+   * would silently append a second attribute rather than extend the value).
+   */
+  | "not-a-writable-literal"
   | "dynamic-expression"
   | "mixed-text-and-expression"
   | "class-directive"
