@@ -106,6 +106,26 @@ describe("SendToAgentPalette rows", () => {
     expect(rowFor("b").getAttribute("aria-label")).toBe("Claude, Claude Code · fix-auth");
   });
 
+  it("draws each row's worktree, not just announces it", () => {
+    renderPalette([
+      item("a", { subtitle: `${CHROME.label} · main` }),
+      item("b", { subtitle: `${CHROME.label} · fix-auth` }),
+    ]);
+
+    expect(rowFor("a").textContent).toContain("main");
+    expect(rowFor("a").textContent).not.toContain("fix-auth");
+    expect(rowFor("b").textContent).toContain("fix-auth");
+  });
+
+  it("says worktrees are searchable on the search field", () => {
+    renderPalette([item("a")]);
+
+    const search = document.querySelector("input");
+    if (search === null) throw new Error("no search field rendered");
+    expect(search.getAttribute("placeholder")).toContain("worktree");
+    expect(search.getAttribute("aria-label")).toContain("worktree");
+  });
+
   it("keeps the accessible name to the title when there is no subtitle", () => {
     renderPalette([item("a", { subtitle: undefined })]);
 

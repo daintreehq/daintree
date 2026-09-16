@@ -82,6 +82,11 @@ const FUSE_OPTIONS: IFuseOptions<SendToAgentItem> = {
     { name: "worktreeName", weight: 0.5 },
   ],
   threshold: 0.4,
+  // Worktree names are branch-derived and long, so the distinctive part of one
+  // sits well past Fuse's default location window and the positional penalty
+  // alone pushes an exact match over the threshold. Every sibling picker that
+  // searches a branch name turns this off (useFleetPicker, branchPickerUtils).
+  ignoreLocation: true,
   includeScore: true,
 };
 

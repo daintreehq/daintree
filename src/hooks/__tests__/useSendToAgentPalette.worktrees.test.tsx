@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { renderHook, act } from "@testing-library/react";
+import { renderHook, act, cleanup } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { WorktreeSnapshot } from "@shared/types";
@@ -69,6 +69,9 @@ describe("useSendToAgentPalette worktree identity", () => {
   });
 
   afterEach(() => {
+    // Unmount first: resetting a store while the hook is still mounted notifies
+    // React subscribers from outside act().
+    cleanup();
     usePaletteStore.setState({ activePaletteId: null });
     usePanelStore.setState({ panelsById: {}, panelIds: [] });
   });
@@ -148,10 +151,53 @@ describe("useSendToAgentPalette worktree identity", () => {
     panels.push(panel("late", { worktreeId: "/repo-fix", title: "Pane late" }));
     seedPanels(panels);
 
-    const { result } = renderHook(() => useSendToAgentPalette());
+    const { result, rerender } = renderHook(() => useSendToAgentPalette());
 
+    // The pane that makes this a spread is not among the rows being labelled.
     expect(result.current.results).toHaveLength(20);
+    expect(result.current.results.some((item) => item.id === "late")).toBe(false);
     expect(result.current.results[0]!.subtitle).toContain("main");
+
+    // Drop it and the very same visible rows go back to bare agent labels.
+    act(() => {
+      seedPanels(panels.slice(0, 24));
+    });
+    rerender();
+    expect(result.current.results[0]!.subtitle).toBe(result.current.results[0]!.chrome.label);
+  });
+
+  it("re-labels when a worktree map arrives after the palette is already open", () => {
+    // Worktrees hydrate asynchronously, so the map routinely lands after the
+    // palette has rendered its rows once.
+    seedPanels([panel("a", { worktreeId: "/repo" }), panel("b", { worktreeId: "/repo-fix" })]);
+
+    const { result, rerender } = renderHook(() => useSendToAgentPalette());
+    expect(result.current.results[0]!.subtitle).toBe(result.current.results[0]!.chrome.label);
+
+    act(() => {
+      seedWorktrees([
+        ["/repo", "main"],
+        ["/repo-fix", "fix-auth"],
+      ]);
+    });
+    rerender();
+
+    expect(result.current.results[0]!.subtitle).toContain("main");
+    expect(result.current.results[1]!.subtitle).toContain("fix-auth");
+  });
+
+  it("matches a long worktree name by its distinctive tail", async () => {
+    // Branch-derived names run long, and the part that tells two of them apart
+    // is at the end — past the window Fuse scores by position.
+    seedWorktrees([["/repo", "feature-issue-12420-send-agent-palette-worktree"]]);
+    seedPanels([panel("a", { worktreeId: "/repo" }), panel("b")]);
+
+    const { result } = renderHook(() => useSendToAgentPalette());
+    await act(async () => {
+      result.current.setQuery("worktree");
+    });
+
+    expect(result.current.results.map((item) => item.id)).toEqual(["a"]);
   });
 
   it("ignores ineligible panels when deciding whether the targets spread", () => {
@@ -209,6 +255,9 @@ describe("useSendToAgentPalette worktree identity", () => {
     expect(missing.worktreeName).toBeUndefined();
     expect(missing.subtitle).toBe(missing.chrome.label);
     expect(missing.subtitle).not.toContain("·");
+    // The id that did not resolve still counts, so the one that did gets named.
+    const known = result.current.results.find((item) => item.id === "a")!;
+    expect(known.subtitle).toContain("main");
   });
 
   it("treats worktree-less panes as unnamed rather than as a second worktree", () => {
