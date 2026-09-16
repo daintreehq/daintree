@@ -16,7 +16,7 @@ import type {
   SurfaceSupport,
   UnsupportedSurfaceReason,
 } from "@daintreehq/svelte-source-model";
-import { loadParse, loadSourceModel, type SourceModel } from "./engine.js";
+import { loadParse, loadSourceModel, loadTokenModel, type SourceModel } from "./engine.js";
 import {
   containsRealPath,
   isGeneratedPath,
@@ -173,6 +173,7 @@ async function resolveNode(
       definition: null,
       mapping: "visual-only",
       capabilities: everySurface("inspect-only", reason),
+      surfaces: { classes: null, text: null },
     },
   });
 
@@ -232,9 +233,115 @@ async function resolveNode(
         renderedOccurrences: observation.sameLocCount,
       },
       mapping: invocation === null ? "definition-only" : "exact",
-      capabilities,
+      ...(await surfacesOf(read.text, element, capabilities)),
     },
   };
+}
+
+/**
+ * The values the inspector shows and edits, decoded exactly as the planner
+ * compares them. Offered only for a surface this selection calls `direct`, so
+ * the view never displays a value it cannot write back.
+ */
+async function surfacesOf(
+  source: string,
+  element: ResolvedElement,
+  capabilities: EditCapability[]
+): Promise<{ surfaces: SelectedNode["surfaces"]; capabilities: EditCapability[] }> {
+  const { splitClassValue, decodeEntities, validateToken } = await loadTokenModel();
+  const isDirect = (surface: Surface) =>
+    capabilities.some(
+      (capability) => capability.surface === surface && capability.support === "direct"
+    );
+  const downgraded = new Set<Surface>();
+
+  let classes: SelectedNode["surfaces"]["classes"] = null;
+  if (isDirect("classes") && element.classes.support === "direct") {
+    // Decoded exactly as `planSetClassTokens` compares, so every token shown
+    // is one a removal by that same string finds.
+    const tokens = splitClassValue(
+      source.slice(element.classes.range.start, element.classes.range.end)
+    )
+      .filter((segment) => segment.kind === "token")
+      .map((segment) => decodeEntities(segment.raw));
+    // A token the planner would refuse to name cannot be removed, so the list
+    // is not editable as a list.
+    if (tokens.every((token) => validateToken(token) === null)) classes = { tokens };
+    else downgraded.add("classes");
+  }
+
+  let text: SelectedNode["surfaces"]["text"] = null;
+  if (isDirect("text") && element.text.support === "direct") {
+    const tag = element.tagName.toLowerCase();
+    const decoded = RAW_TEXT_ELEMENTS.has(tag)
+      ? null
+      : await compilerTextOf(source, element.text.range);
+    if (decoded === null) {
+      downgraded.add("text");
+    } else {
+      // The HTML parser drops one newline straight after `<pre>`, and the
+      // planner re-adds it on write; showing it would grow one per edit.
+      const eaten =
+        NEWLINE_EATING_ELEMENTS.has(tag) && source[element.text.range.start - 1] === ">"
+          ? decoded.replace(/^\r?\n/, "")
+          : decoded;
+      text = { text: eaten };
+    }
+  }
+
+  return {
+    surfaces: { classes, text },
+    capabilities: capabilities.map((capability) =>
+      downgraded.has(capability.surface)
+        ? { surface: capability.surface, support: "agent-assisted" as const }
+        : capability
+    ),
+  };
+}
+
+/** Mirrors the planner's refusal list: raw text is not escapable text. */
+const RAW_TEXT_ELEMENTS = new Set([
+  "script",
+  "style",
+  "xmp",
+  "iframe",
+  "noembed",
+  "noframes",
+  "noscript",
+  "plaintext",
+]);
+const NEWLINE_EATING_ELEMENTS = new Set(["pre", "textarea", "listing"]);
+
+/**
+ * The text as Svelte itself decodes it (full named and numeric entity tables),
+ * which is what renders. The planner's own decoder covers only the subset it
+ * needs for token comparison and would show `&copy;` literally.
+ */
+async function compilerTextOf(
+  source: string,
+  range: { start: number; end: number }
+): Promise<string | null> {
+  const parse = await loadParse();
+  const ast = parse(source, { modern: true });
+  const seen = new Set<object>();
+  let found: string | null = null;
+  const visit = (value: unknown): void => {
+    if (found !== null || value === null || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    const node = value as { type?: unknown; start?: unknown; end?: unknown; data?: unknown };
+    if (
+      node.type === "Text" &&
+      node.start === range.start &&
+      node.end === range.end &&
+      typeof node.data === "string"
+    ) {
+      found = node.data;
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) if (key !== "parent") visit(child);
+  };
+  visit(ast.fragment);
+  return found as string | null;
 }
 
 export async function resolveSelection(

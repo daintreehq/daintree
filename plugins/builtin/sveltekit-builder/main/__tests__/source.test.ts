@@ -503,3 +503,150 @@ describe("sourceChanged", () => {
     ]);
   });
 });
+
+describe("decoded surfaces", () => {
+  it("carries the real class tokens and literal text of a selected element", async () => {
+    const source = await fs.readFile(sandbox.file(NATIVE), "utf8");
+    const node = await selectOne(observation(locationOf(source, "<h1"), { tagName: "H1" }));
+    expect(node.surfaces).toEqual({
+      classes: { tokens: ["text-2xl", "font-bold"] },
+      text: { text: "Plain literal heading" },
+    });
+  });
+
+  it("offers no value for a surface that is not direct", async () => {
+    const source = await fs.readFile(sandbox.file(NATIVE), "utf8");
+    const node = await selectOne(observation(locationOf(source, "<h2"), { tagName: "H2" }));
+    expect(node.surfaces).toEqual({ classes: null, text: null });
+  });
+
+  it("decodes entities once, and removes exactly the source token the view named", async () => {
+    const file = "src/lib/entities.svelte";
+    const source = '<div class="p&#45;4 p&amp;#45;4">A &amp; B</div>\n';
+    await fs.writeFile(sandbox.file(file), source);
+    const node = await selectOne(observation({ file, line: 1, column: 0 }, { tagName: "DIV" }));
+    expect(node.surfaces).toEqual({
+      classes: { tokens: ["p-4", "p&#45;4"] },
+      text: { text: "A & B" },
+    });
+
+    receiptOf(
+      await edit({
+        file: `apps/site/${file}`,
+        expectedRevision: node.definition!.revision,
+        operations: [
+          {
+            kind: "set_class_tokens",
+            range: node.definition!.range,
+            add: [],
+            remove: ["p-4"],
+            responsive: { kind: "base" },
+          },
+        ],
+      })
+    );
+    expect(await fs.readFile(sandbox.file(file), "utf8")).toBe(
+      '<div class="p&amp;#45;4">A &amp; B</div>\n'
+    );
+  });
+});
+
+describe("decoded text", () => {
+  it("shows text as the compiler decodes it and writes it back without growing a newline or escaping an entity", async () => {
+    const file = "src/lib/text.svelte";
+    await fs.writeFile(sandbox.file(file), "<pre>\nHi &copy; &#128;</pre>\n");
+    const node = await selectOne(observation({ file, line: 1, column: 0 }, { tagName: "PRE" }));
+    expect(node.surfaces.text).toEqual({ text: "Hi © €" });
+
+    const result = await edit({
+      file: `apps/site/${file}`,
+      expectedRevision: node.definition!.revision,
+      operations: [
+        { kind: "set_literal_text", range: node.definition!.range, text: node.surfaces.text!.text },
+      ],
+    });
+    // The rendered text is unchanged either way; what must not happen is a
+    // second leading newline or an escaped `&amp;copy;`.
+    const written = await fs.readFile(sandbox.file(file), "utf8");
+    expect(written).toContain("Hi © €</pre>");
+    expect(written).not.toContain("<pre>\n\n");
+    expect(written).not.toContain("&amp;copy;");
+    expect(["applied", "no-op"]).toContain(result.status);
+  });
+
+  it("offers no text value for raw-text elements", async () => {
+    const file = "src/lib/raw.svelte";
+    await fs.writeFile(sandbox.file(file), '<iframe title="x">fallback</iframe>\n');
+    const node = await selectOne(observation({ file, line: 1, column: 0 }, { tagName: "IFRAME" }));
+    expect(node.surfaces.text).toBeNull();
+    expect(node.capabilities).toContainEqual({ surface: "text", support: "agent-assisted" });
+  });
+});
+
+describe("byte order mark", () => {
+  it("keeps a second leading U+FEFF as content", async () => {
+    const file = "src/lib/double-bom.svelte";
+    await fs.writeFile(sandbox.file(file), "\uFEFF\uFEFF<h1>Hello</h1>\n", "utf8");
+    // What Svelte's dev runtime reports: one BOM removed, the second is column 0's content.
+    const node = await selectOne(observation({ file, line: 1, column: 1 }, { tagName: "H1" }));
+    expect(node.surfaces.text).toEqual({ text: "Hello" });
+  });
+
+  it("resolves, edits and undoes against BOM-free offsets while the bytes keep the BOM", async () => {
+    const file = "src/lib/bom.svelte";
+    const original = '\uFEFF<h1 class="title">Hello</h1>\n';
+    await fs.writeFile(sandbox.file(file), original, "utf8");
+    const originalBytes = await fs.readFile(sandbox.file(file));
+    expect([...originalBytes.subarray(0, 3)]).toEqual([0xef, 0xbb, 0xbf]);
+
+    const node = await selectOne(observation({ file, line: 1, column: 0 }, { tagName: "H1" }));
+    expect(node.definition?.range).toEqual({ start: 0, end: original.length - 2 });
+    expect(node.surfaces.text).toEqual({ text: "Hello" });
+
+    const receipt = receiptOf(
+      await edit({
+        file: `apps/site/${file}`,
+        expectedRevision: node.definition!.revision,
+        operations: [{ kind: "set_literal_text", range: node.definition!.range, text: "Bye" }],
+      })
+    );
+    const edited = await fs.readFile(sandbox.file(file));
+    expect(edited.toString("utf8")).toBe('\uFEFF<h1 class="title">Bye</h1>\n');
+    expect(receipt.afterRevision).toBe(sha(edited));
+
+    await test.invoke(CHANNELS.editUndo, {
+      workspaceSessionId,
+      transactionId: receipt.transactionId,
+    });
+    expect(Buffer.compare(await fs.readFile(sandbox.file(file)), originalBytes)).toBe(0);
+  });
+});
+
+describe("undo containment", () => {
+  it("refuses when a parent directory has been swapped for a symlink since the edit", async () => {
+    const source = await fs.readFile(sandbox.file(NATIVE), "utf8");
+    const node = await selectOne(observation(locationOf(source, "<h1"), { tagName: "H1" }));
+    const receipt = receiptOf(
+      await edit({
+        file: NATIVE_IN_WORKTREE,
+        expectedRevision: node.definition!.revision,
+        operations: [{ kind: "set_literal_text", range: node.definition!.range, text: "Edited" }],
+      })
+    );
+    const edited = await fs.readFile(sandbox.file(NATIVE), "utf8");
+
+    // Same bytes, same spelling, different file on disk.
+    await fs.rename(sandbox.file("src/lib"), sandbox.file("src/lib-elsewhere"));
+    await fs.symlink(sandbox.file("src/lib-elsewhere"), sandbox.file("src/lib"), "dir");
+    const writesBefore = test.writes.length;
+
+    expect(
+      await test.invoke(CHANNELS.editUndo, {
+        workspaceSessionId,
+        transactionId: receipt.transactionId,
+      })
+    ).toMatchObject({ status: "error", code: "OUT_OF_SCOPE" });
+    expect(test.writes).toHaveLength(writesBefore);
+    expect(await fs.readFile(sandbox.file("src/lib-elsewhere/native.svelte"), "utf8")).toBe(edited);
+  });
+});
