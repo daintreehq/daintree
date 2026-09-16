@@ -261,7 +261,9 @@ function planScalarValue(
   if (typeof value === "number" && !Number.isFinite(value)) {
     return refuse("invalid-attribute-value", `${value} is not a finite number`);
   }
-  return sealPlan(source, [{ start: slot.inner.start, end: slot.inner.end, text: String(value) }]);
+  // `String(-0)` is "0", which is a different literal from the one asked for.
+  const text = Object.is(value, -0) ? "-0" : String(value);
+  return sealPlan(source, [{ start: slot.inner.start, end: slot.inner.end, text }]);
 }
 
 function writeString(
@@ -269,12 +271,15 @@ function writeString(
   slot: Exclude<ValueSlot, { kind: "unknown" }>,
   value: string
 ): Replacement {
-  const normalised = normaliseLineEndings(value, source);
   if (slot.kind === "expression") {
-    // JSON.stringify is exactly JavaScript's string-literal grammar for the
-    // characters that matter here, including lone surrogates and control codes.
-    return { start: slot.inner.start, end: slot.inner.end, text: JSON.stringify(normalised) };
+    // The value goes in unnormalised: inside a JavaScript literal a newline is
+    // the two characters `\n`, so rewriting it to `\r\n` for a CRLF file would
+    // change what the component receives without moving a single line break in
+    // the file. JSON.stringify is exactly JavaScript's string-literal grammar
+    // for everything that matters here, lone surrogates included.
+    return { start: slot.inner.start, end: slot.inner.end, text: JSON.stringify(value) };
   }
+  const normalised = normaliseLineEndings(value, source);
   if (slot.kind === "quoted") {
     return {
       start: slot.inner.start,
@@ -295,7 +300,17 @@ function writeString(
  * Re-parses candidate source and proves the plan did what it claimed: the
  * intended range changed, and every range in `protectedRanges` still holds
  * byte-identical content. A plan that cannot be verified is refused — the
- * candidate never reaches disk just to find out whether it compiles.
+ * candidate never reaches disk just to find out whether it parses.
+ *
+ * This is a parse-and-range gate, not a compile gate: the candidate can parse
+ * and still fail `compile`, as setting `type` to `text` on an input that carries
+ * `bind:checked` does. A caller that promises compilability has to run the
+ * compiler itself.
+ *
+ * The protected-range check is conservative in one direction only. It derives
+ * the edit from the two strings, so a candidate whose change coincides with the
+ * source's own repetition can be refused although its protected bytes are
+ * intact; it can never accept one whose protected bytes changed.
  */
 export function verifyCandidate(
   original: string,

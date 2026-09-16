@@ -129,7 +129,7 @@ function planned(plan: MutationPlan): Extract<MutationPlan, { status: "planned" 
   return plan;
 }
 
-/** The `class` value as the compiler reads it back out of the candidate. */
+/** The RAW `class` value between the quotes — entities included, undecoded. */
 function classValueOf(source: string, tagName: string, occurrence = 0): string {
   const element = resolveByTag(source, tagName, occurrence);
   if (element.classes.support !== "direct") throw new Error("class is not a literal here");
@@ -147,9 +147,47 @@ function classTokensOf(source: string, tagName: string, occurrence = 0): string[
   const start = element.classes.range.start;
   const ast = svelteParse(source, { modern: true });
   const text = findFirst(ast, (n) => n.type === "Text" && n.start === start);
+  // HTML's own rule: ASCII whitespace separates class tokens, nothing else.
   return String(text?.data ?? "")
-    .split(/\s+/)
+    .split(/[ \t\n\f\r]+/)
     .filter(Boolean);
+}
+
+/** The compiler's decoded text for an element's single literal text child. */
+function textDataOf(source: string, tagName: string, occurrence = 0): string {
+  const element = resolveByTag(source, tagName, occurrence);
+  if (element.text.support !== "direct") throw new Error("text is not a literal here");
+  const start = element.text.range.start;
+  const ast = svelteParse(source, { modern: true });
+  return String(findFirst(ast, (n) => n.type === "Text" && n.start === start)?.data ?? "");
+}
+
+function countElements(source: string): number {
+  const ast = svelteParse(source, { modern: true });
+  let count = 0;
+  const stack: unknown[] = [ast.fragment];
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (!node || typeof node !== "object") continue;
+    const record = node as Record<string, unknown>;
+    if (record.type === "RegularElement" || record.type === "Component") count++;
+    for (const value of Object.values(record)) {
+      if (Array.isArray(value)) stack.push(...value);
+      else if (value && typeof value === "object") stack.push(value);
+    }
+  }
+  return count;
+}
+
+/** The runtime value of a component prop held in an expression slot. */
+function propLiteralOf(source: string, tagName: string, occurrence: number, name: string): unknown {
+  const element = resolveByTag(source, tagName, occurrence);
+  const prop = element.props[name];
+  if (prop?.support !== "direct") throw new Error(`prop ${name} is not a literal here`);
+  const start = prop.range.start;
+  const ast = svelteParse(source, { modern: true });
+  const tag = findFirst(ast, (n) => n.type === "ExpressionTag" && n.start === start);
+  return (tag?.expression as Record<string, unknown> | undefined)?.value;
 }
 
 /** Every byte of `source` except the element at `range`. */
@@ -173,10 +211,8 @@ describe("planSetLiteralText", () => {
       svelteParse
     );
     expect(verdict).toEqual({ ok: true });
-    expect(plan.after.length - source.length).toBe(
-      "New heading".length -
-        (element.text.support === "direct" ? element.text.range.end - element.text.range.start : 0)
-    );
+    expect(textDataOf(plan.after, "h1")).toBe("New heading");
+    expect(countElements(plan.after)).toBe(countElements(source));
   });
 
   it("escapes markup rather than writing it back as source", () => {
@@ -261,6 +297,17 @@ describe("planSetLiteralText", () => {
     });
   });
 
+  it("refuses half a surrogate pair, which UTF-8 persistence would destroy", () => {
+    const half = String.fromCharCode(0xd800);
+    expect(planSetLiteralText(source, resolveByTag(source, "h1"), `x${half}y`)).toMatchObject({
+      status: "refused",
+      reason: "invalid-attribute-value",
+    });
+    expect(planSetLiteralAttribute(source, resolveByTag(source, "img"), "alt", half)).toMatchObject(
+      { status: "refused", reason: "invalid-attribute-value" }
+    );
+  });
+
   it("refuses a control character that no source position can carry", () => {
     expect(planSetLiteralText(source, resolveByTag(source, "h1"), "a\u0000b")).toMatchObject({
       status: "refused",
@@ -327,6 +374,37 @@ describe("planSetClassTokens", () => {
     expect(value.startsWith(" ")).toBe(true);
     expect(value.endsWith(" ")).toBe(true);
     expect(value.trim()).toBe("a  c");
+  });
+
+  it("keeps the outer padding when a token is added or the first one goes", () => {
+    const wrapped = source.replace('class="flex flex-col gap-4 p-6"', 'class="\n    a\n    b\n"');
+    const added = planned(
+      planSetClassTokens(wrapped, resolveByTag(wrapped, "section"), {
+        add: ["c"],
+        remove: [],
+      })
+    );
+    expect(classValueOf(added.after, "section")).toBe("\n    a\n    b\n    c\n");
+    const removed = planned(
+      planSetClassTokens(wrapped, resolveByTag(wrapped, "section"), {
+        add: [],
+        remove: ["a"],
+      })
+    );
+    expect(classValueOf(removed.after, "section")).toBe("\n    b\n");
+  });
+
+  it("splits class tokens on ASCII whitespace only, as HTML does", () => {
+    // `a&nbsp;b` is ONE class. Reading NBSP as a separator would let a removal
+    // of `a` delete half of a class name the user never named.
+    const nbsp = source.replace('class="flex flex-col gap-4 p-6"', 'class="a&nbsp;b keep"');
+    expect(classTokensOf(nbsp, "section")).toHaveLength(2);
+    expect(
+      planSetClassTokens(nbsp, resolveByTag(nbsp, "section"), { add: [], remove: ["a"] })
+    ).toEqual({
+      status: "refused",
+      reason: "no-op",
+    });
   });
 
   it("treats adding a token that is already there as a no-op", () => {
@@ -515,6 +593,10 @@ describe("planSetLiteralAttribute", () => {
     const element = resolveByTag(source, "img");
     const plan = planned(planSetLiteralAttribute(source, element, "alt", "Acme logo"));
     const after = resolveByTag(plan.after, "img");
+    const alt = after.attributes["alt"];
+    expect(alt.support === "direct" ? plan.after.slice(alt.range.start, alt.range.end) : null).toBe(
+      "Acme logo"
+    );
     const srcRange = after.attributes["src"];
     expect(srcRange.support).toBe("direct");
     if (srcRange.support !== "direct") return;
@@ -639,6 +721,21 @@ describe("planSetLiteralProp", () => {
       status: "refused",
       reason: "invalid-attribute-value",
     });
+  });
+
+  it("keeps a negative zero negative", () => {
+    const plan = planned(planSetLiteralProp(source, resolveByTag(source, "Card", 2), "tier", -0));
+    const ast = svelteParse(plan.after, { modern: true });
+    const negation = findFirst(ast, (n) => n.type === "UnaryExpression");
+    expect(negation).toBeDefined();
+  });
+
+  it("does not rewrite line endings inside a JavaScript string literal", () => {
+    // A `\n` in a JS literal is two characters, not a line break in the file,
+    // so a CRLF file must not turn it into `\r\n` and change the prop's value.
+    const crlf = source.replace(/\n/g, "\r\n").replace('plan="Enterprise"', 'plan={"Enterprise"}');
+    const plan = planned(planSetLiteralProp(crlf, resolveByTag(crlf, "Card", 2), "plan", "a\nb"));
+    expect(propLiteralOf(plan.after, "Card", 2, "plan")).toBe("a\nb");
   });
 
   it("refuses a non-finite number", () => {

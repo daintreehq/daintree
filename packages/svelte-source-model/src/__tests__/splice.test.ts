@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { parse } from "svelte/compiler";
 import { SpliceError, applyReplacements, isNoOp, lineColumnToOffset } from "../splice.js";
 import type { Replacement } from "../splice.js";
 
@@ -151,14 +152,16 @@ describe("lineColumnToOffset", () => {
     expect(lineColumnToOffset(source, 1, 3)).toBeNull();
   });
 
-  it("gives the same offsets on a CRLF file as the parser would", () => {
-    const lf = "alpha\nbeta\ngamma";
-    const crlf = lf.replace(/\n/g, "\r\n");
-    const offset = lineColumnToOffset(crlf, 3, 0);
-    expect(offset).not.toBeNull();
-    expect(crlf.slice(offset!, offset! + 5)).toBe(
-      lf.slice(lineColumnToOffset(lf, 3, 0)!, lineColumnToOffset(lf, 3, 0)! + 5)
-    );
+  it("gives the same offsets on a CRLF file as the parser itself does", () => {
+    // The real oracle: the compiler's own start offset for an element, reached
+    // from the line and column its dev runtime would report for that element.
+    const crlf = '<div class="a">x</div>\r\n<p>second</p>\r\n<span>third</span>\r\n';
+    const ast = parse(crlf, { modern: true }) as unknown as {
+      fragment: { nodes: { type: string; name?: string; start: number }[] };
+    };
+    const span = ast.fragment.nodes.find((n) => n.name === "span");
+    expect(span).toBeDefined();
+    expect(lineColumnToOffset(crlf, 3, 0)).toBe(span!.start);
   });
 
   it("returns null for a position the file does not have", () => {
