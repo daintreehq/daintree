@@ -117,11 +117,11 @@ function MockSite() {
                     ? {
                         marginTop: 16,
                         width: "100%",
-                        borderRadius: 8,
+                        borderRadius: "var(--radius-md)",
                         background: "#4f46e5",
                         color: "#ffffff",
                         padding: "12px 24px",
-                        fontSize: 14,
+                        fontSize: "var(--text-sm)",
                         fontWeight: 500,
                         outline: "2px solid #0ea5e9",
                         outlineOffset: 2,
@@ -129,11 +129,11 @@ function MockSite() {
                     : {
                         marginTop: 16,
                         width: "100%",
-                        borderRadius: 8,
+                        borderRadius: "var(--radius-md)",
                         border: "1px solid #cbd5e1",
                         background: "#ffffff",
                         padding: "12px 24px",
-                        fontSize: 14,
+                        fontSize: "var(--text-sm)",
                         fontWeight: 500,
                       }
                 }
