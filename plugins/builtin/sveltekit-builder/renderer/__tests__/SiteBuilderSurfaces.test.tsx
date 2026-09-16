@@ -16,7 +16,11 @@ import {
 import { CHANNELS, PLUGIN_ID, PUSH_CHANNELS } from "../../shared/protocol";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
-import { __resetComposerMemoryForTests } from "../composerMemory";
+import {
+  __resetComposerMemoryForTests,
+  composerMemoryKey,
+  updateComposerMemory,
+} from "../composerMemory";
 import { usePanelStore } from "@/store/panelStore";
 import {
   BUTTON_RANGE,
@@ -223,10 +227,20 @@ describe("selection identity", () => {
     expect(screen.getByRole("toolbar", { name: "Site Builder" }).textContent).toContain(
       `${FILE}:6`
     );
-    const crumbs = screen.getByRole("list", { name: "Ancestry" }).textContent ?? "";
+    // The trail names the components this element was reached through, and
+    // nothing else: generated framework frames are not the user's code, and
+    // `each` is control flow — not a file, not a thing an agent can be pointed
+    // at, so never a step. Asserted as that rule rather than as a fixed list,
+    // so the trail can be restyled without rewriting this.
+    const trail = screen.getAllByRole("navigation", { name: "Selection" })[0]!;
+    const crumbs = Array.from(trail.querySelectorAll("li")).map((li) =>
+      (li.textContent ?? "").trim()
+    );
     expect(crumbs).toContain("PricingCard");
-    expect(crumbs).toContain("each");
-    expect(crumbs).not.toContain("root");
+    expect(crumbs.some((crumb) => crumb.includes("each"))).toBe(false);
+    expect(crumbs.some((crumb) => crumb.includes("root"))).toBe(false);
+    // It ends at what was picked, and marks it as current.
+    expect(trail.querySelector('[aria-current="true"]')?.textContent).toContain("Start Pro");
   });
 
   it("names a picked component by the file main read from source, never a guess", async () => {
@@ -430,14 +444,18 @@ describe("editing", () => {
       ],
     });
 
-    await screen.findByText("Saved — preview not yet refreshed");
+    await screen.findByRole("region", { name: "Last change" });
     expect(text()).toContain("Styles not verified");
     expect(text()).not.toMatch(/styles (generated|applied|rendered)/i);
     // The write spent the selection's ranges.
     expect(removeButton().disabled).toBe(true);
 
     await act(async () => host.documentReady(1));
-    await screen.findByText("Saved — preview reloaded");
+    // A later document is the only thing that proves the reload, and the
+    // receipt starts reporting it once one lands — while still refusing to
+    // claim anything about the styles, which nothing here can prove.
+    await waitFor(() => expect(text()).toMatch(/preview reloaded/i));
+    expect(text()).not.toMatch(/preview not yet refreshed/i);
     expect(text()).toContain("Styles not verified");
   });
 
@@ -478,7 +496,7 @@ describe("editing", () => {
     expect(host.calls(CHANNELS.editApply)).toHaveLength(1);
 
     await act(async () => finish({ status: "applied", receipt: makeReceipt() }));
-    await screen.findByText("Saved — preview not yet refreshed");
+    await screen.findByRole("region", { name: "Last change" });
     expect(screen.getByText("Select again to keep editing")).toBeTruthy();
     expect(removeButton().disabled).toBe(true);
     expect(host.calls(CHANNELS.editApply)).toHaveLength(1);
@@ -587,7 +605,7 @@ describe("editing", () => {
     expect(host.calls(CHANNELS.editApply)[0]!.operations).toEqual([
       { kind: "set_literal_text", range: BUTTON_RANGE, text: "Go Pro" },
     ]);
-    await screen.findByText("Saved — preview not yet refreshed");
+    await screen.findByRole("region", { name: "Last change" });
     expect(text()).not.toContain("Styles not verified");
   });
 
@@ -631,11 +649,66 @@ describe("stale selections", () => {
     expect(sendButton().disabled).toBe(false);
 
     await act(async () => host.epochAdvanced(1));
-    await screen.findByText(
-      "This changed since you picked it — select it again in the page to send"
-    );
-    expect(sendButton().disabled).toBe(true);
+    // The panel says so once, in the identity block, and blocks the send. It
+    // used to say it again inside the composer 300px below; the assertion is on
+    // the behaviour so removing the repeat is not a test change.
+    await screen.findByText("Selection changed — select again");
+    await waitFor(() => expect(sendButton().disabled).toBe(true));
     expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
+  });
+
+  it("won't re-send a request that may already be half-way into the agent's input", async () => {
+    // The rule: when a delivery failed AFTER typing had started, the panel tells
+    // the user to check the terminal first — so Enter must not still be armed.
+    // Sending twice is genuinely harmful here, and this is the one failure mode
+    // where the remedy and the affordance contradicted each other.
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    const sendButton = () =>
+      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    expect(sendButton().disabled).toBe(false);
+
+    act(() => {
+      updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
+        delivery: {
+          state: {
+            status: "failed",
+            message: "The terminal stopped accepting input",
+            partial: true,
+          },
+          title: "claude",
+          terminalId: "term-1",
+        },
+      });
+    });
+
+    await waitFor(() => expect(sendButton().disabled).toBe(true));
+    // Editing the words is the acknowledgement: the user has been back to the
+    // terminal and is deciding again.
+    fireEvent.change(request, { target: { value: "Say Upgrade now" } });
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+  });
+
+  it("still allows an immediate retry when nothing was typed into the agent", async () => {
+    // The counterpart: a failure BEFORE any bytes went out leaves nothing to
+    // check, so blocking the send would be friction with no payoff.
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    act(() => {
+      updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
+        delivery: {
+          state: { status: "failed", message: "The terminal was gone" },
+          title: "claude",
+          terminalId: "term-1",
+        },
+      });
+    });
+    const sendButton = () =>
+      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await screen.findByText("Couldn't send to the agent");
+    expect(sendButton().disabled).toBe(false);
   });
 
   it("holds a request to the bytes of every file it cites, not only the element's", async () => {
@@ -897,7 +970,7 @@ describe("truthful failures and undo", () => {
         { workspaceSessionId: "ws-1", transactionId: "tx-1" },
       ])
     );
-    await screen.findByText("Undone — preview not yet refreshed");
+    await screen.findByRole("region", { name: "Last change" });
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 

@@ -27,7 +27,6 @@ import { ownerFile, type InspectorController, type SelectionState } from "./insp
 import { InspectorNotice } from "./InspectorNotice.js";
 import { WaitingRow } from "./WaitingRow.js";
 import { useAgentTargets } from "./useAgentTargets.js";
-import { basename } from "./copy.js";
 import {
   readComposerMemory,
   updateComposerMemory,
@@ -209,6 +208,11 @@ export function AgentComposer({
     delivery?.state.status === "needs-you" ||
     delivery?.state.status === "unknown-readiness";
   const needsScopeChoice = scopeUnproven && !scopePending;
+  // A delivery that failed part-way has already put some of the prompt into the
+  // agent's input, and the notice says to check the terminal before sending
+  // again. Leaving Enter armed contradicts that in the one state where sending
+  // twice is genuinely harmful, so the second send has to be asked for.
+  const blockedByPartial = delivery?.state.status === "failed" && delivery.state.partial === true;
   // A selection the page or its source has moved past can't vouch for the
   // locations a request would name.
   const subjectStale =
@@ -225,10 +229,14 @@ export function AgentComposer({
     !sending &&
     !scopeUnproven &&
     !subjectStale &&
+    !blockedByPartial &&
     revisions !== null
   );
 
   const onDraftChange = (next: string) => {
+    // Editing the request after a partial delivery is the acknowledgement: the
+    // user has been told to check the terminal and has come back to the words.
+    if (blockedByPartial && next !== draft) updateComposerMemory(memoryKey, { delivery: null });
     setDraft(next);
     if (next.trim() && chosen === null && destination) setChosen(keyOf(destination));
     if (next.trim() && !pinned && subject) setPinned({ ...subject, definitions, revisions });
@@ -331,21 +339,24 @@ export function AgentComposer({
   }
 
   return (
-    <section
-      aria-labelledby={`${inputId}-heading`}
-      className="flex flex-col gap-2.5 rounded-lg border border-border-subtle bg-surface-inset p-3"
-    >
-      <div className="flex items-center justify-between gap-2">
+    <section aria-labelledby={`${inputId}-heading`} className="flex flex-col gap-2">
+      <div className="flex h-7 shrink-0 items-center justify-between gap-2">
         <h2
           id={`${inputId}-heading`}
-          className="flex items-center gap-1.5 text-xs font-medium text-text-primary"
+          className="flex items-center gap-1.5 text-2xs font-medium uppercase tracking-[0.04em] text-text-secondary"
         >
-          <Sparkles className="h-3.5 w-3.5 text-text-secondary" aria-hidden="true" />
+          <Sparkles className="h-3 w-3" aria-hidden="true" />
           Ask an agent
         </h2>
-        {destinations.length > 0 ? (
+      </div>
+      {destinations.length > 0 ? (
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-2xs text-text-secondary">To</span>
           <Select value={destination ? keyOf(destination) : ""} onValueChange={setChosen}>
-            <SelectTrigger aria-label="Agent to send to" className="h-6 max-w-[180px] text-xs">
+            {/* Full width, not a 180px stub: the session name is how two claudes
+                in the same worktree are told apart, and it was truncating to
+                `claude · pricing polis…` beside 280px of empty row. */}
+            <SelectTrigger aria-label="Agent to send to" className="h-7 min-w-0 flex-1 text-xs">
               <SelectValue placeholder="Choose an agent" />
             </SelectTrigger>
             <SelectContent>
@@ -373,29 +384,18 @@ export function AgentComposer({
               ) : null}
             </SelectContent>
           </Select>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
-      <div className="flex min-w-0 items-center gap-2 text-xs">
-        <span className="min-w-0 truncate text-text-secondary" title={subjectLabel}>
-          About <span className="text-text-primary">{subjectLabel}</span>
-          {definition && activeScope?.kind !== "component" ? (
-            <span className="font-mono">
-              {` · ${basename(subject.file ?? definition.location.file)}:${definition.location.line}`}
-            </span>
-          ) : null}
-        </span>
-        {retargetable && current ? (
+      {retargetable && current ? (
+        <div className="flex min-w-0 items-center justify-between gap-2 text-xs">
+          <span className="min-w-0 truncate text-text-secondary" title={subjectLabel}>
+            {`Still about ${subjectLabel}`}
+          </span>
           <Button variant="ghost" size="xs" onClick={() => setPinned(current)}>
             Use current selection
           </Button>
-        ) : null}
-      </div>
-
-      {subjectStale ? (
-        <p className="text-xs text-text-secondary">
-          This changed since you picked it — select it again in the page to send
-        </p>
+        </div>
       ) : null}
 
       {needsScopeChoice && activeScope?.kind === "component" ? (
@@ -405,19 +405,26 @@ export function AgentComposer({
       ) : null}
 
       {scopes.length > 1 ? (
-        <div role="group" aria-label="What the request is about" className="flex flex-wrap gap-1">
-          {scopes.map((scope, index) => (
-            <Button
-              key={`${scope.kind}:${scope.label}:${index}`}
-              variant={subject.scope === index ? "subtle" : "ghost"}
-              size="xs"
-              aria-pressed={subject.scope === index}
-              title={scope.kind === "component" ? (scope.file ?? undefined) : undefined}
-              onClick={() => chooseScope(index)}
-            >
-              {scope.kind === "element" ? "This element" : scope.label}
-            </Button>
-          ))}
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="shrink-0 text-2xs text-text-secondary">About</span>
+          <div
+            role="group"
+            aria-label="What the request is about"
+            className="flex min-w-0 flex-wrap gap-1"
+          >
+            {scopes.map((scope, index) => (
+              <Button
+                key={`${scope.kind}:${scope.label}:${index}`}
+                variant={subject.scope === index ? "subtle" : "ghost"}
+                size="xs"
+                aria-pressed={subject.scope === index}
+                title={scope.kind === "component" ? (scope.file ?? undefined) : undefined}
+                onClick={() => chooseScope(index)}
+              >
+                {scope.kind === "element" ? "This element" : scope.label}
+              </Button>
+            ))}
+          </div>
         </div>
       ) : null}
 
@@ -441,14 +448,21 @@ export function AgentComposer({
           onKeyDown={onKeyDown}
           className="pr-10"
         />
+        {/* `contrast`, not `default`: the house rule reserves accent for a single
+            load-bearing signal per focus region, and the class input's focus ring
+            is already spending it. A neutral high-contrast fill is also the
+            prescribed primary CTA and stays theme-aware by construction.
+            Inset by 2px more than the field's own border radius so the button
+            sits inside the textarea rather than straddling its edge — which also
+            keeps the global focus ring off the border line. */}
         <Button
-          variant="default"
+          variant="contrast"
           size="icon-sm"
           aria-label="Send to agent"
           title="Send to agent (Enter)"
           disabled={!canSend}
           onClick={send}
-          className="absolute bottom-1.5 right-1.5"
+          className="absolute bottom-2 right-2 disabled:opacity-40"
         >
           <ArrowUp aria-hidden="true" />
         </Button>
@@ -595,7 +609,30 @@ function DeliveryNotice({
       );
     case "failed":
       return (
-        <InspectorNotice tone="error" role="alert" title="Couldn't send to the agent" action={open}>
+        <InspectorNotice
+          tone="error"
+          role="alert"
+          title="Couldn't send to the agent"
+          action={
+            state.partial ? (
+              <div className="flex flex-wrap gap-1">
+                {terminalId ? (
+                  <Button variant="subtle" size="xs" onClick={() => onOpenTerminal(terminalId)}>
+                    Open terminal
+                  </Button>
+                ) : null}
+                <Button variant="ghost" size="xs" onClick={onSendAnyway}>
+                  Send it again
+                </Button>
+                <Button variant="ghost" size="xs" onClick={onDismiss}>
+                  Dismiss
+                </Button>
+              </div>
+            ) : (
+              open
+            )
+          }
+        >
           {state.partial
             ? `${state.message}. Part of the request may already be in the agent's input — check the terminal before sending again.`
             : `${state.message}. Your request is still here.`}

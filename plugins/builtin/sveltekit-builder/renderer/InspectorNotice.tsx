@@ -27,6 +27,7 @@ export function InspectorNotice({
   action,
   role,
   className,
+  density = "default",
 }: {
   tone: NoticeTone;
   title: string;
@@ -34,16 +35,31 @@ export function InspectorNotice({
   action?: ReactNode;
   role?: "status" | "alert";
   className?: string;
+  /**
+   * `compact` for a routine, recoverable state the user will see often — a
+   * stale selection, shared markup. Those were spending a full three-line card
+   * on a sentence, and in a 360px column every line they take is a line the
+   * controls move down by. Failures that need recovery instructions keep the
+   * default.
+   */
+  density?: "default" | "compact";
 }) {
   const Icon = tone === "error" ? XCircle : tone === "warning" ? AlertTriangle : Info;
   return (
     <div
       role={role}
       data-tone={tone}
-      className={cn("flex gap-2 rounded-md border px-3 py-2 text-xs", TONE_CLASS[tone], className)}
+      className={cn(
+        "flex gap-2 rounded-md border text-xs",
+        density === "compact" ? "px-2.5 py-1.5" : "px-3 py-2",
+        TONE_CLASS[tone],
+        className
+      )}
     >
       <Icon className={cn("mt-px h-3.5 w-3.5 shrink-0", ICON_CLASS[tone])} aria-hidden="true" />
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+      <div
+        className={cn("flex min-w-0 flex-1 flex-col", density === "compact" ? "gap-0.5" : "gap-1")}
+      >
         <p className="font-medium text-text-primary">{title}</p>
         {children ? <div className="text-text-secondary">{children}</div> : null}
         {action ? <div className="pt-1">{action}</div> : null}

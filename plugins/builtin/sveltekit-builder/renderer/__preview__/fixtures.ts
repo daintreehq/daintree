@@ -65,9 +65,14 @@ async function until(what: string, predicate: () => boolean, timeoutMs = 10_000)
 const seen = (text: string): boolean => (document.body.textContent ?? "").includes(text);
 
 /** The button in the surfaces whose trimmed label is exactly `label`. */
-function summary(): HTMLElement | undefined {
-  return [...document.querySelectorAll("summary")].find((node) =>
-    node.textContent?.includes("Edit directly")
+/**
+ * The "Edit directly" disclosure trigger. A real button with `aria-expanded`
+ * now, rather than a native `summary` — found by its accessible role so the
+ * fixture exercises the same contract a keyboard user gets.
+ */
+function summary(): HTMLButtonElement | undefined {
+  return [...document.querySelectorAll("button")].find(
+    (node) => node.hasAttribute("aria-expanded") && node.textContent?.trim() === "Edit directly"
   );
 }
 
@@ -167,7 +172,7 @@ export const FIXTURES = {
     act: async (host) => {
       await selectElement(host);
       await until("the Edit directly disclosure", () => summary() !== undefined);
-      summary()!.click();
+      if (summary()!.getAttribute("aria-expanded") !== "true") summary()!.click();
       await until(
         "the class tokens",
         () => document.querySelector('[aria-label="Classes"]') !== null
@@ -191,7 +196,7 @@ export const FIXTURES = {
     act: async (host) => {
       await selectElement(host);
       await until("the Edit directly disclosure", () => summary() !== undefined);
-      summary()!.click();
+      if (summary()!.getAttribute("aria-expanded") !== "true") summary()!.click();
       await until(
         "the class tokens",
         () => document.querySelector('[aria-label="Classes"]') !== null
@@ -201,7 +206,7 @@ export const FIXTURES = {
         () => document.querySelector('button[aria-label="Remove px-6"]') !== null
       );
       document.querySelector<HTMLButtonElement>('button[aria-label="Remove px-6"]')!.click();
-      await until("the edit receipt", () => seen("preview not yet refreshed"));
+      await until("the edit receipt", () => seen("Classes saved in +page.svelte"));
       // The receipt is the last thing in a drawer that already holds a notice,
       // the composer and both editors, so on a laptop viewport it lands below
       // the fold. Scroll to it: the capture is about the receipt.
@@ -246,7 +251,7 @@ export const FIXTURES = {
     act: async (host) => {
       await selectElement(host);
       await until("the Edit directly disclosure", () => summary() !== undefined);
-      summary()!.click();
+      if (summary()!.getAttribute("aria-expanded") !== "true") summary()!.click();
       await until(
         "the class tokens",
         () => document.querySelector('[aria-label="Classes"]') !== null
@@ -295,10 +300,11 @@ export const FIXTURES = {
     title: "The source workspace refused to open",
     settled: "text=Couldn't open the site source",
     arrange: (host) => {
-      host.handlers.set(CHANNELS.workspaceOpen, () => ({
-        status: "failed",
-        message: "vite.config.ts could not be read: EACCES permission denied",
-      }));
+      // Main rejects; the view has no `failed` variant on the wire, so a real
+      // failure arrives as a thrown error, not as a status.
+      host.handlers.set(CHANNELS.workspaceOpen, () => {
+        throw new Error("EACCES: permission denied, open 'vite.config.ts'");
+      });
     },
     act: bind,
   },
@@ -310,7 +316,8 @@ export const FIXTURES = {
     act: async (host) => {
       await selectElement(host);
       updateComposerMemory(MEMORY_KEY, {
-        draft: "Make this button feel more premium — softer corners and a calmer hover.",
+        // Cleared, as `deliverAgentRequest` clears it once the send is proven.
+        draft: "",
         delivery: {
           state: { status: "sent" },
           title: "claude · pricing polish",
@@ -345,10 +352,10 @@ export const FIXTURES = {
 
   detached: {
     title: "The inspector lost the preview it was attached to",
-    settled: "text=Reconnect",
+    settled: "text=Another inspector connected to this preview",
     act: async (host) => {
       await bind(host);
-      host.detach("guest-destroyed");
+      host.detach("rebound");
       await tick(160);
     },
   },

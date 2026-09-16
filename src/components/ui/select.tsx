@@ -118,7 +118,7 @@ const SelectTrigger = React.forwardRef<
         onClick={intentClick}
       >
         {children}
-        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
+        <ChevronDown className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
       </button>
     );
   }
@@ -142,7 +142,7 @@ const SelectTrigger = React.forwardRef<
       {children}
       <Icon asChild>
         <ChevronDown
-          className="h-3.5 w-3.5 shrink-0 text-daintree-text/40 transition-transform in-data-[state=open]:rotate-180"
+          className="h-3.5 w-3.5 shrink-0 text-text-secondary transition-transform in-data-[state=open]:rotate-180"
           aria-hidden="true"
         />
       </Icon>

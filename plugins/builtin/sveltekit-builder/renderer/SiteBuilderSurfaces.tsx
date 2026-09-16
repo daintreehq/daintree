@@ -1,7 +1,9 @@
-import { useEffect, useState, useSyncExternalStore } from "react";
-import { ChevronRight, PanelRightClose, PanelRightOpen, X } from "lucide-react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { PanelRightClose, PanelRightOpen, X } from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
 import { Button } from "@/components/ui/button";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
+import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import {
   INITIAL_INSPECTOR_STATE,
@@ -12,6 +14,7 @@ import {
   type InspectorState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
+import { InspectorDisclosure } from "./InspectorSection.js";
 import { SelectionEdits, SelectionIdentity, type SelectionActions } from "./SelectionCard.js";
 import { ReceiptView } from "./ReceiptView.js";
 import { AgentComposer } from "./AgentComposer.js";
@@ -23,7 +26,8 @@ import {
 } from "./composerMemory.js";
 import { WaitingRow } from "./WaitingRow.js";
 import { scopesFor } from "./agentTask.js";
-import { DETACH_COPY, relativeTo } from "./copy.js";
+import { DETACH_COPY, middleTruncate, relativeTo } from "./copy.js";
+import { SelectionTrail, trailFor } from "./SelectionTrail.js";
 
 const MODE_OPTIONS = [
   { value: "browse" as const, label: "Browse" },
@@ -80,11 +84,19 @@ function actionsFor(controller: InspectorController): SelectionActions {
 export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
   const { controller, state } = useBuilder(props);
   const bound = state.binding.status === "bound";
+  // The APG toolbar contract: the whole row is one tab stop, Left/Right move
+  // between its controls. The row claimed `role="toolbar"` while every control
+  // kept its own tab stop, so reaching the page past it cost five presses.
+  // `useToolbarRoving` is the house implementation — four other toolbars use it.
+  const stripRef = useRef<HTMLDivElement | null>(null);
+  const onStripKeyDown = useToolbarRoving(stripRef);
   if (!controller) {
     return (
       <div
+        ref={stripRef}
         role="toolbar"
         aria-label="Site Builder"
+        onKeyDown={onStripKeyDown}
         className="flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
       >
         <WaitingRow label="Starting the Site Builder" />
@@ -94,8 +106,10 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
 
   return (
     <div
+      ref={stripRef}
       role="toolbar"
       aria-label="Site Builder"
+      onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
       <SegmentedToggle
@@ -142,12 +156,18 @@ function DrawerToggle({ panelId }: { panelId: string }) {
 /** How to walk the page from the keyboard once something is selected. */
 function KeyHints() {
   return (
-    <span className="ml-auto hidden shrink-0 items-center gap-2 text-3xs @[640px]/strip:flex">
-      <span>
-        <kbd className="font-sans">↑↓←→</kbd> move
+    // `KBD_COMPACT_CLASS`, not a hand-rolled box: the product already has one
+    // key-cap grammar and this row is exactly the dense case it was tightened
+    // for. Unstyled, the two hints and the file path beside them read as one
+    // running sentence.
+    <span className="ml-auto hidden shrink-0 items-center gap-2 text-3xs text-text-secondary @[640px]/strip:flex">
+      <span className="flex items-center gap-1">
+        <kbd className={KBD_COMPACT_CLASS}>↑↓←→</kbd>
+        move
       </span>
-      <span>
-        <kbd className="font-sans">⌥↑</kbd> component
+      <span className="flex items-center gap-1">
+        <kbd className={KBD_COMPACT_CLASS}>⌥↑</kbd>
+        component
       </span>
     </span>
   );
@@ -196,16 +216,6 @@ function StripStatus({
         selection.scope === "component" ? selection.component : null,
         selection.definitions
       );
-      // Outermost first, ending at what was picked: the component for a
-      // component selection, the element otherwise.
-      const components = scopes
-        .slice(pickedIndex > 0 ? pickedIndex : 1)
-        .map((scope) => scope.label)
-        .reverse();
-      const trail =
-        pickedIndex > 0
-          ? components
-          : [...components, node.label || node.definition?.tagName || "element"];
       const picked = pickedIndex > 0 ? scopes[pickedIndex] : undefined;
       // A component is located by the file it is written in, once that is
       // proven; never by the element it was reached through.
@@ -217,24 +227,10 @@ function StripStatus({
             : null;
       return (
         <>
-          <ol aria-label="Selection" className="flex min-w-0 items-center gap-1 overflow-hidden">
-            {trail.map((label, index) => (
-              <li key={`${label}-${index}`} className="flex min-w-0 shrink items-center gap-1">
-                {index > 0 ? (
-                  <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-                ) : null}
-                <span
-                  className={
-                    index === trail.length - 1
-                      ? "truncate font-medium text-text-primary"
-                      : "truncate"
-                  }
-                >
-                  {label}
-                </span>
-              </li>
-            ))}
-          </ol>
+          {/* The same trail the drawer draws, from the same function. The two
+              used to build their own and disagreed about where the chain starts
+              and whether `each` counts as a step. */}
+          <SelectionTrail crumbs={trailFor(node)} className="min-w-0 flex-1" />
           {pickedIndex > 0 ? (
             <span className="shrink-0 rounded-sm border border-border-subtle px-1 text-3xs">
               Component
@@ -242,8 +238,11 @@ function StripStatus({
           ) : null}
           <KeyHints />
           {location ? (
-            <span className="shrink-0 truncate font-mono text-3xs" title={location}>
-              {location}
+            <span
+              className="ml-2 min-w-0 shrink truncate font-mono text-3xs text-text-secondary"
+              title={location}
+            >
+              {middleTruncate(location, 38)}
             </span>
           ) : null}
         </>
@@ -266,9 +265,16 @@ function StripStatus({
  */
 export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
   const { controller, state } = useBuilder(props);
-  // Held here, outside the per-selection section, so picking the next element
-  // doesn't fold away the editor the user just opened.
-  const [editsOpen, setEditsOpen] = useState(false);
+  // Open by default, and held here rather than per-selection so picking the next
+  // element doesn't fold away the editors.
+  //
+  // Direct editing is one of the two answers to "can I change this" — the other
+  // being the composer below it — and the user in the tight loop (spot it,
+  // click it, fix it) is reaching for it dozens of times a session. Starting it
+  // collapsed made the cheapest route the one that costs an extra click, while
+  // the empty composer held ~280px above it. Collapsing is a preference the
+  // user expresses once and this remembers.
+  const [editsOpen, setEditsOpen] = useState(true);
   const memoryKey = composerMemoryKey(props.panelId, props.worktreeId);
   // A draft or an agent request outlives the selection it was about; keep
   // both reachable.
@@ -305,29 +311,43 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
       ) : null}
       <WorkspaceStatus state={state} controller={controller} worktreePath={props.worktreePath} />
       <SelectionBody state={state} />
-      {state.workspace.status === "ready" ? (
-        <AgentComposer
-          memoryKey={memoryKey}
-          controller={controller}
-          selection={selection}
-          worktreeId={props.worktreeId}
-          worktreePath={props.worktreePath}
-        />
-      ) : null}
+
+      {/* The two routes, as peers. Direct editing used to sit below the composer
+          inside a native `details`, which made a two-keystroke fix a
+          disclose-and-scroll operation and put the editors below the fold on any
+          laptop viewport — while the empty composer held ~280px above them. They
+          answer the same question ("can I change it, and how"), so they get the
+          same weight and the same section grammar. */}
       {selection.status === "ready" ? (
-        <details
+        <InspectorDisclosure
+          title="Edit directly"
           open={editsOpen}
-          onToggle={(event) => setEditsOpen(event.currentTarget.open)}
-          className="group flex flex-col gap-3 border-t border-border-subtle pt-3"
+          onOpenChange={setEditsOpen}
+          className="border-t border-border-subtle pt-1"
         >
-          <summary className="cursor-pointer select-none text-xs font-medium text-text-secondary">
-            Edit directly
-          </summary>
           <SelectionEdits state={state} selection={selection} actions={actionsFor(controller)} />
-        </details>
+        </InspectorDisclosure>
       ) : null}
+
+      {state.workspace.status === "ready" ? (
+        <div className="border-t border-border-subtle pt-3">
+          <AgentComposer
+            memoryKey={memoryKey}
+            controller={controller}
+            selection={selection}
+            worktreeId={props.worktreeId}
+            worktreePath={props.worktreePath}
+          />
+        </div>
+      ) : null}
+
+      {/* Pushed to the bottom of the column rather than trailing the content, so
+          a write and its Undo land in the same place every time instead of
+          wherever the sections above happen to end. */}
       {state.receipt ? (
-        <ReceiptView state={state.receipt} onUndo={() => void controller.undo()} />
+        <div className="mt-auto border-t border-border-subtle pt-3">
+          <ReceiptView state={state.receipt} onUndo={() => void controller.undo()} />
+        </div>
       ) : null}
     </aside>
   );
