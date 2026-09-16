@@ -12,7 +12,8 @@ vi.mock("@daintreehq/svelte-source-model", async (importOriginal) => {
 });
 
 import { activate } from "../index.js";
-import { CHANNELS } from "../../shared/protocol.js";
+import { CHANNELS, INSPECTOR_PANEL_KIND } from "../../shared/protocol.js";
+import manifest from "../../plugin.json" with { type: "json" };
 import { createSandbox, createTestHost, type Sandbox } from "./testHost.js";
 
 let sandbox: Sandbox | null = null;
@@ -61,5 +62,34 @@ describe("activate", () => {
       ],
     });
     expect(loaded).toEqual({ compiler: true, sourceModel: true });
+  });
+
+  it("implements every command the manifest declares, and the inspector command opens the panel", async () => {
+    sandbox = await createSandbox();
+    const test = createTestHost(sandbox.worktree);
+    await activate(test.host);
+
+    const mock = test.host as unknown as {
+      registeredActions: ReadonlyArray<{
+        descriptor: { id: string };
+        handler: (args?: unknown) => unknown;
+      }>;
+      dispatchedActions: ReadonlyArray<{ actionId: string; args: unknown }>;
+    };
+    const registered = mock.registeredActions.map((action) =>
+      action.descriptor.id.split(".").pop()
+    );
+    for (const command of manifest.contributes.commands) {
+      expect(registered).toContain(command.id);
+    }
+
+    const open = mock.registeredActions.find((action) =>
+      action.descriptor.id.endsWith("open-inspector")
+    );
+    await open?.handler();
+    expect(mock.dispatchedActions).toContainEqual({
+      actionId: "panel.openPluginPanel",
+      args: { kind: INSPECTOR_PANEL_KIND },
+    });
   });
 });

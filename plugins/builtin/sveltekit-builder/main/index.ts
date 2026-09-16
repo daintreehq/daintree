@@ -24,6 +24,8 @@ import {
   WorkspaceCloseResultSchema,
   WorkspaceOpenArgsSchema,
   WorkspaceOpenResultSchema,
+  INSPECTOR_PANEL_KIND,
+  OPEN_INSPECTOR_ACTION_ID,
 } from "../shared/protocol.js";
 import type { ProjectFileReader } from "../shared/project/fs.js";
 import { applyEdit, undoEdit } from "./edits.js";
@@ -83,6 +85,22 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   const warnIssue = (code: string, message: string): void => {
     post(PUSH_CHANNELS.issue, IssuePushSchema.parse({ severity: "warning", code, message }));
   };
+
+  // Declared in the manifest so the palette lists it before activation; the
+  // handler binds here, on the first dispatch that activates the plugin.
+  await host.registerAction(
+    {
+      id: OPEN_INSPECTOR_ACTION_ID,
+      title: "Site Builder: Open Site Inspector",
+      description:
+        "Open the Site Inspector and bind it to a running SvelteKit dev preview in this worktree.",
+      category: "panels",
+      kind: "command",
+      danger: "safe",
+      keywords: ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "tailwind"],
+    },
+    async () => host.dispatch("panel.openPluginPanel", { kind: INSPECTOR_PANEL_KIND })
+  );
 
   await host.registerHandler(
     CHANNELS.workspaceOpen,
