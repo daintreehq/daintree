@@ -1,0 +1,9 @@
+{
+  "name": "acme-monorepo",
+  "private": true,
+  "packageManager": "pnpm@9.12.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ]
+}

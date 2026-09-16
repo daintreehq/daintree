@@ -1,0 +1,7 @@
+{
+  "name": "@acme/ui",
+  "private": true,
+  "peerDependencies": {
+    "svelte": "^5.0.0"
+  }
+}
