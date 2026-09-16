@@ -40,8 +40,9 @@ export interface LaunchOptions {
   waitForSelector?: string;
   extraArgs?: string[];
   /**
-   * When set to a digit 1-9, launches Electron with --force-device-scale-factor=N
-   * so the renderer paints at NxCSS pixels. Used by the marketing-screenshot
+   * When set to a single digit 1-9 with an optional fractional part (`3`, `2.5`),
+   * launches Electron with --force-device-scale-factor=N so the renderer paints
+   * at NxCSS pixels. Anything else is ignored. Used by the marketing-screenshot
    * pipeline to capture 4K-grade PNGs from a 1280x720 logical window on a
    * 1920x1080-capped CI display. Defaults to process.env.DAINTREE_SCREENSHOT_SCALE.
    */
