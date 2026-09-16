@@ -65,6 +65,7 @@ import {
 } from "./useReviewHubStagingActions";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
+import { PR_CHECKS_OPEN_ATTR } from "./PrChecksPopover";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
@@ -1623,6 +1624,11 @@ export function ReviewHubContent({
 
   const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
     if (e.key === "Escape") {
+      // Backstop. The checks disclosure claims Escape for itself on a
+      // window-capture listener, which runs ahead of this one — but this
+      // listener closes the entire hub, so it stands aside on the trigger's own
+      // open marker rather than relying on that ordering alone.
+      if (document.querySelector(`[${PR_CHECKS_OPEN_ATTR}="true"]`)) return;
       e.preventDefault();
       e.stopPropagation();
       if (selectedFile) {
@@ -1844,6 +1850,7 @@ export function ReviewHubContent({
             <PrStatusChip
               hasRemote={status?.hasRemote}
               worktreePR={worktreePR}
+              worktreePath={worktreePath}
               onOpenExternal={(url) => void systemClient.openExternal(url)}
             />
           </div>
