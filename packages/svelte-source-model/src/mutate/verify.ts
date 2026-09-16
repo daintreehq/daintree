@@ -92,10 +92,13 @@ export function verifyProtectedRanges(
  */
 export function complementOf(sourceLength: number, ranges: readonly SourceRange[]): SourceRange[] {
   if (ranges.length === 0) return [{ start: 0, end: sourceLength }];
-  const start = Math.min(...ranges.map((r) => r.start));
-  const end = Math.max(...ranges.map((r) => r.end));
-  return [
-    { start: 0, end: start },
-    { start: end, end: sourceLength },
-  ];
+  const sorted = [...ranges].sort((a, b) => a.start - b.start || a.end - b.end);
+  const complement: SourceRange[] = [];
+  let cursor = 0;
+  for (const range of sorted) {
+    if (range.start > cursor) complement.push({ start: cursor, end: range.start });
+    cursor = Math.max(cursor, range.end);
+  }
+  if (cursor < sourceLength) complement.push({ start: cursor, end: sourceLength });
+  return complement;
 }

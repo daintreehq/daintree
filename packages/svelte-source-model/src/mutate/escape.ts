@@ -126,10 +126,42 @@ function dominantLineEnding(source: string): "\r\n" | "\n" {
  * are not, and a NUL that reaches disk is a file no editor will open cleanly.
  */
 export function hasUnwritableCharacter(value: string): boolean {
+  if (hasLoneSurrogate(value)) return true;
   for (let i = 0; i < value.length; i++) {
     const code = value.charCodeAt(i);
     if (code === 0x09 || code === 0x0a || code === 0x0d) continue;
     if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+
+/**
+ * ASCII whitespace, which is the only whitespace HTML splits a space-separated
+ * token list on. JavaScript's `\s` also matches NBSP and the Unicode spaces, so
+ * using it here would read the single class `a\u00a0b` as the two classes `a`
+ * and `b` and happily delete half of it.
+ */
+export const ASCII_WHITESPACE = /[ \t\n\f\r]/;
+
+/**
+ * True when `value` contains half a surrogate pair.
+ *
+ * Svelte's parser accepts one, so a candidate built from it verifies — and then
+ * the UTF-8 encode on the way to disk replaces it with U+FFFD and the file no
+ * longer says what the plan said it would. Inside a JavaScript string literal
+ * `JSON.stringify` escapes it and it survives, which is why this is checked at
+ * the markup writers rather than globally.
+ */
+export function hasLoneSurrogate(value: string): boolean {
+  for (let i = 0; i < value.length; i++) {
+    const code = value.charCodeAt(i);
+    if (code >= 0xd800 && code <= 0xdbff) {
+      const next = value.charCodeAt(i + 1);
+      if (Number.isNaN(next) || next < 0xdc00 || next > 0xdfff) return true;
+      i++;
+    } else if (code >= 0xdc00 && code <= 0xdfff) {
+      return true;
+    }
   }
   return false;
 }
