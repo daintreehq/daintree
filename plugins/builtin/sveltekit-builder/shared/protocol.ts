@@ -23,6 +23,19 @@ import {
  * anything it sends. Everything arriving from the guest is therefore an
  * *observation* — the host re-resolves source identity itself and never accepts
  * a file path, range or revision the page supplied.
+ *
+ * Ownership is split along the process boundary, and each half owns exactly
+ * one thing:
+ *
+ * - **The renderer view owns the live preview.** It binds, detaches and
+ *   switches mode through `window.electron.sitePreview` — which is a renderer
+ *   IPC surface and cannot be reached from plugin main — supplies the guest
+ *   runtime, and receives guest events. Nothing about the preview binding
+ *   crosses `CHANNELS`.
+ * - **Plugin main owns source truth.** It resolves the app, reads and parses
+ *   files through the scope-contained `host.fs`, turns guest observations into
+ *   source identity, applies edits and keeps the undo journal. It never touches
+ *   the preview.
  */
 
 export const PLUGIN_ID = "daintree.sveltekit-builder";
@@ -37,15 +50,11 @@ export const INSPECTOR_VIEW_ID = "inspector";
 export const GUEST_PROTOCOL_VERSION = 1;
 
 export const CHANNELS = {
-  /** Bind the inspector to a dev-preview session, or report why it cannot. */
+  /** Resolve the SvelteKit app for a worktree and open a source workspace on it. */
   workspaceOpen: "workspace:open",
-  /** Current binding, readiness and supported-baseline verdict. */
-  workspaceStatus: "workspace:status",
-  /** Release the binding and remove the guest runtime. */
+  /** Release a source workspace and the undo journal it holds. */
   workspaceClose: "workspace:close",
-  /** Switch the guest between Browse and Select. */
-  modeSet: "mode:set",
-  /** Re-resolve a selection against current source (after HMR, or on demand). */
+  /** Turn guest observations into source identity against current file bytes. */
   selectionResolve: "selection:resolve",
   /** Read a bounded source excerpt for the identity card / source peek. */
   sourceExcerpt: "source:excerpt",
@@ -55,18 +64,20 @@ export const CHANNELS = {
   editUndo: "edit:undo",
   /** Tailwind completion catalog + resolved responsive ranges for this project. */
   tailwindCatalog: "tailwind:catalog",
+  /** Search the project's valid Tailwind candidates for the class input. */
+  classComplete: "tailwind:complete",
   /** Detected app roots, versions, package manager and route tree. */
   projectModel: "project:model",
 } as const satisfies Record<string, string>;
 
+/**
+ * Main pushes only what main alone can observe. Selection, binding and preview
+ * readiness are the renderer's own knowledge, so they are not pushed back to it.
+ */
 export const PUSH_CHANNELS = {
-  /** A new selection (or `null` when cleared) observed in the guest. */
-  selection: "push:selection",
-  /** Binding state changed — bound, detached, guest lost, epoch advanced. */
-  binding: "push:binding",
-  /** An edit reached a new proven state (preview refreshed, styles generated). */
-  receipt: "push:receipt",
-  /** A guest-side or host-side problem the panel should surface inline. */
+  /** A file under an open workspace changed outside the builder, e.g. an agent wrote it. */
+  sourceChanged: "push:source-changed",
+  /** A main-side problem the panel should surface inline. */
   issue: "push:issue",
 } as const satisfies Record<string, string>;
 
@@ -197,63 +208,56 @@ export const WorkspaceOpenArgsSchema = z
   .object({
     projectId: z.string().min(1),
     worktreeId: z.string().min(1),
-    /** Omit to attach to the worktree's only running preview, if there is one. */
-    previewPanelId: z.string().min(1).optional(),
-    /** Omit to auto-detect; required when the repo holds more than one app. */
+    /**
+     * Absolute worktree path. Supplied by the view, which knows the worktree it
+     * is showing; main never trusts it as authority — every read and write goes
+     * through `host.fs`, which realpath-contains it to the declared scopes.
+     */
+    worktreePath: z.string().min(1),
+    /** Omit to auto-detect; required when the worktree holds more than one app. */
     appRoot: z.string().min(1).optional(),
   })
   .strict();
 export type WorkspaceOpenArgs = z.infer<typeof WorkspaceOpenArgsSchema>;
 
-export const WorkspaceStateSchema = z.discriminatedUnion("status", [
+export const WorkspaceOpenResultSchema = z.discriminatedUnion("status", [
   z
     .object({
-      status: z.literal("bound"),
-      identity: WorkspaceIdentitySchema,
+      status: z.literal("ready"),
+      workspaceSessionId: z.string().min(1),
+      appRoot: z.string().min(1),
       support: SupportVerdictSchema,
-      documentEpoch: z.number().int().nonnegative(),
-      mode: z.enum(["browse", "select"]),
-      guestReady: z.boolean(),
     })
     .strict(),
-  /** More than one candidate app or preview — the user must choose. */
+  /** More than one app in the worktree — the user must choose one. */
   z
     .object({
       status: z.literal("ambiguous"),
-      appRoots: z.array(z.string().min(1)),
-      previewPanelIds: z.array(z.string().min(1)),
+      appRoots: z.array(z.string().min(1)).min(2),
     })
     .strict(),
-  z
-    .object({
-      status: z.literal("no-preview"),
-      appRoots: z.array(z.string().min(1)),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("unsupported"),
-      support: SupportVerdictSchema,
-    })
-    .strict(),
-  z.object({ status: z.literal("detached") }).strict(),
+  /** No SvelteKit app found under this worktree. */
+  z.object({ status: z.literal("no-app") }).strict(),
 ]);
-export type WorkspaceState = z.infer<typeof WorkspaceStateSchema>;
+export type WorkspaceOpenResult = z.infer<typeof WorkspaceOpenResultSchema>;
 
-export const ModeSetArgsSchema = z
-  .object({
-    workspaceSessionId: z.string().min(1),
-    mode: z.enum(["browse", "select"]),
-  })
+export const WorkspaceCloseArgsSchema = z
+  .object({ workspaceSessionId: z.string().min(1) })
   .strict();
 
 export const SelectionResolveArgsSchema = z
   .object({
     workspaceSessionId: z.string().min(1),
-    nodes: z.array(GuestNodeObservationSchema).max(32),
+    /** The preview the observations came from; the view owns that binding. */
+    previewPanelId: z.string().min(1),
     documentEpoch: z.number().int().nonnegative(),
+    routeId: z.string().nullable(),
+    url: z.string().max(2048),
+    viewport: ViewportSchema,
+    nodes: z.array(GuestNodeObservationSchema).max(32),
   })
   .strict();
+export type SelectionResolveArgs = z.infer<typeof SelectionResolveArgsSchema>;
 
 export const SelectionResolveResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ok"), selection: SiteSelectionSchema }).strict(),
@@ -385,6 +389,11 @@ export const ClassCompleteArgsSchema = z
   })
   .strict();
 
+export const ClassCompleteResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("ok"), candidates: z.array(ClassCandidateSchema) }).strict(),
+  z.object({ status: z.literal("unavailable"), reason: z.string().min(1) }).strict(),
+]);
+
 export const RouteNodeSchema = z
   .object({
     /** SvelteKit route id, e.g. `/products/[slug]`. Route groups excluded. */
@@ -422,11 +431,19 @@ export type ProjectModel = z.infer<typeof ProjectModelResultSchema>;
 /* Main → view (push)                                                         */
 /* -------------------------------------------------------------------------- */
 
-export const SelectionPushSchema = z.object({ selection: SiteSelectionSchema.nullable() }).strict();
-
-export const BindingPushSchema = z.object({ state: WorkspaceStateSchema }).strict();
-
-export const ReceiptPushSchema = z.object({ receipt: EditReceiptSchema }).strict();
+export const SourceChangedPushSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    /** Worktree-relative POSIX path of the file that changed. */
+    file: z.string().min(1),
+    /** Revision now on disk, or null when the file is gone. */
+    revision: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .nullable(),
+  })
+  .strict();
+export type SourceChangedPush = z.infer<typeof SourceChangedPushSchema>;
 
 export const IssuePushSchema = z
   .object({
