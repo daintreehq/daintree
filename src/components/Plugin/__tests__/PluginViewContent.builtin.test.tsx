@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { useEffect } from "react";
+import { lazy, useEffect } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PanelViewProps } from "@shared/types/plugin";
 import { makePluginViewContent, type PluginViewContentConfig } from "../PluginViewContent";
@@ -167,6 +167,27 @@ describe("built-in panel views", () => {
     expect(activateForView).toHaveBeenCalledWith(BUILTIN_KIND);
     expect(stylePrep.calls).toEqual([]);
     expect(documentViews.calls).toEqual([]);
+  });
+
+  // The Site Builder registers `lazy(() => import("./SiteInspectorView"))` to keep
+  // its view out of the host bundle. Handing that straight back from the host's
+  // own `lazy()` is a lazy resolving to a lazy, which React refuses (#306) — the
+  // panel mounted and showed only the diagnostics fallback.
+  it("renders a slot that was itself registered as a lazy component", async () => {
+    function Inspector({ panelId }: PanelViewProps) {
+      return <div data-testid="builtin-view">{panelId}</div>;
+    }
+    const LazyInspector = lazy(async () => ({ default: Inspector }));
+    registerBuiltinView(BUILTIN_KIND, LazyInspector, {
+      pluginId: BUILTIN_ID,
+      label: "Site Inspector",
+    });
+
+    const Content = makePluginViewContent(builtinConfig());
+    render(<Content panelId="panel-lazy" worktreeId="wt-1" />);
+
+    expect((await screen.findByTestId("builtin-view")).textContent).toBe("panel-lazy");
+    expect(screen.queryByText(/Something went wrong|Try again/)).toBeNull();
   });
 
   it("takes the plugin:// path when no slot is registered under the kind id", async () => {

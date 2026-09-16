@@ -8,10 +8,12 @@ import type {
   SitePreviewPushPayload,
 } from "@shared/types/ipc/sitePreview";
 import { getPanelStoreSnapshot } from "@/store/storeAccessors";
+import { actionService } from "@/services/ActionService";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import {
   CHANNELS,
   ClassCompleteResultSchema,
+  SourceExcerptResultSchema,
   EditApplyResultSchema,
   EditUndoResultSchema,
   IssuePushSchema,
@@ -62,6 +64,14 @@ export interface InspectorDeps {
   /** The worktree a panel belongs to: undefined when unknown, null when it has none. */
   panelWorktreeId(panelId: string): string | null | undefined;
   runtimeSource(): Promise<string>;
+  /**
+   * Open a dev preview in the current worktree, which starts its dev server
+   * (or offers the detected command when none is configured). Resolves to the
+   * new panel, or null when none was created.
+   */
+  startPreview(): Promise<string | null>;
+  /** Resolves after `ms`; injected so tests needn't wait in real time. */
+  delay(ms: number): Promise<void>;
   newId(): string;
   now(): number;
   /** Calls back when this plugin is disabled; main has already closed every workspace. */
@@ -78,6 +88,8 @@ export type BindingState =
   | { status: "idle" }
   | { status: "listing" }
   | { status: "no-candidates" }
+  /** A dev preview was opened for this worktree; waiting for its page to exist. */
+  | { status: "starting"; panelId: string | null }
   | { status: "choosing"; candidates: SitePreviewCandidate[] }
   | { status: "binding"; panelId: string }
   | { status: "bound"; sessionId: string; panelId: string; url: string | null }
@@ -189,6 +201,17 @@ const INITIAL_STATE: InspectorState = {
 
 const MAX_BUFFERED_EVENTS = 64;
 
+const START_PREVIEW_POLL_MS = 500;
+/** Long enough for a first `npm install`-less cold Vite start and a command pick. */
+const START_PREVIEW_TIMEOUT_MS = 5 * 60_000;
+
+/** Detaches the host causes on its own, as opposed to the user or another inspector. */
+const REATTACH_REASONS: ReadonlySet<SitePreviewDetachReason> = new Set([
+  "guest-destroyed",
+  "debugger-detached",
+]);
+const REATTACH_DELAYS_MS = [300, 1000, 3000];
+
 // Loaded on first bind, not at module evaluation: the runtime is only needed
 // once a preview is attached, and it serialises its own factory to source text.
 export async function loadGuestRuntimeBody(): Promise<string> {
@@ -231,6 +254,15 @@ export function defaultInspectorDeps(): InspectorDeps {
       return panel.worktreeId ?? null;
     },
     runtimeSource: loadGuestRuntimeBody,
+    startPreview: async () => {
+      const result = await actionService.dispatch<{ panelId: string | null }>(
+        "devServer.start",
+        undefined,
+        { source: "user" }
+      );
+      return result.ok ? result.result.panelId : null;
+    },
+    delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
     newId: () => crypto.randomUUID(),
     now: () => Date.now(),
     onPluginDisabled: (callback) => {
@@ -319,6 +351,7 @@ export class InspectorController {
   private workspaceKey: string | null = null;
   private workspaceRequest = 0;
   private bindRequest = 0;
+  private reattachTimer: ReturnType<typeof setTimeout> | null = null;
   private selectionRequest = 0;
   private bufferedEvents: SitePreviewPushPayload[] = [];
   /** Files main reported changed while the current resolve was in flight. */
@@ -328,6 +361,8 @@ export class InspectorController {
   private chosenAppRoot: string | undefined;
   private recoveringWorkspace: string | null = null;
   private lastCandidates: SitePreviewCandidate[] = [];
+  /** A preview is opened on the user's behalf once per panel, never in a loop. */
+  private autoStarted = false;
   private disposed = false;
 
   constructor(
@@ -510,6 +545,11 @@ export class InspectorController {
     const inWorktree = candidates.filter((candidate) => this.inThisWorktree(candidate.panelId));
     this.lastCandidates = inWorktree;
     if (inWorktree.length === 0) {
+      if (!this.autoStarted) {
+        this.autoStarted = true;
+        await this.startPreview();
+        return;
+      }
       this.update({ binding: { status: "no-candidates" } });
       return;
     }
@@ -518,6 +558,66 @@ export class InspectorController {
       return;
     }
     this.update({ binding: { status: "choosing", candidates: inWorktree } });
+  }
+
+  /**
+   * Run the site the way the dev preview does: open a preview for this worktree
+   * and bind as soon as its page exists. An unconfigured project gets the
+   * preview's own "Run `npm run dev`" choice, so the wait covers the user
+   * picking a command too.
+   */
+  async startPreview(): Promise<void> {
+    const request = ++this.bindRequest;
+    this.autoStarted = true;
+    this.update({ binding: { status: "starting", panelId: null } });
+    let panelId: string | null;
+    try {
+      panelId = await this.deps.startPreview();
+    } catch (error) {
+      if (request !== this.bindRequest) return;
+      this.update({
+        binding: {
+          status: "failed",
+          message: formatErrorMessage(error, "Couldn't start the dev preview"),
+        },
+      });
+      return;
+    }
+    if (request !== this.bindRequest || this.disposed) return;
+    if (panelId === null) {
+      this.update({ binding: { status: "no-candidates" } });
+      return;
+    }
+    this.update({ binding: { status: "starting", panelId } });
+
+    const deadline = this.deps.now() + START_PREVIEW_TIMEOUT_MS;
+    let panelSeen = false;
+    while (this.deps.now() < deadline) {
+      await this.deps.delay(START_PREVIEW_POLL_MS);
+      if (request !== this.bindRequest || this.disposed) return;
+      // Unknown can mean the panel store isn't reachable, so only a panel that
+      // was there and is now gone counts as the user closing the preview.
+      const present = this.deps.panelWorktreeId(panelId) !== undefined;
+      if (panelSeen && !present) break;
+      panelSeen ||= present;
+      let candidates: SitePreviewCandidate[];
+      try {
+        candidates = await this.deps.sitePreview.listCandidates();
+      } catch {
+        continue;
+      }
+      if (request !== this.bindRequest || this.disposed) return;
+      const inWorktree = candidates.filter((candidate) => this.inThisWorktree(candidate.panelId));
+      const started =
+        inWorktree.find((candidate) => candidate.panelId === panelId) ?? inWorktree[0];
+      if (started) {
+        this.lastCandidates = inWorktree;
+        await this.bindTo(started.panelId);
+        return;
+      }
+    }
+    if (request !== this.bindRequest || this.disposed) return;
+    this.update({ binding: { status: "no-candidates" } });
   }
 
   private inThisWorktree(previewPanelId: string): boolean {
@@ -589,6 +689,42 @@ export class InspectorController {
     for (const payload of buffered) this.handlePreviewPush(payload);
   }
 
+  /**
+   * The grid recreates a preview's page when panels are added or moved, and
+   * that detaches the session exactly as a closed preview would. Reattach to
+   * the same panel a few times before leaving it to the user; when DevTools
+   * really does own the page, every attempt fails fast and the notice stays.
+   */
+  private scheduleReattach(
+    panelId: string,
+    reason: SitePreviewDetachReason,
+    attempt: number
+  ): void {
+    if (attempt >= REATTACH_DELAYS_MS.length || this.disposed) return;
+    const request = this.bindRequest;
+    this.clearReattach();
+    this.reattachTimer = setTimeout(() => {
+      this.reattachTimer = null;
+      const binding = this.state.binding;
+      if (this.disposed || request !== this.bindRequest) return;
+      if (binding.status !== "detached" || binding.panelId !== panelId) return;
+      const rebinding = this.bindTo(panelId);
+      // `bindTo` claims the request synchronously; a later bind supersedes it.
+      const attemptRequest = this.bindRequest;
+      void rebinding.then(() => {
+        if (this.disposed || attemptRequest !== this.bindRequest) return;
+        if (this.state.binding.status !== "failed") return;
+        this.update({ binding: { status: "detached", panelId, reason } });
+        this.scheduleReattach(panelId, reason, attempt + 1);
+      });
+    }, REATTACH_DELAYS_MS[attempt]);
+  }
+
+  private clearReattach(): void {
+    if (this.reattachTimer !== null) clearTimeout(this.reattachTimer);
+    this.reattachTimer = null;
+  }
+
   private candidateUrl(panelId: string): string | null {
     return this.lastCandidates.find((candidate) => candidate.panelId === panelId)?.url ?? null;
   }
@@ -651,6 +787,8 @@ export class InspectorController {
           binding: { status: "detached", panelId: binding.panelId, reason: payload.reason },
           ...this.staleSelectionPatch("preview-detached"),
         });
+        if (REATTACH_REASONS.has(payload.reason))
+          this.scheduleReattach(binding.panelId, payload.reason, 0);
         return;
       case "epoch-advanced":
         this.noteEpoch(payload.documentEpoch);
@@ -1215,8 +1353,35 @@ export class InspectorController {
     }
   }
 
+  /**
+   * The owning markup with a few lines either side, for an agent task. Null when
+   * the source isn't open or main won't excerpt it (generated or dependency
+   * files); the task then goes without, and says the source wasn't traced.
+   */
+  async sourceExcerpt(
+    selection: SiteSelection,
+    file: string
+  ): Promise<{ text: string; firstLine: number } | null> {
+    const range = selection.nodes[0]?.definition?.range;
+    if (!range) return null;
+    try {
+      const raw = await this.deps.invoke(CHANNELS.sourceExcerpt, {
+        workspaceSessionId: selection.workspaceSessionId,
+        file,
+        range,
+        contextLines: 6,
+      });
+      const parsed = SourceExcerptResultSchema.safeParse(raw);
+      if (!parsed.success || parsed.data.status !== "ok") return null;
+      return { text: parsed.data.text, firstLine: parsed.data.firstLine };
+    } catch {
+      return null;
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
+    this.clearReattach();
     this.bindRequest++;
     const binding = this.state.binding;
     if (binding.status === "bound") {

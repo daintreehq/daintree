@@ -8,6 +8,7 @@ const context = vi.hoisted(() => ({
 vi.mock("../useInspectorContext.js", () => ({ useInspectorContext: () => context.current }));
 
 import { SiteInspectorView } from "../SiteInspectorView";
+import { actionService } from "@/services/ActionService";
 import { __resetInspectorControllersForTests, loadGuestRuntimeBody } from "../inspectorController";
 import { CHANNELS, PLUGIN_ID, PUSH_CHANNELS } from "../../shared/protocol";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
@@ -110,12 +111,41 @@ describe("preview binding", () => {
     expect(host.sitePreview.bind.mock.calls[0]![0].panelId).toBe("preview-2");
   });
 
-  it("asks for a dev preview when there is none", async () => {
+  it("starts the site itself when no dev preview is running, then binds to it", async () => {
     host.setCandidates([]);
+    const dispatch = vi.spyOn(actionService, "dispatch").mockImplementation(async (id) => {
+      if (id !== "devServer.start") throw new Error(`unexpected ${id}`);
+      // The preview's page appears a moment after the panel is created.
+      setTimeout(
+        () =>
+          host.setCandidates([
+            { panelId: "preview-new", url: "http://localhost:5173/", boundSessionId: null },
+          ]),
+        50
+      );
+      return { ok: true, result: { panelId: "preview-new" } } as never;
+    });
+
     mount();
-    await screen.findByText("Start a dev preview");
-    expect(screen.getByRole("button", { name: "Check again" })).toBeTruthy();
+
+    await screen.findByText("Starting your site");
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    expect(host.sitePreview.bind.mock.calls[0]![0].panelId).toBe("preview-new");
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers to start the site when opening a preview produced nothing", async () => {
+    host.setCandidates([]);
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true, result: { panelId: null } } as never);
+
+    mount();
+
+    await screen.findByText("Start your site");
     expect(host.sitePreview.bind).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Start dev server" }));
+    await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
   });
 
   it("switches the preview between Browse and Select", async () => {
@@ -752,5 +782,41 @@ describe("lifetime", () => {
       expect(host.calls(CHANNELS.workspaceOpen).at(-1)).toMatchObject({ worktreeId: "wt-2" })
     );
     expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
+  });
+});
+
+describe("preview reattach", () => {
+  it("reattaches on its own when the grid recreates the preview's page", async () => {
+    await mountBound();
+    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
+
+    await act(async () =>
+      host.pushPreview({
+        kind: "detached",
+        sessionId: "session-1",
+        projectId: "p1",
+        reason: "debugger-detached",
+      })
+    );
+
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2), { timeout: 2000 });
+    await screen.findByRole("button", { name: "Browse" });
+  });
+
+  it("stays disconnected when the user asked to disconnect", async () => {
+    await mountBound();
+
+    await act(async () =>
+      host.pushPreview({
+        kind: "detached",
+        sessionId: "session-1",
+        projectId: "p1",
+        reason: "requested",
+      })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
   });
 });

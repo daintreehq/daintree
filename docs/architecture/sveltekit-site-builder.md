@@ -71,7 +71,7 @@ It also does not survive an HMR update as an object identity. A Vite update **re
 │ BUILT-IN PLUGIN  daintree.sveltekit-builder                        │
 │   main/      binding lifecycle, host.fs writes, edit journal, undo │
 │   shared/    protocol + domain model, Tailwind semantics, project  │
-│   renderer/  the Site Inspector panel                              │
+│   renderer/  the Site Builder panel                                │
 └───────────────────────────────┬────────────────────────────────────┘
                                 │
 ┌───────────────────────────────┴────────────────────────────────────┐
@@ -125,6 +125,18 @@ Edits go through `host.fs.writeFile(path, contents, { expectedRevision })`, whic
 
 Edits are planned before they are applied. A plan is a set of replacements over ranges of the _original_ source, applied in one pass, so unrelated bytes — whitespace, comments, quote style, classes the builder does not recognise — survive verbatim. The candidate is re-parsed and the protected ranges are checked before anything reaches disk; a candidate is never written just to discover whether it compiles.
 
+## Asking an agent
+
+The Site Builder's second job — and for most requests its main one — is handing the selected element to an agent terminal. The **Ask an agent** section composes one prompt and submits it to an agent terminal in the panel's own worktree:
+
+- **Destination is explicit.** Only live agent terminals in the same worktree are offered; one is chosen automatically when it is the only one. A terminal in another worktree is never a target, even with focus, because the prompt's paths would be wrong there.
+- **The subject is pinned.** Typing pins the element (or component) the draft is about; clicking something else offers **Use current selection** rather than silently changing the subject.
+- **Element or component.** `taskScopes()` turns the Svelte parent chain into the clicked element plus every component around it, innermost first, each located by the file it is written in and the call site that used it. The outermost user file (a route page or layout rendered by generated code) is always offered.
+- **Context is resolved, not concluded.** The prompt carries the user's words first, then the page, viewport, element label, `file:line:column` of the defining markup (worktree-relative), the rendered-copy count, the component chain, current classes and text, and a bounded source excerpt from main.
+- **Delivery is what the host can prove.** It goes through `terminal.sendCommand` and polls `terminal.getStatus` with the submission token: `pty_written` is "Sent", `unknown` is "Delivery unconfirmed", `failed`/`cancelled` say part of the prompt may already be in the agent's input. A busy (`working`/`directing`) agent can't be sent to.
+
+Built-in renderer views dispatch these renderer actions directly as a user action; `terminal.sendCommand` is closed to `host.dispatch` from plugin main, and `host.sendToActiveAgent` picks its own target, which the explicit-destination rule rules out.
+
 ## Scope, honestly
 
 A rendered element, the markup that defines it, and the invocation that produced this particular copy are three different things. One `<article>` in one component draws all three pricing cards: editing it changes all three. The inspector therefore shows the number of rendered occurrences a source range controls **before** it enables a control, and "this element only" is never offered as a writable scope when the source says otherwise.
@@ -173,6 +185,12 @@ Each of these cost a debugging cycle, a failed merge, or a reproduced bug.
 - An element with no `__svelte_meta` whose ancestor has one is the reliable signal for `{@html}` or third-party DOM: every compiled element is marked.
 - `Function.prototype.toString()` survives this repo's minification, but `keepNames` or coverage instrumentation injects a module-scope helper and the serialised runtime dies with a `ReferenceError` in the page. Check for injected helpers when building the source string.
 - `Number.isInteger(2 ** 53)` is true and zod's `.int()` rejects it; one unsafe number drops the whole envelope. Use `Number.isSafeInteger`.
+
+### Running the real thing
+
+- **Daintree's own `NODE_ENV` used to reach every terminal.** Started with `NODE_ENV=production` (the E2E launcher does this), `vite dev` in a Daintree terminal compiled Svelte for production and no element carried `__svelte_meta`; the guest correctly reported "production build". Terminals now drop the inherited `NODE_ENV` (`EnvironmentFilter.ts`); a value from the user's shell profile or a caller's explicit env still applies.
+- **The grid recreates a preview's page when panels are added or moved**, which detaches the session with `debugger-detached` or `guest-destroyed`. The controller reattaches to the same panel on a short backoff before showing **Reconnect**.
+- **The in-process built-in view path was broken twice without a failing unit test**: a lazy-in-lazy (#306) and a React Compiler alias that rendered `<component>`. Both only showed in the built app, which is what `e2e/plugins/sveltekit-builder.spec.ts` exists for.
 
 ### Freshness
 

@@ -1,6 +1,7 @@
 import {
   Suspense,
   createContext,
+  createElement,
   lazy,
   useCallback,
   useContext,
@@ -321,7 +322,14 @@ export function makePluginViewContent(
           }, PLUGIN_VIEW_IMPORT_TIMEOUT_MS);
         }),
       ]);
-      return { default: component };
+      // A builtin keeps its view out of the host bundle by registering a
+      // `lazy()` component, and React rejects a lazy that resolves to another
+      // lazy (#306). Rendering it from a plain component lets it suspend on its
+      // own chunk inside this same boundary. `createElement`, not JSX: the React
+      // Compiler folds a capitalised alias of a lowercase binding back into the
+      // binding, and `<component />` then renders an intrinsic element.
+      const BuiltinPanelView = (props: PanelViewProps) => createElement(component, props);
+      return { default: BuiltinPanelView };
     });
 
   const createLazyView = (
