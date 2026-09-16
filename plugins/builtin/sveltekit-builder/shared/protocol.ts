@@ -51,23 +51,23 @@ export const GUEST_PROTOCOL_VERSION = 1;
 
 export const CHANNELS = {
   /** Resolve the SvelteKit app for a worktree and open a source workspace on it. */
-  workspaceOpen: "workspace:open",
+  workspaceOpen: "workspace-open",
   /** Release a source workspace and the undo journal it holds. */
-  workspaceClose: "workspace:close",
+  workspaceClose: "workspace-close",
   /** Turn guest observations into source identity against current file bytes. */
-  selectionResolve: "selection:resolve",
+  selectionResolve: "selection-resolve",
   /** Read a bounded source excerpt for the identity card / source peek. */
-  sourceExcerpt: "source:excerpt",
+  sourceExcerpt: "source-excerpt",
   /** Apply deterministic operations to one file. */
-  editApply: "edit:apply",
+  editApply: "edit-apply",
   /** Reverse one applied transaction, revision-checked. */
-  editUndo: "edit:undo",
+  editUndo: "edit-undo",
   /** Tailwind completion catalog + resolved responsive ranges for this project. */
-  tailwindCatalog: "tailwind:catalog",
+  tailwindCatalog: "tailwind-catalog",
   /** Search the project's valid Tailwind candidates for the class input. */
-  classComplete: "tailwind:complete",
+  classComplete: "tailwind-complete",
   /** Detected app roots, versions, package manager and route tree. */
-  projectModel: "project:model",
+  projectModel: "project-model",
 } as const satisfies Record<string, string>;
 
 /**
@@ -76,9 +76,9 @@ export const CHANNELS = {
  */
 export const PUSH_CHANNELS = {
   /** A file under an open workspace changed outside the builder, e.g. an agent wrote it. */
-  sourceChanged: "push:source-changed",
+  sourceChanged: "push-source-changed",
   /** A main-side problem the panel should surface inline. */
-  issue: "push:issue",
+  issue: "push-issue",
 } as const satisfies Record<string, string>;
 
 /* -------------------------------------------------------------------------- */
@@ -244,6 +244,15 @@ export type WorkspaceOpenResult = z.infer<typeof WorkspaceOpenResultSchema>;
 export const WorkspaceCloseArgsSchema = z
   .object({ workspaceSessionId: z.string().min(1) })
   .strict();
+
+export const WorkspaceCloseResultSchema = z.object({ closed: z.boolean() }).strict();
+
+/** Args for the channels that only need to name their workspace. */
+export const WorkspaceScopedArgsSchema = z
+  .object({ workspaceSessionId: z.string().min(1) })
+  .strict();
+export const ProjectModelArgsSchema = WorkspaceScopedArgsSchema;
+export const TailwindCatalogArgsSchema = WorkspaceScopedArgsSchema;
 
 export const SelectionResolveArgsSchema = z
   .object({
