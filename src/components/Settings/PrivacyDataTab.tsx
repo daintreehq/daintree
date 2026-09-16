@@ -15,7 +15,7 @@ import { notify } from "@/lib/notify";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
-import { SettingsSubtabBar } from "./SettingsSubtabBar";
+import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
 import { actionService } from "@/services/ActionService";
@@ -349,294 +349,300 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
         subtabs={PRIVACY_SUBTABS}
         activeId={currentSubtab}
         onChange={onSubtabChange}
+        group="privacy"
+        ariaLabel="Privacy and data sections"
       />
 
-      {currentSubtab === "telemetry" && (
-        <SettingsSection
-          icon={Signal}
-          title="Telemetry & diagnostics"
-          description="Control what data Daintree collects. No personal data, file contents, or credentials are ever collected."
-        >
-          <div className="contents">
-            {TELEMETRY_OPTIONS.map((option) => (
-              <button
-                key={option.level}
-                type="button"
-                onClick={() => void handleTelemetryChange(option.level)}
-                className={cn(
-                  "w-full text-left p-4 rounded-[var(--radius-lg)] border transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                  telemetryLevel === option.level
-                    ? "border-border-strong bg-overlay-selected"
-                    : "border-border-default hover:bg-tint/5"
-                )}
-              >
-                <div className="flex items-center gap-3">
-                  <div
-                    className={cn(
-                      "w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0",
-                      telemetryLevel === option.level
-                        ? "border-border-strong"
-                        : "border-daintree-text/30"
-                    )}
-                  >
-                    {telemetryLevel === option.level && (
-                      <div className="status-mark w-2 h-2 rounded-full bg-text-primary" />
-                    )}
-                  </div>
-                  <div>
-                    <div className="text-sm font-medium text-text-primary">{option.title}</div>
-                    <div className="text-xs text-text-secondary mt-0.5 select-text">
-                      {option.description}
+      <div {...subtabPanelProps("privacy", currentSubtab)} className="space-y-6">
+        {currentSubtab === "telemetry" && (
+          <SettingsSection
+            icon={Signal}
+            title="Telemetry & diagnostics"
+            description="Control what data Daintree collects. No personal data, file contents, or credentials are ever collected."
+          >
+            <div className="contents">
+              {TELEMETRY_OPTIONS.map((option) => (
+                <button
+                  key={option.level}
+                  type="button"
+                  onClick={() => void handleTelemetryChange(option.level)}
+                  className={cn(
+                    "w-full text-left p-4 rounded-[var(--radius-lg)] border transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                    telemetryLevel === option.level
+                      ? "border-border-strong bg-overlay-selected"
+                      : "border-border-default hover:bg-tint/5"
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className={cn(
+                        "w-4 h-4 rounded-full border-2 flex items-center justify-center shrink-0",
+                        telemetryLevel === option.level
+                          ? "border-border-strong"
+                          : "border-daintree-text/30"
+                      )}
+                    >
+                      {telemetryLevel === option.level && (
+                        <div className="status-mark w-2 h-2 rounded-full bg-text-primary" />
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-sm font-medium text-text-primary">{option.title}</div>
+                      <div className="text-xs text-text-secondary mt-0.5 select-text">
+                        {option.description}
+                      </div>
                     </div>
                   </div>
-                </div>
-              </button>
-            ))}
-          </div>
-          <p className="text-xs text-text-secondary mt-2 select-text">
-            Turning telemetry off stops sending immediately.
-          </p>
-
-          <div className="mt-4 flex items-start gap-3 rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3">
-            <Eye className="w-4 h-4 mt-0.5 text-daintree-accent/80 shrink-0" aria-hidden />
-            <div className="min-w-0 flex-1">
-              <p className="text-xs font-medium text-text-primary">Preview outbound telemetry</p>
-              <p className="text-xs text-text-secondary mt-0.5 select-text">
-                Inspect every sanitised payload Daintree would send — live, for this session only,
-                with no transmission to any server.
-              </p>
-            </div>
-            <Button variant="subtle" size="xs" onClick={handleOpenTelemetryPreview}>
-              Open preview
-            </Button>
-          </div>
-
-          <div
-            aria-labelledby="telemetry-disclosure-heading"
-            className="mt-6 pt-4 border-t border-daintree-border/40"
-          >
-            <h3
-              id="telemetry-disclosure-heading"
-              className="text-xs font-medium text-text-secondary uppercase tracking-wide"
-            >
-              What's collected at each level
-            </h3>
-            <p className="text-xs text-text-secondary mt-1 select-text">
-              This disclosure describes the data transmitted externally. File contents, prompts, API
-              keys, and other credentials are never collected.
-            </p>
-            <dl className="mt-3 space-y-4">
-              {TELEMETRY_DISCLOSURE.map((entry) => (
-                <div
-                  key={entry.level}
-                  className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
-                >
-                  <dt className="text-xs font-medium text-text-primary">{entry.title}</dt>
-                  <dd className="mt-1 space-y-2 text-xs text-text-secondary select-text">
-                    <p>{entry.summary}</p>
-                    {entry.fields.length > 0 && (
-                      <ul className="list-disc pl-4 space-y-0.5">
-                        {entry.fields.map((field) => (
-                          <li key={field}>{field}</li>
-                        ))}
-                      </ul>
-                    )}
-                    {entry.events && entry.events.length > 0 && (
-                      <ul className="flex flex-wrap gap-1.5 pt-1">
-                        {entry.events.map((name) => (
-                          <li
-                            key={name}
-                            className="font-mono text-2xs text-text-secondary bg-surface-canvas px-1.5 py-0.5 rounded border border-daintree-border/60"
-                          >
-                            {name}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </dd>
-                </div>
+                </button>
               ))}
-            </dl>
-          </div>
-        </SettingsSection>
-      )}
+            </div>
+            <p className="text-xs text-text-secondary mt-2 select-text">
+              Turning telemetry off stops sending immediately.
+            </p>
 
-      {currentSubtab === "storage" && (
-        <>
-          <SettingsSection
-            icon={FolderOpen}
-            title="Data folder"
-            description="Location where Daintree stores settings, logs, and session data."
-          >
-            <div className="flex items-center gap-3">
-              <code className="flex-1 text-xs bg-surface-canvas p-2.5 rounded-[var(--radius-md)] border border-border-default font-mono text-text-secondary truncate">
-                {dataFolderPath}
-              </code>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleOpenDataFolder}
-                className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary shrink-0"
-              >
-                <FolderOpen className="w-4 h-4" />
-                Open Folder
+            <div className="mt-4 flex items-start gap-3 rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3">
+              <Eye className="w-4 h-4 mt-0.5 text-daintree-accent/80 shrink-0" aria-hidden />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-medium text-text-primary">Preview outbound telemetry</p>
+                <p className="text-xs text-text-secondary mt-0.5 select-text">
+                  Inspect every sanitised payload Daintree would send — live, for this session only,
+                  with no transmission to any server.
+                </p>
+              </div>
+              <Button variant="subtle" size="xs" onClick={handleOpenTelemetryPreview}>
+                Open preview
               </Button>
             </div>
-          </SettingsSection>
 
-          <SettingsSection
-            icon={Clock}
-            title="Log retention"
-            description="Automatically prune log files older than the selected period on startup."
-          >
-            <div className="flex gap-2">
-              {RETENTION_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => void handleRetentionChange(option.value)}
-                  className={cn(
-                    "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    logRetentionDays === option.value
-                      ? "bg-overlay-selected text-text-primary font-medium border border-border-strong"
-                      : "text-text-secondary border border-border-default hover:bg-tint/5 hover:text-text-primary"
-                  )}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-text-secondary mt-2 select-text">
-              Log pruning happens at startup. Changing this setting takes effect on next launch.
-            </p>
-          </SettingsSection>
-
-          <SettingsSection
-            icon={HardDrive}
-            title="Clear cache"
-            description="Clear the HTTP disk cache and code caches. This does not affect your settings or data."
-          >
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void handleClearCache()}
-              disabled={cacheClearing}
-              className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
+            <div
+              aria-labelledby="telemetry-disclosure-heading"
+              className="mt-6 pt-4 border-t border-daintree-border/40"
             >
-              <Trash2 className={cn("w-4 h-4", cacheClearing && "animate-spin")} />
-              {cacheClearing ? "Clearing…" : cacheCleared ? "Cache Cleared" : "Clear Cache"}
-            </Button>
-          </SettingsSection>
-
-          <SettingsSection
-            icon={History}
-            title="Session history"
-            description="Daintree records resumable agent sessions so you can pick up where you left off. Prune records older than the selected period, or clear them all now."
-          >
-            <div className="flex gap-2">
-              {RETENTION_OPTIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => void handleSessionRetentionChange(option.value)}
-                  className={cn(
-                    "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                    sessionRetentionDays === option.value
-                      ? "bg-overlay-selected text-text-primary font-medium border border-border-strong"
-                      : "text-text-secondary border border-border-default hover:bg-tint/5 hover:text-text-primary"
-                  )}
-                >
-                  {option.label}
-                </button>
-              ))}
+              <h3
+                id="telemetry-disclosure-heading"
+                className="text-xs font-medium text-text-secondary uppercase tracking-wide"
+              >
+                What's collected at each level
+              </h3>
+              <p className="text-xs text-text-secondary mt-1 select-text">
+                This disclosure describes the data transmitted externally. File contents, prompts,
+                API keys, and other credentials are never collected.
+              </p>
+              <dl className="mt-3 space-y-4">
+                {TELEMETRY_DISCLOSURE.map((entry) => (
+                  <div
+                    key={entry.level}
+                    className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
+                  >
+                    <dt className="text-xs font-medium text-text-primary">{entry.title}</dt>
+                    <dd className="mt-1 space-y-2 text-xs text-text-secondary select-text">
+                      <p>{entry.summary}</p>
+                      {entry.fields.length > 0 && (
+                        <ul className="list-disc pl-4 space-y-0.5">
+                          {entry.fields.map((field) => (
+                            <li key={field}>{field}</li>
+                          ))}
+                        </ul>
+                      )}
+                      {entry.events && entry.events.length > 0 && (
+                        <ul className="flex flex-wrap gap-1.5 pt-1">
+                          {entry.events.map((name) => (
+                            <li
+                              key={name}
+                              className="font-mono text-2xs text-text-secondary bg-surface-canvas px-1.5 py-0.5 rounded border border-daintree-border/60"
+                            >
+                              {name}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
             </div>
-            <p className="text-xs text-text-secondary mt-2 select-text">
-              Applies to every project. Shortening the window prunes older records immediately.
-            </p>
-            <div className="mt-4">
+          </SettingsSection>
+        )}
+
+        {currentSubtab === "storage" && (
+          <>
+            <SettingsSection
+              icon={FolderOpen}
+              title="Data folder"
+              description="Location where Daintree stores settings, logs, and session data."
+            >
+              <div className="flex items-center gap-3">
+                <code className="flex-1 text-xs bg-surface-canvas p-2.5 rounded-[var(--radius-md)] border border-border-default font-mono text-text-secondary truncate">
+                  {dataFolderPath}
+                </code>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleOpenDataFolder}
+                  className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary shrink-0"
+                >
+                  <FolderOpen className="w-4 h-4" />
+                  Open Folder
+                </Button>
+              </div>
+            </SettingsSection>
+
+            <SettingsSection
+              icon={Clock}
+              title="Log retention"
+              description="Automatically prune log files older than the selected period on startup."
+            >
+              <div className="flex gap-2">
+                {RETENTION_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => void handleRetentionChange(option.value)}
+                    className={cn(
+                      "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                      logRetentionDays === option.value
+                        ? "bg-overlay-selected text-text-primary font-medium border border-border-strong"
+                        : "text-text-secondary border border-border-default hover:bg-tint/5 hover:text-text-primary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-text-secondary mt-2 select-text">
+                Log pruning happens at startup. Changing this setting takes effect on next launch.
+              </p>
+            </SettingsSection>
+
+            <SettingsSection
+              icon={HardDrive}
+              title="Clear cache"
+              description="Clear the HTTP disk cache and code caches. This does not affect your settings or data."
+            >
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowClearHistoryConfirm(true)}
+                onClick={() => void handleClearCache()}
+                disabled={cacheClearing}
                 className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
               >
-                <Trash2 className="w-4 h-4" />
-                {historyCleared ? "History cleared" : "Clear session history"}
+                <Trash2 className={cn("w-4 h-4", cacheClearing && "animate-spin")} />
+                {cacheClearing ? "Clearing…" : cacheCleared ? "Cache Cleared" : "Clear Cache"}
               </Button>
-            </div>
-          </SettingsSection>
+            </SettingsSection>
 
-          <SettingsSection
-            icon={EyeOff}
-            title="Hidden commands"
-            description="Commands you've hidden from 'Recently used' in the action palette. Resetting restores all of them."
-          >
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleResetHiddenCommands}
-              disabled={hiddenActionCount === 0}
-              className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
+            <SettingsSection
+              icon={History}
+              title="Session history"
+              description="Daintree records resumable agent sessions so you can pick up where you left off. Prune records older than the selected period, or clear them all now."
             >
-              <EyeOff className="w-4 h-4" />
-              {hiddenActionCount === 0
-                ? "No hidden commands"
-                : `Reset hidden commands (${hiddenActionCount})`}
-            </Button>
-          </SettingsSection>
+              <div className="flex gap-2">
+                {RETENTION_OPTIONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => void handleSessionRetentionChange(option.value)}
+                    className={cn(
+                      "px-3 py-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                      sessionRetentionDays === option.value
+                        ? "bg-overlay-selected text-text-primary font-medium border border-border-strong"
+                        : "text-text-secondary border border-border-default hover:bg-tint/5 hover:text-text-primary"
+                    )}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-xs text-text-secondary mt-2 select-text">
+                Applies to every project. Shortening the window prunes older records immediately.
+              </p>
+              <div className="mt-4">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setShowClearHistoryConfirm(true)}
+                  className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  {historyCleared ? "History cleared" : "Clear session history"}
+                </Button>
+              </div>
+            </SettingsSection>
 
-          <SettingsSection
-            icon={AlertTriangle}
-            title="Reset all app data"
-            description="Permanently delete all settings, session data, and logs. The app will restart with factory defaults."
-            iconColor="text-status-error"
-          >
-            {resetState === "idle" ? (
+            <SettingsSection
+              icon={EyeOff}
+              title="Hidden commands"
+              description="Commands you've hidden from 'Recently used' in the action palette. Resetting restores all of them."
+            >
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setResetState("confirming")}
-                className="text-status-error border-border-default hover:bg-status-error/10 hover:border-status-error/20"
+                onClick={handleResetHiddenCommands}
+                disabled={hiddenActionCount === 0}
+                className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
               >
-                <AlertTriangle className="w-4 h-4" />
-                Reset All Data…
+                <EyeOff className="w-4 h-4" />
+                {hiddenActionCount === 0
+                  ? "No hidden commands"
+                  : `Reset hidden commands (${hiddenActionCount})`}
               </Button>
-            ) : (
-              <div className="contents">
-                <div className="p-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
-                  <p className="text-sm text-text-primary font-medium mb-1">Reset all app data?</p>
-                  <p className="text-xs text-text-secondary">
-                    This will permanently delete all settings, API keys, session data, and logs. The
-                    app will restart with factory defaults. This cannot be undone.
-                  </p>
+            </SettingsSection>
+
+            <SettingsSection
+              icon={AlertTriangle}
+              title="Reset all app data"
+              description="Permanently delete all settings, session data, and logs. The app will restart with factory defaults."
+              iconColor="text-status-error"
+            >
+              {resetState === "idle" ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setResetState("confirming")}
+                  className="text-status-error border-border-default hover:bg-status-error/10 hover:border-status-error/20"
+                >
+                  <AlertTriangle className="w-4 h-4" />
+                  Reset All Data…
+                </Button>
+              ) : (
+                <div className="contents">
+                  <div className="p-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
+                    <p className="text-sm text-text-primary font-medium mb-1">
+                      Reset all app data?
+                    </p>
+                    <p className="text-xs text-text-secondary">
+                      This will permanently delete all settings, API keys, session data, and logs.
+                      The app will restart with factory defaults. This cannot be undone.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setResetState("idle")}
+                      className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleResetAllData}
+                      className="text-text-inverse bg-status-error border-status-error hover:bg-status-error/80"
+                    >
+                      <AlertTriangle className="w-4 h-4" />
+                      Reset everything &amp; restart
+                    </Button>
+                  </div>
                 </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setResetState("idle")}
-                    className="text-text-primary border-border-default hover:bg-border-default hover:text-text-primary"
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleResetAllData}
-                    className="text-text-inverse bg-status-error border-status-error hover:bg-status-error/80"
-                  >
-                    <AlertTriangle className="w-4 h-4" />
-                    Reset everything &amp; restart
-                  </Button>
-                </div>
-              </div>
-            )}
-          </SettingsSection>
-        </>
-      )}
+              )}
+            </SettingsSection>
+          </>
+        )}
+      </div>
 
       <ConfirmDialog
         isOpen={showClearHistoryConfirm}

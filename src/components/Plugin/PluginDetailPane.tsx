@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import {
   SettingsSubtabBar,
+  subtabPanelProps,
   type SettingsSubtabItem,
 } from "@/components/Settings/SettingsSubtabBar";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -550,63 +551,71 @@ export function PluginDetailPane({
           onChange={(id) => {
             if (isVisibleTab(id)) setActiveTab(id);
           }}
+          group="plugin-detail"
+          ariaLabel="Plugin detail sections"
         />
       </div>
 
-      {currentTab === "overview" && (
-        <div className="space-y-4">
-          {plugin.manifest.description ? (
-            <p className="text-xs text-text-secondary select-text">{plugin.manifest.description}</p>
-          ) : (
-            <p className="text-xs text-text-secondary">No description provided.</p>
-          )}
+      <div {...subtabPanelProps("plugin-detail", currentTab)}>
+        {currentTab === "overview" && (
+          <div className="space-y-4">
+            {plugin.manifest.description ? (
+              <p className="text-xs text-text-secondary select-text">
+                {plugin.manifest.description}
+              </p>
+            ) : (
+              <p className="text-xs text-text-secondary">No description provided.</p>
+            )}
 
-          {/* Where it actually came from. A "URL" badge names the KIND of
+            {/* Where it actually came from. A "URL" badge names the KIND of
               source while withholding the one fact that makes it checkable —
               which host it was downloaded from. Selectable, because the useful
               thing to do with it is paste it somewhere. */}
-          {(plugin.originalUrl || plugin.devMode) && (
-            <div>
-              <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">
-                Source
-              </p>
-              {/* A dev plugin's origin is the checkout it is running from, and
+            {(plugin.originalUrl || plugin.devMode) && (
+              <div>
+                <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">
+                  Source
+                </p>
+                {/* A dev plugin's origin is the checkout it is running from, and
                   without it an author cannot tell WHICH working copy is loaded
                   — the one fact the Dev badge implies but never states. A
                   reload action would be the other half, and needs a runtime
                   operation that does not exist yet. */}
-              <p className="text-2xs text-text-secondary mt-0.5 break-all select-text font-mono">
-                {plugin.devMode ? plugin.dir : plugin.originalUrl}
-              </p>
-            </div>
-          )}
+                <p className="text-2xs text-text-secondary mt-0.5 break-all select-text font-mono">
+                  {plugin.devMode ? plugin.dir : plugin.originalUrl}
+                </p>
+              </div>
+            )}
 
-          {commands.length > 0 && <PluginContributedCommands commands={commands} />}
+            {commands.length > 0 && <PluginContributedCommands commands={commands} />}
 
-          {panels.length > 0 && <PluginContributedPanels panels={panels} />}
+            {panels.length > 0 && <PluginContributedPanels panels={panels} />}
 
-          {agents.length > 0 && <PluginContributedAgents agents={agents} />}
+            {agents.length > 0 && <PluginContributedAgents agents={agents} />}
 
-          {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
-            <PluginContributors authors={plugin.manifest.authors} />
-          )}
-        </div>
-      )}
+            {plugin.manifest.authors && plugin.manifest.authors.length > 0 && (
+              <PluginContributors authors={plugin.manifest.authors} />
+            )}
+          </div>
+        )}
 
-      {/* Settings render whether or not the plugin is enabled — values persist
+        {/* Settings render whether or not the plugin is enabled — values persist
           independently of the plugin's runtime, so users can pre-configure a
           plugin before turning it on, or keep editing it while it's off. The tab
           only exists when the plugin declares settings, so there's no empty
           branch to fall back to. */}
-      {currentTab === "settings" && <PluginSettingsForm plugin={plugin} />}
+        {currentTab === "settings" && <PluginSettingsForm plugin={plugin} />}
 
-      {currentTab === "capabilities" && <PluginCapabilityList plugin={plugin} granted={granted} />}
+        {currentTab === "capabilities" && (
+          <PluginCapabilityList plugin={plugin} granted={granted} />
+        )}
 
-      {currentTab === "mcp-servers" && hasMcpServers && (
-        <PluginMcpServersSection pluginId={plugin.manifest.name} declared={mcpServers} />
-      )}
+        {currentTab === "mcp-servers" && hasMcpServers && (
+          <PluginMcpServersSection pluginId={plugin.manifest.name} declared={mcpServers} />
+        )}
 
-      {currentTab === "logs" && <PluginLogsSection {...logs} />}
+        {currentTab === "logs" && <PluginLogsSection {...logs} />}
+      </div>
     </div>
   );
 }

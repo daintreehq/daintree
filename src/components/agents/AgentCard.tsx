@@ -15,14 +15,20 @@ import { getInstallBlocksForCurrentOS } from "@/lib/agentInstall";
 import { InstallBlock } from "@/components/Setup/InstallBlock";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
-interface AgentIdentity {
+export interface AgentIdentity {
   name: string;
   color: string;
   Icon: ComponentType<AgentIconProps>;
   description: string;
 }
 
-function resolveIdentity(agentId: string): AgentIdentity | null {
+/**
+ * The single place the brand mark, display name and blurb for an agent are resolved.
+ * Exported so other surfaces that render an agent row — the System status list in
+ * Settings, for one — inherit the same description fallback chain rather than each
+ * growing its own.
+ */
+export function resolveIdentity(agentId: string): AgentIdentity | null {
   const config = getAgentConfig(agentId);
   if (!config) return null;
   return {
@@ -152,12 +158,19 @@ export function AgentIdentityBlock({
   name,
   description,
   compact = false,
+  showDescription = true,
 }: {
   Icon: ComponentType<AgentIconProps>;
   color: string;
   name: string;
   description: string;
   compact?: boolean;
+  /**
+   * Drop the blurb and render the row on one line. In a long roster the blurbs stop
+   * distinguishing anything — "Open-source CLI" is true of three different agents — while
+   * still costing a second line on every row, so the mark does the recognition work alone.
+   */
+  showDescription?: boolean;
 }) {
   return (
     <>
@@ -171,8 +184,10 @@ export function AgentIdentityBlock({
         </BrandMark>
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-text-primary">{name}</div>
-        {description && <div className="text-2xs text-text-secondary truncate">{description}</div>}
+        <div className="text-sm font-medium text-text-primary truncate">{name}</div>
+        {showDescription && description && (
+          <div className="text-2xs text-text-secondary truncate">{description}</div>
+        )}
       </div>
     </>
   );
@@ -245,7 +260,11 @@ export function AgentInstallSection({
     : showWslNotice
       ? `${agentName} CLI was detected in WSL, but WSL binaries can't be launched directly yet — install a native Windows binary if available`
       : showAuthNudge
-        ? `${agentName} CLI found but not signed in — launching will prompt for login`
+        ? // Two claims the probe cannot support: that the user is not signed in, and that
+          // launching will prompt. `unauthenticated` only means no credentials were found
+          // where we looked, and the state is launchable — the CLI resolves auth at run
+          // time and may well just work.
+          `${agentName} CLI found, but no credentials were detected — it may still launch, or ask you to sign in`
         : `${agentName} CLI not found`;
 
   return (
