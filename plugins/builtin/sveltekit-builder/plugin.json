@@ -1,0 +1,52 @@
+{
+  "name": "daintree.sveltekit-builder",
+  "version": "0.1.0",
+  "displayName": "SvelteKit Site Builder",
+  "description": "Point at your running SvelteKit site and change it: select an element in the dev preview, see which source owns it, and edit its text and Tailwind classes as real source changes.",
+  "tagline": "Edit your SvelteKit site by pointing at it",
+  "category": "workspace",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.36.0"
+  },
+  "capabilities": [
+    "fs:project-read",
+    "fs:project-write",
+    "fs:user-data-read",
+    "fs:user-data-write"
+  ],
+  "scopes": {
+    "fs": {
+      "allowedPaths": ["${project}", "${worktree}"]
+    }
+  },
+  "contributes": {
+    "panels": [
+      {
+        "id": "inspector",
+        "name": "Site Inspector",
+        "iconId": "layout-panel-top",
+        "color": "var(--theme-category-orange)",
+        "stateVersion": 1
+      }
+    ],
+    "views": [
+      {
+        "id": "inspector",
+        "componentPath": "./renderer/index.js",
+        "location": "panel"
+      }
+    ],
+    "commands": [
+      {
+        "id": "open-inspector",
+        "title": "Site Builder: Open Site Inspector",
+        "description": "Open the Site Inspector and bind it to a running SvelteKit dev preview in this worktree.",
+        "category": "panels",
+        "kind": "command",
+        "danger": "safe",
+        "keywords": ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "tailwind"]
+      }
+    ]
+  }
+}
