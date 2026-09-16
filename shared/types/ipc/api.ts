@@ -954,6 +954,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onStateChanged(callback: (data: DevPreviewStateChangedPayload) => void): () => void;
     onAllSessionsChanged(callback: (data: DevPreviewAllSessionsPayload) => void): () => void;
   };
+  // bind / detach / setMode / getState come from GeneratedElectronAPI; onEvent
+  // is the renderer-only push subscription for validated guest observations.
+  sitePreview: GeneratedElectronAPI["sitePreview"] & {
+    onEvent(
+      callback: (data: import("./sitePreview.js").SitePreviewPushPayload) => void
+    ): () => void;
+  };
   git: GeneratedElectronAPI["git"] & {
     getFileDiff(
       cwd: string,

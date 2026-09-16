@@ -1,0 +1,128 @@
+/**
+ * IPC surface for the site-preview bridge.
+ *
+ * Deliberately absent: any method that evaluates caller-supplied script in a
+ * guest. The runtime body is handed over once, at `bind`, and nothing else ever
+ * runs in the page. Adding an `evaluate` op here would give every renderer-side
+ * caller — including a compromised plugin view — arbitrary code execution
+ * inside whatever site the user is previewing, so it is a security boundary
+ * rather than an API-surface preference.
+ *
+ * Every op takes its project from the IPC context, never from the payload: the
+ * sender's WebContents is what the host can actually prove, and resolving an
+ * omitted project from current UI focus would let one project's panel bind to
+ * another's preview.
+ */
+
+import { z } from "zod";
+import { CHANNELS } from "../channels.js";
+import { defineIpcNamespace, op, opValidated } from "../define.js";
+import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
+import { AppError } from "../../utils/errorTypes.js";
+import { getSitePreviewBridge, resetSitePreviewBridge } from "../../services/SitePreviewBridge.js";
+import { MAX_RUNTIME_SOURCE_BYTES } from "../../services/sitePreview/guestRuntime.js";
+import type { HandlerDependencies } from "../types.js";
+import type { IpcContext } from "../types.js";
+import type {
+  SitePreviewBindingState,
+  SitePreviewCandidate,
+} from "../../../shared/types/ipc/sitePreview.js";
+import { SITE_PREVIEW_METHOD_CHANNELS } from "./sitePreview.preload.js";
+
+const modeSchema = z.enum(["browse", "select"]);
+
+const bindSchema = z
+  .object({
+    panelId: z.string().min(1).max(256),
+    runtimeSource: z.string().min(1).max(MAX_RUNTIME_SOURCE_BYTES),
+    mode: modeSchema.optional(),
+  })
+  .strict();
+
+const sessionSchema = z.object({ sessionId: z.string().min(1).max(128) }).strict();
+
+const setModeSchema = z
+  .object({ sessionId: z.string().min(1).max(128), mode: modeSchema })
+  .strict();
+
+function requireProject(ctx: IpcContext): string {
+  if (!ctx.projectId) {
+    throw new AppError({
+      code: "PERMISSION",
+      message: "Site preview operations require a project-scoped sender",
+    });
+  }
+  return ctx.projectId;
+}
+
+export const sitePreviewNamespace = defineIpcNamespace({
+  name: "sitePreview",
+  ops: {
+    listCandidates: op(
+      SITE_PREVIEW_METHOD_CHANNELS.listCandidates,
+      async (ctx): Promise<SitePreviewCandidate[]> =>
+        getSitePreviewBridge().listCandidates(requireProject(ctx)),
+      { withContext: true }
+    ),
+    bind: opValidated(
+      SITE_PREVIEW_METHOD_CHANNELS.bind,
+      bindSchema,
+      async (ctx, payload): Promise<SitePreviewBindingState> =>
+        getSitePreviewBridge().bind({
+          projectId: requireProject(ctx),
+          panelId: payload.panelId,
+          runtimeSource: payload.runtimeSource,
+          mode: payload.mode ?? "browse",
+        }),
+      { withContext: true }
+    ),
+    detach: opValidated(
+      SITE_PREVIEW_METHOD_CHANNELS.detach,
+      sessionSchema,
+      async (ctx, payload): Promise<void> => {
+        await getSitePreviewBridge().detach(requireProject(ctx), payload.sessionId);
+      },
+      { withContext: true }
+    ),
+    setMode: opValidated(
+      SITE_PREVIEW_METHOD_CHANNELS.setMode,
+      setModeSchema,
+      async (ctx, payload): Promise<SitePreviewBindingState> =>
+        getSitePreviewBridge().setMode(requireProject(ctx), payload.sessionId, payload.mode),
+      { withContext: true }
+    ),
+    getState: opValidated(
+      SITE_PREVIEW_METHOD_CHANNELS.getState,
+      sessionSchema,
+      async (ctx, payload): Promise<SitePreviewBindingState | null> =>
+        getSitePreviewBridge().getState(requireProject(ctx), payload.sessionId),
+      { withContext: true }
+    ),
+  },
+});
+
+export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => void {
+  const bridge = getSitePreviewBridge({
+    push: (payload) => {
+      // Sent only to views of the owning project. Deliberately NOT
+      // `broadcastToProjectRenderers`: that helper falls back to an app-wide
+      // broadcast when no project views are registered, and a guest observation
+      // must never reach a window hosting a different project.
+      for (const wc of getWebContentsForProject(payload.projectId)) {
+        if (wc.isDestroyed()) continue;
+        try {
+          wc.send(CHANNELS.SITE_PREVIEW_EVENT, payload);
+        } catch {
+          // A view torn down between the lookup and the send; nothing to do.
+        }
+      }
+    },
+  });
+
+  const disposeNamespace = sitePreviewNamespace.register();
+  return () => {
+    disposeNamespace();
+    void bridge.disposeAll();
+    resetSitePreviewBridge();
+  };
+}

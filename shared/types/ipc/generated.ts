@@ -1647,6 +1647,28 @@ export interface GeneratedIpcInvokeMap {
     args: [keys: string[]];
     result: void;
   };
+  "site-preview:bind": {
+    args: [
+      payload: { panelId: string; runtimeSource: string; mode?: "browse" | "select" | undefined },
+    ];
+    result: import("./sitePreview.js").SitePreviewBindingState;
+  };
+  "site-preview:detach": {
+    args: [payload: { sessionId: string }];
+    result: void;
+  };
+  "site-preview:get-state": {
+    args: [payload: { sessionId: string }];
+    result: import("./sitePreview.js").SitePreviewBindingState | null;
+  };
+  "site-preview:list-candidates": {
+    args: [];
+    result: import("./sitePreview.js").SitePreviewCandidate[];
+  };
+  "site-preview:set-mode": {
+    args: [payload: { sessionId: string; mode: "browse" | "select" }];
+    result: import("./sitePreview.js").SitePreviewBindingState;
+  };
   "slash-commands:list": {
     args: [payload: { agentId: string; projectPath?: string | undefined }];
     result: import("../slashCommands.js").SlashCommand[];
