@@ -18,6 +18,7 @@ const {
   notifyMock,
   devPreviewGetByWorktreeMock,
   devPreviewStopByWorktreeMock,
+  logErrorWithContextMock,
 } = vi.hoisted(() => ({
   worktreeClientDeleteMock: vi.fn<
     (
@@ -36,6 +37,7 @@ const {
   notifyMock: vi.fn(),
   devPreviewGetByWorktreeMock: vi.fn(),
   devPreviewStopByWorktreeMock: vi.fn(),
+  logErrorWithContextMock: vi.fn(),
 }));
 
 (globalThis as Record<string, unknown>).window = globalThis.window ?? {};
@@ -67,6 +69,14 @@ vi.mock("@/components/Worktree/worktreeDeleteHelper", () => ({
 vi.mock("@/lib/notify", () => ({
   notify: notifyMock,
 }));
+
+// Partial: `createWorktreeStore` reaches for other `errorContext` exports, so
+// the original module has to stay behind the one override.
+vi.mock("@/utils/errorContext", async () => {
+  const actual =
+    await vi.importActual<typeof import("@/utils/errorContext")>("@/utils/errorContext");
+  return { ...actual, logErrorWithContext: logErrorWithContextMock };
+});
 
 // Import after mocks so the store picks up the mocked deps.
 import { createWorktreeStore, OUTBOX_RETRY_CAP } from "@/store/createWorktreeStore";
@@ -290,6 +300,97 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
     expect(store.getState().deletingIds.has("wt-1")).toBe(false);
     expect(store.getState().deleteErrors.get("wt-1")).toContain("git error: unmerged paths");
     expect(store.getState().deleteErrorArgs.get("wt-1")).toEqual({ force: false });
+  });
+
+  // #12418. The host stopped truncating git's stderr at the first newline, so
+  // the renderer has to carry the rest of it through to the card unchanged —
+  // the later lines are the ones that name the recovery.
+  it("carries a multi-line failure through to deleteErrors intact", async () => {
+    const stderr =
+      "Worktree removed. Couldn't delete branch 'feature/x': error: Cannot delete branch 'feature/x' checked out at '/other/tree'\nhint: remove that worktree first";
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error(stderr));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false });
+    await flushPromises();
+    await flushPromises();
+
+    const recorded = store.getState().deleteErrors.get("wt-1")!;
+    expect(recorded).toContain("hint: remove that worktree first");
+    expect(recorded.split("\n")).toHaveLength(2);
+  });
+
+  // #12418. Before this, a delete failure existed only on the card — dismiss it
+  // and the error was gone everywhere, with nothing in `daintree.log` to go back
+  // to. Asserted on both routing paths because the log call sits ahead of the
+  // split: the partial-success path returns early and would miss a later one.
+  it("logs a delete failure that still has a card to report on", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(new Error("git error: unmerged paths"));
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false, deleteBranch: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(logErrorWithContextMock).toHaveBeenCalledTimes(1);
+    const [loggedError, context] = logErrorWithContextMock.mock.calls[0]!;
+    expect((loggedError as Error).message).toContain("unmerged paths");
+    expect(context).toMatchObject({
+      operation: "delete_worktree",
+      component: "createWorktreeStore",
+      errorType: "git",
+    });
+    expect((context as { details: Record<string, unknown> }).details).toMatchObject({
+      worktreeId: "wt-1",
+      deleteBranch: true,
+    });
+  });
+
+  it("logs a delete failure whose card is already gone", async () => {
+    let rejectIpc: (reason: unknown) => void = () => {};
+    worktreeClientDeleteMock.mockImplementationOnce(
+      () =>
+        new Promise<void>((_resolve, reject) => {
+          rejectIpc = reject;
+        })
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false, deleteBranch: true });
+    await flushPromises();
+
+    // `worktree-removed` lands before the branch step fails, so the card the
+    // error would have gone on is already cleared.
+    store.getState().applyRemove("wt-1", nextV());
+    rejectIpc(new Error("Worktree removed. Couldn't delete branch 'feature/x': locked ref"));
+    await flushPromises();
+    await flushPromises();
+
+    expect(store.getState().deleteErrors.has("wt-1")).toBe(false);
+    expect(logErrorWithContextMock).toHaveBeenCalledTimes(1);
+    expect(logErrorWithContextMock.mock.calls[0]![1]).toMatchObject({
+      operation: "delete_worktree",
+      component: "createWorktreeStore",
+    });
+  });
+
+  it("does not log when the delete succeeds", async () => {
+    worktreeClientDeleteMock.mockResolvedValueOnce();
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false });
+    await flushPromises();
+    await flushPromises();
+
+    expect(logErrorWithContextMock).not.toHaveBeenCalled();
   });
 
   it("retryDelete re-fires with the stored args", async () => {

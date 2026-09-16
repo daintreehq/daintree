@@ -10,6 +10,7 @@ import {
   type WorktreeTerminalRestoreSnapshot,
 } from "@/components/Worktree/worktreeDeleteHelper";
 import { logDebug } from "@/utils/logger";
+import { logErrorWithContext } from "@/utils/errorContext";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { issueNumberBelongsToLinkedPr } from "@shared/utils/worktreeIssueProjection";
@@ -1689,6 +1690,22 @@ async function runDeleteAsync(
     pruneOutboxEntry(get, set, mutationId);
   } catch (err) {
     const message = formatErrorMessage(err, "Failed to delete worktree");
+    // Logged once here, before the routing split below, so the partial-success
+    // path (card already gone, toast only) and the pre-IPC failures (dev-preview
+    // stop, terminal close) land in `daintree.log` too — not just the failures
+    // that still have a card to draw an error on.
+    logErrorWithContext(err, {
+      operation: "delete_worktree",
+      component: "createWorktreeStore",
+      errorType: "git",
+      details: {
+        worktreeId,
+        mutationId,
+        force: options.force,
+        deleteBranch: options.deleteBranch,
+        closeTerminals: options.closeTerminals,
+      },
+    });
     const prev = get();
     // Partial-success path: the backend removes the worktree and emits
     // `worktree-removed` BEFORE it touches the branch, so a branch-delete

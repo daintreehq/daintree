@@ -19,7 +19,7 @@ import {
   getGitRecoveryAction,
   getGitRecoveryHint,
 } from "../../shared/utils/gitOperationErrors.js";
-import { logWarn } from "../utils/logger.js";
+import { logError, logWarn } from "../utils/logger.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type {
   LifecycleCommandReview,
@@ -4295,7 +4295,7 @@ export class WorkspaceService {
             );
           } else if (errorMsg.includes("checked out at") || errorMsg.includes("Cannot delete")) {
             throw new Error(
-              `Worktree removed. Couldn't delete branch '${branchToDelete}': ${errorMsg.split("\n")[0]}`,
+              `Worktree removed. Couldn't delete branch '${branchToDelete}': ${errorMsg}`,
               {
                 cause: branchError,
               }
@@ -4324,6 +4324,18 @@ export class WorkspaceService {
       // Delete failed — drop any pending entry so a real external change to
       // that name isn't masked, and cancel its safety valve.
       if (pendingDeleteKey) this.topologyWatcher.clearPending(pendingDeleteKey);
+      // The only durable record of a delete failure. The renderer surfaces it
+      // on the card, but a branch-delete failure arrives after the card is
+      // already gone — so without this the error survives nowhere on disk.
+      logError("Worktree delete failed", error, {
+        projectRootPath: this.projectRootPath,
+        requestId,
+        worktreeId,
+        mutationId,
+        force,
+        deleteBranch,
+        forceDeleteBranch: branchOptions.forceDeleteBranch === true,
+      });
       // sendEvent for the legacy `WorkspaceClient.sendWithResponse` path, which
       // resolves its requestId-keyed promise from `delete-worktree-result`.
       this.sendEvent({
