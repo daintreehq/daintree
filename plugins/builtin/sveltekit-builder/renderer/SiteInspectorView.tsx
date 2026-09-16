@@ -15,6 +15,7 @@ import { useInspectorContext } from "./useInspectorContext.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { SelectionCard, type SelectionActions } from "./SelectionCard.js";
 import { ReceiptView } from "./ReceiptView.js";
+import { AgentComposer } from "./AgentComposer.js";
 import { DETACH_COPY, displayUrl, relativeTo } from "./copy.js";
 
 const MODE_OPTIONS = [
@@ -49,6 +50,7 @@ export function SiteInspectorView({ panelId, panelRemovedSignal }: PanelViewProp
             state={state}
             controller={controller}
             worktreePath={worktreePath}
+            worktreeId={worktreeId}
             actions={actions}
           />
         ) : (
@@ -111,17 +113,26 @@ function BindingBody({
     case "binding":
     case "bound":
       return <WaitingRow label="Connecting to the dev preview" />;
+    case "starting":
+      return (
+        <div className="flex flex-col gap-1">
+          <WaitingRow label="Starting your site" />
+          <p className="text-xs text-text-secondary">
+            If the dev preview asks which command runs your site, choose it there.
+          </p>
+        </div>
+      );
     case "no-candidates":
       return (
         <EmptyState
           variant="zero-data"
           scale="canvas"
           icon={<MonitorPlay />}
-          title="Start a dev preview"
-          description="Run your SvelteKit dev server in a dev preview for this worktree, then check again."
+          title="Start your site"
+          description="The Site Builder works on your running SvelteKit dev server in this worktree."
           action={
-            <Button variant="subtle" size="sm" onClick={() => void controller.refreshCandidates()}>
-              Check again
+            <Button variant="subtle" size="sm" onClick={() => void controller.startPreview()}>
+              Start dev server
             </Button>
           }
         />
@@ -195,11 +206,13 @@ function BoundBody({
   state,
   controller,
   worktreePath,
+  worktreeId,
   actions,
 }: {
   state: InspectorState;
   controller: InspectorController;
   worktreePath: string | null;
+  worktreeId: string | null;
   actions: SelectionActions;
 }) {
   return (
@@ -218,6 +231,14 @@ function BoundBody({
       ) : null}
       <WorkspaceStatus state={state} controller={controller} worktreePath={worktreePath} />
       <SelectionBody state={state} controller={controller} actions={actions} />
+      {state.workspace.status === "ready" ? (
+        <AgentComposer
+          controller={controller}
+          selection={state.selection}
+          worktreeId={worktreeId}
+          worktreePath={worktreePath}
+        />
+      ) : null}
     </>
   );
 }

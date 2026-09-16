@@ -24,7 +24,7 @@
     "panels": [
       {
         "id": "inspector",
-        "name": "Site Inspector",
+        "name": "Site Builder",
         "iconId": "layout-panel-top",
         "color": "var(--theme-category-orange)",
         "stateVersion": 1
@@ -40,12 +40,22 @@
     "commands": [
       {
         "id": "open-inspector",
-        "title": "Site Builder: Open Site Inspector",
-        "description": "Open the Site Inspector and bind it to a running SvelteKit dev preview in this worktree.",
+        "title": "Open Site Builder",
+        "description": "Open the Site Builder beside this worktree's dev preview, starting the dev server if none is running.",
         "category": "panels",
         "kind": "command",
         "danger": "safe",
-        "keywords": ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "tailwind"]
+        "keywords": ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "tailwind"],
+        "requires": []
+      }
+    ],
+    "toolbarButtons": [
+      {
+        "id": "open",
+        "label": "Open Site Builder",
+        "iconId": "layout-panel-top",
+        "actionId": "daintree.sveltekit-builder.open-inspector",
+        "priority": 1
       }
     ]
   }

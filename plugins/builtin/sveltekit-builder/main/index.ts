@@ -91,13 +91,17 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   await host.registerAction(
     {
       id: OPEN_INSPECTOR_ACTION_ID,
-      title: "Site Builder: Open Site Inspector",
+      title: "Open Site Builder",
       description:
-        "Open the Site Inspector and bind it to a running SvelteKit dev preview in this worktree.",
+        "Open the Site Builder beside this worktree's dev preview, starting the dev server if none is running.",
       category: "panels",
       kind: "command",
       danger: "safe",
       keywords: ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "tailwind"],
+      // Opening a panel exercises none of the plugin's capabilities. Without
+      // this the host elevates the command to a confirm prompt because the
+      // manifest holds fs write — a dialog on every toolbar click.
+      requires: [],
     },
     async () => host.dispatch("panel.openPluginPanel", { kind: INSPECTOR_PANEL_KIND })
   );

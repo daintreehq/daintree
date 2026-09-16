@@ -72,6 +72,8 @@ async function setUp() {
     on: () => () => {},
     panelWorktreeId: () => "w1",
     runtimeSource: async () => "",
+    startPreview: async () => null,
+    delay: async () => {},
     newId: () => `id-${++id}`,
     now: () => Date.now(),
     onPluginDisabled: () => () => {},

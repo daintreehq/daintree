@@ -13,5 +13,5 @@ const SiteInspectorView = lazy(() =>
 // The slot id is the runtime panel kind id `{pluginId}.{panelId}`.
 registerBuiltinView("daintree.sveltekit-builder.inspector", SiteInspectorView, {
   pluginId: "daintree.sveltekit-builder",
-  label: "Site Inspector",
+  label: "Site Builder",
 });
