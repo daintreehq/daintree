@@ -15,8 +15,7 @@ const SAFE_MARGIN = 0.05;
 function fixedMeasurer(perChar: number): Pick<CanvasRenderingContext2D, "font" | "measureText"> {
   return {
     font: "",
-    measureText: (s: string) =>
-      ({ width: s.length * perChar }) as TextMetrics,
+    measureText: (s: string) => ({ width: s.length * perChar }) as TextMetrics,
   };
 }
 
@@ -106,7 +105,13 @@ describe("estimateCaptionBox", () => {
   it("height grows monotonically with line count", () => {
     setViewport(1920, 1080);
     const one = estimateCaptionBox("short", "md", true, 1920, 1080);
-    const many = estimateCaptionBox("line one\nline two\nline three\nline four", "md", true, 1920, 1080);
+    const many = estimateCaptionBox(
+      "line one\nline two\nline three\nline four",
+      "md",
+      true,
+      1920,
+      1080
+    );
     expect(many.lines).toBeGreaterThan(one.lines);
     expect(many.estH).toBeGreaterThan(one.estH);
   });
@@ -121,7 +126,13 @@ describe("estimateCaptionBox", () => {
   it("guards a malformed size: coerces to a finite box, never NaN", () => {
     setViewport(1920, 1080);
     // Untyped IPC could deliver a bogus size; it must not poison the math.
-    const bad = estimateCaptionBox("caption", "huge" as unknown as DemoAnnotationSize, true, 1920, 1080);
+    const bad = estimateCaptionBox(
+      "caption",
+      "huge" as unknown as DemoAnnotationSize,
+      true,
+      1920,
+      1080
+    );
     expect(Number.isFinite(bad.estW)).toBe(true);
     expect(Number.isFinite(bad.estH)).toBe(true);
     expect(bad.estW).toBeGreaterThan(0);
@@ -190,9 +201,7 @@ describe("resolveAnnotationPlacement", () => {
     const fh = 2000;
     setViewport(fw, fh);
     const longText = "supercalifragilisticexpialidocious ".repeat(8);
-    const resolved = resolveAnnotationPlacement(
-      annotate({ position: "top-left", text: longText })
-    );
+    const resolved = resolveAnnotationPlacement(annotate({ position: "top-left", text: longText }));
     expect("error" in resolved).toBe(false);
     if ("error" in resolved) return;
 

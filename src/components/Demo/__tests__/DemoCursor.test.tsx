@@ -639,9 +639,7 @@ describe("DemoCursor", () => {
 
     const delays: number[] = [];
     const origSetTimeout = globalThis.setTimeout;
-    const randomValues = [
-      0.5, 0.5, 0, 0.5, 0.5, 0.5, 0.5, 0.2, 0, 0.5, 0.5, 0, 0.5, 0.5, 0.5,
-    ];
+    const randomValues = [0.5, 0.5, 0, 0.5, 0.5, 0.5, 0.5, 0.2, 0, 0.5, 0.5, 0, 0.5, 0.5, 0.5];
     let randomIndex = 0;
     const randomSpy = vi.spyOn(Math, "random").mockImplementation(() => {
       return randomValues[randomIndex++] ?? 0.5;
@@ -1247,9 +1245,10 @@ describe("DemoCursor", () => {
 
     // Collapse the drag's pauseAwareDelay so the 10-step animation runs synchronously.
     const origSetTimeout = globalThis.setTimeout;
-    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(((
-      fn: (...args: unknown[]) => void
-    ) => origSetTimeout(fn, 0)) as typeof setTimeout);
+    const setTimeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((fn: (...args: unknown[]) => void) =>
+        origSetTimeout(fn, 0)) as typeof setTimeout);
 
     try {
       render(<DemoCursor />);
@@ -1359,7 +1358,11 @@ describe("DemoCursor", () => {
 
     it("resolves when nothing is active", async () => {
       render(<DemoCursor />);
-      emit("demo:exec-wait-for-idle", { requestId: "req-idle-empty", settleMs: 30, timeoutMs: 2000 });
+      emit("demo:exec-wait-for-idle", {
+        requestId: "req-idle-empty",
+        settleMs: 30,
+        timeoutMs: 2000,
+      });
 
       await vi.waitFor(() =>
         expect(demoMock.sendCommandDone).toHaveBeenCalledWith("req-idle-empty", undefined)
@@ -1371,7 +1374,11 @@ describe("DemoCursor", () => {
       registerTerminals({ "panel-1": term });
 
       render(<DemoCursor />);
-      emit("demo:exec-wait-for-idle", { requestId: "req-idle-term", settleMs: 80, timeoutMs: 3000 });
+      emit("demo:exec-wait-for-idle", {
+        requestId: "req-idle-term",
+        settleMs: 80,
+        timeoutMs: 3000,
+      });
 
       // The handler subscribes onWriteParsed on the live terminal.
       expect(term.managed.terminal.onWriteParsed).toHaveBeenCalledTimes(1);
@@ -1399,7 +1406,11 @@ describe("DemoCursor", () => {
       terminalGetMock.mockReturnValue(null);
 
       render(<DemoCursor />);
-      emit("demo:exec-wait-for-idle", { requestId: "req-idle-null", settleMs: 30, timeoutMs: 2000 });
+      emit("demo:exec-wait-for-idle", {
+        requestId: "req-idle-null",
+        settleMs: 30,
+        timeoutMs: 2000,
+      });
 
       await vi.waitFor(
         () => {
