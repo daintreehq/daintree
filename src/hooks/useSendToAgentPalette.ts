@@ -9,6 +9,8 @@ import { terminalClient } from "@/clients";
 import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
 import { usePaletteStore } from "@/store/paletteStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import { useWorktreeStoreOptional } from "./useWorktreeStore";
+import type { WorktreeSnapshot } from "@shared/types";
 
 export interface SendToAgentItem {
   id: string;
@@ -17,6 +19,12 @@ export interface SendToAgentItem {
   terminalKind?: PanelKind;
   chrome: TerminalChromeDescriptor;
   isInputLocked?: boolean;
+  /**
+   * Resolved whether or not the row draws it, because a worktree name has to
+   * find its pane even in the single-worktree case where naming every row would
+   * be noise. {@link SendToAgentItem.subtitle} carries the visible copy.
+   */
+  worktreeName?: string;
 }
 
 // Module-level state for the opener function (object to avoid react-compiler reassignment warning)
@@ -71,6 +79,13 @@ const FUSE_OPTIONS: IFuseOptions<SendToAgentItem> = {
   keys: [
     { name: "title", weight: 2 },
     { name: "subtitle", weight: 1 },
+    // Branch-derived worktree names run long, and Fuse scores by position, so a
+    // token past roughly the first 40 characters of one will not match. Turning
+    // location scoring off repairs that but reranks the primary field, where an
+    // incidental substring ("pre-fix-es") then beats the whole word — too high a
+    // price, and out of scope here. useFleetPicker pays for it with a matching
+    // threshold and minimum match length; this palette has neither.
+    { name: "worktreeName", weight: 0.5 },
   ],
   threshold: 0.4,
   includeScore: true,
@@ -101,6 +116,7 @@ const MAX_RESULTS = 20;
 
 const EMPTY_PANEL_IDS: string[] = [];
 const EMPTY_PANELS_BY_ID: ReturnType<typeof usePanelStore.getState>["panelsById"] = {};
+const EMPTY_WORKTREES = new Map<string, WorktreeSnapshot>();
 
 export function useSendToAgentPalette() {
   // Always mounted in App: subscribe to the panel map only while open — a
@@ -110,10 +126,18 @@ export function useSendToAgentPalette() {
   const panelIds = usePanelStore((state) => (isOpen ? state.panelIds : EMPTY_PANEL_IDS));
   const panelsById = usePanelStore((state) => (isOpen ? state.panelsById : EMPTY_PANELS_BY_ID));
   const showAgentTaskTitles = usePreferencesStore((s) => s.showAgentTaskTitles);
+  // The raw map rather than useWorktrees(): its `enabled` flag gates only the
+  // map, leaving five status selectors live, which is the always-on re-render
+  // the gating above exists to avoid.
+  const worktrees = useWorktreeStoreOptional(
+    (state) => (isOpen ? state.worktrees : EMPTY_WORKTREES),
+    EMPTY_WORKTREES
+  );
 
   const items = useMemo<SendToAgentItem[]>(() => {
     const sourceId = isOpen ? pendingState.sourceId : null;
     const result: SendToAgentItem[] = [];
+    const worktreeIds = new Set<string>();
 
     for (const id of panelIds) {
       const t = panelsById[id];
@@ -126,6 +150,7 @@ export function useSendToAgentPalette() {
 
       const chrome = deriveTerminalChrome(t);
       const subtitle = chrome.label;
+      if (t.worktreeId) worktreeIds.add(t.worktreeId);
 
       result.push({
         id: t.id,
@@ -136,11 +161,22 @@ export function useSendToAgentPalette() {
         terminalKind: t.kind,
         chrome,
         isInputLocked: t.isInputLocked,
+        worktreeName: t.worktreeId ? worktrees.get(t.worktreeId)?.name : undefined,
       });
     }
 
+    // Counted over every eligible target, not the filtered results, so the
+    // label cannot appear and vanish as a query narrows the list — and so a
+    // second worktree still counts when it sits past the MAX_RESULTS cut.
+    if (worktreeIds.size > 1) {
+      for (const item of result) {
+        if (!item.worktreeName) continue;
+        item.subtitle = [item.chrome.label, item.worktreeName].filter(Boolean).join(" · ");
+      }
+    }
+
     return result;
-  }, [panelIds, panelsById, isOpen, showAgentTaskTitles]);
+  }, [panelIds, panelsById, isOpen, showAgentTaskTitles, worktrees]);
 
   const fuse = useMemo(() => new Fuse(items, FUSE_OPTIONS), [items]);
 

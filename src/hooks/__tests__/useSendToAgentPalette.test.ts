@@ -12,6 +12,12 @@ vi.mock("@/store", () => ({
   usePanelStore: { getState: () => panelState },
 }));
 
+// The real module pulls WorktreeStoreContext and its whole renderer graph
+// (actionService, clients, four stores) into this node-environment suite.
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStoreOptional: vi.fn(),
+}));
+
 vi.mock("@/store/paletteStore", () => ({
   usePaletteStore: { getState: () => ({ openPalette }) },
 }));
