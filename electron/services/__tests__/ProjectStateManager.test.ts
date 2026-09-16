@@ -114,18 +114,26 @@ describe("ProjectStateManager clone isolation", () => {
     state.terminals[0].spawnedBy = "quickrun";
     await manager.saveProjectState(projectId, state);
 
+    // Fresh managers force disk reads; each installs a sweep interval, so both
+    // are disposed even if an assertion throws.
     const freshManager = new ProjectStateManager(tempDir);
-    const loaded = await freshManager.getProjectState(projectId);
-    expect(loaded!.terminals[0].spawnedBy).toBe("quickrun");
-    // A pane that predates the field stays unattributed rather than inheriting one.
-    expect(loaded!.terminals[1].spawnedBy).toBeUndefined();
+    const rereadManager = new ProjectStateManager(tempDir);
+    try {
+      const loaded = await freshManager.getProjectState(projectId);
+      expect(loaded!.terminals[0].spawnedBy).toBe("quickrun");
+      // A pane that predates the field stays unattributed rather than inheriting one.
+      expect(loaded!.terminals[1].spawnedBy).toBeUndefined();
 
-    // An unrelated later save (the shape the session journal and layout handlers
-    // write) must not strip it back off.
-    loaded!.sidebarWidth = 400;
-    await manager.saveProjectState(projectId, loaded!);
-    const reloaded = await new ProjectStateManager(tempDir).getProjectState(projectId);
-    expect(reloaded!.terminals[0].spawnedBy).toBe("quickrun");
+      // An unrelated later save (the shape the session journal and layout handlers
+      // write) must not strip it back off.
+      loaded!.sidebarWidth = 400;
+      await manager.saveProjectState(projectId, loaded!);
+      const reloaded = await rereadManager.getProjectState(projectId);
+      expect(reloaded!.terminals[0].spawnedBy).toBe("quickrun");
+    } finally {
+      freshManager.dispose();
+      rereadManager.dispose();
+    }
   });
 
   it("drops non-string mruList entries on read", async () => {

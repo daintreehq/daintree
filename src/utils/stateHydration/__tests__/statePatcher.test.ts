@@ -1664,6 +1664,26 @@ describe("spawnedBy propagation", () => {
     ).toBeUndefined();
   });
 
+  // The two builders that deliberately do NOT carry a source: an orphan has no
+  // saved snapshot to read one from, and a non-PTY recreation is a kind the field
+  // does not exist on. Pinned so neither grows a guessed attribution later.
+  it("does not invent a spawn source for an orphaned backend terminal", () => {
+    const result = buildArgsForOrphanedTerminal(
+      { id: "t1", cwd: "/p", kind: "terminal", launchAgentId: "claude" },
+      "/p"
+    );
+    expect(result.spawnedBy).toBeUndefined();
+  });
+
+  it("does not carry a spawn source onto a non-PTY recreation", () => {
+    const result = buildArgsForNonPtyRecreation(
+      { ...savedQuickRun, kind: "browser" as const },
+      "browser",
+      "/p"
+    );
+    expect(result.spawnedBy).toBeUndefined();
+  });
+
   // The write side is what closes the cycle: a builder that forgot the field
   // would produce a live panel whose very next save strips it again, so the
   // second serialize is the assertion that matters. The restored panel is built

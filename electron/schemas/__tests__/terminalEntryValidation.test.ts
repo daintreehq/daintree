@@ -318,18 +318,47 @@ describe("Terminal Entry Validation Schemas", () => {
         const result = TerminalSnapshotSchema.safeParse(base);
         expect(result.success).toBe(true);
         expect(result.success && result.data.spawnedBy).toBeUndefined();
+        // Absent rather than materialized as an undefined-valued key, so a later
+        // save does not start writing `"spawnedBy": null` into every legacy entry.
+        expect(result.success && "spawnedBy" in result.data).toBe(false);
       });
 
       // The tag is cosmetic — a value this build does not recognize (e.g. one a
       // newer build added, then downgraded) must cost the tag, never the pane.
-      it.each([["cron"], [42], [null], [{ origin: "quickrun" }]])(
-        "drops the unrecognized value %s but keeps the entry",
-        (spawnedBy) => {
-          const result = TerminalSnapshotSchema.safeParse({ ...base, spawnedBy });
-          expect(result.success).toBe(true);
-          expect(result.success && result.data.spawnedBy).toBeUndefined();
-        }
-      );
+      it.each([
+        ["cron"],
+        [""],
+        ["  quickrun  "],
+        ["__proto__"],
+        ["constructor"],
+        [42],
+        [null],
+        [{ origin: "quickrun" }],
+      ])("drops the unrecognized value %s but keeps the entry", (spawnedBy) => {
+        const result = TerminalSnapshotSchema.safeParse({ ...base, spawnedBy });
+        expect(result.success).toBe(true);
+        expect(result.success && result.data.spawnedBy).toBeUndefined();
+      });
+
+      it("normalizes the spawn source on the legacy global entry schema too", () => {
+        const globalBase = { id: "g1", title: "Terminal", cwd: "/Users/test", location: "grid" };
+        const valid = AppStateTerminalEntrySchema.safeParse({
+          ...globalBase,
+          spawnedBy: "quickrun",
+        });
+        expect(valid.success).toBe(true);
+        expect(valid.success && valid.data.spawnedBy).toBe("quickrun");
+
+        // Legacy migration and the no-project fallback hand these entries back to
+        // the renderer unchanged, so an unrecognized value must be dropped here as
+        // well or the restore builders receive something outside the union.
+        const bogus = AppStateTerminalEntrySchema.safeParse({
+          ...globalBase,
+          spawnedBy: "__proto__",
+        });
+        expect(bogus.success).toBe(true);
+        expect(bogus.success && bogus.data.spawnedBy).toBeUndefined();
+      });
 
       it("keeps a pane with an unrecognized spawn source through filterValidTerminalEntries", () => {
         const result = filterValidTerminalEntries(

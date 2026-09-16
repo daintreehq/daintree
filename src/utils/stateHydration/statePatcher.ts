@@ -170,8 +170,10 @@ export interface SavedTerminalData {
   originalPresetId?: string;
   /**
    * Surface that spawned this terminal, stamped once at creation (#12419).
-   * Validated against the union by `TerminalSnapshotSchema` before it reaches
-   * the renderer, so it is trusted here the same way `titleMode` is.
+   * Both hydration ingresses normalize it against the union before it reaches
+   * the renderer — `TerminalSnapshotSchema` for per-project state and
+   * `AppStateTerminalEntrySchema` for the legacy global migration/fallback —
+   * so it is trusted here the same way `titleMode` is.
    */
   spawnedBy?: TerminalSpawnSource;
   /**

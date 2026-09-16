@@ -109,6 +109,7 @@ export const AppStateTerminalEntrySchema = z
     devServerTerminalId: z.string().optional(),
     browserConsoleOpen: z.boolean().optional(),
     devPreviewConsoleOpen: z.boolean().optional(),
+    spawnedBy: SpawnSourceSchema,
     pluginId: z.string().optional(),
   })
   .passthrough()
