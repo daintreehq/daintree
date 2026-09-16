@@ -462,7 +462,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
         path.resolve(__dirname, "../WorktreeBulkRemoveDialog.tsx"),
         "utf-8"
       );
-      expect(dialogSource).toMatch(/typedNameTarget=\{bulkRemove\.typedNameTarget\}/);
+      expect(dialogSource).toMatch(/typedNameTarget=\{[^}]*bulkRemove\.typedNameTarget/);
       expect(dialogSource).toMatch(/variant="destructive"/);
     });
 

@@ -66,32 +66,55 @@ describe("describeBulkRemoveRisks", () => {
    * row with no warning at all (#7880).
    */
   it("surfaces every non-zero count the fresh preview carries", () => {
+    // Every count distinct, so no phrase can stand in for another — a bare
+    // `toContain("2")` was satisfiable by whichever risk happened to say 2.
     const populated = target({
       aheadCount: 7,
       status: verified({
         changes: [
-          change("a.ts", "modified"),
-          change("b.ts", "modified"),
-          change("c.ts", "modified"),
-          change("u1.ts", "untracked"),
-          change("u2.ts", "untracked"),
+          ...Array.from({ length: 3 }, (_, i) => change(`t${i}.ts`, "modified")),
+          ...Array.from({ length: 5 }, (_, i) => change(`u${i}.ts`, "untracked")),
         ],
         submodules: {
           status: "verified",
-          risk: risk({ dirtyFiles: ["vendor/lib/src/main.c"], untrackedFiles: ["vendor/lib/x.o"] }),
+          risk: risk({
+            dirtyFiles: ["vendor/lib/src/main.c", "vendor/lib/src/util.c"],
+            untrackedFiles: [
+              "vendor/lib/x.o",
+              "vendor/lib/y.o",
+              "vendor/lib/z.o",
+              "vendor/lib/w.o",
+            ],
+          }),
         },
       }),
     });
     const line = describeBulkRemoveRisks(populated).join(" · ");
 
-    expect(line, "tracked changes never reached the confirmation").toContain("3");
-    expect(line, "untracked files never reached the confirmation").toContain("2");
-    expect(line, "unpushed commits never reached the confirmation").toContain("7");
-    // The parent's own status collapses both nested files into one
+    expect(line, "tracked changes never reached the confirmation").toContain("3 uncommitted files");
+    expect(line, "untracked files never reached the confirmation").toContain("5 untracked files");
+    expect(line, "unpushed commits never reached the confirmation").toContain("7 unpushed commits");
+    // The parent's own status collapses all six nested files into one
     // ` M vendor/lib` row, so this count cannot be derived from the two above.
-    expect(line, "nested submodule files never reached the confirmation").toMatch(
-      /2 files inside submodules/
+    expect(line, "nested submodule files never reached the confirmation").toContain(
+      "6 files inside submodules"
     );
+  });
+
+  it("prefers the fresh ahead count over the cached seed", () => {
+    // `getFreshChanges` reports `ahead` from the same `git status --porcelain -b`
+    // that produced the file list, so the seed must not win once it has landed.
+    const risks = describeBulkRemoveRisks(
+      target({ aheadCount: 0, status: verified({ ahead: 3 }) })
+    );
+    expect(risks).toEqual(["3 unpushed commits"]);
+  });
+
+  it("falls back to the seed when git reports no upstream to be ahead of", () => {
+    // `ahead` is absent, NOT zero, on a branch with no upstream — reading that
+    // as "nothing unpushed" is the misreading the fallback exists to prevent.
+    const risks = describeBulkRemoveRisks(target({ aheadCount: 2, status: verified() }));
+    expect(risks).toEqual(["2 unpushed commits"]);
   });
 
   it("reports nothing when nothing is at risk", () => {
@@ -120,10 +143,19 @@ describe("describeBulkRemoveRisks", () => {
     expect(risks[0]).toContain("2");
   });
 
-  it("says nothing at all while the preview is still pending", () => {
-    // No count may be asserted before the evidence arrives — the skeleton is
-    // the honest state, not a zero.
+  it("asserts no content risk while the preview is still pending", () => {
+    // No file count may be claimed before the evidence arrives — the skeleton
+    // is the honest state, not a zero.
     expect(describeBulkRemoveRisks(target({ status: { state: "pending" } }))).toEqual([]);
+  });
+
+  it("still carries the seeded unpushed count while pending", () => {
+    // Deliberate: the seed is the only risk that is already known at open
+    // time. The dialog renders a skeleton for a pending row rather than this
+    // line, so the contract is the helper's, not the surface's.
+    expect(
+      describeBulkRemoveRisks(target({ aheadCount: 4, status: { state: "pending" } }))
+    ).toEqual(["4 unpushed commits"]);
   });
 
   it("keeps each risk to its own phrase so they can be joined", () => {

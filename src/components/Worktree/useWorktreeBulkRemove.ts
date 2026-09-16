@@ -32,15 +32,15 @@ export interface BulkRemoveTarget {
   branch: string | null;
   path: string;
   /**
-   * Unpushed commits, from the store snapshot — the ONLY count here that a
-   * fresh preview cannot refresh, because `getFreshChanges` carries no
-   * ahead/behind (see `WorktreeChanges` in `shared/types/git.ts`).
+   * Unpushed commits from the store snapshot — the SEED only. Once the preview
+   * settles, `preview.ahead` supersedes it (see {@link describeBulkRemoveRisks});
+   * this stays as the answer for a branch git reports no upstream for, where
+   * `ahead` is `undefined` rather than zero.
    *
-   * Kept anyway. `deleteBranch: false` means a named branch outlives its
-   * worktree and its commits with it, but a detached worktree has no branch to
-   * leave them on, so the line is not merely informational. Dropping a warning
-   * from a destructive confirm is the #7880 failure direction; a count that is
-   * up to a poll interval old is not.
+   * The line is kept at all because `deleteBranch: false` leaves a named
+   * branch's commits behind, but a detached worktree has no branch to leave
+   * them on — so it is not merely informational, and dropping a warning from a
+   * destructive confirm is the #7880 failure direction.
    */
   aheadCount: number;
   status: BulkRemoveTargetStatus;
@@ -83,6 +83,23 @@ export function isBulkRemoveEligible(target: BulkRemoveTarget): boolean {
 }
 
 /**
+ * True when re-running this target's preview could still clear it.
+ *
+ * Both retryable states are a fetch that did not answer, not an answer we
+ * dislike: `verify-failed` is the parent status, and `blocked`/`unverified` is
+ * the submodule inventory — which arrives that way when its request rejected,
+ * resolved `null`, or completed only partially. `at-risk-commits` is excluded
+ * deliberately: that inventory DID answer, and only a push changes it, so
+ * offering Retry there would promise a recovery the button does not have.
+ */
+export function isBulkRemoveRetryable(target: BulkRemoveTarget): boolean {
+  const exclusion = bulkRemoveExclusion(target);
+  if (!exclusion) return false;
+  if (exclusion.kind === "verify-failed") return true;
+  return exclusion.kind === "blocked" && exclusion.block === "unverified";
+}
+
+/**
  * The per-target risk line for the D3 confirmation.
  *
  * Every count this preview derives has to reach the user: a worktree holding
@@ -100,6 +117,10 @@ export function isBulkRemoveEligible(target: BulkRemoveTarget): boolean {
 export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
   const risks: string[] = [];
   const status = target.status;
+  // Fresh when the same `git status --porcelain -b` reported it; the seed only
+  // where git named no upstream, in which case `ahead` is absent rather than 0.
+  const aheadCount =
+    status.state === "verified" ? (status.preview.ahead ?? target.aheadCount) : target.aheadCount;
   if (status.state === "verified") {
     const { trackedChangeCount, untrackedFileCount, submodules } = status.preview;
     if (trackedChangeCount > 0) {
@@ -116,8 +137,8 @@ export function describeBulkRemoveRisks(target: BulkRemoveTarget): string[] {
       risks.push(`${nested} file${nested === 1 ? "" : "s"} inside submodules`);
     }
   }
-  if (target.aheadCount > 0) {
-    risks.push(`${target.aheadCount} unpushed commit${target.aheadCount === 1 ? "" : "s"}`);
+  if (aheadCount > 0) {
+    risks.push(`${aheadCount} unpushed commit${aheadCount === 1 ? "" : "s"}`);
   }
   return risks;
 }
@@ -136,8 +157,8 @@ export interface UseWorktreeBulkRemoveReturn {
   eligibleCount: number;
   /** True until every snapshotted target's preview has settled. */
   isPreviewPending: boolean;
-  /** True when at least one preview failed and a retry could still clear it. */
-  hasFailedPreviews: boolean;
+  /** True when at least one target is excluded by something a retry could clear. */
+  hasRetryablePreviews: boolean;
   /** Changes once when previews settle, so typed consent can't predate them. */
   consentKey: string;
   typedNameTarget: string;
@@ -160,6 +181,45 @@ const PREVIEW_CONCURRENCY = 3;
 
 /** Concurrency for the delete fan-out. Unchanged. */
 const DELETE_CONCURRENCY = 4;
+
+/**
+ * Deadline for the two dev-preview calls that run before each delete.
+ *
+ * They are the only awaits in the task with no deadline of their own —
+ * `devPreview.*` is a bare `ipcRenderer.invoke` (see
+ * `electron/ipc/handlers/devPreview.preload.ts`), unlike `worktreeClient.delete`,
+ * which carries a 10-minute worktree-port deadline. Without this, a stop that
+ * never resolves parks its task before the delete, so the batch's `allSettled`
+ * never settles: no summary, and `isExecuting` pinned true with Cancel gated
+ * behind it.
+ *
+ * It bounds THIS side's wait and nothing else — there is no cross-process
+ * cancellation to reach for (electron#31737), so the host may still stop the
+ * server afterwards. That is why expiry is reported as a failed target rather
+ * than as a stopped dev server, and why the delete is skipped: a directory lock
+ * we could not confirm released is what #9084 added the stop for.
+ */
+const DEV_PREVIEW_STEP_TIMEOUT_MS = 30_000;
+
+/**
+ * Reject with `reason` if `pending` has not settled inside `ms`.
+ *
+ * Deliberately not p-queue's `timeout`: that rejects the queue's WRAPPER, which
+ * abandons the task's own continuation and takes the batch's bookkeeping with
+ * it (#12416). Racing inside the task's try/catch makes a hang an ordinary
+ * per-target failure instead.
+ */
+function withDeadline<T>(pending: Promise<T>, ms: number, reason: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    pending,
+    new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(reason)), ms);
+    }),
+  ]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer);
+  }) as Promise<T>;
+}
 
 // Identity only — every risk count now comes from the fresh preview. The IPC
 // layer still gets `force: true` for every bulk remove (the user typed the
@@ -388,11 +448,17 @@ export function useWorktreeBulkRemove({
               // every session itself and no-ops cleanly when none match, so
               // it survives the case where `getByWorktree` only reports one
               // panel's session of several sharing the worktreeId.
-              const existing = await window.electron.devPreview.getByWorktree({
-                worktreeId: target.id,
-              });
+              const existing = await withDeadline(
+                window.electron.devPreview.getByWorktree({ worktreeId: target.id }),
+                DEV_PREVIEW_STEP_TIMEOUT_MS,
+                "Timed out checking for a running dev server"
+              );
               const hadDevPreview = existing !== null;
-              await window.electron.devPreview.stopByWorktree({ worktreeId: target.id });
+              await withDeadline(
+                window.electron.devPreview.stopByWorktree({ worktreeId: target.id }),
+                DEV_PREVIEW_STEP_TIMEOUT_MS,
+                "Timed out stopping the dev server"
+              );
               await worktreeClient.delete(target.id, { force: true, deleteBranch: false });
               return {
                 ok: true,
@@ -422,9 +488,12 @@ export function useWorktreeBulkRemove({
         const target = targets[index];
         const fallbackName = target ? (target.branch ?? target.name) : "worktree";
         if (entry.status === "rejected") {
-          // The task body catches its own errors, so this is the submission
-          // itself failing (a cleared queue). Counted rather than dropped —
-          // every target the run attempted has to reach the summary.
+          // The task body catches its own errors, so reaching here means the
+          // `add()` promise itself rejected. Nothing in this hook does that
+          // today — notably NOT `clear()`, which drops queued tasks without
+          // settling their submission promises. Counted rather than dropped
+          // anyway: every target the run attempted has to reach the summary,
+          // and `addAll`'s Promise.all is what used to lose the others.
           failures.push({
             name: fallbackName,
             reason: formatErrorMessage(entry.reason, "Removal failed"),
@@ -511,7 +580,7 @@ export function useWorktreeBulkRemove({
   }, [clearSelection, resetSnapshot]);
 
   const eligibleCount = displayTargets.filter(isBulkRemoveEligible).length;
-  const hasFailedPreviews = displayTargets.some((t) => t.status.state === "failed");
+  const hasRetryablePreviews = displayTargets.some(isBulkRemoveRetryable);
 
   return {
     isConfirmOpen,
@@ -519,7 +588,7 @@ export function useWorktreeBulkRemove({
     excludedMainCount: displayExcludedMain,
     eligibleCount,
     isPreviewPending,
-    hasFailedPreviews,
+    hasRetryablePreviews,
     // Flips exactly once per generation, when the previews settle, so a count
     // typed against the skeleton does not carry into the evidence that
     // replaced it.

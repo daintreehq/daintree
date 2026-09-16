@@ -1,7 +1,8 @@
 import { AlertTriangle, GitBranch, Trash2 } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { Button } from "@/components/ui/button";
-import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { useSkeletonDisplayFloor } from "@/hooks/useDeferredLoading";
 import { cn } from "@/lib/utils";
 import {
   buildSubmoduleCommitRows,
@@ -13,9 +14,17 @@ import {
 import {
   bulkRemoveExclusion,
   describeBulkRemoveRisks,
+  isBulkRemoveEligible,
   type BulkRemoveTarget,
   type UseWorktreeBulkRemoveReturn,
 } from "./useWorktreeBulkRemove";
+
+/**
+ * When the long-wait hint appears. The design system puts a "still working"
+ * line at five seconds; `SkeletonHint` defaults to eight, which is tuned for a
+ * whole pane rather than a modal the user is blocked in front of.
+ */
+const PREVIEW_HINT_THRESHOLD_MS = 5_000;
 
 /**
  * Per-target file cap, deliberately below the single-delete dialog's
@@ -66,8 +75,12 @@ function FileRows({ rows, label }: { rows: WorktreeChangeRow[]; label: string })
 /** The evidence body for one snapshotted target, keyed on its preview state. */
 function TargetBody({ target }: { target: BulkRemoveTarget }) {
   const status = target.status;
+  // Per row, not per batch: rows settle independently, so a batch-wide floor
+  // would hold a skeleton over evidence that had already arrived. Keeps a row
+  // that resolves a frame after onset from flashing its placeholder.
+  const showSkeleton = useSkeletonDisplayFloor(status.state === "pending");
 
-  if (status.state === "pending") {
+  if (status.state === "pending" || showSkeleton) {
     return (
       <Skeleton label="Checking for uncommitted work" className="mt-1">
         <SkeletonBone className="h-3 w-40" />
@@ -83,7 +96,11 @@ function TargetBody({ target }: { target: BulkRemoveTarget }) {
         : exclusion.kind === "verify-failed"
           ? "Couldn't read this worktree's changes — excluded"
           : exclusion.block === "at-risk-commits"
-            ? "Holds submodule commits that are not on any remote — excluded until they are pushed"
+            ? // What the check actually measures, so the sentence promises exactly
+              // what clears it: the inventory reads this clone's remote-tracking
+              // refs, so a fetch that proves the remote already has them works
+              // as well as a push.
+              "Excluded — holds submodule commits this clone can't find on a remote"
             : "The submodule check didn't finish — excluded";
 
     // A failed parent fetch still carries whatever the submodule arm settled
@@ -172,18 +189,35 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
     excludedMainCount,
     eligibleCount,
     isPreviewPending,
-    hasFailedPreviews,
+    hasRetryablePreviews,
     consentKey,
   } = bulkRemove;
 
-  const settledExcluded = targets.filter(
-    (t) => t.status.state !== "pending" && bulkRemoveExclusion(t) !== null
-  ).length;
+  // Everything the user selected that will NOT be removed — the main worktrees
+  // filtered out before the dialog opened, plus the targets their own preview
+  // excluded. Counting only the latter understated it.
+  const settledExcluded =
+    excludedMainCount +
+    targets.filter((t) => t.status.state !== "pending" && bulkRemoveExclusion(t) !== null).length;
 
-  const title =
-    eligibleCount === 1 && targets.length === 1
-      ? `Remove '${targets[0]?.branch ?? targets[0]?.name ?? "worktree"}'?`
-      : `Remove ${targets.length === 1 ? "1 worktree" : `${targets.length} worktrees`}?`;
+  // The title names the batch that will actually run, so it cannot promise
+  // three removals over a button offering one. While previews are pending the
+  // eligible count is not known yet, so it names the selection instead.
+  const titleCount = isPreviewPending ? targets.length : eligibleCount;
+  // Name the entity whenever exactly one will run — including when it is one
+  // of several rows, where "1 worktree" over a list of three is the least
+  // useful thing the title could say.
+  const namedTarget =
+    titleCount !== 1
+      ? undefined
+      : isPreviewPending
+        ? targets[0]
+        : targets.find(isBulkRemoveEligible);
+  const title = namedTarget
+    ? `Remove '${namedTarget.branch ?? namedTarget.name}'?`
+    : titleCount === 0
+      ? "Nothing left to remove"
+      : `Remove ${titleCount} worktrees?`;
 
   // States the consequence, not generic irreversibility copy: what leaves the
   // disk is the working tree, and the branch is explicitly what does not.
@@ -204,7 +238,7 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
     : eligibleCount === 0
       ? targets.length === 0
         ? null
-        : "Nothing left to remove — every selected worktree was excluded"
+        : "Every selected worktree was excluded"
       : settledExcluded > 0
         ? `${settledExcluded} excluded — ${eligibleCount} will be removed`
         : null;
@@ -222,7 +256,10 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
       // dialog, not an alertdialog.
       hasPreview={targets.length > 0}
       zIndex="nested"
-      typedNameTarget={bulkRemove.typedNameTarget}
+      // No gate when nothing can run: the typed-name gate is the most emphatic
+      // confirmation the app has, and offering it for a batch of zero asks the
+      // user to attest to an action that has no targets.
+      typedNameTarget={eligibleCount > 0 ? bulkRemove.typedNameTarget : undefined}
       // Clears a count typed against the skeletons once the evidence that
       // replaced them is on screen. No cooldown timer is set, so this is purely
       // the consent reset.
@@ -266,13 +303,27 @@ export function WorktreeBulkRemoveDialog({ bulkRemove }: WorktreeBulkRemoveDialo
           })}
         </div>
       )}
-      {hasFailedPreviews && (
+      {/* Sibling to the rows' own `<Skeleton>` wrappers, never inside one:
+          their `aria-busy="true"` silences live-region updates in its subtree.
+          Cancel is the honest recovery for a stalled batch — there is nothing
+          to retry until the requests come back. */}
+      {isPreviewPending && (
+        <SkeletonHint
+          firstThreshold={PREVIEW_HINT_THRESHOLD_MS}
+          onCancel={bulkRemove.handleCancel}
+          data-testid="bulk-remove-preview-hint"
+        />
+      )}
+      {hasRetryablePreviews && (
         <div className="flex items-center justify-between gap-2 text-xs text-text-secondary">
-          <span>Some worktrees couldn&apos;t be checked and were excluded.</span>
+          <span>Some worktrees couldn&apos;t be checked and were excluded</span>
           <Button
             variant="ghost"
             size="sm"
             onClick={bulkRemove.handleRetryPreviews}
+            // The handler refuses mid-run anyway; leaving the button live would
+            // report an affordance that silently does nothing.
+            disabled={bulkRemove.isExecuting}
             data-testid="bulk-remove-retry-previews"
           >
             Retry
