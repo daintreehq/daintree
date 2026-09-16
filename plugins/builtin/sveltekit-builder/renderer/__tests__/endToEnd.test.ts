@@ -1,0 +1,204 @@
+import fs from "node:fs/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  SiteGuestEvent,
+  SiteGuestNodeObservation,
+  SitePreviewBindingState,
+  SitePreviewMode,
+  SitePreviewPushPayload,
+} from "@shared/types/ipc/sitePreview";
+import { activate } from "../../main/index.js";
+import { createSandbox, createTestHost, type Sandbox } from "../../main/__tests__/testHost.js";
+import { InspectorController, type InspectorDeps } from "../inspectorController.js";
+
+/**
+ * The panel controller and plugin main were written in parallel against the
+ * same protocol, each tested against a mock of the other. This drives the real
+ * controller into the real main over real files — the only place a mismatch in
+ * range conventions, path forms or state sequencing actually shows up.
+ *
+ * The preview itself is simulated at its IPC surface: a CDP guest cannot run
+ * here, and its half is covered by the guest/host integration test.
+ */
+
+const PREVIEW_PANEL = "preview-1";
+const PREVIEW_SESSION = "preview-session-1";
+
+let sandbox: Sandbox | null = null;
+afterEach(async () => {
+  await sandbox?.cleanup();
+  sandbox = null;
+});
+
+async function setUp() {
+  sandbox = await createSandbox();
+  const test = createTestHost(sandbox.worktree);
+  await activate(test.host);
+
+  let emit: (payload: SitePreviewPushPayload) => void = () => {};
+  let mode: SitePreviewMode = "browse";
+  const bound = (): SitePreviewBindingState => ({
+    sessionId: PREVIEW_SESSION,
+    panelId: PREVIEW_PANEL,
+    projectId: "p1",
+    documentEpoch: 0,
+    mode,
+    guestReady: true,
+    droppedMessages: 0,
+  });
+
+  let id = 0;
+  const deps: InspectorDeps = {
+    sitePreview: {
+      listCandidates: async () => [
+        { panelId: PREVIEW_PANEL, url: "http://site", boundSessionId: null },
+      ],
+      bind: async (request) => {
+        mode = request.mode ?? mode;
+        return bound();
+      },
+      detach: async () => {},
+      setMode: async (request) => {
+        mode = request.mode;
+        return bound();
+      },
+      getState: async () => bound(),
+      onEvent: (callback) => {
+        emit = callback;
+        return () => {};
+      },
+    },
+    invoke: (channel, args) => test.invoke(channel, args),
+    on: () => () => {},
+    panelWorktreeId: () => "w1",
+    runtimeSource: async () => "",
+    newId: () => `id-${++id}`,
+  };
+
+  const controller = new InspectorController("inspector-1", deps);
+  controller.updateContext({ projectId: "p1", worktreeId: "w1", worktreePath: sandbox.worktree });
+
+  const guest = (event: SiteGuestEvent) =>
+    emit({
+      kind: "guest-event",
+      sessionId: PREVIEW_SESSION,
+      panelId: PREVIEW_PANEL,
+      projectId: "p1",
+      documentEpoch: 0,
+      sequence: id++,
+      event,
+    });
+
+  return { controller, guest, sandbox };
+}
+
+function observation(file: string, source: string, marker: string): SiteGuestNodeObservation {
+  const offset = source.indexOf(marker);
+  const before = source.slice(0, offset);
+  // The tag is the marker's first word; the rest only disambiguates the element.
+  const tag = marker.slice(1).split(/[\s>]/)[0]!;
+  return {
+    runtimeOccurrenceId: `occ-${offset}`,
+    loc: { file, line: before.split("\n").length, column: offset - (before.lastIndexOf("\n") + 1) },
+    ancestry: [],
+    tagName: tag.toUpperCase(),
+    sameLocCount: 1,
+    label: tag,
+    bounds: [{ x: 0, y: 0, width: 10, height: 10 }],
+    unmapped: false,
+  };
+}
+
+async function selectInPage(
+  env: Awaited<ReturnType<typeof setUp>>,
+  appRelative: string,
+  marker: string
+) {
+  const { controller, guest, sandbox: box } = env;
+  await vi.waitFor(() => {
+    expect(controller.getSnapshot().binding.status).toBe("bound");
+    expect(controller.getSnapshot().workspace.status).toBe("ready");
+  });
+  guest({
+    type: "documentReady",
+    routeId: "/",
+    url: "http://site/",
+    viewport: { width: 1280, height: 800, deviceScaleFactor: 1 },
+  });
+  const source = await fs.readFile(box.file(appRelative), "utf8");
+  guest({ type: "selectionChanged", nodes: [observation(appRelative, source, marker)] });
+  await vi.waitFor(() => {
+    const snapshot = controller.getSnapshot();
+    expect(snapshot.selection.status).toBe("ready");
+    expect(snapshot.source.status).toBe("ok");
+  });
+  const selection = controller.getSnapshot().selection;
+  if (selection.status !== "ready") throw new Error("selection did not resolve");
+  return { selectionId: selection.selection.selectionId, source };
+}
+
+describe("Site Inspector end to end: view controller → plugin main → disk", () => {
+  it("adds a class the user asked for and writes exactly that to the component", async () => {
+    const env = await setUp();
+    const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<section");
+
+    await expect(env.controller.addClasses(selectionId, ["gap-8"])).resolves.toBe(true);
+
+    const after = await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8");
+    expect(after).toBe(
+      source.replace('class="flex flex-col gap-4 p-6"', 'class="flex flex-col gap-4 p-6 gap-8"')
+    );
+    const receipt = env.controller.getSnapshot().receipt;
+    expect(receipt?.receipt.sourceSaved).toBe(true);
+    expect(receipt?.receipt.stylesGenerated).toBeNull();
+  });
+
+  it("removes a class and leaves every other byte alone", async () => {
+    const env = await setUp();
+    const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<section");
+
+    await expect(env.controller.removeClass(selectionId, "p-6")).resolves.toBe(true);
+
+    const after = await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8");
+    expect(after).toBe(
+      source.replace('class="flex flex-col gap-4 p-6"', 'class="flex flex-col gap-4"')
+    );
+  });
+
+  it("edits literal text in place", async () => {
+    const env = await setUp();
+    const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<h1");
+
+    await expect(env.controller.setText(selectionId, "A new heading")).resolves.toBe(true);
+
+    const after = await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8");
+    expect(after).toBe(source.replace("Plain literal heading", "A new heading"));
+  });
+
+  it("undoes the edit, restoring the original bytes", async () => {
+    const env = await setUp();
+    const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<section");
+    await env.controller.addClasses(selectionId, ["gap-8"]);
+
+    await env.controller.undo();
+
+    await vi.waitFor(async () => {
+      expect(await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8")).toBe(source);
+    });
+  });
+
+  it("refuses a class edit on an expression-driven class and never touches the file", async () => {
+    const env = await setUp();
+    const { selectionId, source } = await selectInPage(
+      env,
+      "src/lib/dynamic-classes.svelte",
+      "<button class={["
+    );
+
+    await expect(env.controller.addClasses(selectionId, ["p-8"])).resolves.toBe(false);
+
+    expect(await fs.readFile(env.sandbox.file("src/lib/dynamic-classes.svelte"), "utf8")).toBe(
+      source
+    );
+  });
+});
