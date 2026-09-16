@@ -97,6 +97,11 @@ export function createSiteBuilderGuest(
    * can tell the host the region was `{@html}` or canvas rather than markup.
    */
   let selection: Array<{ target: Element; hit: Element }> = [];
+  /** Whether the selection is one element or a whole component's rendered roots. */
+  let selectionScope: "element" | "component" = "element";
+  /** The component invocation a component selection stands for, for stepping outward. */
+  let selectedFrame: object | null = null;
+  let trackedTargets: Element[] = [];
   let overlayHost: HTMLElement | null = null;
   let overlayRoot: ShadowRoot | null = null;
   let overlayLayer: HTMLElement | null = null;
@@ -172,6 +177,78 @@ export function createSiteBuilderGuest(
       node = parentOf(node);
     }
     return null;
+  }
+
+  /**
+   * The component invocation that rendered a node: the first `component` frame
+   * on its Svelte parent chain. Svelte builds one frame object per invocation,
+   * so identity — not file and line — tells two cards drawn by one line apart.
+   */
+  function componentFrames(node: Element): object[] {
+    const frames: object[] = [];
+    const meta = readMeta(node);
+    let current: unknown = meta === null ? null : meta.parent;
+    const seen = new Set<object>();
+    let visited = 0;
+    while (current !== null && typeof current === "object" && visited < MAX_ANCESTRY_LINKS) {
+      if (seen.has(current)) break;
+      seen.add(current);
+      visited += 1;
+      const raw = current as SvelteMetaFrame;
+      if (raw.type === "component") frames.push(current);
+      current = raw.parent;
+    }
+    return frames;
+  }
+
+  function componentName(frame: object | null): string | null {
+    if (frame === null) return null;
+    const raw = frame as SvelteMetaFrame;
+    const tag = nonEmptyString(raw.componentTag, MAX_COMPONENT_TAG);
+    if (tag !== null) return tag;
+    return null;
+  }
+
+  function validFile(value: unknown): string | null {
+    return typeof value === "string" && value.length > 0 && value.length <= MAX_FILE ? value : null;
+  }
+
+  /**
+   * Where a selected invocation is used and what it is called. Where the
+   * component is written is deliberately not read off the chain: a snippet
+   * passed in, a wrapper with no element of its own or a dropped frame all make
+   * the chain name a plausible wrong file. Main reads that from source.
+   */
+  function componentIdentity(
+    frame: object
+  ): { file: string; line: number; column: number; name: string } | null {
+    const raw = frame as SvelteMetaFrame;
+    const file = validFile(raw.file);
+    const line = positiveInt(raw.line);
+    const column = nonNegativeInt(raw.column);
+    const name = componentName(frame);
+    if (file === null || line === null || column === null || name === null) return null;
+    return { file, line, column, name };
+  }
+
+  /** The outermost connected elements a component invocation rendered. */
+  function componentRoots(frame: object, start: Element): Element[] {
+    const belongs = (node: Element): boolean =>
+      readLoc(node) !== null && componentFrames(node).includes(frame);
+    let root: Element = start;
+    let parent = parentOf(root);
+    while (parent !== null && belongs(parent)) {
+      root = parent;
+      parent = parentOf(root);
+    }
+    const container = parentOf(root);
+    if (container === null) return [root];
+    const roots: Element[] = [];
+    for (const child of Array.from(container.children)) {
+      if (child === root || belongs(child)) roots.push(child);
+      if (roots.length >= MAX_NODES) break;
+    }
+    return roots.length > 0 ? roots : [root];
   }
 
   function byteLength(text: string): number {
@@ -390,6 +467,7 @@ export function createSiteBuilderGuest(
   }
 
   const ACCENT = "56, 152, 236";
+  const ACCENT_LIGHT = "125, 190, 255";
 
   function ensureOverlay(): void {
     if (overlayHost !== null && overlayHost.isConnected) return;
@@ -529,27 +607,132 @@ export function createSiteBuilderGuest(
     if (drawn === 0) drawBox(layer, node.getBoundingClientRect(), kind, transform);
   }
 
-  function drawLabel(layer: HTMLElement, node: Element, transform: Transform): void {
+  function drawLabel(
+    layer: HTMLElement,
+    node: Element,
+    transform: Transform,
+    text: { name: string; detail: string }
+  ): void {
     const rect = node.getBoundingClientRect();
     const label = document.createElement("div");
-    label.textContent = describe(node);
+    const name = document.createElement("span");
+    name.textContent = text.name;
+    style(name, [
+      ["color", "rgb(" + ACCENT_LIGHT + ")"],
+      ["font-weight", "600"],
+    ]);
+    const detail = document.createElement("span");
+    detail.textContent = text.detail;
+    style(detail, [
+      ["color", "rgba(255, 255, 255, 0.72)"],
+      ["margin-left", "6px"],
+    ]);
+    label.appendChild(name);
+    label.appendChild(detail);
+    // Above the element when there is room, inside its top edge when not, and
+    // never off the left or right of the viewport.
+    const above = rect.top >= 24;
+    const top = above ? finite(rect.top) - 4 : Math.max(0, finite(rect.top)) + 4;
+    const left = Math.min(Math.max(0, finite(rect.left)), Math.max(0, innerWidth - 320));
     style(label, [
       ["position", "fixed"],
       ["pointer-events", "none"],
-      ["transform", "translateY(-100%)"],
-      ["left", (finite(rect.left) - transform.originX) / transform.scale + "px"],
-      ["top", (finite(rect.top) - transform.originY) / transform.scale + "px"],
-      ["font", "500 11px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace"],
+      ["transform", above ? "translateY(-100%)" : "none"],
+      ["left", (left - transform.originX) / transform.scale + "px"],
+      ["top", (top - transform.originY) / transform.scale + "px"],
+      ["font", "500 11px/18px -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif"],
       ["color", "#fff"],
-      ["background", "rgba(" + ACCENT + ", 1)"],
-      ["padding", "0 4px"],
-      ["border-radius", "2px"],
+      ["background", "rgba(24, 24, 27, 0.94)"],
+      ["box-shadow", "0 4px 16px rgba(0, 0, 0, 0.28), 0 0 0 1px rgba(255, 255, 255, 0.08)"],
+      ["padding", "1px 7px"],
+      ["border-radius", "5px"],
       ["white-space", "nowrap"],
-      ["max-width", "60vw"],
+      ["max-width", "320px"],
       ["overflow", "hidden"],
       ["text-overflow", "ellipsis"],
     ]);
     layer.appendChild(label);
+  }
+
+  function labelFor(node: Element): { name: string; detail: string } {
+    const rect = node.getBoundingClientRect();
+    const size = Math.round(rect.width) + " × " + Math.round(rect.height);
+    const component = componentName(componentFrames(node)[0] ?? null);
+    const tag = describe(node);
+    return component === null
+      ? { name: tag, detail: size }
+      : { name: component, detail: tag + "  " + size };
+  }
+
+  /** Margin and padding bands, tinted the way browser inspectors draw them. */
+  function drawBoxModel(layer: HTMLElement, node: Element, transform: Transform): void {
+    if (typeof getComputedStyle !== "function") return;
+    const computed = getComputedStyle(node);
+    const px = (value: string): number => {
+      const parsed = parseFloat(value);
+      return Number.isFinite(parsed) ? Math.max(0, parsed) : 0;
+    };
+    const rect = node.getBoundingClientRect();
+    const band = (left: number, top: number, width: number, height: number, color: string) => {
+      if (width <= 0 || height <= 0) return;
+      const box = document.createElement("div");
+      style(box, [
+        ["position", "fixed"],
+        ["pointer-events", "none"],
+        ["left", (left - transform.originX) / transform.scale + "px"],
+        ["top", (top - transform.originY) / transform.scale + "px"],
+        ["width", width / transform.scale + "px"],
+        ["height", height / transform.scale + "px"],
+        ["background", color],
+      ]);
+      layer.appendChild(box);
+    };
+    const margin = {
+      top: px(computed.marginTop),
+      right: px(computed.marginRight),
+      bottom: px(computed.marginBottom),
+      left: px(computed.marginLeft),
+    };
+    const padding = {
+      top: px(computed.paddingTop) + px(computed.borderTopWidth),
+      right: px(computed.paddingRight) + px(computed.borderRightWidth),
+      bottom: px(computed.paddingBottom) + px(computed.borderBottomWidth),
+      left: px(computed.paddingLeft) + px(computed.borderLeftWidth),
+    };
+    const MARGIN = "rgba(246, 178, 107, 0.28)";
+    const PADDING = "rgba(147, 196, 125, 0.28)";
+    band(
+      rect.left - margin.left,
+      rect.top - margin.top,
+      rect.width + margin.left + margin.right,
+      margin.top,
+      MARGIN
+    );
+    band(
+      rect.left - margin.left,
+      rect.bottom,
+      rect.width + margin.left + margin.right,
+      margin.bottom,
+      MARGIN
+    );
+    band(rect.left - margin.left, rect.top, margin.left, rect.height, MARGIN);
+    band(rect.right, rect.top, margin.right, rect.height, MARGIN);
+    band(rect.left, rect.top, rect.width, padding.top, PADDING);
+    band(rect.left, rect.bottom - padding.bottom, rect.width, padding.bottom, PADDING);
+    band(
+      rect.left,
+      rect.top + padding.top,
+      padding.left,
+      rect.height - padding.top - padding.bottom,
+      PADDING
+    );
+    band(
+      rect.right - padding.right,
+      rect.top + padding.top,
+      padding.right,
+      rect.height - padding.top - padding.bottom,
+      PADDING
+    );
   }
 
   function paint(): void {
@@ -576,14 +759,40 @@ export function createSiteBuilderGuest(
     layer.textContent = "";
     const transform = readTransform(host, overlayProbe);
     if (hovered !== null && selection.every((entry) => entry.target !== hovered)) {
+      drawBoxModel(layer, hovered, transform);
       drawElement(layer, hovered, "hover", transform);
-      drawLabel(layer, hovered, transform);
+      drawLabel(layer, hovered, transform, labelFor(hovered));
     }
     for (const entry of selection) drawElement(layer, entry.target, "selected", transform);
+    const primary = selection[0];
+    if (primary !== undefined) {
+      const label = labelFor(primary.target);
+      const component = componentName(selectedFrame);
+      drawLabel(
+        layer,
+        primary.target,
+        transform,
+        selectionScope === "component" && component !== null
+          ? {
+              name: component,
+              detail: selection.length > 1 ? selection.length + " elements" : label.detail,
+            }
+          : label
+      );
+    }
     if (trackTargets !== null) {
       const tracked = selection.map((entry) => entry.target);
       if (hovered !== null) tracked.push(hovered);
-      trackTargets(tracked);
+      // Re-observing makes the observer report again, which schedules another
+      // paint: only do it when the set of targets actually changed, or an idle
+      // page repaints every frame.
+      const changed =
+        tracked.length !== trackedTargets.length ||
+        tracked.some((node, index) => node !== trackedTargets[index]);
+      if (changed) {
+        trackedTargets = tracked;
+        trackTargets(tracked);
+      }
     }
   }
 
@@ -603,9 +812,18 @@ export function createSiteBuilderGuest(
    */
   function emitSelection(): boolean {
     const nodes = selection.map((entry) => observe(entry.hit));
-    if (send({ type: "selectionChanged", nodes })) return true;
+    const primary = selection[0];
+    const identity =
+      selectionScope === "component" && selectedFrame !== null && primary !== undefined
+        ? componentIdentity(selectedFrame)
+        : null;
+    const scopeField =
+      identity !== null && nodes.length > 0
+        ? { scope: "component" as const, component: identity }
+        : {};
+    if (send({ type: "selectionChanged", nodes, ...scopeField })) return true;
     const trimmed = nodes.map((node) => ({ ...node, ancestry: node.ancestry.slice(0, 4) }));
-    if (send({ type: "selectionChanged", nodes: trimmed })) {
+    if (send({ type: "selectionChanged", nodes: trimmed, ...scopeField })) {
       issue("internal", "ancestry shortened to fit the selection into one envelope");
       return true;
     }
@@ -677,6 +895,8 @@ export function createSiteBuilderGuest(
     const mouse = event as MouseEvent;
     const additive = mouse.metaKey === true || mouse.ctrlKey === true;
     const previous = selection;
+    selectionScope = "element";
+    selectedFrame = null;
     if (additive) {
       const existing = selection.some((entry) => entry.target === target);
       if (existing) {
@@ -698,17 +918,138 @@ export function createSiteBuilderGuest(
     schedulePaint();
   }
 
+  function mappedChildren(node: Element): Element[] {
+    const found: Element[] = [];
+    const walk = (parent: Element, depth: number): void => {
+      for (const child of Array.from(parent.children)) {
+        if (found.length >= MAX_NODES || isOverlay(child)) return;
+        if (readLoc(child) !== null) found.push(child);
+        else if (depth < 8) walk(child, depth + 1);
+      }
+    };
+    walk(node, 0);
+    return found;
+  }
+
+  function selectOnly(
+    target: Element,
+    scopeNext: "element" | "component",
+    frame: object | null
+  ): void {
+    const previous = selection;
+    const previousScope = selectionScope;
+    const previousFrame = selectedFrame;
+    selectionScope = scopeNext;
+    selectedFrame = frame;
+    selection =
+      scopeNext === "component" && frame !== null
+        ? componentRoots(frame, target).map((root) => ({ target: root, hit: root }))
+        : [{ target, hit: target }];
+    if (!emitSelection()) {
+      selection = previous;
+      selectionScope = previousScope;
+      selectedFrame = previousFrame;
+    }
+    const first = selection[0];
+    if (first !== undefined && typeof first.target.scrollIntoView === "function") {
+      first.target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
+    schedulePaint();
+  }
+
+  const CONTROL_ROLES = new Set([
+    "textbox",
+    "searchbox",
+    "combobox",
+    "slider",
+    "spinbutton",
+    "listbox",
+    "menu",
+    "menubar",
+    "grid",
+    "tablist",
+    "tree",
+    "radiogroup",
+  ]);
+
+  /** Arrow keys that belong to something on the page: a field, an editor, a widget. */
+  function keyTargetsPageControl(event: Event): boolean {
+    const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+    for (const entry of path) {
+      if (!(entry instanceof Element)) continue;
+      const tag = entry.tagName.toLowerCase();
+      if (tag === "input" || tag === "textarea" || tag === "select") return true;
+      if (entry instanceof HTMLElement && entry.isContentEditable) return true;
+      const role = entry.getAttribute("role");
+      if (role !== null && CONTROL_ROLES.has(role)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Keyboard traversal, the Web Inspector way: arrows walk the rendered tree,
+   * and Option/Alt+Up widens to the component that drew the selection — then to
+   * the component around that.
+   */
   function onKeyDown(event: Event): void {
     const keyboard = event as KeyboardEvent;
-    // Escape during composition belongs to the IME, never to the inspector.
+    // Keys during composition belong to the IME, never to the inspector.
     if (keyboard.isComposing === true || keyboard.keyCode === 229) return;
-    if (keyboard.key !== "Escape" || selection.length === 0) return;
-    // Only swallow Escape when it had something of ours to clear; otherwise the
-    // host still owns it for leaving Select mode.
-    suppress(event);
-    selection = [];
-    emitSelection();
-    schedulePaint();
+    const primary = selection[0];
+    if (keyboard.key === "Escape") {
+      if (selection.length === 0) return;
+      // Only swallow Escape when it had something of ours to clear; otherwise
+      // the host still owns it for leaving Select mode.
+      suppress(event);
+      selection = [];
+      selectionScope = "element";
+      selectedFrame = null;
+      emitSelection();
+      schedulePaint();
+      return;
+    }
+    if (primary === undefined) return;
+    if (!keyboard.key.startsWith("Arrow") || keyTargetsPageControl(event)) return;
+    const onlyAlt = keyboard.altKey && !keyboard.ctrlKey && !keyboard.metaKey && !keyboard.shiftKey;
+    const plain = !keyboard.altKey && !keyboard.ctrlKey && !keyboard.metaKey && !keyboard.shiftKey;
+    if (!plain && !(onlyAlt && keyboard.key === "ArrowUp")) return;
+    const current = primary.target;
+    if (keyboard.key === "ArrowUp" && keyboard.altKey) {
+      suppress(event);
+      const frames = componentFrames(current);
+      const index = selectedFrame === null ? -1 : frames.indexOf(selectedFrame);
+      // Step out to the next component the page can actually name and place;
+      // one with a malformed frame of its own is passed over, not selected blind.
+      for (let at = selectionScope === "component" ? index + 1 : 0; at < frames.length; at += 1) {
+        const next = frames[at];
+        if (next !== undefined && componentIdentity(next) !== null) {
+          selectOnly(current, "component", next);
+          break;
+        }
+      }
+      return;
+    }
+    if (keyboard.key === "ArrowUp") {
+      suppress(event);
+      const parent = nearestMapped(parentOf(current));
+      if (parent !== null) selectOnly(parent, "element", null);
+      return;
+    }
+    if (keyboard.key === "ArrowDown") {
+      suppress(event);
+      const child = mappedChildren(current)[0];
+      if (child !== undefined) selectOnly(child, "element", null);
+      return;
+    }
+    if (keyboard.key === "ArrowLeft" || keyboard.key === "ArrowRight") {
+      const parent = parentOf(current);
+      if (parent === null) return;
+      suppress(event);
+      const siblings = mappedChildren(nearestMapped(parent) ?? parent);
+      const index = siblings.indexOf(current);
+      const next = siblings[index + (keyboard.key === "ArrowRight" ? 1 : -1)];
+      if (next !== undefined) selectOnly(next, "element", null);
+    }
   }
 
   function onGeometryChange(): void {
@@ -779,6 +1120,7 @@ export function createSiteBuilderGuest(
       };
       selectTeardown.push(() => {
         trackTargets = null;
+        trackedTargets = [];
         resizes.disconnect();
       });
     }

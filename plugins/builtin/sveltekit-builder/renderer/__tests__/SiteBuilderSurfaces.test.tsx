@@ -5,16 +5,23 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const context = vi.hoisted(() => ({
   current: { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" },
 }));
-vi.mock("../useInspectorContext.js", () => ({ useInspectorContext: () => context.current }));
 
-import { SiteInspectorView } from "../SiteInspectorView";
-import { actionService } from "@/services/ActionService";
-import { __resetInspectorControllersForTests, loadGuestRuntimeBody } from "../inspectorController";
+import { SiteBuilderDrawer, SiteBuilderToolbar } from "../SiteBuilderSurfaces";
+import {
+  __resetInspectorControllersForTests,
+  loadGuestRuntimeBody,
+  peekBuilderController,
+  releaseBuilderController,
+} from "../inspectorController";
 import { CHANNELS, PLUGIN_ID, PUSH_CHANNELS } from "../../shared/protocol";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
+import { __resetComposerMemoryForTests } from "../composerMemory";
+import { usePanelStore } from "@/store/panelStore";
 import {
   BUTTON_RANGE,
   FILE,
+  OBSERVATION,
   REVISION,
   createFakeHost,
   makeReceipt,
@@ -24,22 +31,25 @@ import {
 
 let host: FakeHost;
 let uninstall: () => void;
-let removed: AbortController;
-
-function mount({ reuseSignal = false } = {}) {
-  if (!reuseSignal) removed = new AbortController();
-  return render(
-    <SiteInspectorView
-      panelId="inspector-1"
-      pluginId="daintree.sveltekit-builder"
-      disposeSignal={new AbortController().signal}
-      panelRemovedSignal={removed.signal}
-      initialArgs={{}}
-      stateVersion={1}
-      persistState={() => true}
-      styleRootAttributes={{}}
-    />
+/** What the dev preview mounts while the Site Builder is switched on. */
+function Builder() {
+  const props = {
+    panelId: "preview-1",
+    ...context.current,
+    url: "http://localhost:5173/pricing",
+    isWebviewReady: true,
+    onClose: () => {},
+  };
+  return (
+    <>
+      <SiteBuilderToolbar {...props} />
+      <SiteBuilderDrawer {...props} />
+    </>
   );
+}
+
+function mount() {
+  return render(<Builder />);
 }
 
 async function mountBound() {
@@ -77,13 +87,16 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   _resetPluginRuntimeStoreForTest();
+  useDevPreviewToolStore.setState({ activeByPanel: {} });
+  usePanelStore.setState({ panelsById: {} as never });
   cleanup();
   __resetInspectorControllersForTests();
+  __resetComposerMemoryForTests();
   uninstall();
 });
 
 describe("preview binding", () => {
-  it("auto-binds the only candidate with the guest runtime body", async () => {
+  it("binds its own preview in Select mode with the guest runtime body", async () => {
     mount();
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1));
     const body = await loadGuestRuntimeBody();
@@ -92,73 +105,22 @@ describe("preview binding", () => {
     expect(host.sitePreview.bind.mock.calls[0]![0]).toEqual({
       panelId: "preview-1",
       runtimeSource: body,
-      mode: "browse",
+      mode: "select",
     });
-    await screen.findByRole("button", { name: "Select" });
-  });
-
-  it("shows a picker for several candidates and binds the one chosen", async () => {
-    host.setCandidates([
-      { panelId: "preview-1", url: "http://localhost:5173/", boundSessionId: null },
-      { panelId: "preview-2", url: "http://localhost:5174/about", boundSessionId: null },
-    ]);
-    mount();
-    const choice = await screen.findByRole("button", { name: /localhost:5174\/about/ });
-    expect(screen.getByRole("button", { name: /localhost:5173\// })).toBeTruthy();
-    expect(host.sitePreview.bind).not.toHaveBeenCalled();
-    fireEvent.click(choice);
-    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1));
-    expect(host.sitePreview.bind.mock.calls[0]![0].panelId).toBe("preview-2");
-  });
-
-  it("starts the site itself when no dev preview is running, then binds to it", async () => {
-    host.setCandidates([]);
-    const dispatch = vi.spyOn(actionService, "dispatch").mockImplementation(async (id) => {
-      if (id !== "devServer.start") throw new Error(`unexpected ${id}`);
-      // The preview's page appears a moment after the panel is created.
-      setTimeout(
-        () =>
-          host.setCandidates([
-            { panelId: "preview-new", url: "http://localhost:5173/", boundSessionId: null },
-          ]),
-        50
-      );
-      return { ok: true, result: { panelId: "preview-new" } } as never;
-    });
-
-    mount();
-
-    await screen.findByText("Starting your site");
-    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1), { timeout: 3000 });
-    expect(host.sitePreview.bind.mock.calls[0]![0].panelId).toBe("preview-new");
-    expect(dispatch).toHaveBeenCalledTimes(1);
-  });
-
-  it("offers to start the site when opening a preview produced nothing", async () => {
-    host.setCandidates([]);
-    const dispatch = vi
-      .spyOn(actionService, "dispatch")
-      .mockResolvedValue({ ok: true, result: { panelId: null } } as never);
-
-    mount();
-
-    await screen.findByText("Start your site");
-    expect(host.sitePreview.bind).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Start dev server" }));
-    await waitFor(() => expect(dispatch).toHaveBeenCalledTimes(2));
+    await screen.findByRole("button", { name: "Browse" });
   });
 
   it("switches the preview between Browse and Select", async () => {
     await mountBound();
-    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     await waitFor(() =>
       expect(host.sitePreview.setMode).toHaveBeenCalledWith({
         sessionId: "session-1",
-        mode: "select",
+        mode: "browse",
       })
     );
     await waitFor(() =>
-      expect(screen.getByRole("button", { name: "Select" }).getAttribute("aria-pressed")).toBe(
+      expect(screen.getByRole("button", { name: "Browse" }).getAttribute("aria-pressed")).toBe(
         "true"
       )
     );
@@ -185,6 +147,49 @@ describe("preview binding", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "apps/docs" })).toBeNull());
   });
 
+  it("opens the app the preview's dev server runs in without asking", async () => {
+    host.handlers.set(CHANNELS.workspaceOpen, (args) =>
+      args.appRoot
+        ? {
+            status: "ready",
+            workspaceSessionId: "ws-1",
+            appRoot: args.appRoot,
+            support: { level: "full" },
+          }
+        : { status: "ambiguous", appRoots: ["/repo", "/repo/apps/docs"] }
+    );
+    usePanelStore.setState({
+      panelsById: {
+        "preview-1": {
+          id: "preview-1",
+          kind: "dev-preview",
+          location: "grid",
+          cwd: "/repo/apps/docs",
+        },
+      } as never,
+    });
+    await mountBound();
+    await waitFor(() =>
+      expect(host.calls(CHANNELS.workspaceOpen).at(-1)).toMatchObject({
+        appRoot: "/repo/apps/docs",
+      })
+    );
+    expect(
+      screen.queryByRole("heading", { name: "Which app is this preview showing?" })
+    ).toBeNull();
+  });
+
+  it("won't trace a preview whose dev server runs from another worktree", async () => {
+    usePanelStore.setState({
+      panelsById: {
+        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", cwd: "/elsewhere" },
+      } as never,
+    });
+    await mountBound();
+    await screen.findByText(/runs from another worktree/);
+    expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(0);
+  });
+
   it("stays preview-only when the support verdict says so", async () => {
     host.handlers.set(CHANNELS.workspaceOpen, () => ({
       status: "ready",
@@ -195,7 +200,7 @@ describe("preview binding", () => {
     await mountBound();
     await screen.findByText("Found svelte 4.2.1; editing needs Svelte 5");
     await act(async () => host.select(0));
-    await screen.findByText("Source isn't available in preview-only mode");
+    await screen.findByText("This element couldn't be traced to source");
     expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(0);
     expect(screen.queryByRole("combobox", { name: "Add a class" })).toBeNull();
   });
@@ -212,11 +217,152 @@ describe("selection identity", () => {
       routeId: "/pricing",
     });
     expect((args!.nodes as unknown[]).length).toBe(1);
-    expect(screen.getByText(`${FILE}:6`)).toBeTruthy();
+    // Named twice on purpose: in the strip over the page and in the details.
+    const identity = screen.getByRole("region", { name: "Selected element" });
+    expect(identity.textContent).toContain(`${FILE}:6`);
+    expect(screen.getByRole("toolbar", { name: "Site Builder" }).textContent).toContain(
+      `${FILE}:6`
+    );
     const crumbs = screen.getByRole("list", { name: "Ancestry" }).textContent ?? "";
     expect(crumbs).toContain("PricingCard");
     expect(crumbs).toContain("each");
     expect(crumbs).not.toContain("root");
+  });
+
+  it("names a picked component by the file main read from source, never a guess", async () => {
+    const site = { file: "src/lib/PricingCard.svelte", line: 3, column: 0 };
+    let answer: (definedIn: string | null) => void = () => {};
+    host.handlers.set(
+      CHANNELS.componentDefinitions,
+      (args) =>
+        new Promise((resolve) => {
+          answer = (definedIn) =>
+            resolve({
+              definitions: (args.callSites as (typeof site)[]).map((callSite) => ({
+                ...callSite,
+                name: "PricingCard",
+                definedIn,
+                revision: REVISION,
+                definedInRevision: definedIn ? REVISION : null,
+              })),
+            });
+        })
+    );
+    await mountBound();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 1,
+        event: {
+          type: "selectionChanged",
+          nodes: [OBSERVATION],
+          scope: "component",
+          component: { ...site, name: "PricingCard" },
+        },
+      })
+    );
+    const identity = await screen.findByRole("region", { name: "Selected element" });
+    await waitFor(() => expect(host.calls(CHANNELS.componentDefinitions)).toHaveLength(1));
+    expect(host.calls(CHANNELS.componentDefinitions)[0]).toMatchObject({
+      workspaceSessionId: "ws-1",
+      callSites: [site],
+    });
+    // Until main answers, the component is named but no file is claimed for it —
+    // not even the file of the element it was reached through.
+    expect(identity.textContent).toContain("PricingCard");
+    expect(identity.textContent).not.toContain("src/lib/Card.svelte");
+    expect(identity.textContent).not.toContain(`${FILE}:6`);
+    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    expect(strip.textContent).not.toContain(`${FILE}:6`);
+
+    await act(async () => answer("src/lib/Card.svelte"));
+    await waitFor(() => expect(identity.textContent).toContain("src/lib/Card.svelte"));
+    expect(strip.textContent).toContain("src/lib/Card.svelte");
+  });
+
+  it("settles a draft pinned before its component was resolved, after the selection moved on", async () => {
+    const site = { file: "src/lib/PricingCard.svelte", line: 3, column: 0 };
+    const answers: Array<(definedIn: string | null) => void> = [];
+    let closed = false;
+    host.handlers.set(CHANNELS.componentDefinitions, (args) => {
+      if (closed && args.workspaceSessionId === "ws-1") {
+        throw new Error("WORKSPACE_CLOSED: that source workspace is not open; open it again");
+      }
+      return new Promise((resolve) => {
+        answers.push((definedIn) =>
+          resolve({
+            definitions: (args.callSites as (typeof site)[]).map((callSite) => ({
+              ...callSite,
+              name: "PricingCard",
+              definedIn,
+              revision: REVISION,
+              definedInRevision: definedIn ? REVISION : null,
+            })),
+          })
+        );
+      });
+    });
+    await mountBound();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 1,
+        event: {
+          type: "selectionChanged",
+          nodes: [OBSERVATION],
+          scope: "component",
+          component: { ...site, name: "PricingCard" },
+        },
+      })
+    );
+    const request = await screen.findByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Make the card pop" } });
+    const sendButton = () =>
+      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    expect(sendButton().disabled).toBe(true);
+
+    // The workspace closes and reopens under a new session, then a plain click
+    // elsewhere: the first lookup's answer is for a selection no longer on
+    // screen, so the pinned draft must ask for itself — through the new session.
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ready",
+      workspaceSessionId: "ws-2",
+      appRoot: "/repo",
+      support: { level: "full" },
+    }));
+    closed = true;
+    host.handlers.set(CHANNELS.selectionResolve, () => {
+      throw new Error("WORKSPACE_CLOSED: that source workspace is not open; open it again");
+    });
+    await act(async () => host.select(0));
+    await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: {
+        ...makeSelection({ documentEpoch: args.documentEpoch as number, selectionId: "sel-2" }),
+        workspaceSessionId: args.workspaceSessionId as string,
+      },
+    }));
+    await act(async () => host.select(0));
+    await waitFor(() => expect(answers.length).toBeGreaterThanOrEqual(2));
+    await waitFor(() =>
+      expect(host.calls(CHANNELS.componentDefinitions).at(-1)?.workspaceSessionId).toBe("ws-2")
+    );
+    await act(async () => {
+      for (const answer of answers) answer("src/lib/Card.svelte");
+    });
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    expect(
+      screen.getByRole("button", { name: "PricingCard", pressed: true }).getAttribute("title")
+    ).toBe("src/lib/Card.svelte");
   });
 
   it("warns about shared markup before any edit control", async () => {
@@ -449,19 +595,9 @@ describe("editing", () => {
     await mountBound();
     cleanup();
     const panelKeys = vi.fn();
-    removed = new AbortController();
     render(
       <div onKeyDown={panelKeys}>
-        <SiteInspectorView
-          panelId="inspector-1"
-          pluginId="daintree.sveltekit-builder"
-          disposeSignal={new AbortController().signal}
-          panelRemovedSignal={removed.signal}
-          initialArgs={{}}
-          stateVersion={1}
-          persistState={() => true}
-          styleRootAttributes={{}}
-        />
+        <Builder />
       </div>
     );
     await act(async () => host.select(0));
@@ -484,6 +620,144 @@ describe("stale selections", () => {
     expect(
       (screen.getByRole("combobox", { name: "Add a class" }) as HTMLInputElement).disabled
     ).toBe(true);
+  });
+
+  it("won't send a request about a selection the page has moved past, and keeps the draft", async () => {
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    const sendButton = () =>
+      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    expect(sendButton().disabled).toBe(false);
+
+    await act(async () => host.epochAdvanced(1));
+    await screen.findByText(
+      "This changed since you picked it — select it again in the page to send"
+    );
+    expect(sendButton().disabled).toBe(true);
+    expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
+  });
+
+  it("holds a request to the bytes of every file it cites, not only the element's", async () => {
+    // Innermost first, as the page reports it: PricingCard's call site, then generated code.
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const base = makeSelection({ documentEpoch: args.documentEpoch as number });
+      const node = base.nodes[0]!;
+      return {
+        status: "ok",
+        selection: { ...base, nodes: [{ ...node, ancestry: [...node.ancestry].reverse() }] },
+      };
+    });
+    await mountSelected();
+    const controller = peekBuilderController("preview-1")!;
+    let state = controller.getSnapshot().selection;
+    await waitFor(() => {
+      state = controller.getSnapshot().selection;
+      expect(state.status === "ready" && state.revisions !== null).toBe(true);
+    });
+    if (state.status !== "ready") throw new Error("not ready");
+    // The chain's PricingCard call site is cited alongside the element's file.
+    expect(Object.keys(state.revisions!).sort()).toEqual(["src/lib/PricingCard.svelte", FILE]);
+    expect(await controller.sourcesUnchanged(state.selection, state.revisions)).toBe(true);
+
+    host.diskRevisions.set("src/lib/PricingCard.svelte", "f".repeat(64));
+    expect(await controller.sourcesUnchanged(state.selection, state.revisions)).toBe(false);
+    host.diskRevisions.set("src/lib/PricingCard.svelte", null);
+    expect(await controller.sourcesUnchanged(state.selection, state.revisions)).toBe(false);
+  });
+
+  it("keeps the revision a mapping was read from, even if the file changed before it was recorded", async () => {
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const base = makeSelection({ documentEpoch: args.documentEpoch as number });
+      const node = base.nodes[0]!;
+      return {
+        status: "ok",
+        selection: { ...base, nodes: [{ ...node, ancestry: [...node.ancestry].reverse() }] },
+      };
+    });
+    // Main parsed PricingCard's call site at one revision; disk already holds another.
+    host.diskRevisions.set("src/lib/PricingCard.svelte", "e".repeat(64));
+    await mountSelected();
+    const controller = peekBuilderController("preview-1")!;
+    let state = controller.getSnapshot().selection;
+    await waitFor(() => {
+      state = controller.getSnapshot().selection;
+      expect(state.status === "ready" && state.revisions !== null).toBe(true);
+    });
+    if (state.status !== "ready") throw new Error("not ready");
+    expect(await controller.sourcesUnchanged(state.selection, state.revisions)).toBe(false);
+  });
+
+  it("won't let an element's revision paper over a mapping read from other bytes of its file", async () => {
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const base = makeSelection({ documentEpoch: args.documentEpoch as number });
+      const node = base.nodes[0]!;
+      return {
+        status: "ok",
+        selection: {
+          ...base,
+          nodes: [
+            {
+              ...node,
+              ancestry: [
+                {
+                  kind: "component",
+                  location: { file: FILE, line: 2, column: 0 },
+                  componentTag: "Badge",
+                  generated: false,
+                },
+              ],
+            },
+          ],
+        },
+      };
+    });
+    host.handlers.set(CHANNELS.componentDefinitions, (args) => ({
+      definitions: (args.callSites as Array<{ file: string; line: number; column: number }>).map(
+        (site) => ({
+          ...site,
+          name: "Badge",
+          definedIn: null,
+          revision: "a".repeat(64),
+          definedInRevision: null,
+        })
+      ),
+    }));
+    await mountSelected();
+    const controller = peekBuilderController("preview-1")!;
+    await waitFor(() => {
+      const state = controller.getSnapshot().selection;
+      expect(state.status === "ready" && state.revisions !== null).toBe(true);
+    });
+    const state = controller.getSnapshot().selection;
+    if (state.status !== "ready") throw new Error("not ready");
+    expect(state.revisions![FILE]).toBeNull();
+  });
+
+  it("refuses to send source text read from other bytes than the selection", async () => {
+    host.handlers.set(CHANNELS.sourceExcerpt, () => ({
+      status: "ok",
+      text: "<button>Changed</button>",
+      firstLine: 6,
+      revision: "b".repeat(64),
+    }));
+    // The request belongs to a live preview with the builder on.
+    usePanelStore.setState({
+      panelsById: {
+        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
+      } as never,
+    });
+    useDevPreviewToolStore.setState({
+      activeByPanel: { "preview-1": "daintree.sveltekit-builder.builder" },
+    });
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    const sendButton = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(sendButton.disabled).toBe(false));
+    fireEvent.click(sendButton);
+    await screen.findByText(/The source changed since you picked this/);
+    expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
   });
 
   it("goes stale when main reports the selected file changed, and only that file", async () => {
@@ -522,7 +796,6 @@ describe("stale selections", () => {
     await act(async () => host.epochAdvanced(1));
     expect(screen.queryByText("Selection changed — select again")).toBeNull();
     expect(removeButton().disabled).toBe(false);
-    expect(screen.getByText("/pricing")).toBeTruthy();
   });
 
   it("drops a resolve when the owning file changed while it was out", async () => {
@@ -557,7 +830,7 @@ describe("stale selections", () => {
       guestReady: false,
       droppedMessages: 0,
     }));
-    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     await screen.findByText("Selection changed — select again");
     expect(removeButton().disabled).toBe(true);
   });
@@ -676,20 +949,8 @@ describe("lifetime", () => {
     // What the host does: the slot resolves to nothing while the plugin is disabled.
     function Gated() {
       const disabled = usePluginRuntimeStore((state) => state.disabledPluginIds.has(PLUGIN_ID));
-      return disabled ? null : (
-        <SiteInspectorView
-          panelId="inspector-1"
-          pluginId="daintree.sveltekit-builder"
-          disposeSignal={new AbortController().signal}
-          panelRemovedSignal={removed.signal}
-          initialArgs={{}}
-          stateVersion={1}
-          persistState={() => true}
-          styleRootAttributes={{}}
-        />
-      );
+      return disabled ? null : <Builder />;
     }
-    removed = new AbortController();
     render(<Gated />);
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(1));
@@ -743,7 +1004,7 @@ describe("lifetime", () => {
       support: { level: "full" },
     }));
     context.current = { projectId: "p1", worktreeId: "wt-2", worktreePath: "/repo-2" };
-    mount({ reuseSignal: true });
+    mount();
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2));
 
@@ -757,15 +1018,15 @@ describe("lifetime", () => {
     await mountSelected();
     cleanup();
     expect(host.sitePreview.detach).not.toHaveBeenCalled();
-    mount({ reuseSignal: true });
+    mount();
     expect(screen.getByRole("button", { name: "Remove px-6" })).toBeTruthy();
     expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
   });
 
-  it("releases the preview and workspace when the panel is removed while unmounted", async () => {
+  it("releases the preview and workspace once the builder is switched off", async () => {
     await mountSelected();
     cleanup();
-    act(() => removed.abort());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
     expect(host.sitePreview.detach).toHaveBeenCalledWith({ sessionId: "session-1" });
     expect(host.calls(CHANNELS.workspaceClose)).toEqual([{ workspaceSessionId: "ws-1" }]);
   });
@@ -774,7 +1035,7 @@ describe("lifetime", () => {
     await mountSelected();
     cleanup();
     context.current = { projectId: "p1", worktreeId: "wt-2", worktreePath: "/repo-2" };
-    mount({ reuseSignal: true });
+    mount();
     await waitFor(() =>
       expect(host.sitePreview.detach).toHaveBeenCalledWith({ sessionId: "session-1" })
     );
@@ -818,5 +1079,80 @@ describe("preview reattach", () => {
 
     expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "Reconnect" })).toBeTruthy();
+  });
+});
+
+describe("builder lifetime", () => {
+  it("recovers when its controller is released while the builder is still on screen", async () => {
+    // A controller can be disposed under a mounted builder — an idle check that
+    // ran before a slow commit claimed it. Rendering the dead one leaves the
+    // strip on "Connecting" forever.
+    await mountBound();
+    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
+
+    await act(async () => releaseBuilderController("preview-1"));
+
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2));
+    await screen.findByRole("button", { name: "Browse" });
+  });
+});
+
+describe("builder lifetime while switched on", () => {
+  function builderOn() {
+    usePanelStore.setState({
+      panelsById: {
+        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid" },
+      } as never,
+    });
+    useDevPreviewToolStore.setState({
+      activeByPanel: { "preview-1": "daintree.sveltekit-builder.builder" },
+    });
+  }
+
+  afterEach(() => {
+    useDevPreviewToolStore.setState({ activeByPanel: {} });
+    usePanelStore.setState({ panelsById: {} as never });
+  });
+
+  it("keeps the binding and Undo while the preview is hidden, and lets go when switched off", async () => {
+    builderOn();
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await screen.findByRole("button", { name: "Undo" });
+
+    cleanup();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    expect(host.sitePreview.detach).not.toHaveBeenCalled();
+
+    mount();
+    expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy();
+    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
+
+    cleanup();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    await act(async () => useDevPreviewToolStore.getState().setActive("preview-1", null));
+    expect(host.sitePreview.detach).toHaveBeenCalledWith({ sessionId: "session-1" });
+    expect(host.calls(CHANNELS.workspaceClose)).toEqual([{ workspaceSessionId: "ws-1" }]);
+  });
+
+  it("keeps trying to connect while the preview has no page yet", async () => {
+    let attempts = 0;
+    host.sitePreview.bind.mockImplementation(async (request) => {
+      attempts++;
+      if (attempts < 3) throw new Error("No dev preview is available on that panel");
+      return {
+        sessionId: "session-1",
+        panelId: request.panelId,
+        projectId: "p1",
+        documentEpoch: 0,
+        mode: request.mode ?? "select",
+        guestReady: false,
+        droppedMessages: 0,
+      };
+    });
+    mount();
+    await screen.findByText("Waiting for the page to load");
+    await waitFor(() => expect(attempts).toBe(3), { timeout: 3000 });
+    await waitFor(() => expect(screen.queryByText("Waiting for the page to load")).toBeNull());
   });
 });

@@ -62,7 +62,9 @@ function guestEventTypes(source: string): string[] {
     source.indexOf("export const GuestEventSchema"),
     source.indexOf("export const GuestEnvelopeSchema")
   );
-  return [...guestEventBlock.matchAll(/z\.literal\("([a-zA-Z]+)"\)/g)].map((m) => m[1]!);
+  // Discriminants only: payload fields carry literals of their own (a selection's
+  // `scope: z.literal("component")`), and those are not event types.
+  return [...guestEventBlock.matchAll(/type: z\.literal\("([a-zA-Z]+)"\)/g)].map((m) => m[1]!);
 }
 
 describe("site preview guest protocol", () => {

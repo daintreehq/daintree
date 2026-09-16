@@ -9,7 +9,8 @@ export const SITE_AGENT_EDITED = "SITE_AGENT_EDITED";
  * deterministically: it reads the submitted prompt, takes the source location
  * the Inspector put in it, and makes the requested text change in that file.
  *
- * It understands exactly one instruction — `Change the text to "…"` — and edits
+ * It understands two instructions — `Change the text to "…"` and
+ * `Add the classes "…"` — and edits
  * only the line the prompt names. That is the point: the edit can only land if
  * the prompt carried a correct, worktree-relative source location, so a passing
  * run proves the context packet, not a lucky search.
@@ -63,9 +64,10 @@ process.stdin.setEncoding("utf8");
 function handlePrompt(prompt) {
   fs.appendFileSync(INBOX, prompt + "\\n----\\n");
   process.stdout.write(OSC_WORKING);
-  const wanted = /Change the text to "([^"]+)"/.exec(prompt);
   const source = /^- Source: <([a-z0-9-]+)> at (.+):(\\d+):(\\d+)$/m.exec(prompt);
-  if (!wanted || !source) {
+  const text = /Change the text to "([^"]+)"/.exec(prompt);
+  const classes = /Add the classes "([^"]+)"/.exec(prompt);
+  if (!source || (!text && !classes)) {
     console.log("SITE_AGENT_CONFUSED");
     process.stdout.write(OSC_IDLE);
     return;
@@ -74,8 +76,13 @@ function handlePrompt(prompt) {
   const target = path.join(process.cwd(), file);
   const lines = fs.readFileSync(target, "utf8").split("\\n");
   const index = Number(line) - 1;
-  const pattern = new RegExp("(<" + tag + "\\\\b[^>]*>)([^<]*)(</" + tag + ">)");
-  lines[index] = lines[index].replace(pattern, (_m, open, _text, close) => open + wanted[1] + close);
+  if (text) {
+    const pattern = new RegExp("(<" + tag + "\\\\b[^>]*>)([^<]*)(</" + tag + ">)");
+    lines[index] = lines[index].replace(pattern, (_m, open, _t, close) => open + text[1] + close);
+  } else {
+    const pattern = new RegExp("(<" + tag + "\\\\b[^>]*\\\\bclass=\\")([^\\"]*)(\\")");
+    lines[index] = lines[index].replace(pattern, (_m, open, value, close) => open + value + " " + classes[1] + close);
+  }
   fs.writeFileSync(target, lines.join("\\n"));
   console.log(${JSON.stringify(SITE_AGENT_EDITED)} + " " + file + ":" + line);
   setTimeout(() => process.stdout.write(OSC_IDLE), 300);

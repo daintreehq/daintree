@@ -21,41 +21,160 @@ export interface AgentTaskContext {
 /**
  * What a request is about: the clicked element, or one of the components
  * that contain it, innermost first. A component is named for the tag that
- * rendered it and located by the file it is written in — the file the next
- * level in holds its call site.
+ * rendered it and located by the file its import at the call site resolves to,
+ * read from source by main. `file` is null while that is still being read or
+ * when it couldn't be proven; such a scope can be shown but never sent.
  */
 export type TaskScope =
   | { kind: "element"; label: string }
   | {
       kind: "component";
       label: string;
-      /** App-relative file the component is written in. */
-      file: string;
+      /** App-relative file the component is written in; null when not proven. */
+      file: string | null;
       /** Where it is used, when a call site outside generated code is known. */
-      usedAt: { file: string; line: number } | null;
+      usedAt: CallSite | null;
     };
 
-export function taskScopes(selection: SiteSelection): TaskScope[] {
+export interface CallSite {
+  file: string;
+  line: number;
+  column: number;
+}
+
+/**
+ * Where each component call site's component is written, keyed by
+ * {@link callSiteKey}: a file, null when it couldn't be proven, or absent while
+ * still unknown. `null` as a whole means the lookup hasn't answered yet.
+ */
+export type ComponentDefinitions = Readonly<Record<string, string | null>> | null;
+
+export function callSiteKey(site: CallSite): string {
+  return `${site.file}\n${site.line}\n${site.column}`;
+}
+
+/** Call sites whose definitions a selection's scopes need, deduplicated. */
+export function componentCallSites(
+  selection: SiteSelection,
+  picked: PickedComponent | null
+): CallSite[] {
+  const sites = new Map<string, CallSite>();
+  const add = (site: CallSite) => sites.set(callSiteKey(site), site);
+  // Every authored call site the prompt can name, including ones outside a
+  // generated or library frame — the same entries "Rendered inside" lists.
+  for (const entry of selection.nodes[0]?.ancestry ?? []) {
+    if (entry.kind !== "component" || entry.generated) continue;
+    add({ file: entry.location.file, line: entry.location.line, column: entry.location.column });
+  }
+  if (picked) add({ file: picked.file, line: picked.line, column: picked.column });
+  return [...sites.values()];
+}
+
+/** App-relative file → revision of the bytes a request's claims were read from. */
+export type SourceRevisions = Readonly<Record<string, string | null>> | null;
+
+/**
+ * Every file a request about this selection can cite: each selected element's
+ * own file, the call sites on the chain, and where the components are written.
+ */
+export function citedFiles(
+  selection: SiteSelection,
+  picked: PickedComponent | null,
+  definitions: Readonly<Record<string, string | null>>
+): string[] {
+  const files = new Set<string>();
+  for (const node of selection.nodes) {
+    if (node.definition) files.add(node.definition.location.file);
+  }
+  for (const site of componentCallSites(selection, picked)) files.add(site.file);
+  for (const file of Object.values(definitions)) if (file) files.add(file);
+  return [...files];
+}
+
+/** Whether a scope names a component nobody has proven the file of yet. */
+export function isUnresolvedScope(scope: TaskScope | undefined): boolean {
+  return scope?.kind === "component" && scope.file === null;
+}
+
+export function taskScopes(
+  selection: SiteSelection,
+  definitions: ComponentDefinitions = null
+): TaskScope[] {
   const node = selection.nodes[0];
-  const definition = node?.definition;
-  if (!node || !definition) return [];
-  const scopes: TaskScope[] = [{ kind: "element", label: node.label || definition.tagName }];
-  let file = definition.location.file;
+  if (!node) return [];
+  const definition = node.definition;
+  const scopes: TaskScope[] = [
+    { kind: "element", label: node.label || definition?.tagName || "element" },
+  ];
+  if (!definition) return scopes;
+  let outermost = definition.location.file;
   for (const entry of node.ancestry) {
     if (entry.kind !== "component") continue;
     if (entry.generated) break;
+    const usedAt = {
+      file: entry.location.file,
+      line: entry.location.line,
+      column: entry.location.column,
+    };
+    const file = definitions?.[callSiteKey(usedAt)] ?? null;
     scopes.push({
       kind: "component",
-      label: entry.componentTag ?? componentName(file),
+      label: entry.componentTag ?? (file ? componentName(file) : "component"),
       file,
-      usedAt: { file: entry.location.file, line: entry.location.line },
+      usedAt,
     });
-    file = entry.location.file;
+    outermost = entry.location.file;
   }
   // The outermost user file is itself a component — a route page or layout
-  // rendered by generated code, so it has no call site of its own.
-  scopes.push({ kind: "component", label: componentName(file), file, usedAt: null });
+  // rendered by generated code. It holds the outermost call site (or the
+  // element), so its file is observed rather than inferred.
+  scopes.push({
+    kind: "component",
+    label: componentName(outermost),
+    file: outermost,
+    usedAt: null,
+  });
   return scopes;
+}
+
+/** The component a selection on the page stands for: its call site and tag. */
+export interface PickedComponent extends CallSite {
+  name: string;
+}
+
+/**
+ * The scopes a request can be about, with the component picked on the page
+ * placed by its call site rather than by a position in the chain. The element
+ * is always scope 0, so `pickedIndex` always points at a real scope. Until main
+ * has proven where the picked component is written it is `unresolved`, and the
+ * request may not quietly become about the element, or about a neighbour.
+ */
+export function scopesFor(
+  selection: SiteSelection,
+  picked: PickedComponent | null,
+  definitions: ComponentDefinitions = null
+): { scopes: TaskScope[]; pickedIndex: number; unresolved: boolean } {
+  const scopes = taskScopes(selection, definitions);
+  if (picked === null || scopes.length === 0) return { scopes, pickedIndex: 0, unresolved: false };
+  const file = definitions?.[callSiteKey(picked)] ?? null;
+  const scope: TaskScope = {
+    kind: "component",
+    label: picked.name,
+    file,
+    usedAt: { file: picked.file, line: picked.line, column: picked.column },
+  };
+  const index = scopes.findIndex(
+    (candidate) =>
+      candidate.kind === "component" &&
+      candidate.usedAt !== null &&
+      callSiteKey(candidate.usedAt) === callSiteKey(picked)
+  );
+  const pickedIndex = index > 0 ? index : 1;
+  if (index > 0) scopes[index] = scope;
+  // Not on the transmitted chain (a generated invocation, a trimmed ancestry):
+  // still what the user picked, so it is offered first.
+  else scopes.splice(1, 0, scope);
+  return { scopes, pickedIndex, unresolved: file === null };
 }
 
 function componentName(file: string): string {
@@ -74,14 +193,15 @@ export const MAX_INSTRUCTION_CHARS = 4000;
 
 export function buildAgentTaskPrompt(context: AgentTaskContext): string {
   const { selection, file, worktreePath, excerpt } = context;
-  // App-relative paths from the page map onto the worktree the same way the
-  // owning file already did, so every path in the prompt is worktree-relative.
+  // App-relative paths from the page map onto the worktree through the app's
+  // own place in it — not through the element's file, which a visual-only
+  // root doesn't have.
+  const ownerLocation = selection.nodes[0]?.definition?.location.file;
   const appPrefix =
-    file &&
-    selection.nodes[0]?.definition &&
-    file.endsWith(selection.nodes[0].definition.location.file)
-      ? file.slice(0, file.length - selection.nodes[0].definition.location.file.length)
-      : "";
+    appPrefixIn(worktreePath, selection.appRoot) ??
+    (file && ownerLocation && file.endsWith(ownerLocation)
+      ? file.slice(0, file.length - ownerLocation.length)
+      : "");
   const inWorktree = (appRelative: string) => `${appPrefix}${appRelative}`;
   const node = selection.nodes[0];
   const definition = node?.definition ?? null;
@@ -100,7 +220,8 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
     const used = scope.usedAt
       ? `, used at ${inWorktree(scope.usedAt.file)}:${scope.usedAt.line}`
       : "";
-    lines.push(`- Target: the ${scope.label} component (${inWorktree(scope.file)}${used})`);
+    const where = scope.file ? inWorktree(scope.file) : "file not traced";
+    lines.push(`- Target: the ${scope.label} component (${where}${used})`);
     lines.push("- Picked by clicking this element inside it:");
   }
   if (node) {
@@ -159,6 +280,16 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
   return lines.join("\n");
 }
 
+/** `apps/site/` for an app at `<worktree>/apps/site`; null when it isn't inside the worktree. */
+function appPrefixIn(worktreePath: string | null, appRoot: string): string | null {
+  if (!worktreePath) return null;
+  const normalize = (value: string) => value.replace(/\\/g, "/").replace(/\/+$/, "");
+  const root = normalize(worktreePath);
+  const app = normalize(appRoot);
+  if (app === root) return "";
+  return app.startsWith(`${root}/`) ? `${app.slice(root.length + 1)}/` : null;
+}
+
 /** Agents that are mid-turn must not receive a second prompt on top of it. */
 export function isAgentBusy(state: AgentState | null): boolean {
   return state === "working" || state === "directing";
@@ -166,9 +297,34 @@ export function isAgentBusy(state: AgentState | null): boolean {
 
 export type DeliveryState =
   | { status: "sending" }
+  /** A fresh session is starting; the request goes in once it is at its prompt. */
+  | { status: "starting" }
+  /** The session is asking its user something (trust, approval) before it can take the request. */
+  | { status: "needs-you" }
+  /** No sign yet whether the agent can take typed input; the user may send anyway. */
+  | { status: "unknown-readiness" }
   | { status: "sent" }
   | { status: "unconfirmed" }
-  | { status: "failed"; message: string };
+  /** `partial` when typing had started: some of the prompt may be in the agent's input. */
+  | { status: "failed"; message: string; partial?: true };
+
+/**
+ * Whether a freshly launched agent can take a typed request now. Only an agent
+ * observed waiting at its own prompt qualifies: a trust or approval question is
+ * also "waiting", and a request typed into it would answer the question.
+ */
+export function launchReadiness(
+  agentState: AgentState | null | undefined,
+  waitingReason: string | undefined
+): "ready" | "needs-you" | "not-yet" {
+  if (agentState === "waiting") {
+    return waitingReason === "question" || waitingReason === "approval" || waitingReason === "error"
+      ? "needs-you"
+      : "ready";
+  }
+  if (agentState === "idle") return "ready";
+  return "not-yet";
+}
 
 /**
  * Only `pty_written` is evidence the prompt reached the agent's terminal. Every
@@ -181,9 +337,17 @@ export function deliveryFromPhase(phase: TerminalSubmissionPhase | null): Delive
     // Part of the prompt may already sit in the agent's input, so neither of
     // these says resending is safe.
     case "failed":
-      return { status: "failed", message: "The terminal didn't accept the whole prompt" };
+      return {
+        status: "failed",
+        message: "The terminal didn't accept the whole prompt",
+        partial: true,
+      };
     case "cancelled":
-      return { status: "failed", message: "Sending was stopped before the prompt finished" };
+      return {
+        status: "failed",
+        message: "Sending was stopped before the prompt finished",
+        partial: true,
+      };
     case "queued":
     case "writing":
     case null:

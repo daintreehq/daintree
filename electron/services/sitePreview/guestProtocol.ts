@@ -89,6 +89,25 @@ export const GuestEventSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("selectionChanged"),
       nodes: z.array(GuestNodeObservationSchema).max(32),
+      /** Present when the nodes are one component invocation's rendered roots. */
+      scope: z.literal("component").optional(),
+      /**
+       * The call site of the component that was selected, as it appears on the
+       * primary node's parent chain. A location, not a position in the chain: a
+       * dropped or truncated frame must not make it name a different component.
+       * A wrapper with no element of its own shares its roots with the component
+       * inside it, so the roots alone cannot say which one was meant.
+       */
+      component: z
+        .object({
+          file: z.string().min(1).max(1024),
+          line: z.number().int().positive(),
+          column: z.number().int().nonnegative(),
+          /** The tag it was written as at that call site. */
+          name: z.string().min(1).max(128),
+        })
+        .strict()
+        .optional(),
     })
     .strict(),
   z

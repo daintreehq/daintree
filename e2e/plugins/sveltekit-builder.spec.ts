@@ -9,15 +9,19 @@ import { getGridPanelIds } from "../helpers/panels";
 import { fakeAgentEnv, ptyWrite } from "../helpers/fakeAgent";
 import { SEL } from "../helpers/selectors";
 import { T_MEDIUM } from "../helpers/timeouts";
-import { createSvelteKitProject, PAGE_FILE, PAGE_SOURCE } from "./helpers/sveltekitProject";
+import {
+  CARD_FILE,
+  createSvelteKitProject,
+  PAGE_FILE,
+  PAGE_SOURCE,
+} from "./helpers/sveltekitProject";
 import { installSiteAgent } from "./helpers/siteAgent";
 
 const PLUGIN_ID = "daintree.sveltekit-builder";
-const PANEL_KIND = `${PLUGIN_ID}.inspector`;
-const OPEN_ACTION = `${PLUGIN_ID}.open-inspector`;
-const OPEN_TITLE = "Open Site Builder";
+const TOGGLE_ACTION = `${PLUGIN_ID}.toggle-builder`;
+const TOGGLE_TITLE = "Toggle Site Builder";
 const HEADING_CLASSES = 'class="text-4xl font-bold"';
-const AGENT_HEADING = "Built by an agent";
+const AGENT_CLASSES = "bg-indigo-600 text-white";
 
 // A cold Vite start compiles SvelteKit and Tailwind before the first byte.
 const DEV_SERVER_TIMEOUT = 120_000;
@@ -61,19 +65,57 @@ async function dispatch(page: Page, actionId: string, args?: unknown) {
   );
 }
 
+/** Marks the fixture site's pages, so helpers never reach into another webview. */
+const SITE_MARKER = "!!document.body?.hasAttribute('data-daintree-e2e-site')";
+
 /**
  * Evaluate in the dev preview's page, from main: the host renderer's Trusted
  * Types policy rejects `webview.executeJavaScript`.
  */
 async function inPreview<T>(app: ElectronApplication, expression: string): Promise<T | null> {
-  return app.evaluate(async ({ webContents }, source) => {
-    for (const guest of webContents.getAllWebContents()) {
-      if (guest.getType() !== "webview") continue;
-      const value = await guest.executeJavaScript(source).catch(() => null);
-      if (value !== null && value !== undefined) return value;
-    }
-    return null;
-  }, expression) as Promise<T | null>;
+  return app.evaluate(
+    async ({ webContents }, { source, marker }) => {
+      for (const guest of webContents.getAllWebContents()) {
+        if (guest.getType() !== "webview") continue;
+        if (!(await guest.executeJavaScript(marker).catch(() => false))) continue;
+        const value = await guest.executeJavaScript(source).catch(() => null);
+        if (value !== null && value !== undefined) return value;
+      }
+      return null;
+    },
+    { source: expression, marker: SITE_MARKER }
+  ) as Promise<T | null>;
+}
+
+/**
+ * Press a key inside the preview as native input. Playwright's keyboard goes to
+ * the host window and only sometimes crosses into a focused <webview>.
+ */
+async function pressInPreview(
+  app: ElectronApplication,
+  keyCode: string,
+  modifiers: Array<"alt" | "shift" | "control" | "meta"> = []
+): Promise<void> {
+  const pressed = await app.evaluate(
+    async ({ webContents }, input) => {
+      let count = 0;
+      for (const guest of webContents.getAllWebContents()) {
+        if (guest.getType() !== "webview") continue;
+        if (!(await guest.executeJavaScript(input.marker).catch(() => false))) continue;
+        guest.sendInputEvent({
+          type: "keyDown",
+          keyCode: input.keyCode,
+          modifiers: input.modifiers,
+        });
+        guest.sendInputEvent({ type: "keyUp", keyCode: input.keyCode, modifiers: input.modifiers });
+        count += 1;
+      }
+      return count;
+    },
+    { keyCode, modifiers, marker: SITE_MARKER }
+  );
+  if (pressed !== 1)
+    throw new Error(`expected one site preview to press keys in, found ${pressed}`);
 }
 
 type Rect = { x: number; y: number; width: number; height: number };
@@ -124,14 +166,18 @@ async function selectInPreview(page: Page, selector: string): Promise<void> {
 
 const readPage = () => readFileSync(path.join(projectDir, ...PAGE_FILE.split("/")), "utf8");
 
+/** The dev preview panel with the Site Builder switched on: its strip and drawer. */
 function inspector(page: Page) {
-  return page.locator(SEL.panel.gridPanel).filter({ hasText: "Site Builder" });
+  return page
+    .locator(SEL.panel.gridPanel)
+    .filter({ has: page.getByRole("toolbar", { name: "Site Builder" }) });
 }
 
 /**
  * The SvelteKit Site Builder against a real SvelteKit 2 / Svelte 5 / Tailwind 4
- * dev server, through the real app: enable the built-in, find its panel, open
- * it from the plugin tray and let it start the site, point at an element, edit its classes on disk, undo,
+ * dev server, through the real app: enable the built-in, switch it on from the
+ * plugin tray so it starts the site in a dev preview, toggle it from the
+ * preview's own toolbar, point at an element, edit its classes on disk, undo,
  * then hand the element to an agent terminal and watch the site change.
  *
  * Every step is its own test in a serial block, so a failure names the first
@@ -209,19 +255,9 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     cleanup?.();
   });
 
-  test("enabling the built-in registers its panel and command", async () => {
+  test("enabling the built-in registers its command", async () => {
     const { window } = ctx;
     await window.evaluate((id) => window.electron.plugin.setEnabled(id, true), PLUGIN_ID);
-
-    await expect
-      .poll(
-        async () =>
-          (await window.evaluate(() => window.electron.plugin.getPanelKinds())).map(
-            (kind) => kind.id
-          ),
-        { timeout: PLUGIN_TIMEOUT }
-      )
-      .toContain(PANEL_KIND);
     await expect
       .poll(
         async () =>
@@ -230,56 +266,84 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
           ),
         { timeout: PLUGIN_TIMEOUT }
       )
-      .toContain(OPEN_ACTION);
+      .toContain(TOGGLE_ACTION);
+    // It lives in the dev preview now, not in a panel of its own.
+    const kinds = await window.evaluate(() => window.electron.plugin.getPanelKinds());
+    expect(kinds.map((kind) => kind.id).filter((id) => id.startsWith(PLUGIN_ID))).toEqual([]);
   });
 
-  test("the panel palette offers the Site Builder", async () => {
-    const { window } = ctx;
-    await dispatch(window, "panel.palette");
-    const palette = window.locator(SEL.panelPalette.dialog);
-    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
-    await window.locator(SEL.panelPalette.searchInput).fill("Site Builder");
-    await expect(
-      window.locator(SEL.panelPalette.options).filter({ hasText: "Site Builder" })
-    ).toBeVisible({ timeout: T_MEDIUM });
-    await window.keyboard.press("Escape");
-    await expect(palette).not.toBeVisible({ timeout: T_MEDIUM });
-  });
-
-  test("the plugin tray opens the Site Builder, which starts the site itself", async () => {
+  test("the plugin tray switches the Site Builder on, starting the site in a dev preview", async () => {
     const { window } = ctx;
     const port = await freePort();
     await saveCurrentProjectSettings(window, {
       devServerCommand: `npm run dev -- --host 127.0.0.1 --port ${port} --strictPort`,
     });
-    // No preview is running: the Site Builder has to start one.
     await expect(window.locator("webview")).toHaveCount(0);
 
     await window.getByRole("button", { name: "Plugin tray" }).click();
-    await window.getByRole("menuitem", { name: OPEN_TITLE }).click();
+    await window.getByRole("menuitem", { name: TOGGLE_TITLE }).click();
 
-    // Opening a panel uses none of the plugin's capabilities, so no confirm.
-    await expect(window.getByRole("dialog", { name: `Run '${OPEN_TITLE}'?` })).toHaveCount(0);
-    const panel = inspector(window);
-    await expect(panel).toBeVisible({ timeout: PLUGIN_TIMEOUT });
-    await expect(panel.getByRole("button", { name: "Start selecting" })).toBeVisible({
+    // Toggling a tool uses none of the plugin's capabilities, so no confirm.
+    await expect(window.getByRole("dialog", { name: `Run '${TOGGLE_TITLE}'?` })).toHaveCount(0);
+    const strip = window.getByRole("toolbar", { name: "Site Builder" });
+    await expect(strip).toBeVisible({ timeout: PLUGIN_TIMEOUT });
+    await expect(window.locator("webview")).toBeAttached({ timeout: DEV_SERVER_TIMEOUT });
+    await expect(strip.getByText("Click any element on the page")).toBeVisible({
       timeout: DEV_SERVER_TIMEOUT,
     });
-    await expect(window.locator("webview")).toBeAttached();
+  });
+
+  test("the dev preview's own toolbar button toggles the Site Builder", async () => {
+    const { window } = ctx;
+    const strip = window.getByRole("toolbar", { name: "Site Builder" });
+    await strip.getByRole("button", { name: "Close Site Builder" }).click();
+    await expect(strip).toHaveCount(0);
+
+    const toggle = window.getByRole("button", { name: "Site Builder", exact: true });
+    await expect(toggle).toHaveAttribute("aria-pressed", "false", { timeout: PLUGIN_TIMEOUT });
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(strip.getByText("Click any element on the page")).toBeVisible({
+      timeout: PLUGIN_TIMEOUT,
+    });
+    await expect(strip.getByRole("button", { name: "Select" })).toHaveAttribute(
+      "aria-pressed",
+      "true"
+    );
   });
 
   test("clicking an element in the preview traces it to its source", async () => {
     const { window } = ctx;
     const panel = inspector(window);
-    await panel.getByRole("button", { name: "Start selecting" }).click();
-    await expect(panel.getByText("Click an element in the preview to select it")).toBeVisible({
-      timeout: T_MEDIUM,
-    });
-
     await selectInPreview(window, "h1");
 
-    const selected = panel.getByRole("region", { name: "Selected element" });
-    await expect(selected.getByRole("list", { name: "Classes" })).toContainText("text-4xl");
+    await expect(window.getByRole("toolbar", { name: "Site Builder" })).toContainText(
+      `${PAGE_FILE}:2`
+    );
+    const details = window.getByRole("complementary", { name: "Site Builder details" });
+    await expect(details).toBeVisible();
+    await panel.getByText("Edit directly").click();
+    await expect(panel.getByRole("list", { name: "Classes" })).toContainText("text-4xl");
+  });
+
+  test("Option+Up selects the component that drew an element", async () => {
+    const { window } = ctx;
+    const strip = window.getByRole("toolbar", { name: "Site Builder" });
+    await clickInPreview(ctx, "article h2");
+    await expect(strip).toContainText(`${CARD_FILE}:6`, { timeout: PLUGIN_TIMEOUT });
+
+    await pressInPreview(ctx.app, "Up", ["alt"]);
+    await expect(strip).toContainText("FeatureCard", { timeout: PLUGIN_TIMEOUT });
+    await expect(strip.getByText("Component", { exact: true })).toBeVisible();
+    const scope = window
+      .getByRole("group", { name: "What the request is about" })
+      .getByRole("button", { name: "FeatureCard" });
+    await expect(scope).toHaveAttribute("aria-pressed", "true");
+    await window.screenshot({ path: test.info().outputPath("component-selected.png") });
+
+    // Back to the heading for the edit steps.
+    await selectInPreview(window, "h1");
+    await window.screenshot({ path: test.info().outputPath("element-selected.png") });
   });
 
   test("adding a class writes it to the component source", async () => {
@@ -304,59 +368,90 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     await expect.poll(readPage, { timeout: PLUGIN_TIMEOUT }).toBe(PAGE_SOURCE);
   });
 
-  test("an agent in the worktree takes the selected element and changes the site", async () => {
+  test("a new Claude session restyles the selected component on the live page", async () => {
     const { window, app } = ctx;
+    const panel = inspector(window);
+    const strip = window.getByRole("toolbar", { name: "Site Builder" });
+    // Every card's computed background, or null when the page isn't there to ask.
+    const cardBackgrounds = () =>
+      inPreview<string[]>(
+        app,
+        `(() => { const cards = [...document.querySelectorAll("article")]; return cards.length ? cards.map((card) => getComputedStyle(card).backgroundColor) : null; })()`
+      );
+    const before = await cardBackgrounds();
+    expect(before).toHaveLength(3);
 
-    const before = new Set(await getGridPanelIds(window));
-    const launched = await dispatch(window, "agent.launch", { agentId: "claude" });
-    expect(launched.ok, JSON.stringify(launched.error)).toBe(true);
+    // Pick the FeatureCard component, the way a user would.
+    await clickInPreview(ctx, "article h2");
+    await expect(strip).toContainText(`${CARD_FILE}:6`, { timeout: PLUGIN_TIMEOUT });
+    await pressInPreview(app, "Up", ["alt"]);
+    await expect(strip.getByText("Component", { exact: true })).toBeVisible({
+      timeout: PLUGIN_TIMEOUT,
+    });
+
+    // No agent is running: the composer offers the user's own CLIs.
+    const destination = panel.getByRole("combobox", { name: "Agent to send to" });
+    await expect(destination).toContainText("New Claude", { timeout: PLUGIN_TIMEOUT });
+
+    const panelsBefore = new Set(await getGridPanelIds(window));
+    const request = panel.getByRole("textbox", { name: "Request for the agent" });
+    await request.fill(`Add the classes "${AGENT_CLASSES}" to it`);
+    await window.screenshot({ path: test.info().outputPath("composer.png") });
+    await panel.getByRole("button", { name: "Send to agent" }).click();
+
     await expect
       .poll(
         async () => {
-          agentPanelId = (await getGridPanelIds(window)).find((id) => !before.has(id)) ?? "";
+          agentPanelId = (await getGridPanelIds(window)).find((id) => !panelsBefore.has(id)) ?? "";
           return agentPanelId;
         },
         { timeout: PLUGIN_TIMEOUT }
       )
       .not.toBe("");
-    const agentPanel = window.locator(`[data-panel-id="${agentPanelId}"]`);
-    // Past the workspace trust prompt, then wait until Daintree sees an agent.
+
+    // A fresh Claude asks whether to trust the folder. The request must wait for
+    // that answer rather than be typed into the question.
+    await expect
+      .poll(
+        () =>
+          existsSync(`${agentInbox}.raw`) &&
+          readFileSync(`${agentInbox}.raw`, "utf8").includes("started"),
+        { timeout: 60_000 }
+      )
+      .toBe(true);
+    await window.waitForTimeout(1500);
+    expect(existsSync(agentInbox)).toBe(false);
+    await ptyWrite(window, agentPanelId, "\r");
+
+    await expect
+      .poll(() => readFileSync(path.join(projectDir, ...CARD_FILE.split("/")), "utf8"), {
+        timeout: 90_000,
+      })
+      .toContain(`p-5 shadow-sm ${AGENT_CLASSES}`);
+    const received = readFileSync(agentInbox, "utf8");
+    expect(received).toContain("- Target: the FeatureCard component");
+    expect(received).toContain(`Source: <article> at ${CARD_FILE}:5:1`);
+    // Line breaks survive: the request went in as typed input, not a shell argument.
+    expect(received).toContain("```svelte\n");
+    await expect(panel.getByRole("status").filter({ hasText: /Sent to/ })).toBeVisible({
+      timeout: PLUGIN_TIMEOUT,
+    });
+
+    // Every card on the running site picks up the new look, with no reload.
     await expect
       .poll(
         async () => {
-          await ptyWrite(window, agentPanelId, "\r");
-          return agentPanel.getAttribute("data-detected-agent-id");
+          const after = await cardBackgrounds();
+          // All three cards still rendered, and every one of them restyled.
+          return (
+            after !== null &&
+            after.length === 3 &&
+            after.every((color, index) => color !== before![index])
+          );
         },
-        { timeout: 60_000, intervals: [1000] }
+        { timeout: PLUGIN_TIMEOUT }
       )
-      .toBe("claude");
-
-    // Opening the agent re-lays the grid, which recreates the preview's page;
-    // the inspector reattaches on its own.
-    const panel = inspector(window);
-    await expect(panel.getByText("Click an element in the preview to select it")).toBeVisible({
-      timeout: PLUGIN_TIMEOUT,
-    });
-    await selectInPreview(window, "h1");
-
-    const request = panel.getByRole("textbox", { name: "Request for the agent" });
-    await expect(request).toBeEnabled({ timeout: PLUGIN_TIMEOUT });
-    await request.fill(`Change the text to "${AGENT_HEADING}"`);
-    await panel.getByRole("button", { name: "Send to agent" }).click();
-    await expect(panel.getByRole("status").filter({ hasText: /^Sent to/ })).toBeVisible({
-      timeout: PLUGIN_TIMEOUT,
-    });
-
-    await expect
-      .poll(readPage, { timeout: PLUGIN_TIMEOUT })
-      .toBe(PAGE_SOURCE.replace("Daintree site builder", AGENT_HEADING));
-    await expect(readFileSync(agentInbox, "utf8")).toContain(`Source: <h1> at ${PAGE_FILE}:2:3`);
-
-    // The running site picks the edit up, with no reload from the test.
-    await expect
-      .poll(() => inPreview<string>(app, `document.querySelector("h1")?.textContent ?? null`), {
-        timeout: PLUGIN_TIMEOUT,
-      })
-      .toBe(AGENT_HEADING);
+      .toBe(true);
+    await window.screenshot({ path: test.info().outputPath("agent-done.png") });
   });
 });

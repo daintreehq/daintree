@@ -595,3 +595,170 @@ describe("hardening the observation", () => {
     );
   });
 });
+
+describe("keyboard traversal and component selection", () => {
+  function key(init: KeyboardEventInit): KeyboardEvent {
+    const event = new KeyboardEvent("keydown", { bubbles: true, cancelable: true, ...init });
+    window.dispatchEvent(event);
+    return event;
+  }
+
+  function lastScope(): string | undefined {
+    const selections = events("selectionChanged");
+    const latest = selections[selections.length - 1];
+    return latest?.type === "selectionChanged" ? latest.scope : undefined;
+  }
+
+  // Two cards drawn by one line of the page: the same markup, two invocations.
+  function renderCards() {
+    document.body.innerHTML = `
+      <main id="main">
+        <article id="a"><h2 id="a-title">One</h2><p id="a-body">x</p></article>
+        <article id="b"><h2 id="b-title">Two</h2></article>
+      </main>`;
+    const page = { type: "component", file: "src/routes/+page.svelte", line: 1, column: 0 };
+    const cardA = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 6,
+      column: 6,
+      componentTag: "Card",
+      parent: page,
+    };
+    const cardB = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 6,
+      column: 6,
+      componentTag: "Card",
+      parent: page,
+    };
+    const $ = (id: string) => document.getElementById(id)!;
+    setMeta($("main"), loc(1), page);
+    setMeta($("a"), loc(5, 0, "src/lib/Card.svelte"), cardA);
+    setMeta($("a-title"), loc(6, 2, "src/lib/Card.svelte"), cardA);
+    setMeta($("a-body"), loc(7, 2, "src/lib/Card.svelte"), cardA);
+    setMeta($("b"), loc(5, 0, "src/lib/Card.svelte"), cardB);
+    setMeta($("b-title"), loc(6, 2, "src/lib/Card.svelte"), cardB);
+    return $;
+  }
+
+  it("walks to the parent, first child and siblings with the arrow keys", () => {
+    const $ = renderCards();
+    install("select");
+    click($("a-title"));
+
+    expect(key({ key: "ArrowRight" }).defaultPrevented).toBe(true);
+    expect(lastSelection()[0].loc).toEqual(loc(7, 2, "src/lib/Card.svelte"));
+    key({ key: "ArrowUp" });
+    expect(lastSelection()[0].loc).toEqual(loc(5, 0, "src/lib/Card.svelte"));
+    key({ key: "ArrowDown" });
+    expect(lastSelection()[0].loc).toEqual(loc(6, 2, "src/lib/Card.svelte"));
+    expect(lastScope()).toBeUndefined();
+  });
+
+  it("widens to the invocation that drew the element, not every card from that line", () => {
+    const $ = renderCards();
+    install("select");
+    click($("a-title"));
+
+    key({ key: "ArrowUp", altKey: true });
+
+    const nodes = lastSelection();
+    expect(lastScope()).toBe("component");
+    expect(nodes).toHaveLength(1);
+    expect(nodes[0].tagName.toLowerCase()).toBe("article");
+    // The first card only: the second shares the line, not the invocation.
+    expect(nodes[0].ancestry[0]).toMatchObject({ componentTag: "Card" });
+  });
+
+  it("names the outer component when a wrapper renders no element of its own", () => {
+    document.body.innerHTML =
+      '<main id="main"><article id="card"><h2 id="title">Hi</h2></article></main>';
+    const page = { type: "component", file: "src/routes/+page.svelte", line: 1, column: 0 };
+    const wrapper = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 4,
+      column: 2,
+      componentTag: "Wrapper",
+      parent: page,
+    };
+    const child = {
+      type: "component",
+      file: "src/lib/Wrapper.svelte",
+      line: 2,
+      column: 2,
+      componentTag: "Child",
+      parent: wrapper,
+    };
+    const $ = (id: string) => document.getElementById(id)!;
+    setMeta($("main"), loc(3), page);
+    setMeta($("card"), loc(1, 0, "src/lib/Child.svelte"), child);
+    setMeta($("title"), loc(2, 2, "src/lib/Child.svelte"), child);
+    install("select");
+    click($("title"));
+
+    key({ key: "ArrowUp", altKey: true });
+    let latest = events("selectionChanged").at(-1);
+    expect(latest).toMatchObject({
+      scope: "component",
+      component: {
+        file: "src/lib/Wrapper.svelte",
+        line: 2,
+        column: 2,
+        name: "Child",
+      },
+    });
+
+    // Same roots, but now the request is about Wrapper, not Child.
+    key({ key: "ArrowUp", altKey: true });
+    latest = events("selectionChanged").at(-1);
+    expect(latest).toMatchObject({
+      scope: "component",
+      component: {
+        file: "src/routes/+page.svelte",
+        line: 4,
+        column: 2,
+        name: "Wrapper",
+      },
+    });
+    expect(lastSelection()[0].tagName.toLowerCase()).toBe("article");
+  });
+
+  it("goes back to element scope on the next plain click", () => {
+    const $ = renderCards();
+    install("select");
+    click($("a-title"));
+    key({ key: "ArrowUp", altKey: true });
+    click($("b-title"));
+    expect(lastScope()).toBeUndefined();
+  });
+
+  it("leaves arrow keys to fields and widgets on the page, and to other modifiers", () => {
+    const $ = renderCards();
+    const input = document.createElement("input");
+    document.body.appendChild(input);
+    install("select");
+    click($("a-title"));
+    const before = events("selectionChanged").length;
+
+    const inField = new KeyboardEvent("keydown", {
+      key: "ArrowUp",
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+    });
+    input.dispatchEvent(inField);
+    expect(inField.defaultPrevented).toBe(false);
+    expect(key({ key: "ArrowUp", shiftKey: true }).defaultPrevented).toBe(false);
+    expect(key({ key: "ArrowDown", altKey: true }).defaultPrevented).toBe(false);
+    expect(events("selectionChanged")).toHaveLength(before);
+  });
+
+  it("leaves arrow keys to the page when nothing is selected", () => {
+    renderCards();
+    install("select");
+    expect(key({ key: "ArrowUp" }).defaultPrevented).toBe(false);
+  });
+});

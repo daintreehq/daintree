@@ -2,8 +2,8 @@
   "name": "daintree.sveltekit-builder",
   "version": "0.1.0",
   "displayName": "SvelteKit Site Builder",
-  "description": "Point at your running SvelteKit site and change it: select an element in the dev preview, see which source owns it, and edit its text and Tailwind classes as real source changes.",
-  "tagline": "Edit your SvelteKit site by pointing at it",
+  "description": "Build your SvelteKit site visually with your own Claude Code, Codex or Gemini CLI: switch on the Site Builder in the dev preview, click any element or component, and ask your agent to change it.",
+  "tagline": "Point at your site, ask your own agent to change it",
   "category": "workspace",
   "main": "main/index.js",
   "engines": {
@@ -21,27 +21,11 @@
     }
   },
   "contributes": {
-    "panels": [
-      {
-        "id": "inspector",
-        "name": "Site Builder",
-        "iconId": "layout-panel-top",
-        "color": "var(--theme-category-orange)",
-        "stateVersion": 1
-      }
-    ],
-    "views": [
-      {
-        "id": "inspector",
-        "componentPath": "./renderer/index.js",
-        "location": "panel"
-      }
-    ],
     "commands": [
       {
-        "id": "open-inspector",
-        "title": "Open Site Builder",
-        "description": "Open the Site Builder beside this worktree's dev preview, starting the dev server if none is running.",
+        "id": "toggle-builder",
+        "title": "Toggle Site Builder",
+        "description": "Switch the Site Builder on or off in this worktree's dev preview, opening the preview if none is running.",
         "category": "panels",
         "kind": "command",
         "danger": "safe",
@@ -51,10 +35,10 @@
     ],
     "toolbarButtons": [
       {
-        "id": "open",
-        "label": "Open Site Builder",
-        "iconId": "layout-panel-top",
-        "actionId": "daintree.sveltekit-builder.open-inspector",
+        "id": "toggle",
+        "label": "Toggle Site Builder",
+        "iconId": "monitor-play",
+        "actionId": "daintree.sveltekit-builder.toggle-builder",
         "priority": 1
       }
     ]

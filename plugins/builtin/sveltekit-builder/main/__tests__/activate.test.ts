@@ -12,7 +12,7 @@ vi.mock("@daintreehq/svelte-source-model", async (importOriginal) => {
 });
 
 import { activate } from "../index.js";
-import { CHANNELS, INSPECTOR_PANEL_KIND } from "../../shared/protocol.js";
+import { BUILDER_TOOL_ID, CHANNELS } from "../../shared/protocol.js";
 import manifest from "../../plugin.json" with { type: "json" };
 import { createSandbox, createTestHost, type Sandbox } from "./testHost.js";
 
@@ -83,13 +83,13 @@ describe("activate", () => {
       expect(registered).toContain(command.id);
     }
 
-    const open = mock.registeredActions.find((action) =>
-      action.descriptor.id.endsWith("open-inspector")
+    const toggle = mock.registeredActions.find((action) =>
+      action.descriptor.id.endsWith("toggle-builder")
     );
-    await open?.handler();
+    await toggle?.handler();
     expect(mock.dispatchedActions).toContainEqual({
-      actionId: "panel.openPluginPanel",
-      args: { kind: INSPECTOR_PANEL_KIND },
+      actionId: "devPreview.toggleTool",
+      args: { toolId: BUILDER_TOOL_ID },
     });
   });
 });

@@ -36,7 +36,7 @@ describe("findSvelteKitApps", () => {
     }
   });
 
-  it("does not descend into installs or build output", async () => {
+  it("does not descend into installs, build output or hidden scratch directories", async () => {
     const manifest = JSON.stringify({ name: "buried", devDependencies: { "@sveltejs/kit": "^2" } });
     const memory = createMemoryReader({
       "/repo/node_modules/some-dep/package.json": manifest,
@@ -45,6 +45,7 @@ describe("findSvelteKitApps", () => {
       "/repo/dist/package.json": manifest,
       "/repo/build/package.json": manifest,
       "/repo/.git/package.json": manifest,
+      "/repo/.tmp/performance/baseline-source/package.json": manifest,
       "/repo/apps/real/package.json": manifest,
     });
 

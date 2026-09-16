@@ -61,7 +61,7 @@ npm run build:e2e && npm run test:e2e:plugins                                   
 npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/sveltekit-builder.spec.ts
 ```
 
-- **`sveltekit-builder.spec.ts`** creates a throwaway SvelteKit 2 + Svelte 5 + Tailwind 4 app and installs its dependencies from the registry (network on a cold npm cache), runs it in a dev preview, and walks the Site Builder: enable, find the panel, open it from the plugin tray so it starts the dev server itself, click an element in the preview, edit a class, undo, then send the element to an agent terminal and wait for the site to change. The agent is a deterministic fake `claude` (`e2e/plugins/helpers/siteAgent.ts`) that applies the requested edit only at the source location the prompt names, so a pass proves the context the Inspector sent.
+- **`sveltekit-builder.spec.ts`** creates a throwaway SvelteKit 2 + Svelte 5 + Tailwind 4 app and installs its dependencies from the registry (network on a cold npm cache), runs it in a dev preview, and walks the Site Builder: enable, switch it on from the plugin tray so it opens a dev preview and starts the site, close it and switch it back on from the preview's own toolbar button, click an element in the preview, edit a class, undo, then send the element to an agent terminal and wait for the site to change. The agent is a deterministic fake `claude` (`e2e/plugins/helpers/siteAgent.ts`) that applies the requested edit only at the source location the prompt names, so a pass proves the context the Site Builder sent.
 
 Things these specs have to handle that bucket specs don't:
 
@@ -69,7 +69,7 @@ Things these specs have to handle that bucket specs don't:
 - **Built-ins are default-off.** Enable with `window.electron.plugin.setEnabled(id, true)` and poll `getPanelKinds()` / `getActions()`.
 - **The preview's page is only reachable from main.** The host renderer's Trusted Types policy rejects `webview.executeJavaScript`; use `app.evaluate` over `webContents.getAllWebContents()` filtered to `getType() === "webview"`. Click at the element's real position: the webview's bounding box plus the element's client rect.
 - **A fixture project's `package.json` type applies to scripts in it.** An extensionless fake CLI inside a `"type": "module"` project loads as ESM, so `require` throws; use `process.getBuiltinModule`.
-- **Print diagnostics on failure.** A blank panel or a silent preview has no assertion message worth reading; the Site Builder spec dumps the panel text, the renderer console, the preview's console (collected from `web-contents-created`) and what the agent received.
+- **Print diagnostics on failure.** A blank panel or a silent preview has no assertion message worth reading; the Site Builder spec dumps the builder's text, the renderer console, the preview's console (collected from `web-contents-created`) and what the agent received.
 
 | Project         | testDir                 | retries (CI) | workers |
 | --------------- | ----------------------- | ------------ | ------- |
