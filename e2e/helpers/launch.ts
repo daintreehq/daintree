@@ -346,7 +346,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
     // device-pixel output. windows-latest GitHub runners cap the OS display
     // at 1920x1080, so render-side scaling is the only path to 4K-grade PNGs.
     const screenshotScale = options.screenshotScale ?? process.env.DAINTREE_SCREENSHOT_SCALE;
-    if (screenshotScale && /^[1-9]$/.test(screenshotScale)) {
+    if (screenshotScale && /^[1-9](\.\d+)?$/.test(screenshotScale)) {
       const scaleIdx = args.findIndex((a) => a.startsWith("--force-device-scale-factor"));
       if (scaleIdx >= 0) {
         args[scaleIdx] = `--force-device-scale-factor=${screenshotScale}`;
