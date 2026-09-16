@@ -1632,6 +1632,11 @@ async function runDeleteAsync(
   options: WorktreeDeleteOptions,
   mutationId: string
 ): Promise<void> {
+  // Which half of the flow a failure came from. `classifyError` reads the
+  // message, and a branch name is part of that message — `feature/fetch` reads
+  // as a network error, `fix/file-upload` as a filesystem one. Once the delete
+  // call is in flight we know the category without having to guess at text.
+  let reachedDelete = false;
   try {
     // A rapid retry after a prior attempt's restore must not start closing
     // terminals while that restore is still spawning panels (#11344) — wait it
@@ -1667,6 +1672,7 @@ async function runDeleteAsync(
     const existingDevPreview = await window.electron.devPreview.getByWorktree({ worktreeId });
     const hadDevPreview = existingDevPreview !== null;
     await window.electron.devPreview.stopByWorktree({ worktreeId });
+    reachedDelete = true;
     await worktreeClient.delete(worktreeId, {
       force: options.force,
       deleteBranch: options.deleteBranch,
@@ -1694,12 +1700,14 @@ async function runDeleteAsync(
     // path (card already gone, toast only) and the pre-IPC failures (dev-preview
     // stop, terminal close) land in `daintree.log` too — not just the failures
     // that still have a card to draw an error on.
-    // No explicit `errorType`: this catch also sees terminal-close, dev-preview
-    // and connectivity failures, which are not git failures. `classifyError`
-    // reads the structured props and lands each on its own category.
+    // Only the delete itself is known to be git. The terminal-close and
+    // dev-preview failures ahead of it are not, so those are left to
+    // `classifyError` and its structured props rather than forced to a
+    // category the stage cannot support.
     logErrorWithContext(err, {
       operation: "delete_worktree",
       component: "createWorktreeStore",
+      ...(reachedDelete ? { errorType: "git" as const } : {}),
       details: {
         worktreeId,
         mutationId,

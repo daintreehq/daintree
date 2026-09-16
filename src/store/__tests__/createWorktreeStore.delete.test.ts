@@ -347,9 +347,9 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       operation: "delete_worktree",
       component: "createWorktreeStore",
     });
-    // No `errorType`: deliberately delegated to `classifyError`, because this
-    // catch also sees terminal and dev-preview failures that are not git.
-    expect((context as { errorType?: string }).errorType).toBeUndefined();
+    // The delete call was reached, so the category is known rather than
+    // inferred from text that happens to contain the branch name.
+    expect((context as { errorType?: string }).errorType).toBe("git");
     // The mutationId is what ties this record to the host's own log line for
     // the same failure; without it the two records cannot be correlated.
     const sentMutationId = worktreeClientDeleteMock.mock.calls[0]![1].mutationId;
@@ -394,6 +394,44 @@ describe("createWorktreeStore — delete in-flight state (#8417)", () => {
       component: "createWorktreeStore",
       details: expect.objectContaining({ worktreeId: "wt-1", mutationId: sentMutationId }),
     });
+  });
+
+  // A branch name is part of the failure message, and `classifyError` matches
+  // "fetch" before it matches "branch" — so left to the text alone, deleting
+  // `feature/fetch` would be filed as a network fault. The stage knows better.
+  it("files a delete failure as git even when the branch name reads as another category", async () => {
+    worktreeClientDeleteMock.mockRejectedValueOnce(
+      new Error("Worktree removed. Couldn't delete branch 'feature/fetch': locked ref")
+    );
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false, deleteBranch: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(logErrorWithContextMock.mock.calls[0]![1]).toMatchObject({ errorType: "git" });
+  });
+
+  // The mirror of the case above: a failure BEFORE the delete call is not a git
+  // failure, so it must not be labelled one.
+  it("leaves a pre-delete failure to classifyError rather than calling it git", async () => {
+    closeTerminalsForWorktreeMock.mockRejectedValueOnce(new Error("terminal close timed out"));
+    captureWorktreeTerminalSnapshotMock.mockReturnValueOnce([{ id: "t-1" }]);
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1")], nextV());
+
+    store.getState().startDelete("wt-1", { force: false, closeTerminals: true });
+    await flushPromises();
+    await flushPromises();
+
+    expect(worktreeClientDeleteMock).not.toHaveBeenCalled();
+    expect(logErrorWithContextMock).toHaveBeenCalledTimes(1);
+    expect(
+      (logErrorWithContextMock.mock.calls[0]![1] as { errorType?: string }).errorType
+    ).toBeUndefined();
   });
 
   it("does not log when the delete succeeds", async () => {
