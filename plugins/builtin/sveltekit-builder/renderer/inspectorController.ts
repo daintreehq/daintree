@@ -19,6 +19,7 @@ import {
   type PickedComponent,
 } from "./agentTask.js";
 import { forgetComposerMemories } from "./composerMemory.js";
+import { wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
 import {
   BUILDER_TOOL_ID,
@@ -510,7 +511,7 @@ export class InspectorController {
       this.update({
         workspace: {
           status: "failed",
-          message: formatErrorMessage(error, "Couldn't open the site source"),
+          message: wireFailureMessage(error, "Couldn't open the site source"),
         },
       });
     }

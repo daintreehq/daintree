@@ -1,3 +1,4 @@
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SitePreviewDetachReason } from "@shared/types/ipc/sitePreview";
 import type { EditSupport, UnsupportedReason } from "../shared/model.js";
 import type { StaleReason } from "./inspectorController.js";
@@ -74,4 +75,55 @@ export function relativeTo(root: string | null, path: string): string {
   const base = root.replace(/\/+$/, "");
   if (path === base) return ".";
   return path.startsWith(base + "/") ? path.slice(base.length + 1) : path;
+}
+
+/**
+ * Keep the end of a path, which is the part that identifies it.
+ *
+ * CSS `truncate` cuts the right-hand side, so a long source path degrades to
+ * `src/routes/marketing/campaigns/…` and loses the filename and line — exactly
+ * the piece the user came for. Directories are what gets dropped instead.
+ */
+export function middleTruncate(path: string, max = 44): string {
+  if (path.length <= max) return path;
+  const tail = basename(path);
+  // A filename alone longer than the budget: keep its end, since the extension
+  // and any line suffix live there.
+  if (tail.length + 2 >= max) return `…${path.slice(path.length - (max - 1))}`;
+  const head = path.slice(0, Math.max(0, max - tail.length - 2));
+  return `${head}…/${tail}`;
+}
+
+/**
+ * What to show the user when a call to plugin main fails.
+ *
+ * A schema mismatch — a plugin and a host that disagree about the wire, which
+ * is what a partial upgrade looks like — arrives here as a `ZodError`, and its
+ * `.message` is the raw issue array: `[{"code":"invalid_union","discriminator":
+ * "status","options":["ready","ambiguous","no-app"], …}]`. That was being
+ * rendered verbatim as the panel's explanation, wrapped across eight lines of
+ * proportional type. It tells the user nothing they can act on and reads as a
+ * crash.
+ *
+ * A validation failure is ours, not the user's project's, so it gets a sentence
+ * that says so. Everything else is a real runtime error (EACCES, ENOENT) whose
+ * message is genuinely useful, and keeps it.
+ */
+export function wireFailureMessage(error: unknown, fallback: string): string {
+  if (isSchemaError(error)) {
+    return "The Site Builder and this version of Daintree disagree about the response format. Restarting the app usually clears it.";
+  }
+  return formatErrorMessage(error, fallback);
+}
+
+/**
+ * Structural, not `instanceof`: zod may be duplicated across the plugin and host
+ * bundles, and a cross-realm `instanceof ZodError` is false exactly when this
+ * guard matters most.
+ */
+function isSchemaError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const name = (error as { name?: unknown }).name;
+  if (name === "ZodError" || name === "$ZodError") return true;
+  return Array.isArray((error as { issues?: unknown }).issues);
 }

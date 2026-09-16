@@ -1,4 +1,5 @@
 import type {
+  SitePreviewDetachReason,
   SiteGuestNodeObservation,
   SitePreviewBindingState,
   SitePreviewCandidate,
@@ -297,14 +298,19 @@ export function createPreviewHost() {
         event: { type: "selectionChanged", nodes },
       });
     },
-    detach(reason: string) {
+    /**
+     * `guest-destroyed` and `debugger-detached` are in the controller's
+     * reattach set, so pushing one of those lands back on the bound state a
+     * moment later and the capture shows a connected preview. Terminal reasons
+     * only here.
+     */
+    detach(reason: Exclude<SitePreviewDetachReason, "guest-destroyed" | "debugger-detached">) {
       host.pushPreview({
         kind: "detached",
         sessionId: "session-1",
-        panelId: "preview-1",
         projectId: "p1",
         reason,
-      } as unknown as SitePreviewPushPayload);
+      });
     },
   };
   return host;

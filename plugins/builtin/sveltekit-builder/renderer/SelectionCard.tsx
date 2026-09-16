@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { Badge } from "@/components/ui/badge";
-import type { AncestryEntry, EditCapability, SelectedNode } from "../shared/model.js";
+import type { EditCapability, SelectedNode } from "../shared/model.js";
 import {
   capabilityFor,
   editTargetOf,
@@ -14,7 +14,15 @@ import { InspectorNotice } from "./InspectorNotice.js";
 import { scopesFor } from "./agentTask.js";
 import { TextEditor } from "./TextEditor.js";
 import { ClassEditor } from "./ClassEditor.js";
-import { STALE_COPY, SUPPORT_LABEL, UNSUPPORTED_REASON_COPY, basename, plural } from "./copy.js";
+import {
+  STALE_COPY,
+  SUPPORT_LABEL,
+  UNSUPPORTED_REASON_COPY,
+  middleTruncate,
+  plural,
+} from "./copy.js";
+import { SelectionTrail, trailFor } from "./SelectionTrail.js";
+import { SectionHeader } from "./InspectorSection.js";
 
 export interface SelectionActions {
   setText: (selectionId: string, text: string) => void;
@@ -42,73 +50,93 @@ export function SelectionCard({
   );
 }
 
-/** What was selected and where it comes from, with the warnings that qualify it. */
+/**
+ * What was selected and where it comes from.
+ *
+ * The one identity in the drawer. It used to be said three times — a mono
+ * `button` badge beside the label `button "Start Pro"`, then the path, then the
+ * composer's own `About button "Start Pro" · +page.svelte:6` sixty pixels
+ * below — so the densest text in the panel was a repeat, and under a component
+ * request scope the two disagreed outright. The composer now labels its scope
+ * control instead of restating the subject, and this block is the only place
+ * the selection is named.
+ */
 export function SelectionIdentity({ selection }: { selection: ReadySelection }) {
   const nodes = selection.selection.nodes;
   const node = nodes[0];
   if (!node) return null;
   const definition = node.definition;
   const stale = selection.stale ? STALE_COPY[selection.stale] : null;
-  // A component picked on the page is named as the component, with the
-  // element it was reached through as detail.
+  // A component picked on the page is named as the component, with the element
+  // it was reached through left to the trail below.
   const picked =
     selection.scope === "component"
       ? scopesFor(selection.selection, selection.component, selection.definitions)
       : null;
   const pickedScope = picked ? picked.scopes[picked.pickedIndex] : null;
   const component = pickedScope?.kind === "component" ? pickedScope.label : null;
+  const source = component
+    ? pickedScope?.kind === "component"
+      ? pickedScope.file
+      : null
+    : definition
+      ? `${selection.file ?? definition.location.file}:${definition.location.line}`
+      : null;
 
   return (
-    <section aria-label="Selected element" className="flex flex-col gap-3">
-      <header className="flex flex-col gap-1">
-        <div className="flex min-w-0 items-center gap-2">
-          <Badge size="sm" tone="neutral" className={component ? undefined : "font-mono"}>
-            {component ? "Component" : (definition?.tagName ?? tagFromLabel(node))}
-          </Badge>
-          {component ? (
-            <span className="min-w-0 truncate text-sm font-medium text-text-primary">
-              {component}
-            </span>
-          ) : node.label ? (
-            <span className="min-w-0 truncate text-sm text-text-primary" title={node.label}>
-              {node.label}
-            </span>
-          ) : null}
-        </div>
-        {pickedScope?.kind === "component" ? (
-          pickedScope.file ? (
-            <p className="truncate font-mono text-xs text-text-secondary" title={pickedScope.file}>
-              {pickedScope.file}
-            </p>
-          ) : (
-            <p className="text-xs text-text-secondary">
-              {selection.definitions === null
-                ? "Finding where it's written"
-                : "Couldn't find where it's written"}
-            </p>
-          )
-        ) : definition ? (
-          <p
-            className="truncate font-mono text-xs text-text-secondary"
-            title={`${selection.file ?? definition.location.file}:${definition.location.line}`}
-          >
-            {`${selection.file ?? definition.location.file}:${definition.location.line}`}
-          </p>
-        ) : (
-          <p className="text-xs text-text-secondary">Source unknown</p>
-        )}
-        <Breadcrumb node={node} />
-      </header>
+    <section aria-label="Selected element" className="flex flex-col gap-2">
+      <div className="flex min-w-0 items-center gap-2">
+        <Badge size="sm" tone="neutral" className={component ? undefined : "font-mono"}>
+          {component ? "Component" : (definition?.tagName ?? tagFromLabel(node))}
+        </Badge>
+        <span
+          className="min-w-0 truncate text-sm font-medium text-text-primary"
+          title={component ?? node.label}
+        >
+          {component ?? displayLabel(node)}
+        </span>
+      </div>
+
+      {source ? (
+        <p className="truncate font-mono text-2xs text-text-secondary" title={source}>
+          {middleTruncate(source)}
+        </p>
+      ) : (
+        <p className="text-2xs text-text-secondary">
+          {component
+            ? selection.definitions === null
+              ? "Finding where it's written"
+              : "Couldn't find where it's written"
+            : "Source unknown"}
+        </p>
+      )}
+
+      <SelectionTrail
+        crumbs={trailFor(node, { includeSelf: false })}
+        className="text-2xs text-text-secondary"
+      />
 
       {stale ? (
-        <InspectorNotice tone="warning" title={stale.title} role="status">
-          {stale.detail} Click it in the preview to select it again.
+        <InspectorNotice tone="warning" title={stale.title} role="status" density="compact">
+          {stale.detail}
         </InspectorNotice>
       ) : null}
 
       <MappingNotice node={node} nodeCount={nodes.length} scope={selection.scope} />
     </section>
   );
+}
+
+/**
+ * The element's own name without its tag prefix: the badge beside it already
+ * carries the tag, and `button` `button "Start Pro"` said it twice.
+ */
+function displayLabel(node: SelectedNode): string {
+  const tag = node.definition?.tagName;
+  const label = node.label || tag || "element";
+  if (!tag) return label;
+  const prefix = `${tag} `;
+  return label.startsWith(prefix) ? label.slice(prefix.length) : label;
 }
 
 /** Direct source edits for the selected element's literal text and classes. */
@@ -183,35 +211,6 @@ function MappingNotice({
   return null;
 }
 
-function ancestryLabel(entry: AncestryEntry): string {
-  if (entry.kind === "component") {
-    return entry.componentTag ?? basename(entry.location.file).replace(/\.svelte$/, "");
-  }
-  return entry.kind === "unknown" ? "block" : entry.kind;
-}
-
-function Breadcrumb({ node }: { node: SelectedNode }) {
-  // Innermost first on the wire; generated framework frames are real but never
-  // something the user wrote, so they stay out of the trail.
-  const trail = node.ancestry.filter((entry) => !entry.generated).reverse();
-  if (trail.length === 0) return null;
-  return (
-    <ol aria-label="Ancestry" className="flex min-w-0 flex-wrap items-center gap-x-1 text-xs">
-      {trail.map((entry, index) => (
-        <li
-          key={`${entry.location.file}:${entry.location.line}:${entry.location.column}:${index}`}
-          className="flex items-center gap-1 text-text-secondary"
-          title={`${entry.location.file}:${entry.location.line}`}
-        >
-          <span>{ancestryLabel(entry)}</span>
-          <span aria-hidden="true">›</span>
-        </li>
-      ))}
-      <li className="text-text-primary">{node.definition?.tagName ?? tagFromLabel(node)}</li>
-    </ol>
-  );
-}
-
 function Surface({
   title,
   capability,
@@ -223,15 +222,17 @@ function Surface({
 }) {
   const support = capability?.support;
   return (
-    <div className="flex flex-col gap-1.5 border-t border-border-subtle pt-3">
-      <div className="flex items-center gap-2">
-        <h3 className="text-xs font-medium text-text-secondary">{title}</h3>
-        {support && support !== "direct" ? (
-          <Badge size="xs" tone="neutral">
-            {SUPPORT_LABEL[support]}
-          </Badge>
-        ) : null}
-      </div>
+    <div className="flex flex-col">
+      <SectionHeader
+        title={title}
+        action={
+          support && support !== "direct" ? (
+            <Badge size="xs" tone="neutral">
+              {SUPPORT_LABEL[support]}
+            </Badge>
+          ) : null
+        }
+      />
       {!capability ? (
         <p className="text-xs text-text-secondary">Not available for this element</p>
       ) : support !== "direct" ? (
