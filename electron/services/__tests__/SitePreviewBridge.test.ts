@@ -25,6 +25,8 @@ class FakeDebugger extends EventEmitter {
   readonly rejects = new Map<string, Error>();
   /** Canned responses, e.g. an evaluate that reports a guest-side exception. */
   readonly responses = new Map<string, unknown>();
+  /** Holds a command until the promise settles, to open a race window. */
+  readonly gates = new Map<string, Promise<void>>();
 
   isAttached(): boolean {
     return this.attached;
@@ -34,6 +36,8 @@ class FakeDebugger extends EventEmitter {
   }
   async sendCommand(method: string, params?: Record<string, unknown>): Promise<unknown> {
     this.commands.push({ method, params });
+    const gate = this.gates.get(method);
+    if (gate) await gate;
     const failure = this.rejects.get(method);
     if (failure) throw failure;
     if (this.responses.has(method)) return this.responses.get(method);
@@ -618,6 +622,78 @@ describe("SitePreviewBridge", () => {
     await shutdown;
     await expect(late).rejects.toThrow(/shutting down/);
     expect(harness.wc.debugger.listenerCount("message")).toBe(0);
+  });
+
+  it("does not install twice for one epoch when a navigation lands mid-install", async () => {
+    // Two installs for the same epoch both start the prelude's sequence at 0,
+    // so the host drops the second runtime's messages as replays and the
+    // inspector goes silent after an ordinary quick navigation.
+    let release!: () => void;
+    harness.wc.debugger.gates.set(
+      "Page.getFrameTree",
+      new Promise<void>((resolve) => {
+        release = resolve;
+      })
+    );
+
+    const bound = harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      runtimeSource: "",
+      mode: "browse",
+    });
+    await vi.waitFor(() => {
+      expect(harness.wc.debugger.methods()).toContain("Page.getFrameTree");
+    });
+    harness.wc.emit("did-navigate");
+    harness.wc.debugger.gates.delete("Page.getFrameTree");
+    release();
+    await bound;
+
+    // Uniqueness holds in the window before the queued reinstall runs, so
+    // polling on it would pass early. Wait until the navigation's reinstall has
+    // actually been processed, then assert once.
+    await vi.waitFor(() => {
+      expect(harness.pushed.some((p) => p.kind === "epoch-advanced")).toBe(true);
+    });
+    const installs = harness.wc.debugger.commands.filter(
+      (c) => c.method === "Page.addScriptToEvaluateOnNewDocument"
+    );
+    const epochs = installs.map(
+      (c) => /DOCUMENT_EPOCH = (\d+)/.exec(String(c.params?.source))?.[1]
+    );
+    expect(epochs.length).toBeGreaterThan(0);
+    expect(new Set(epochs).size).toBe(epochs.length);
+  });
+
+  it("re-applies a mode switch made while the runtime was still installing", async () => {
+    let release!: () => void;
+    harness.wc.debugger.gates.set(
+      "Page.addScriptToEvaluateOnNewDocument",
+      new Promise<void>((resolve) => {
+        release = resolve;
+      })
+    );
+
+    const bound = harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      runtimeSource: "",
+      mode: "select",
+    });
+    await vi.waitFor(() => {
+      expect(harness.wc.debugger.methods()).toContain("Page.addScriptToEvaluateOnNewDocument");
+    });
+    await harness.bridge.setMode(PROJECT_ID, "session-1", "browse");
+    harness.wc.debugger.gates.delete("Page.addScriptToEvaluateOnNewDocument");
+    release();
+    await bound;
+
+    // The installed source baked in "select"; without the re-apply the host
+    // would report Browse while the page kept intercepting clicks.
+    const evaluations = harness.wc.debugger.commands.filter((c) => c.method === "Runtime.evaluate");
+    expect(String(evaluations.at(-1)?.params?.expression)).toContain('"browse"');
+    expect(harness.bridge.getState(PROJECT_ID, "session-1")?.mode).toBe("browse");
   });
 
   it("detaches when the guest webContents goes away", async () => {

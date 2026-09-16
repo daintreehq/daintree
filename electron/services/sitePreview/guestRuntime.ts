@@ -35,10 +35,18 @@ export interface GuestRuntimeParams {
 }
 
 /**
- * The prelude owns the envelope: the runtime body can only hand it an event,
- * never choose a session id, epoch or sequence number. Those three are baked in
- * per install, which is why the host reinstalls on every document rather than
- * letting the guest advance its own epoch.
+ * The prelude numbers and addresses the envelope for an honest runtime: the
+ * session id and epoch are baked in per install and the sequence is counted
+ * here, which is why the host reinstalls on every document rather than letting
+ * the guest advance its own epoch.
+ *
+ * This is bookkeeping, not a security boundary. Everything below runs in the
+ * page's main world, so a hostile page can replace `api.post`, call the binding
+ * directly, or — if it controls the supplied body — assign `sequence`, and in
+ * all three cases submit fabricated observations for this binding at a sequence
+ * it chooses. What it cannot do is reach another binding, another project, or
+ * anything the host does with a path: the host re-validates session and epoch,
+ * and treats every accepted message as an untrusted observation.
  *
  * `JSON.stringify` on each interpolated value is what keeps a hostile panel id
  * or session id from closing the string literal it lands in.

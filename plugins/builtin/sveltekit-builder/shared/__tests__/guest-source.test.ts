@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   GUEST_BINDING_NAME,
   GUEST_HANDLE_NAME,
-  buildGuestRuntimeSource,
+  buildStandaloneGuestSource,
 } from "../../guest/source.js";
 import type { GuestBootstrapConfig, GuestRuntimeHandle } from "../../guest/types.js";
 import { GUEST_PROTOCOL_VERSION, GuestEnvelopeSchema, type GuestEnvelope } from "../protocol.js";
@@ -29,7 +29,7 @@ function config(overrides: Partial<GuestBootstrapConfig> = {}): GuestBootstrapCo
  * from module scope surfaces here as a ReferenceError.
  */
 function inject(overrides: Partial<GuestBootstrapConfig> = {}): GuestRuntimeHandle {
-  const source = buildGuestRuntimeSource(config(overrides));
+  const source = buildStandaloneGuestSource(config(overrides));
   new Function("return " + source + ";")();
   return scope[overrides.handleName ?? GUEST_HANDLE_NAME] as GuestRuntimeHandle;
 }
@@ -59,7 +59,7 @@ function bind(): void {
   };
 }
 
-describe("buildGuestRuntimeSource", () => {
+describe("buildStandaloneGuestSource", () => {
   it("runs standalone and publishes a working handle", () => {
     bind();
     const node = card();
@@ -124,7 +124,7 @@ describe("buildGuestRuntimeSource", () => {
     const sessionId = "</script>\u2028\u2029'\"";
     inject({ sessionId });
 
-    expect(buildGuestRuntimeSource(config({ sessionId }))).not.toContain("</script>");
+    expect(buildStandaloneGuestSource(config({ sessionId }))).not.toContain("</script>");
     expect(envelopes[0].sessionId).toBe(sessionId);
   });
 });

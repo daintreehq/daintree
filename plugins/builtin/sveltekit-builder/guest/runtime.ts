@@ -1,6 +1,11 @@
 /// <reference lib="dom" />
 import type { GuestEvent, GuestNodeObservation } from "../shared/protocol.js";
-import type { GuestBootstrapConfig, GuestMode, GuestRuntimeHandle } from "./types.js";
+import type {
+  GuestBootstrapConfig,
+  GuestMode,
+  GuestRuntimeHandle,
+  GuestTransport,
+} from "./types.js";
 
 /** Shape Svelte's dev compiler attaches; every field is treated as untrusted. */
 interface SvelteMetaFrame {
@@ -23,12 +28,15 @@ type SourceLoc = NonNullable<GuestNodeObservation["loc"]>;
 /**
  * The whole guest runtime, as one self-contained function.
  *
- * It is serialised by `buildGuestRuntimeSource` and evaluated in the page's
+ * It is serialised by `buildGuestRuntimeBody` (or `buildStandaloneGuestSource`) and evaluated in the page's
  * main world, so it may close over nothing: every helper, constant and type
  * guard lives in this body. That is the reason for the size — splitting it into
  * module-scope helpers would compile fine and break the moment it is injected.
  */
-export function createSiteBuilderGuest(config: GuestBootstrapConfig): GuestRuntimeHandle {
+export function createSiteBuilderGuest(
+  config: GuestBootstrapConfig,
+  transport?: GuestTransport
+): GuestRuntimeHandle {
   // The host injects on every new document, which includes every subframe. A
   // child frame would emit its own sequence under the same session id, and the
   // protocol has no way to say which frame spoke — so only the top one runs.
@@ -172,23 +180,33 @@ export function createSiteBuilderGuest(config: GuestBootstrapConfig): GuestRunti
 
   function send(event: GuestEvent): boolean {
     if (disposed) return false;
-    const sink = scope[config.bindingName];
-    if (typeof sink !== "function") return false;
+    // Measured as the full envelope even when the host builds it, because the
+    // host drops an oversized envelope whole — the size the page can control is
+    // the event, but the ceiling applies to what finally crosses the binding.
+    // Behind a transport the prelude numbers the envelope independently, so the
+    // widest sequence it could write is reserved: measuring with the local
+    // counter let a selection pass this check and still be dropped by the host
+    // one byte over, with no issue reported and the guest believing it was sent.
     const payload = JSON.stringify({
       protocolVersion: config.protocolVersion,
       sessionId: config.sessionId,
       documentEpoch: config.documentEpoch,
-      sequence,
+      sequence: transport ? Number.MAX_SAFE_INTEGER : sequence,
       event,
     });
-    // The host drops an oversized envelope whole, so trade the payload for an
-    // explanation rather than let an observation vanish silently.
     if (byteLength(payload) > MAX_MESSAGE_BYTES) {
       if (event.type !== "runtimeIssue") {
         issue("internal", "dropped an oversized " + event.type + " envelope");
       }
       return false;
     }
+    if (transport) {
+      // The prelude numbers the envelope; a local count here would drift from it.
+      transport.post(event);
+      return true;
+    }
+    const sink = scope[config.bindingName];
+    if (typeof sink !== "function") return false;
     sequence += 1;
     resumed.sequence = sequence;
     (sink as (message: string) => void)(payload);

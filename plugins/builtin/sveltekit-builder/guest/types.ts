@@ -23,6 +23,21 @@ export interface GuestBootstrapConfig {
 }
 
 /**
+ * How observations leave the page.
+ *
+ * In production the host prelude supplies `post` and addresses the envelope:
+ * session id and epoch are baked in per install and the prelude counts the
+ * sequence. That keeps an honest runtime from drifting out of step with the
+ * host; it does not stop a hostile page, which shares the main world and can
+ * call the binding itself. Without a transport the
+ * runtime builds its own envelope and calls the binding directly — the
+ * standalone shape, used where no prelude is present.
+ */
+export interface GuestTransport {
+  post(event: unknown): void;
+}
+
+/**
  * What the host drives after injection. Everything is synchronous: the host
  * calls these over `Runtime.evaluate`, and a promise would cost a round trip.
  */

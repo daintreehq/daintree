@@ -160,9 +160,10 @@ function declaresProperty(
  * Strips the prefix, the variant chain and the utility stem back off a token,
  * or `null` when the token is not this control's utility.
  *
- * The chain is split outside brackets only: `text-[length:2rem]` and
- * `bg-[color:var(--brand)]` carry colons inside their arbitrary value, and
- * splitting on the last one hands back `2rem]`.
+ * The chain is split outside brackets only: `bg-[color:var(--brand)]` and the
+ * arbitrary property `[mask-type:luminance]` carry colons inside their
+ * brackets, and splitting on the last colon hands back a fragment like
+ * `luminance]` instead of the value.
  */
 function valueSegment(token: string, prefix: string): string | null {
   const utility = utilityOf(token);
