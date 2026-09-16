@@ -171,6 +171,36 @@ Closing and reopening the project replaces the document; switching back to a cac
 
 Custom elements are the strict case because registration is irreversible. Other globals are name-keyed but not permanent — `window.*` singletons can be reassigned, stylesheets removed, service workers unregistered — so give each an explicit lifetime. A per-view stylesheet or listener belongs to the mount disposer; a shared loader such as Monaco’s belongs to its document package. Shared package initialization must not capture one plugin’s host bridge, credentials, or panel state.
 
+## Working with a live dev preview
+
+`window.electron.sitePreview` lets a view attach to one of the project's running dev-preview panels and receive structured observations from the page inside it — which element was hovered or clicked, and what the page reported about it. The SvelteKit Site Builder is built on it; nothing about it is Svelte-specific.
+
+| Call | What it does |
+| --- | --- |
+| `listCandidates()` | The dev-preview panels this project could bind to, with any existing binding |
+| `bind({ panelId, runtimeSource, mode })` | Installs your runtime into the page and returns a binding with a host-issued session id |
+| `setMode({ sessionId, mode })` | Switches between `browse` (the page behaves normally) and `select` |
+| `getState({ sessionId })`, `detach({ sessionId })` | Read or release the binding |
+| `onEvent(cb)` | Validated guest events, epoch advances, and detaches |
+
+Things that shape how you use it:
+
+- **It is renderer IPC.** A plugin's main side cannot reach it. The view owns the binding and forwards what it learns to main over its own channels.
+- **There is no "evaluate in the page" call, on purpose.** The runtime is supplied once, at bind time, and the host wraps it in a prelude that addresses and numbers each message. A general evaluate method would hand every renderer-side caller a standing arbitrary-execution channel into whatever site the user is previewing.
+- **Everything from the page is an observation, never an instruction.** The page is an application under development, and it shares the main world with your runtime, so it can forge messages for its own binding. That reaches nothing beyond that binding's observations — the host validates session, epoch, sequence and size — but never act on a file path, range or revision a page supplied without resolving it yourself.
+- **Key state on each event's `documentEpoch`, not on arrival order.** The new runtime's own ready event for a document can arrive before the host's epoch-advance notice for it. A hot-module update that does not navigate does not advance the epoch at all, so "the page reloaded" and "the page shows your latest source" are different claims.
+
+The mechanism — CDP binding, prelude, validation — is described in [`docs/architecture/sveltekit-site-builder.md`](../architecture/sveltekit-site-builder.md).
+
+## Built-in plugin views
+
+A built-in plugin's view is compiled into the host bundle, so some of this page reads differently for it. [Architecture → Built-in plugin views](./architecture.md#built-in-plugin-views) covers registration; these are the practical differences once it renders:
+
+- **It may import host modules.** `@/store/...` and `@/components/ui/...` resolve normally. Follow the host's store rules: cross-store reads go through `src/store/storeAccessors.ts`, and nothing imports a partner store at module evaluation.
+- **Finding your worktree.** `PanelViewProps` gives you `panelId`, not a worktree. Read the panel's `worktreeId` from the panel store and its path from the worktree store. A plugin view is not guaranteed to sit under the worktree store's provider, so use the optional accessor (`useWorktreeStoreOptional`) with `getWorktreePathIndex()` as a fallback — the non-optional hook throws there. The project id comes from the project store.
+- **Styling is the host's Tailwind.** The per-plugin runtime stylesheet described above does not run for a built-in; you get the host's full design system and must follow its rules — `.claude/rules/design-system.md` in the repo.
+- **React Compiler applies to you.** A bailout is silent at runtime and reddens the compiler budget. Two traps specific to controller-style views: never call a method that reads mutable controller state during render — pass a `useSyncExternalStore` snapshot to a pure function instead — and do not write a `try`/`finally` without a `catch` in a component.
+
 ## What doesn't work inline
 
 - Bare npm imports in a raw view. Only the five React specifiers above resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle.
