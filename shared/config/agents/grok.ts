@@ -108,6 +108,12 @@ export const config: AgentConfig = {
     // Rust TUI reads the PTY buffer atomically, so the quit-command body and
     // Enter must be sent as separate writes (same rationale as Codex).
     quitSubmitMode: "split-write",
+    // Grok's composer footer reads "Ctrl+c:cancel", and a double Escape sent
+    // mid-turn only prints "Press Ctrl+c to cancel the turn" while the turn
+    // keeps running. So Escape is not its cancel key: record Ctrl+C so an
+    // Escape-based interrupt refuses Grok by name instead of reporting a
+    // keystroke it never acts on as a requested interrupt.
+    interrupt: "ctrl-c",
   },
   // `detection` is intentionally omitted. Grok Build's working-state TUI strings
   // haven't been calibrated against live output yet, so it falls back to the

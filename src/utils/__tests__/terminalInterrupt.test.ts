@@ -98,14 +98,17 @@ describe("assessTerminalInterrupt (#12338)", () => {
     }
   });
 
-  it("refuses an agent that advertises a different cancel key, naming it", () => {
-    const result = assessTerminalInterrupt(makeAgentPanel({ detectedAgentId: "goose" }), "t1");
-    expect(result.eligible).toBe(false);
-    if (!result.eligible) {
-      expect(result.reason).toContain("goose");
-      expect(result.reason).toContain("Ctrl+C");
+  it.each(["goose", "grok"])(
+    "refuses %s, which advertises a different cancel key, naming it",
+    (agentId) => {
+      const result = assessTerminalInterrupt(makeAgentPanel({ detectedAgentId: agentId }), "t1");
+      expect(result.eligible).toBe(false);
+      if (!result.eligible) {
+        expect(result.reason).toContain(agentId);
+        expect(result.reason).toContain("Ctrl+C");
+      }
     }
-  });
+  );
 
   it("marks every agent that advertises Escape as advertised", () => {
     for (const agentId of ["claude", "codex", "kiro", "opencode", "mistral"]) {
