@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from "vitest";
-import { createSiteBuilderGuest } from "../../guest/runtime.js";
-import type { GuestMode, GuestRuntimeHandle } from "../../guest/types.js";
+import { createSiteBuilderGuest } from "../../renderer/guest/runtime.js";
+import type { GuestMode, GuestRuntimeHandle } from "../../renderer/guest/types.js";
 import {
   GUEST_PROTOCOL_VERSION,
   GuestEnvelopeSchema,

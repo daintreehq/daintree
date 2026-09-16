@@ -23,35 +23,14 @@ export function loadSourceModel(): Promise<SourceModel> {
 }
 
 /**
- * The source model's own class-token and entity semantics. The package does
- * not export them from its entry, so they are imported from its source: a
- * second tokenizer here is exactly how the view once removed a different token
- * than the one the user clicked.
+ * The source model's own class-token and entity semantics: a second tokenizer
+ * here is exactly how the view once removed a different token than the one the
+ * user clicked.
  */
-export interface TokenModel {
-  splitClassValue: typeof import("../../../../packages/svelte-source-model/src/mutate/classTokens.js").splitClassValue;
-  decodeEntities: typeof import("../../../../packages/svelte-source-model/src/mutate/escape.js").decodeEntities;
-  validateToken: typeof import("../../../../packages/svelte-source-model/src/mutate/classTokens.js").validateToken;
-}
+export type TokenModel = Pick<SourceModel, "splitClassValue" | "decodeEntities" | "validateToken">;
 
-let tokenModel: Promise<TokenModel> | null = null;
-
-export function loadTokenModel(): Promise<TokenModel> {
-  tokenModel ??= Promise.all([
-    import("../../../../packages/svelte-source-model/src/mutate/classTokens.js"),
-    import("../../../../packages/svelte-source-model/src/mutate/escape.js"),
-  ]).then(
-    ([classTokens, escape]) => ({
-      splitClassValue: classTokens.splitClassValue,
-      decodeEntities: escape.decodeEntities,
-      validateToken: classTokens.validateToken,
-    }),
-    (error: unknown) => {
-      tokenModel = null;
-      throw error;
-    }
-  );
-  return tokenModel;
+export async function loadTokenModel(): Promise<TokenModel> {
+  return loadSourceModel();
 }
 
 export function loadParse(): Promise<SvelteParse> {

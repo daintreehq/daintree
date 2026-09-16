@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -317,73 +317,109 @@ describe("loader guard", () => {
     expect(result.status).toBe("unavailable");
   });
 
-  it("survives a v4 build whose design system has the wrong shape", async () => {
+  it("survives an engine whose design system has the wrong shape", async () => {
     const project = await makeProject("@import 'tailwindcss';", "none");
-    await writeStubTailwind(
-      project.appRoot,
-      "4.99.0",
-      `export async function __unstable__loadDesignSystem() {
-         return { theme: { values: new Map(), prefix: null } };
-       }\n`
-    );
-    const result = await loadTailwindDesignSystem(project);
+    await writeStubTailwind(project.appRoot, "4.99.0", "export {};\n");
+    const result = await loadTailwindDesignSystem(project, async () => ({
+      version: "4.99.0",
+      exports: {
+        __unstable__loadDesignSystem: async () => ({ theme: { values: new Map(), prefix: null } }),
+      },
+    }));
     expect(result.status === "unavailable" && result.reason).toContain("unrecognised shape");
   });
 
   it("refuses a design system whose methods survive but whose results do not", async () => {
     const project = await makeProject("@import 'tailwindcss';", "none");
-    await writeStubTailwind(
-      project.appRoot,
-      "4.99.0",
-      `export async function __unstable__loadDesignSystem() {
-         return {
-           theme: { values: new Map(), prefix: null },
-           candidatesToCss: (candidates) => candidates.map(() => ".x { color: red }"),
-           candidatesToAst: () => "not an ast",
-           getClassList: () => [],
-         };
-       }\n`
-    );
-    const result = await loadTailwindDesignSystem(project);
+    await writeStubTailwind(project.appRoot, "4.99.0", "export {};\n");
+    const result = await loadTailwindDesignSystem(project, async () => ({
+      version: "4.99.0",
+      exports: {
+        __unstable__loadDesignSystem: async () => ({
+          theme: { values: new Map(), prefix: null },
+          candidatesToCss: (candidates: string[]) => candidates.map(() => ".x { color: red }"),
+          candidatesToAst: () => "not an ast",
+          getClassList: () => [],
+        }),
+      },
+    }));
     // Answering "valid, and conflicts with nothing" would be an unavailable
     // analysis dressed as a successful one.
     expect(result.status === "unavailable" && result.reason).toContain("no readable declarations");
   });
 
-  it("follows nested conditional exports to the compiler entry point", async () => {
+  it("refuses an engine that no longer exposes the unstable loader", async () => {
     const project = await makeProject("@import 'tailwindcss';", "none");
-    const dir = path.join(project.appRoot, "node_modules", "tailwindcss");
-    await fs.mkdir(path.join(dir, "nested"), { recursive: true });
-    await fs.writeFile(
-      path.join(dir, "package.json"),
-      JSON.stringify({
-        name: "tailwindcss",
-        version: "4.99.0",
-        type: "module",
-        exports: {
-          ".": { node: { import: "./nested/compiler.mjs" } },
-          "./package.json": "./package.json",
-        },
-      })
-    );
-    // Only reachable through the nested condition; the dist fallback is absent.
-    await fs.writeFile(
-      path.join(dir, "nested", "compiler.mjs"),
-      "export const __unstable__loadDesignSystem = null;\n"
-    );
-    const result = await loadTailwindDesignSystem(project);
+    await writeStubTailwind(project.appRoot, "4.99.0", "export {};\n");
+    const result = await loadTailwindDesignSystem(project, async () => ({
+      version: "4.99.0",
+      exports: { noop: true },
+    }));
     expect(result.status === "unavailable" && result.reason).toContain(
       "__unstable__loadDesignSystem"
     );
   });
+});
 
-  it("refuses a v4 build that no longer exposes the unstable loader", async () => {
+describe("the project's own JavaScript never runs in the host", () => {
+  const marker = "__siteBuilderProjectCodeRan";
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>)[marker];
+  });
+
+  it("reads the project's tailwindcss version without importing its code", async () => {
     const project = await makeProject("@import 'tailwindcss';", "none");
-    await writeStubTailwind(project.appRoot, "4.99.0", "export const noop = true;\n");
-    const result = await loadTailwindDesignSystem(project);
-    expect(result.status === "unavailable" && result.reason).toContain(
-      "__unstable__loadDesignSystem"
+    await writeStubTailwind(
+      project.appRoot,
+      "4.3.3",
+      `globalThis.${marker} = true;\nexport const __unstable__loadDesignSystem = null;\n`
     );
+    const result = await loadTailwindDesignSystem(project);
+    expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
+    // The project's package is data: its version is still what gates support.
+    expect(result.status === "unavailable" && result.reason).not.toContain(
+      "outside the supported major"
+    );
+  });
+
+  it("does not import modules named by @plugin or @config, and records them", async () => {
+    const project = await makeProject(
+      `@import "tailwindcss";\n@plugin "./evil-plugin.mjs";\n@config "./evil-config.mjs";\n`
+    );
+    const base = path.dirname(project.cssEntry);
+    for (const name of ["evil-plugin.mjs", "evil-config.mjs"]) {
+      await fs.writeFile(
+        path.join(base, name),
+        `globalThis.${marker} = true;\nexport default function plugin() {}\n`
+      );
+    }
+    const result = await loadTailwindDesignSystem(project);
+    expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") return;
+    // Tailwind decides the order it resolves these in; only which were skipped matters.
+    expect([...result.skippedModules].sort()).toEqual(["./evil-config.mjs", "./evil-plugin.mjs"]);
+    expect(result.system.cssFor("p-4")).not.toBeNull();
+  });
+
+  it("keeps working when the project configures a plugin with options", async () => {
+    const project = await makeProject(
+      `@import "tailwindcss";\n@plugin "./forms.mjs" {\n  strategy: class;\n}\n`
+    );
+    await fs.writeFile(
+      path.join(path.dirname(project.cssEntry), "forms.mjs"),
+      `globalThis.${marker} = true;\nexport default function plugin() {}\n`
+    );
+    const result = await loadTailwindDesignSystem(project);
+    expect((globalThis as Record<string, unknown>)[marker]).toBeUndefined();
+    expect(result.status).toBe("ok");
+  });
+
+  it("refuses when the project's tailwindcss minor differs from the engine's", async () => {
+    const project = await makeProject("@import 'tailwindcss';", "none");
+    await writeStubTailwind(project.appRoot, "4.2.0", "export {};\n");
+    const result = await loadTailwindDesignSystem(project);
+    expect(result.status === "unavailable" && result.reason).toContain("4.2.0");
   });
 });
 
