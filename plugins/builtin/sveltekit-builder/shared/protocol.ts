@@ -1,0 +1,440 @@
+import { z } from "zod";
+import {
+  EditOperationSchema,
+  EditReceiptSchema,
+  RectSchema,
+  SelectedNodeSchema,
+  SiteEditErrorCodeSchema,
+  SiteSelectionSchema,
+  SourceLocationSchema,
+  SourceRangeSchema,
+  ViewportSchema,
+} from "./model.js";
+
+/**
+ * The Site Builder wire contract. Three boundaries meet here and all three are
+ * frozen for the life of a protocol version:
+ *
+ * - renderer view → plugin main, over the plugin channel bridge (`CHANNELS`);
+ * - plugin main → renderer view, pushed (`PUSH_CHANNELS`);
+ * - preview guest → host, over the site-preview bridge (`GuestEnvelopeSchema`).
+ *
+ * The guest half is the security-relevant one. The page is untrusted: it may be
+ * an application the user is debugging, and a same-origin compromise can forge
+ * anything it sends. Everything arriving from the guest is therefore an
+ * *observation* — the host re-resolves source identity itself and never accepts
+ * a file path, range or revision the page supplied.
+ */
+
+export const PLUGIN_ID = "daintree.sveltekit-builder";
+export const INSPECTOR_PANEL_ID = "inspector";
+export const INSPECTOR_VIEW_ID = "inspector";
+
+/**
+ * Bumped whenever a guest-visible shape changes. The host refuses envelopes
+ * from a runtime built against a different major, which is what keeps a stale
+ * injected script from a previous app version talking to a newer host.
+ */
+export const GUEST_PROTOCOL_VERSION = 1;
+
+export const CHANNELS = {
+  /** Bind the inspector to a dev-preview session, or report why it cannot. */
+  workspaceOpen: "workspace:open",
+  /** Current binding, readiness and supported-baseline verdict. */
+  workspaceStatus: "workspace:status",
+  /** Release the binding and remove the guest runtime. */
+  workspaceClose: "workspace:close",
+  /** Switch the guest between Browse and Select. */
+  modeSet: "mode:set",
+  /** Re-resolve a selection against current source (after HMR, or on demand). */
+  selectionResolve: "selection:resolve",
+  /** Read a bounded source excerpt for the identity card / source peek. */
+  sourceExcerpt: "source:excerpt",
+  /** Apply deterministic operations to one file. */
+  editApply: "edit:apply",
+  /** Reverse one applied transaction, revision-checked. */
+  editUndo: "edit:undo",
+  /** Tailwind completion catalog + resolved responsive ranges for this project. */
+  tailwindCatalog: "tailwind:catalog",
+  /** Detected app roots, versions, package manager and route tree. */
+  projectModel: "project:model",
+} as const satisfies Record<string, string>;
+
+export const PUSH_CHANNELS = {
+  /** A new selection (or `null` when cleared) observed in the guest. */
+  selection: "push:selection",
+  /** Binding state changed — bound, detached, guest lost, epoch advanced. */
+  binding: "push:binding",
+  /** An edit reached a new proven state (preview refreshed, styles generated). */
+  receipt: "push:receipt",
+  /** A guest-side or host-side problem the panel should surface inline. */
+  issue: "push:issue",
+} as const satisfies Record<string, string>;
+
+/* -------------------------------------------------------------------------- */
+/* Guest → host                                                               */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * What the guest reports about one node. Note what is absent: no file path, no
+ * source range, no revision. The guest reports the raw `__svelte_meta` it read
+ * plus geometry; the host turns that into source identity. A page that lies
+ * about its own `__svelte_meta` can at worst point the inspector at the wrong
+ * element of its own project, never at another file.
+ */
+export const GuestNodeObservationSchema = z
+  .object({
+    runtimeOccurrenceId: z.string().min(1).max(128),
+    /** Verbatim `__svelte_meta.loc`, absent when the node has none. */
+    loc: SourceLocationSchema.nullable(),
+    /** Verbatim `__svelte_meta.parent` chain, innermost first, capped. */
+    ancestry: z
+      .array(
+        z
+          .object({
+            type: z.string().min(1).max(32),
+            file: z.string().min(1).max(1024),
+            line: z.number().int().positive(),
+            column: z.number().int().nonnegative(),
+            componentTag: z.string().min(1).max(128).optional(),
+          })
+          .strict()
+      )
+      .max(64),
+    tagName: z.string().min(1).max(64),
+    /** Count of live nodes sharing this node's `loc`, computed in the guest. */
+    sameLocCount: z.number().int().positive().max(100_000),
+    label: z.string().max(200),
+    bounds: z.array(RectSchema).max(32),
+    /** True when the node sits inside `{@html}`, canvas, or a shadow root. */
+    unmapped: z.boolean(),
+  })
+  .strict();
+export type GuestNodeObservation = z.infer<typeof GuestNodeObservationSchema>;
+
+export const GuestEventSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("documentReady"),
+      routeId: z.string().max(512).nullable(),
+      url: z.string().max(2048),
+      viewport: ViewportSchema,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("selectionChanged"),
+      nodes: z.array(GuestNodeObservationSchema).max(32),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("hoverChanged"),
+      node: GuestNodeObservationSchema.nullable(),
+    })
+    .strict(),
+  z
+    .object({ type: z.literal("mappingRevisionSeen"), revision: z.string().min(1).max(128) })
+    .strict(),
+  z
+    .object({
+      type: z.literal("runtimeIssue"),
+      code: z.enum(["no-svelte-meta", "not-dev-build", "overlay-blocked", "internal"]),
+      detail: z.string().max(512),
+    })
+    .strict(),
+]);
+export type GuestEvent = z.infer<typeof GuestEventSchema>;
+
+/**
+ * Every guest message is wrapped. The host validates all five envelope fields
+ * before it looks at the payload: a mismatched protocol version, an unknown
+ * session, a stale epoch, a replayed sequence number or an oversized body is
+ * dropped without interpretation.
+ */
+export const GuestEnvelopeSchema = z
+  .object({
+    protocolVersion: z.literal(GUEST_PROTOCOL_VERSION),
+    /** Host-issued, per-binding. Not a credential — it scopes, it does not authorise. */
+    sessionId: z.string().min(1).max(128),
+    documentEpoch: z.number().int().nonnegative(),
+    sequence: z.number().int().nonnegative(),
+    event: GuestEventSchema,
+  })
+  .strict();
+export type GuestEnvelope = z.infer<typeof GuestEnvelopeSchema>;
+
+/** Hard ceiling on one envelope, enforced before parsing. */
+export const MAX_GUEST_MESSAGE_BYTES = 256 * 1024;
+
+/* -------------------------------------------------------------------------- */
+/* View → main                                                                */
+/* -------------------------------------------------------------------------- */
+
+export const WorkspaceIdentitySchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    projectId: z.string().min(1),
+    worktreeId: z.string().min(1),
+    appRoot: z.string().min(1),
+    previewPanelId: z.string().min(1),
+  })
+  .strict();
+export type WorkspaceIdentity = z.infer<typeof WorkspaceIdentitySchema>;
+
+export const SupportVerdictSchema = z.discriminatedUnion("level", [
+  z.object({ level: z.literal("full") }).strict(),
+  z
+    .object({
+      level: z.literal("preview-only"),
+      /** Human-readable, already specific: names the package and version found. */
+      reasons: z.array(z.string().min(1)).min(1),
+    })
+    .strict(),
+]);
+export type SupportVerdict = z.infer<typeof SupportVerdictSchema>;
+
+export const WorkspaceOpenArgsSchema = z
+  .object({
+    projectId: z.string().min(1),
+    worktreeId: z.string().min(1),
+    /** Omit to attach to the worktree's only running preview, if there is one. */
+    previewPanelId: z.string().min(1).optional(),
+    /** Omit to auto-detect; required when the repo holds more than one app. */
+    appRoot: z.string().min(1).optional(),
+  })
+  .strict();
+export type WorkspaceOpenArgs = z.infer<typeof WorkspaceOpenArgsSchema>;
+
+export const WorkspaceStateSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("bound"),
+      identity: WorkspaceIdentitySchema,
+      support: SupportVerdictSchema,
+      documentEpoch: z.number().int().nonnegative(),
+      mode: z.enum(["browse", "select"]),
+      guestReady: z.boolean(),
+    })
+    .strict(),
+  /** More than one candidate app or preview — the user must choose. */
+  z
+    .object({
+      status: z.literal("ambiguous"),
+      appRoots: z.array(z.string().min(1)),
+      previewPanelIds: z.array(z.string().min(1)),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("no-preview"),
+      appRoots: z.array(z.string().min(1)),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("unsupported"),
+      support: SupportVerdictSchema,
+    })
+    .strict(),
+  z.object({ status: z.literal("detached") }).strict(),
+]);
+export type WorkspaceState = z.infer<typeof WorkspaceStateSchema>;
+
+export const ModeSetArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    mode: z.enum(["browse", "select"]),
+  })
+  .strict();
+
+export const SelectionResolveArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    nodes: z.array(GuestNodeObservationSchema).max(32),
+    documentEpoch: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const SelectionResolveResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("ok"), selection: SiteSelectionSchema }).strict(),
+  /** The document moved on while we resolved — the caller reselects, never retargets. */
+  z.object({ status: z.literal("stale") }).strict(),
+]);
+export type SelectionResolveResult = z.infer<typeof SelectionResolveResultSchema>;
+
+export const SourceExcerptArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    file: z.string().min(1),
+    range: SourceRangeSchema,
+    /** Lines of surrounding context, capped so this can never stream a file. */
+    contextLines: z.number().int().min(0).max(40).default(4),
+  })
+  .strict();
+
+export const SourceExcerptResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("ok"),
+      text: z.string(),
+      firstLine: z.number().int().positive(),
+      revision: z.string().regex(/^[0-9a-f]{64}$/),
+    })
+    .strict(),
+  z.object({ status: z.literal("unavailable") }).strict(),
+]);
+
+export const EditApplyArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    /** Worktree-relative POSIX path, re-contained by the host before any I/O. */
+    file: z.string().min(1),
+    expectedRevision: z.string().regex(/^[0-9a-f]{64}$/),
+    operations: z.array(EditOperationSchema).min(1).max(16),
+    /** Echoed into the receipt so the UI can state the blast radius truthfully. */
+    affectedOccurrences: z.number().int().positive(),
+    idempotencyKey: z.string().min(1).max(128),
+  })
+  .strict();
+export type EditApplyArgs = z.infer<typeof EditApplyArgsSchema>;
+
+export const EditApplyResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("applied"), receipt: EditReceiptSchema }).strict(),
+  /** Nothing to do — no write, no history entry. */
+  z.object({ status: z.literal("no-op") }).strict(),
+  z
+    .object({
+      status: z.literal("conflict"),
+      currentRevision: z.string().regex(/^[0-9a-f]{64}$/),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("error"),
+      code: SiteEditErrorCodeSchema,
+      message: z.string().min(1),
+    })
+    .strict(),
+]);
+export type EditApplyResult = z.infer<typeof EditApplyResultSchema>;
+
+export const EditUndoArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    transactionId: z.string().min(1),
+  })
+  .strict();
+
+export const EditUndoResultSchema = z.discriminatedUnion("status", [
+  z.object({ status: z.literal("reversed"), receipt: EditReceiptSchema }).strict(),
+  /** The file moved on since the edit; reversing it needs review, not a blind write. */
+  z
+    .object({
+      status: z.literal("superseded"),
+      currentRevision: z.string().regex(/^[0-9a-f]{64}$/),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("error"),
+      code: SiteEditErrorCodeSchema,
+      message: z.string().min(1),
+    })
+    .strict(),
+]);
+
+/** One entry of the Tailwind completion catalog. */
+export const ClassCandidateSchema = z
+  .object({
+    candidate: z.string().min(1),
+    /** Generated CSS declarations, for the completion preview. */
+    css: z.string(),
+  })
+  .strict();
+
+export const ResponsiveRangeSchema = z
+  .object({
+    /** `base`, or the variant chain that expresses this interval. */
+    variant: z.string().min(1),
+    label: z.string().min(1),
+    minWidth: z.number().int().nonnegative().optional(),
+    maxWidthExclusive: z.number().int().positive().optional(),
+  })
+  .strict();
+export type ResponsiveRange = z.infer<typeof ResponsiveRangeSchema>;
+
+export const TailwindCatalogResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("ok"),
+      /** Revision of the resolved CSS entry, so a stale catalog is detectable. */
+      catalogRevision: z.string().min(1),
+      ranges: z.array(ResponsiveRangeSchema),
+      /** Theme colour/spacing/font tokens the project actually defines. */
+      themeTokens: z.record(z.string(), z.string()),
+    })
+    .strict(),
+  z.object({ status: z.literal("unavailable"), reason: z.string().min(1) }).strict(),
+]);
+
+export const ClassCompleteArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    query: z.string().max(128),
+    limit: z.number().int().min(1).max(200).default(50),
+  })
+  .strict();
+
+export const RouteNodeSchema = z
+  .object({
+    /** SvelteKit route id, e.g. `/products/[slug]`. Route groups excluded. */
+    routeId: z.string().min(1),
+    /** Worktree-relative path of the `+page.svelte`, when one exists. */
+    pageFile: z.string().min(1).nullable(),
+    layoutFiles: z.array(z.string().min(1)),
+    /** True when the route id carries at least one `[param]`. */
+    dynamic: z.boolean(),
+    /** Endpoint-only routes are not navigable pages. */
+    endpointOnly: z.boolean(),
+  })
+  .strict();
+export type RouteNode = z.infer<typeof RouteNodeSchema>;
+
+export const ProjectModelResultSchema = z
+  .object({
+    appRoot: z.string().min(1),
+    packageManager: z.enum(["npm", "pnpm", "yarn", "bun", "unknown"]),
+    versions: z
+      .object({
+        svelte: z.string().nullable(),
+        kit: z.string().nullable(),
+        tailwind: z.string().nullable(),
+        vite: z.string().nullable(),
+      })
+      .strict(),
+    support: SupportVerdictSchema,
+    routes: z.array(RouteNodeSchema),
+  })
+  .strict();
+export type ProjectModel = z.infer<typeof ProjectModelResultSchema>;
+
+/* -------------------------------------------------------------------------- */
+/* Main → view (push)                                                         */
+/* -------------------------------------------------------------------------- */
+
+export const SelectionPushSchema = z.object({ selection: SiteSelectionSchema.nullable() }).strict();
+
+export const BindingPushSchema = z.object({ state: WorkspaceStateSchema }).strict();
+
+export const ReceiptPushSchema = z.object({ receipt: EditReceiptSchema }).strict();
+
+export const IssuePushSchema = z
+  .object({
+    severity: z.enum(["warning", "error"]),
+    code: z.string().min(1),
+    message: z.string().min(1),
+  })
+  .strict();
+
+export type { SelectedNode, SiteSelection };
