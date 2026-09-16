@@ -357,7 +357,8 @@ function describeState(
       return `No CI checks reported on pull request #${prNumber}.`;
     case "loaded": {
       const failing = state.rows.filter((row) => row.isFailure).length;
-      return `${state.rows.length} CI checks, ${failing} failing`;
+      const total = state.rows.length;
+      return `${total} CI check${total === 1 ? "" : "s"}, ${failing} failing`;
     }
     default:
       return "";

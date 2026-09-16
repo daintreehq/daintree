@@ -130,6 +130,25 @@ describe("PrChecksPopover", () => {
     expect(rows[1]!.textContent).not.toMatch(/required/i);
   });
 
+  it("announces the loaded count, pluralized against a single check", async () => {
+    getChecksMock.mockResolvedValue({ checks: [check({ conclusion: "failure" })] });
+    const { unmount } = renderPopover();
+    await openAndSettle();
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("1 CI check, 1 failing")
+    );
+    unmount();
+    cleanup();
+
+    getChecksMock.mockReset();
+    getChecksMock.mockResolvedValue({ checks: [check(), check({ name: "lint" })] });
+    renderPopover();
+    await openAndSettle();
+    await waitFor(() =>
+      expect(screen.getByRole("status").textContent).toBe("2 CI checks, 0 failing")
+    );
+  });
+
   it("routes a validated details link through the external opener", async () => {
     getChecksMock.mockResolvedValue({
       checks: [
