@@ -202,7 +202,11 @@ describe("preview binding", () => {
       support: { level: "preview-only", reasons: ["Found svelte 4.2.1; editing needs Svelte 5"] },
     }));
     await mountBound();
-    await screen.findByText("Found svelte 4.2.1; editing needs Svelte 5");
+    // The rule: the reason main gave is shown, under a heading that scopes it to
+    // direct editing rather than to the panel as a whole. Matched as a substring
+    // because the notice adds what still works alongside it.
+    await screen.findByText("Direct editing unavailable");
+    await screen.findByText(/Found svelte 4\.2\.1; editing needs Svelte 5/);
     await act(async () => host.select(0));
     await screen.findByText("This element couldn't be traced to source");
     expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(0);
@@ -688,6 +692,49 @@ describe("stale selections", () => {
     // terminal and is deciding again.
     fireEvent.change(request, { target: { value: "Say Upgrade now" } });
     await waitFor(() => expect(sendButton().disabled).toBe(false));
+  });
+
+  it("keeps the partial-delivery guard when the notice is dismissed", async () => {
+    // The guard reads the delivery record, and Dismiss used to clear it — so
+    // closing the warning rearmed Enter on the unchanged draft. Hiding the
+    // notice and deciding the request is safe to repeat are different acts.
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    const sendButton = () =>
+      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+
+    act(() => {
+      updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
+        delivery: {
+          state: {
+            status: "failed",
+            message: "The terminal stopped accepting input",
+            partial: true,
+          },
+          title: "claude",
+          terminalId: "term-1",
+        },
+      });
+    });
+    await waitFor(() => expect(sendButton().disabled).toBe(true));
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(screen.queryByText("Couldn't send to the agent")).toBeNull();
+    expect(sendButton().disabled).toBe(true);
+  });
+
+  it("names the selection as current in the trail, never an ancestor", async () => {
+    // The drawer hides the terminal crumb because its header already names the
+    // element. Marking whatever crumb is left as `aria-current` told screen
+    // readers the parent component was the selection.
+    await mountSelected();
+    for (const trail of screen.getAllByRole("navigation", { name: "Selection" })) {
+      const current = trail.querySelector('[aria-current="true"]');
+      expect(current).not.toBeNull();
+      expect(current!.textContent).toContain("Start Pro");
+      expect(current!.textContent).not.toBe("PricingCard");
+    }
   });
 
   it("still allows an immediate retry when nothing was typed into the agent", async () => {

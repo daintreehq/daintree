@@ -60,19 +60,30 @@ function elementLabel(node: SelectedNode): string {
  */
 export function SelectionTrail({
   crumbs,
+  current,
   className,
   itemClassName,
 }: {
   crumbs: readonly TrailCrumb[];
+  /**
+   * What is actually selected. Required, and deliberately not defaulted to the
+   * last crumb: the drawer hides the terminal crumb because its header already
+   * names the element, and marking whatever is left as `aria-current` told
+   * screen readers the parent component was the selection. When the selected
+   * crumb is not displayed it is carried as visually-hidden text, so the
+   * accessibility tree and the visible identity always agree.
+   */
+  current: string;
   className?: string;
   itemClassName?: string;
 }) {
+  const shown = crumbs.some((crumb) => crumb.label === current);
   if (crumbs.length === 0) return null;
   return (
     <nav aria-label="Selection" className={cn("min-w-0", className)}>
       <ol className="flex min-w-0 items-center gap-1">
         {crumbs.map((crumb, index) => {
-          const last = index === crumbs.length - 1;
+          const last = shown && crumb.label === current;
           return (
             <li
               key={`${crumb.label}-${index}`}
@@ -91,6 +102,11 @@ export function SelectionTrail({
             </li>
           );
         })}
+        {shown ? null : (
+          <li className="sr-only" aria-current="true">
+            {current}
+          </li>
+        )}
       </ol>
     </nav>
   );

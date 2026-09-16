@@ -25,6 +25,9 @@ import {
   useDrawerCollapsed,
 } from "./composerMemory.js";
 import { WaitingRow } from "./WaitingRow.js";
+import { IdentitySkeleton } from "./IdentitySkeleton.js";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_SKELETON_TAKEOVER_MS } from "@/lib/animationUtils";
 import { scopesFor } from "./agentTask.js";
 import { DETACH_COPY, middleTruncate, relativeTo } from "./copy.js";
 import { SelectionTrail, trailFor } from "./SelectionTrail.js";
@@ -230,7 +233,19 @@ function StripStatus({
           {/* The same trail the drawer draws, from the same function. The two
               used to build their own and disagreed about where the chain starts
               and whether `each` counts as a step. */}
-          <SelectionTrail crumbs={trailFor(node)} className="min-w-0 flex-1" />
+          {/* The strip has no header, so its trail ends at what is selected —
+              the component when a component was picked, the element otherwise.
+              It used to always end at the element, so a component selection was
+              presented as though an element were current. */}
+          <SelectionTrail
+            crumbs={trailFor(node, { includeSelf: pickedIndex === 0 })}
+            current={
+              pickedIndex > 0 && picked?.kind === "component"
+                ? picked.label
+                : node.label || node.definition?.tagName || "element"
+            }
+            className="min-w-0 flex-1"
+          />
           {pickedIndex > 0 ? (
             <span className="shrink-0 rounded-sm border border-border-subtle px-1 text-3xs">
               Component
@@ -295,57 +310,69 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
   return (
     <aside
       aria-label="Site Builder details"
-      className="flex w-[360px] shrink-0 flex-col gap-3 overflow-y-auto border-l border-overlay bg-surface-panel p-3 text-text-primary"
+      className="flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-overlay bg-surface-panel text-text-primary"
     >
-      {state.issue ? (
-        <InspectorNotice
-          tone={state.issue.severity}
-          title={state.issue.message}
-          role={state.issue.severity === "error" ? "alert" : "status"}
-          action={
-            <Button variant="ghost" size="xs" onClick={() => controller.dismissIssue()}>
-              Dismiss
-            </Button>
-          }
-        />
+      {/* Pinned. A desktop inspector always says what is selected; a form
+          scrolls it away. */}
+      {selection.status === "ready" ? (
+        <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3">
+          <SelectionIdentity selection={selection} />
+        </div>
       ) : null}
-      <WorkspaceStatus state={state} controller={controller} worktreePath={props.worktreePath} />
-      <SelectionBody state={state} />
 
-      {/* The two routes, as peers. Direct editing used to sit below the composer
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+        {state.issue ? (
+          <InspectorNotice
+            tone={state.issue.severity}
+            title={state.issue.message}
+            role={state.issue.severity === "error" ? "alert" : "status"}
+            action={
+              <Button variant="ghost" size="xs" onClick={() => controller.dismissIssue()}>
+                Dismiss
+              </Button>
+            }
+          />
+        ) : null}
+        <WorkspaceStatus state={state} controller={controller} worktreePath={props.worktreePath} />
+        {selection.status === "ready" ? null : <SelectionBody state={state} />}
+
+        {/* The two routes, as peers. Direct editing used to sit below the composer
           inside a native `details`, which made a two-keystroke fix a
           disclose-and-scroll operation and put the editors below the fold on any
           laptop viewport — while the empty composer held ~280px above them. They
           answer the same question ("can I change it, and how"), so they get the
           same weight and the same section grammar. */}
-      {selection.status === "ready" ? (
-        <InspectorDisclosure
-          title="Edit directly"
-          open={editsOpen}
-          onOpenChange={setEditsOpen}
-          className="border-t border-border-subtle pt-1"
-        >
-          <SelectionEdits state={state} selection={selection} actions={actionsFor(controller)} />
-        </InspectorDisclosure>
-      ) : null}
+        {selection.status === "ready" ? (
+          <InspectorDisclosure
+            title="Edit directly"
+            open={editsOpen}
+            onOpenChange={setEditsOpen}
+            className="border-t border-border-subtle pt-1"
+          >
+            <SelectionEdits state={state} selection={selection} actions={actionsFor(controller)} />
+          </InspectorDisclosure>
+        ) : null}
 
-      {state.workspace.status === "ready" ? (
-        <div className="border-t border-border-subtle pt-3">
-          <AgentComposer
-            memoryKey={memoryKey}
-            controller={controller}
-            selection={selection}
-            worktreeId={props.worktreeId}
-            worktreePath={props.worktreePath}
-          />
-        </div>
-      ) : null}
+        {state.workspace.status === "ready" ? (
+          <div className="border-t border-border-subtle pt-3">
+            <AgentComposer
+              memoryKey={memoryKey}
+              controller={controller}
+              selection={selection}
+              worktreeId={props.worktreeId}
+              worktreePath={props.worktreePath}
+            />
+          </div>
+        ) : null}
+      </div>
 
-      {/* Pushed to the bottom of the column rather than trailing the content, so
-          a write and its Undo land in the same place every time instead of
-          wherever the sections above happen to end. */}
+      {/* Pinned to the foot of the drawer, not trailing the content: a write and
+          its Undo land in the same place every time. `mt-auto` only
+          bottom-aligned it when the content happened to be short, so after any
+          real edit the receipt was below the fold — the one control the user
+          most needs to reach in a hurry. */}
       {state.receipt ? (
-        <div className="mt-auto border-t border-border-subtle pt-3">
+        <div className="shrink-0 border-t border-border-subtle px-3 pb-3 pt-2">
           <ReceiptView state={state.receipt} onUndo={() => void controller.undo()} />
         </div>
       ) : null}
@@ -427,18 +454,62 @@ function WorkspaceStatus({
           {workspace.message}
         </InspectorNotice>
       );
-    case "ready":
+    case "ready": {
       if (workspace.support.level === "full") return null;
-      return (
-        <InspectorNotice tone="warning" title="Editing isn't supported for this project">
-          <ul className="flex list-disc flex-col gap-0.5 pl-4">
-            {workspace.support.reasons.map((reason) => (
-              <li key={reason}>{reason}</li>
-            ))}
-          </ul>
-        </InspectorNotice>
+      // Every non-full reason used to sit under one "Editing isn't supported"
+      // heading, so "no Tailwind config" read as a reason the whole editing
+      // surface was gone. Suggestions and direct editing are independent
+      // capabilities and are reported as such; whatever still works is still
+      // offered.
+      const suggestions = workspace.support.reasons.filter((reason) =>
+        /tailwind|suggestion|completion/i.test(reason)
       );
+      const editing = workspace.support.reasons.filter((reason) => !suggestions.includes(reason));
+      return (
+        <>
+          {editing.length > 0 ? (
+            <InspectorNotice tone="warning" title="Direct editing unavailable" density="compact">
+              {editing.length === 1 ? (
+                editing[0]
+              ) : (
+                <ul className="flex list-disc flex-col gap-0.5 pl-4">
+                  {editing.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              )}
+              {" You can still select elements and ask an agent to change them."}
+            </InspectorNotice>
+          ) : null}
+          {suggestions.length > 0 ? (
+            <InspectorNotice tone="info" title="Class suggestions unavailable" density="compact">
+              {suggestions.length === 1 ? (
+                suggestions[0]
+              ) : (
+                <ul className="flex list-disc flex-col gap-0.5 pl-4">
+                  {suggestions.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              )}
+              {" Classes you type are still written exactly as typed."}
+            </InspectorNotice>
+          ) : null}
+        </>
+      );
+    }
   }
+}
+
+/**
+ * Nothing under 400ms, the inline wait between 400ms and a second, then the
+ * identity's own shape — so a slow resolve settles into the panel it was always
+ * going to become instead of replacing it with a status line.
+ */
+function ResolvingIdentity() {
+  const past = useDeferredLoading(true, UI_SKELETON_TAKEOVER_MS);
+  if (past) return <IdentitySkeleton />;
+  return <WaitingRow label="Finding the source for this element" />;
 }
 
 function SelectionBody({ state }: { state: InspectorState }) {
@@ -447,7 +518,10 @@ function SelectionBody({ state }: { state: InspectorState }) {
     case "none":
       return null;
     case "resolving":
-      return <WaitingRow label="Finding the source for this element" />;
+      // Under the Doherty gate `WaitingRow` shows nothing at all; past a second
+      // the contract asks for a skeleton of the shape that is coming, and this
+      // block has a very predictable one.
+      return <ResolvingIdentity />;
     case "observed":
       return (
         <section aria-label="Selected element" className="flex flex-col gap-1">

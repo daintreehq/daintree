@@ -1,7 +1,9 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { splitClassTokens, type ClassCompletion } from "./inspectorController.js";
 
@@ -64,20 +66,25 @@ function ClassChips({
   return (
     <ul className="flex flex-wrap gap-1" aria-label="Classes">
       {tokens.map((token) => (
-        <li
-          key={token}
-          className="inline-flex max-w-full items-center gap-0.5 rounded-sm bg-overlay-subtle py-0.5 pr-0.5 pl-1.5 text-xs text-text-primary"
-        >
-          <span className="truncate font-mono">{token}</span>
-          <button
-            type="button"
-            aria-label={`Remove ${token}`}
-            disabled={!editable}
-            onClick={() => onRemove(token)}
-            className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary disabled:pointer-events-none disabled:opacity-50"
-          >
-            <X className="h-3 w-3" aria-hidden="true" />
-          </button>
+        <li key={token} className="max-w-full">
+          {/* `Badge` rather than a hand-rolled box: the drawer already shows
+              badges for the element tag and for capability labels, and three
+              near-identical chips built three ways is how a panel stops looking
+              like one system. The remove control stays a real button with its
+              own name and focus ring. */}
+          <Badge size="sm" tone="neutral" className="max-w-full pr-0.5 text-text-primary">
+            <span className="truncate font-mono">{token}</span>
+            <button
+              type="button"
+              aria-label={`Remove ${token}`}
+              data-class-remove=""
+              disabled={!editable}
+              onClick={() => onRemove(token)}
+              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary disabled:pointer-events-none disabled:opacity-50"
+            >
+              <X className="h-3 w-3" aria-hidden="true" />
+            </button>
+          </Badge>
         </li>
       ))}
     </ul>
@@ -168,16 +175,36 @@ function ClassAddField({
       case "ArrowDown":
         event.preventDefault();
         setOpen(true);
-        if (visible > 0) setActive((index) => (index + 1) % visible);
+        // Reopening a closed list left `active` at -1, so the first Down only
+        // revealed the options and a second was needed before Enter chose one.
+        if (visible > 0) setActive((index) => (index < 0 ? 0 : (index + 1) % visible));
         return;
       case "ArrowUp":
         event.preventDefault();
         if (visible > 0) setActive((index) => (index <= 0 ? visible - 1 : index - 1));
         return;
       case "Enter": {
+        // A composing IME sends Enter to accept its candidate. Writing the
+        // user's source file on that keystroke is the wrong reading of it.
+        if (event.nativeEvent.isComposing) return;
         event.preventDefault();
         const picked = open && active >= 0 ? candidates[active] : undefined;
         void submit(picked ? picked.candidate : query);
+        return;
+      }
+      case "Backspace": {
+        if (query !== "") return;
+        // APG: an empty buffer sends Backspace to the preceding token. It FOCUSES
+        // the remove control rather than removing it — this writes to the user's
+        // source, so the second press is theirs to make deliberately.
+        const removals = event.currentTarget
+          .closest("[data-class-editor]")
+          ?.querySelectorAll<HTMLButtonElement>("button[data-class-remove]:not([disabled])");
+        const last = removals?.[removals.length - 1];
+        if (!last) return;
+        event.preventDefault();
+        close();
+        last.focus();
         return;
       }
       case "Escape":
@@ -195,41 +222,65 @@ function ClassAddField({
   const showList = open && trimmed.length > 0 && candidates.length > 0;
   const activeId = showList && active >= 0 ? `${listboxId}-${active}` : undefined;
 
+  // Focus stays in the input, so nothing scrolls the active row into view on its
+  // own — the list is bounded now, and arrowing past its edge would otherwise
+  // move a highlight the user cannot see.
+  useEffect(() => {
+    if (!activeId) return;
+    document.getElementById(activeId)?.scrollIntoView({ block: "nearest" });
+  }, [activeId]);
+
   return (
-    <div className="relative flex flex-col gap-1">
-      <Input
-        density="compact"
-        role="combobox"
-        aria-label="Add a class"
-        aria-expanded={showList}
-        aria-controls={listboxId}
-        aria-autocomplete="list"
-        aria-activedescendant={activeId}
-        aria-describedby={error ? errorId : undefined}
-        placeholder="Add a class"
-        spellCheck={false}
-        autoComplete="off"
-        value={query}
-        invalid={error !== null}
-        disabled={!editable && !saving}
-        readOnly={saving}
-        onChange={(event) => {
-          setQuery(event.target.value);
-          setActive(-1);
-          setError(null);
-          setOpen(true);
-        }}
-        onKeyDown={onKeyDown}
-        onBlur={close}
-      />
-      {showList ? (
-        <CandidateList
-          id={listboxId}
-          candidates={candidates}
-          active={active}
-          onPick={(candidate) => void submit(candidate)}
-        />
-      ) : null}
+    <div data-class-editor className="relative flex flex-col gap-1">
+      <Popover open={showList}>
+        <PopoverAnchor asChild>
+          <Input
+            density="compact"
+            role="combobox"
+            aria-label="Add a class"
+            aria-expanded={showList}
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+            aria-activedescendant={activeId}
+            aria-describedby={error ? errorId : undefined}
+            placeholder="Add a class"
+            spellCheck={false}
+            autoComplete="off"
+            value={query}
+            invalid={error !== null}
+            disabled={!editable && !saving}
+            readOnly={saving}
+            onChange={(event) => {
+              setQuery(event.target.value);
+              setActive(-1);
+              setError(null);
+              setOpen(true);
+            }}
+            onKeyDown={onKeyDown}
+            onBlur={close}
+          />
+        </PopoverAnchor>
+        {/* Anchored and bounded rather than in normal flow. In flow it pushed
+            the composer down on every keystroke and ran past the bottom of the
+            drawer with no sign that more suggestions existed. Radix flips it
+            upward when there is no room below. */}
+        <PopoverContent
+          align="start"
+          sideOffset={4}
+          className="w-[var(--radix-popover-trigger-width)] p-0"
+          // Focus stays in the field: the input owns the listbox through
+          // aria-activedescendant, so the popover must not take it.
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+        >
+          <CandidateList
+            id={listboxId}
+            candidates={candidates}
+            active={active}
+            onPick={(candidate) => void submit(candidate)}
+          />
+        </PopoverContent>
+      </Popover>
       {error ? (
         <p id={errorId} className="text-xs text-status-error">
           {error}
@@ -261,7 +312,7 @@ function CandidateList({
       id={id}
       role="listbox"
       aria-label="Class suggestions"
-      className="flex flex-col rounded-md border border-border-subtle bg-surface-panel-elevated p-1 shadow-[var(--theme-shadow-ambient)]"
+      className="flex max-h-[min(280px,var(--radix-popover-content-available-height))] flex-col overflow-y-auto p-1"
     >
       {candidates.map((candidate, index) => (
         <li

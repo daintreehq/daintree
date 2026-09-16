@@ -32,9 +32,22 @@ export interface ComposerMemory {
   /** The destination the user committed to, by key; null until they write. */
   chosen: string | null;
   delivery: ComposerDelivery | null;
+  /**
+   * The notice about the last delivery has been closed, without deciding that a
+   * half-delivered request is safe to repeat. Kept apart from `delivery` because
+   * the partial-send guard reads that record: clearing it to hide the notice
+   * would rearm the send it exists to block.
+   */
+  deliveryDismissed?: boolean;
 }
 
-const EMPTY: ComposerMemory = { draft: "", pinned: null, chosen: null, delivery: null };
+const EMPTY: ComposerMemory = {
+  draft: "",
+  pinned: null,
+  chosen: null,
+  delivery: null,
+  deliveryDismissed: false,
+};
 const memories = new Map<string, ComposerMemory>();
 const listeners = new Set<() => void>();
 
