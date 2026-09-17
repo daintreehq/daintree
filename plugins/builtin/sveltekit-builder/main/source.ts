@@ -106,33 +106,6 @@ export function resolveReportedPath(roots: PathRoots, reported: string): Contain
 }
 
 /**
- * A worktree-relative POSIX path from the view (`sourceExcerpt`). Absolute
- * paths are refused outright rather than contained: the wire form is relative
- * by contract, and accepting both would give one file two spellings.
- */
-export function resolveWorktreePath(roots: PathRoots, file: string): ContainedPath {
-  if (file.length === 0 || hasControlCharacter(file)) return { ok: false, reason: "invalid" };
-  if (path.posix.isAbsolute(file) || path.win32.isAbsolute(file)) {
-    return { ok: false, reason: "invalid" };
-  }
-  return contain(roots, path.resolve(roots.worktreePath, ...file.split("/")));
-}
-
-/**
- * The inverse of the source model's `lineColumnToOffset`: 1-indexed line,
- * 0-indexed column, LF-counted, so a CR stays on the line it ends.
- */
-export function offsetToLocation(source: string, offset: number): { line: number; column: number } {
-  let line = 1;
-  let index = source.indexOf("\n");
-  while (index !== -1 && index < offset) {
-    line++;
-    index = source.indexOf("\n", index + 1);
-  }
-  return { line, column: offset - (source.lastIndexOf("\n", offset - 1) + 1) };
-}
-
-/**
  * Lexical containment cannot see a symlinked directory inside the app that
  * points elsewhere in the worktree, and `host.fs` only contains to the
  * worktree. Both ends are resolved on disk before anything is read. Only

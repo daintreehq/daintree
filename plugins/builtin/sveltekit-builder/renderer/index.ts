@@ -13,7 +13,7 @@ export const ENTRY_TOOL_ID = "daintree.sveltekit-builder.builder";
 
 // Registration is synchronous, at module eval (the builtin renderer glob imports
 // this entry for exactly that side effect). Only the toolbar button is eager;
-// the builder itself — zod schemas, the serialised guest runtime — is a lazy
+// the builder itself — zod schemas, the controller, the surfaces — is a lazy
 // chunk loaded the first time someone switches it on.
 const SiteBuilderToolbar = lazy(() =>
   import("./SiteBuilderSurfaces.js").then((m) => ({ default: m.SiteBuilderToolbar }))

@@ -98,7 +98,10 @@ export interface CdpLease {
   readonly invalidated: boolean;
   /** Re-read `Page.getFrameTree`. Callers refresh after a navigation. */
   refreshMainFrameId(): Promise<string | null>;
-  /** Idempotent. Disables each domain this lease was the last holder of. */
+  /**
+   * Idempotent. Disables each domain this lease was the last holder of, except
+   * `Page`, which is left on for the callers that enable it without a lease.
+   */
   release(): Promise<void>;
 }
 
@@ -147,7 +150,11 @@ function domainState(entry: Entry, domain: CdpDomain): DomainState {
   return state;
 }
 
-/** Whether a domain is currently on for this guest, whoever turned it on. */
+/**
+ * Whether this service records a domain as on for this guest. Bookkeeping, not
+ * the guest's state: `Page` stays on in the guest after its last holder goes,
+ * while the record of it is dropped with the entry.
+ */
 export function isCdpDomainEnabled(webContentsId: number, domain: CdpDomain): boolean {
   const entry = entries.get(webContentsId);
   if (!entry) return false;

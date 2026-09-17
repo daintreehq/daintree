@@ -42,9 +42,10 @@ import {
 import type { SiteSelection, Viewport } from "../shared/model.js";
 
 /**
- * One controller per dev preview with the Site Builder switched on. It holds
- * the preview binding, the source workspace and the selection, and ends
- * shortly after the builder's UI is gone.
+ * One controller per dev preview with the Site Builder switched on — the
+ * host's tool session for that preview. It holds the preview binding, the
+ * source workspace and the selection, and lives exactly as long as the host
+ * keeps the builder on for the preview, surfaces or no surfaces.
  *
  * Every piece of preview state is keyed on the document epoch an observation
  * carries, never on arrival order: a reinstalled runtime's `documentReady` can
@@ -115,6 +116,11 @@ export type WorkspaceState =
   | { status: "ambiguous"; appRoots: string[] }
   | { status: "no-app" }
   | { status: "failed"; message: string };
+
+/** A frame the trail can hand to a crumb: a component invocation with a tag. */
+function namesComponent(frame: { type: string; componentTag?: string }): boolean {
+  return frame.type === "component" && frame.componentTag !== undefined;
+}
 
 export interface PageState {
   epoch: number;
@@ -851,6 +857,10 @@ export class InspectorController implements DevPreviewToolSession {
         if (page === null || page.epoch !== epoch) return;
         const metadata = { locations: event.locations, ancestry: event.ancestry };
         const patch: Partial<InspectorState> = { page: { ...page, metadata } };
+        // A page that hydrated late can be probed after the audit already
+        // called it a production build; the probe's answer is the newer fact.
+        const code = this.state.issue?.code;
+        if (event.locations && code !== undefined && MAPPING_ISSUES.has(code)) patch.issue = null;
         // A shape the runtime could not read is said once, up front, rather
         // than discovered click by click; a chain it could not follow narrows
         // the trail and says why.
@@ -880,7 +890,9 @@ export class InspectorController implements DevPreviewToolSession {
    */
   private clearDisprovedMappingIssue(nodes: SiteGuestNodeObservation[]): void {
     const traced = nodes.some((node) => node.loc !== null);
-    const chained = nodes.some((node) => node.ancestry.length > 0);
+    // A chain is only a chain the trail can use when it names a component: a
+    // block frame on its own gives a crumb nothing to select.
+    const chained = nodes.some((node) => node.ancestry.some(namesComponent));
     const patch: Partial<InspectorState> = {};
     // What the page shows outranks what its probe sampled: a chain the sample
     // lacked can turn up on a deeper element, whether or not the notice about

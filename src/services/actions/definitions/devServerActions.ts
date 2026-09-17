@@ -14,7 +14,10 @@ import {
   type DevPreviewTool,
   type DevPreviewToolContext,
 } from "@/registry/devPreviewToolRegistry";
-import { startDevPreviewToolSessions } from "@/services/devPreviewTools/sessionManager";
+import {
+  seedDevPreviewToolContext,
+  startDevPreviewToolSessions,
+} from "@/services/devPreviewTools/sessionManager";
 import { actionService } from "@/services/ActionService";
 
 /**
@@ -247,6 +250,9 @@ export function registerDevServerActions(
         if (!getAvailableDevPreviewTool(args.toolId) || !live || live.location === "trash") {
           return { panelId, active: false };
         }
+        // The pane for a preview started a moment ago may not have mounted;
+        // the session should not start worktree-less because of it.
+        seedDevPreviewToolContext(devPreviewToolContext(panelId, ctx));
         store.setActive(panelId, args.toolId);
         const activated = useDevPreviewToolStore.getState().activeByPanel[panelId] === args.toolId;
         if (activated) void actionService.dispatch("panel.focus", { panelId }, { source });
@@ -256,6 +262,7 @@ export function registerDevServerActions(
       // while the tool was on must still be switchable back to plain browsing.
       if (store.activeByPanel[panelId] !== args.toolId) {
         await refuseUnlessToolApplies(tool, panelId, ctx);
+        seedDevPreviewToolContext(devPreviewToolContext(panelId, ctx));
       }
       store.toggle(panelId, args.toolId);
       const active = useDevPreviewToolStore.getState().activeByPanel[panelId] === args.toolId;

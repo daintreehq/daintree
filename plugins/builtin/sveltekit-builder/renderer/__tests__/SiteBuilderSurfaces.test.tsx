@@ -274,6 +274,15 @@ describe("page verdicts", () => {
     }
   });
 
+  it("drops a production-build verdict when a late probe finds readable metadata", async () => {
+    await mountBound();
+    await act(async () => runtimeIssue("not-dev-build"));
+    expect(text()).toContain("production build");
+    // The page hydrated after the audit's deadline; nothing was clicked.
+    await act(async () => metadataProbed(true, true));
+    expect(text()).not.toContain("production build");
+  });
+
   it("warns up front when the page's metadata cannot be read at all", async () => {
     await mountBound();
     await act(async () => metadataProbed(false, false));
@@ -1466,7 +1475,6 @@ describe("stale selections", () => {
     expect(sent[0]).toContain(`  - page: ${FILE}`);
     expect(sent[0]).toContain("(SvelteKit 2.15.0, Svelte 5.2.0, Tailwind 4.1.0)");
     expect(sent[0]).not.toContain("```");
-    expect(host.calls(CHANNELS.sourceExcerpt)).toEqual([]);
 
     // The notice keeps the exact request, one disclosure away.
     fireEvent.click(await screen.findByRole("button", { name: "View request" }));

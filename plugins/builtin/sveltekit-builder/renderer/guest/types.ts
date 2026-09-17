@@ -1,11 +1,10 @@
 /// <reference lib="dom" />
 /**
- * Types shared by the guest runtime and its serialiser.
+ * Types shared by the guest runtime, its bundled entry and the tests.
  *
- * Everything here is erased at compile time. The runtime factory is serialised
- * with `Function.prototype.toString()` and evaluated inside the user's page, so
- * a value import in `runtime.ts` would produce a free identifier the page
- * cannot resolve.
+ * Everything here is erased at compile time: the runtime runs inside the
+ * user's page as a bundled asset, and nothing of the host's module graph goes
+ * with it.
  */
 
 export type GuestMode = "browse" | "select";

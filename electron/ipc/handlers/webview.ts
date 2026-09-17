@@ -572,7 +572,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       // acquisition is the one that actually sends `Runtime.enable`. A guest the
       // site preview bridge already holds Runtime on replays nothing, and
       // bracketing that would reconcile live events away as duplicates.
-      session.runtimeLease = await acquireCdpLease(wc, ["Runtime"], {
+      const lease = await acquireCdpLease(wc, ["Runtime"], {
         onDomainEnable: () => {
           openReplayWindow(session.consoleWatermark, session.exceptionWatermark);
           return () => closeReplayWindow(session.consoleWatermark, session.exceptionWatermark);
@@ -581,6 +581,13 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
           session.runtimeLease = null;
         },
       });
+      // Handler teardown or the guest's `destroyed` hook can drop the session
+      // under this await; a lease adopted by a dead session is never released.
+      if (sessions.get(webContentsId) !== session) {
+        await lease.release();
+        return;
+      }
+      session.runtimeLease = lease;
     }
 
     // Log surfaces browser-emitted entries (CSP violations, network failures,
@@ -591,7 +598,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // for both domains would fail whole.
     if (!session.logLease) {
       try {
-        session.logLease = await acquireCdpLease(wc, ["Log"], {
+        const lease = await acquireCdpLease(wc, ["Log"], {
           onDomainEnable: () => {
             openReplayWindow(session.logEntryWatermark);
             return () => closeReplayWindow(session.logEntryWatermark);
@@ -600,6 +607,11 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
             session.logLease = null;
           },
         });
+        if (sessions.get(webContentsId) !== session) {
+          await lease.release();
+          return;
+        }
+        session.logLease = lease;
       } catch (logErr) {
         console.warn(
           `[webview] CDP Log.enable failed for id=${webContentsId}:`,

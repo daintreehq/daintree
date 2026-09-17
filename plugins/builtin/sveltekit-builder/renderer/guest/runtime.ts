@@ -26,12 +26,11 @@ type AncestryFrame = GuestNodeObservation["ancestry"][number];
 type SourceLoc = NonNullable<GuestNodeObservation["loc"]>;
 
 /**
- * The whole guest runtime, as one self-contained function.
- *
- * It is serialised by `buildGuestRuntimeBody` (or `buildStandaloneGuestSource`) and evaluated in the page's
- * main world, so it may close over nothing: every helper, constant and type
- * guard lives in this body. That is the reason for the size — splitting it into
- * module-scope helpers would compile fine and break the moment it is injected.
+ * The whole guest runtime. `entry.ts` bundles it into the standalone asset the
+ * host installs into the page's main world; the factory itself is what the
+ * unit tests drive directly. It closes over nothing but its own body by habit
+ * from the days it travelled as serialised source — keeping it that way costs
+ * nothing and keeps the asset one self-contained closure.
  */
 export function createSiteBuilderGuest(
   config: GuestBootstrapConfig,
@@ -1567,7 +1566,16 @@ export function createSiteBuilderGuest(
       if (element === undefined || readMeta(element) === null) continue;
       stamped += 1;
       if (readLoc(element) !== null) locations = true;
-      if (readAncestry(element).frames.length > 0) ancestry = true;
+      // Ancestry means a component the trail can name, not merely a readable
+      // frame: a chain of block frames with no tagged invocation on it gives a
+      // crumb nothing to select.
+      if (
+        readAncestry(element).frames.some(
+          (frame) => frame.type === "component" && frame.componentTag !== undefined
+        )
+      ) {
+        ancestry = true;
+      }
       if (locations && ancestry) break;
     }
     if (stamped === 0) return;
