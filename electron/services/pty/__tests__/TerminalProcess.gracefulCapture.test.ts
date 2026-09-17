@@ -371,13 +371,40 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     await expect(promise).resolves.toBe("shed-1");
   });
 
+  it("still answers a colour query the held output carries", async () => {
+    // A TUI blocks on this reply for longer than the teardown budget, so a
+    // discarded query would cost the hint it prints afterwards.
+    const host = createHost();
+    const handles = createPausablePty();
+    const delivered: string[] = [];
+    const { terminal, coordinator } = host.spawn("t1", handles, {
+      agentId: "claude",
+      emitData: (data) => delivered.push(data),
+    });
+    coordinator.pause("resource-governor");
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    const writesBefore = handles.writes.length;
+
+    handles.output("\x1b]11;?\x07");
+
+    const replies = handles.writes.slice(writesBefore);
+    expect(replies).toHaveLength(1);
+    expect(replies[0]!.startsWith("\x1b]11;rgb:")).toBe(true);
+    expect(delivered).toEqual([]);
+
+    handles.output("claude --resume answered-1\n");
+    await expect(promise).resolves.toBe("answered-1");
+  });
+
   it("captures while a renderer that never acknowledges stays within its queue watermark", async () => {
     const host = createHost();
     const handles = createPausablePty();
-    let terminalCoordinator: PtyPauseCoordinator | undefined;
+    const coordinatorRef: { current?: PtyPauseCoordinator } = {};
     const queue = new IpcQueueManager({
       getTerminal: () => undefined,
-      getPauseCoordinator: () => terminalCoordinator,
+      getPauseCoordinator: () => coordinatorRef.current,
       sendEvent: vi.fn(),
       metricsEnabled: () => false,
       emitTerminalStatus: vi.fn(),
@@ -393,7 +420,7 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
         queue.applyBackpressure("t1", queue.getUtilization("t1"));
       },
     });
-    terminalCoordinator = coordinator;
+    coordinatorRef.current = coordinator;
 
     const promise = terminal.gracefulShutdown();
     await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);

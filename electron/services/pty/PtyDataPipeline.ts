@@ -46,6 +46,9 @@ export class PtyDataPipeline {
     // unread — no renderer delivery, analysis, headless mirror, or agent output
     // — so the exemption costs nothing downstream of the capture itself.
     if (this.host.shouldDiscardCapturedChunk(data)) {
+      // Colour queries are still answered: a TUI blocks on its reply for
+      // longer than the whole teardown, and would never print its hint.
+      this.answerOscColorQueries(data);
       return;
     }
 
@@ -55,6 +58,17 @@ export class PtyDataPipeline {
     // reveal. The agent-state poll cadence (50ms active / 500ms background, set
     // in setActivityMonitorTier) still throttles the headless poll loop.
     this.runPipeline(data);
+  }
+
+  /** Returns the renderer-bound copy, with any query answered here stripped. */
+  private answerOscColorQueries(data: string): string {
+    if (!this.host.shouldHandleOscColorQueries || !data.includes("\x1b]1")) {
+      return data;
+    }
+    const terminal = this.host.terminalInfo;
+    return handleOscColorQueries(data, (response) => {
+      terminal.ptyProcess.write(response);
+    });
   }
 
   /**
@@ -73,12 +87,7 @@ export class PtyDataPipeline {
     // contract that keeps the renderer's xterm.js from double-responding.
     // This is the ONLY stage that must precede the forward — it derives the
     // renderer-bound copy.
-    let rendererData = data;
-    if (this.host.shouldHandleOscColorQueries && data.includes("\x1b]1")) {
-      rendererData = handleOscColorQueries(data, (response) => {
-        terminal.ptyProcess.write(response);
-      });
-    }
+    const rendererData = this.answerOscColorQueries(data);
 
     // Forward to the renderer before the analysis stages below: they are
     // bookkeeping the user never sees, and on the batcher's synchronous
