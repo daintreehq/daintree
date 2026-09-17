@@ -885,7 +885,12 @@ function DeliveryStatus({
           title={`Sent to ${title}`}
           action={open}
         >
-          {active ? "There's been activity in the terminal since. " : ""}
+          {/* Present tense, and no "since": `agentState` is a reading of the
+              terminal RIGHT NOW, not a comparison against how it looked before
+              the send. "There's been activity since" asserts a chronology
+              nothing here established — a busy classification that simply
+              carried across the send would have told the same story. */}
+          {active ? "The terminal is showing activity. " : ""}
           File changes it saves appear in the preview.
         </InspectorNotice>
       );

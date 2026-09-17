@@ -25,6 +25,31 @@ describe("buildAgentTaskPrompt", () => {
     expect(prompt).toContain(`- Source: <button> at apps/site/${FILE}:6:3`);
   });
 
+  it("separates the user's words from what the builder added with a rule", () => {
+    // The rule: an agent reading the prompt can tell the request from its
+    // context without inferring the boundary from a blank line. Asserted by
+    // position — the instruction is everything above the rule, the builder's
+    // context everything below — so the wording of either half can change
+    // without touching this.
+    const prompt = buildAgentTaskPrompt({
+      instruction: "Make this button say Upgrade",
+      selection: makeSelection(),
+      file: FILE,
+      worktreePath: "/repo",
+      place: null,
+    });
+
+    const lines = prompt.split("\n");
+    const rule = lines.indexOf("---");
+    expect(rule).toBeGreaterThan(0);
+    expect(lines.slice(0, rule).join("\n").trim()).toBe("Make this button say Upgrade");
+    expect(lines.slice(rule + 1).join("\n")).toContain("Daintree Site Builder");
+    // A blank line each side, so it is a Markdown rule and not a setext
+    // underline for the sentence above it.
+    expect(lines[rule - 1]).toBe("");
+    expect(lines[rule + 1]).toBe("");
+  });
+
   it("references files instead of pasting their contents", () => {
     const prompt = buildAgentTaskPrompt({
       instruction: "Make this button say Upgrade",

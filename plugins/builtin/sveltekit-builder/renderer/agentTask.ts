@@ -225,6 +225,11 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
   const lines: string[] = [];
 
   lines.push(context.instruction.trim());
+  // A Markdown rule between what the user wrote and what the builder added, so
+  // an agent reading the prompt can tell the request from its context at a
+  // glance instead of inferring the boundary from a blank line.
+  lines.push("");
+  lines.push("---");
   lines.push("");
   lines.push(
     "Context from the Daintree Site Builder — file references only; read the files for the code:"

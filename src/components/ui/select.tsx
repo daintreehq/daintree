@@ -132,7 +132,10 @@ const SelectTrigger = React.forwardRef<
         "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-1.5 text-sm text-text-primary transition-colors",
         "focus:outline-hidden focus:border-accent-primary",
         "disabled:opacity-50 disabled:cursor-not-allowed",
-        "data-[placeholder]:text-text-muted",
+        // `text-text-secondary`, not `text-muted`: a placeholder is the only
+        // thing naming an unset control, and `text-muted` has no dark-theme
+        // contrast floor (2.22:1 on namib, 2.50:1 on redwoods).
+        "data-[placeholder]:text-text-secondary",
         "[&>span]:line-clamp-1 [&>span]:text-left",
         className
       )}
@@ -327,22 +330,27 @@ const SelectItem = React.forwardRef<
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
         </ItemIndicator>
       </span>
-      {/* `min-w-0` on the text column: as a flex child it otherwise floors at
-          its content's width, so a long label runs out past the popup's padding
-          and is cut by the edge with no ellipsis — a descendant's `truncate`
-          never gets the chance to fire. This only lets the column shrink when
-          something inside it asks to; items that do not truncate are unchanged. */}
+      {/* `min-w-0` on the text column: as a flex child it otherwise takes its
+          content width as a floor (`min-width: auto`), so a long label runs out
+          past the popup's padding and is cut by the edge with no ellipsis, and
+          a descendant's `truncate` never gets the chance to fire.
+
+          It lifts that floor unconditionally — not only where something asks to
+          truncate — so under enough constraint non-truncating content can wrap
+          where it previously overflowed. That is the better failure of the two,
+          and no current consumer is constrained enough to meet it.
+
+          No `flex-1`: the default `flex-shrink: 1` is what does the work here,
+          and filling surplus width buys nothing. No `truncate` on the
+          description either — those are full sentences across the settings tabs
+          and are meant to wrap. */}
       {description ? (
-        // No `truncate` on the description: these are full sentences across the
-        // settings tabs and they are meant to wrap. `min-w-0` alone is enough —
-        // it lets the column shrink so a descendant that DOES ask to truncate
-        // can, without deciding for prose that never asked.
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <span className="flex min-w-0 flex-col gap-0.5">
           <ItemText>{children}</ItemText>
           <span className="text-2xs text-text-secondary">{description}</span>
         </span>
       ) : (
-        <span className="flex min-w-0 flex-1 flex-col">
+        <span className="flex min-w-0 flex-col">
           <ItemText>{children}</ItemText>
         </span>
       )}
