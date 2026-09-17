@@ -92,7 +92,9 @@ afterEach(() => {
   vi.restoreAllMocks();
   _resetPluginRuntimeStoreForTest();
   useDevPreviewToolStore.setState({ activeByPanel: {} });
-  usePanelStore.setState({ panelsById: {} as never });
+  // Both halves: a test that seeds terminals sets `panelIds` too, and leaving
+  // those ids behind hands the next test a composer with phantom destinations.
+  usePanelStore.setState({ panelIds: [], panelsById: {} } as never);
   cleanup();
   __resetInspectorControllersForTests();
   __resetComposerMemoryForTests();
@@ -646,6 +648,113 @@ describe("stale selections", () => {
     await screen.findByText("Select again — the page reloaded");
     await waitFor(() => expect(sendButton().disabled).toBe(true));
     expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
+  });
+
+  it("reports terminal activity without blocking the send, since that reading is a guess", async () => {
+    // The rule: the panel may say what it SAW in the terminal, but a passive
+    // output heuristic must never be the thing that stops a request going out.
+    // Agent state is frequently wrong, and the advice it offers — go and look
+    // at the terminal — cannot clear a reading that is stuck, so enforcing it
+    // stranded a finished request with no way to send. Proof is a busy-looking
+    // agent: the observation shows AND the control still works.
+    usePanelStore.setState({
+      // `panelIds` as well as `panelsById`: the composer's target list walks the
+      // id order, so a terminal present only in the map is invisible to it.
+      panelIds: ["preview-1", "term-busy"],
+      panelsById: {
+        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
+        "term-busy": {
+          id: "term-busy",
+          kind: "terminal",
+          location: "grid",
+          worktreeId: "wt-1",
+          hasPty: true,
+          title: "claude · pricing polish",
+          launchAgentId: "claude",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+      } as never,
+    });
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send().disabled).toBe(false));
+    // And it is surfaced as an observation rather than swallowed.
+    expect(text()).toMatch(/Activity in /);
+  });
+
+  it("headlines a delivery with what was proven, never with a reading of the agent", async () => {
+    // The rule: the receipt's title states the one thing the host can vouch
+    // for — that the request was sent. Anything inferred from terminal output
+    // may appear, but only below it and only named as something observed. The
+    // title used to append "· working" off the same heuristic, which reads as
+    // confirmation that the agent picked the request up.
+    usePanelStore.setState({
+      panelIds: ["preview-1", "term-busy"],
+      panelsById: {
+        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
+        "term-busy": {
+          id: "term-busy",
+          kind: "terminal",
+          location: "grid",
+          worktreeId: "wt-1",
+          hasPty: true,
+          title: "claude · pricing polish",
+          launchAgentId: "claude",
+          detectedAgentId: "claude",
+          agentState: "working",
+        },
+      } as never,
+    });
+    await mountSelected();
+    updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
+      draft: "",
+      delivery: {
+        state: { status: "sent" },
+        title: "claude · pricing polish",
+        terminalId: "term-busy",
+      },
+    });
+    const notice = await screen.findByRole("status");
+    // The notice's headline is its first paragraph; the body follows it.
+    const headline = notice.querySelector("p")?.textContent ?? "";
+    expect(headline).toContain("claude · pricing polish");
+    expect(headline).not.toMatch(/working|activity/i);
+    // And the observation is not suppressed either — it just lives below the
+    // headline, where it reads as something seen rather than something proven.
+    expect(notice.textContent ?? "").toMatch(/activity/i);
+  });
+
+  it("inserts a suggestion's whole instruction, not the short label on its chip", async () => {
+    // The rule: a chip may abbreviate itself to fit, but it must never put
+    // words into the draft that the user could not read before clicking. Label
+    // and prompt are separate for exactly that reason, so the inserted text is
+    // allowed to be longer than the label — never the other way round.
+    await mountSelected();
+    const chips = within(screen.getByRole("group", { name: "Suggestions" })).getAllByRole("button");
+    expect(chips.length).toBeGreaterThan(0);
+    const chip = chips[0]!;
+    const label = chip.textContent?.trim() ?? "";
+    const promised = chip.getAttribute("title") ?? "";
+    expect(promised.length).toBeGreaterThan(0);
+    fireEvent.click(chip);
+    const request = screen.getByRole("textbox", {
+      name: "Request for the agent",
+    }) as HTMLTextAreaElement;
+    await waitFor(() => expect(request.value).toBe(promised));
+    // The chip's own words are a summary of what it sent, never the whole of it
+    // when the instruction says more.
+    expect(request.value.length).toBeGreaterThanOrEqual(label.length);
+  });
+
+  it("names the composer as a group, so it is reachable without a visible heading", async () => {
+    // The rule: removing the visible header must not remove the accessible
+    // grouping. An aria-label on a role-less div is dropped by assistive
+    // technology, so the name has to sit on something with a role.
+    await mountSelected();
+    expect(screen.getByRole("group", { name: "Ask an agent" })).toBeTruthy();
   });
 
   it("won't re-send a request that may already be half-way into the agent's input", async () => {

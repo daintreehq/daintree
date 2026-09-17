@@ -252,8 +252,12 @@ function MappingNotice({
   if (node.mapping === "visual-only" || !node.definition) {
     return (
       <InspectorNotice tone="info" title="Not traced to source">
-        This content is drawn at runtime — by {"{@html}"}, a canvas or a shadow root — so a request
-        about it has no source location to name.
+        {/* What we know is that no source location came back. Content drawn at
+            runtime is the usual reason, offered as the likely one rather than
+            asserted — a missing mapping is not by itself evidence of {@html},
+            a canvas or a shadow root. */}
+        A request about it can't name a file or line. Content drawn at runtime — by {"{@html}"}, a
+        canvas or a shadow root — is the usual reason.
       </InspectorNotice>
     );
   }

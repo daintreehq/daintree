@@ -96,15 +96,20 @@ export function PropertyRow({
   return (
     <div
       className={cn(
-        "grid min-h-7 grid-cols-[64px_minmax(0,1fr)] gap-x-2",
-        align === "center" ? "items-center" : "items-start",
+        // The label column is a luxury of a wide drawer. Below 340px it costs
+        // 72 of the 256px a control has to live in, which is what pushed the
+        // scope segments into an `overflow-hidden` wrapper and took a scope out
+        // of reach at the 280px floor. Narrow, the label sits above its control
+        // and the control gets the whole width.
+        "grid min-h-7 grid-cols-1 gap-x-2 @[340px]/drawer:grid-cols-[64px_minmax(0,1fr)]",
+        align === "center" ? "items-center @[340px]/drawer:items-center" : "items-start",
         className
       )}
     >
       <div
         className={cn(
           "flex min-w-0 items-center gap-1 text-xs text-text-secondary",
-          align === "start" && "min-h-7"
+          align === "start" && "@[340px]/drawer:min-h-7"
         )}
       >
         <Label {...(htmlFor ? { htmlFor } : {})} className="min-w-0 truncate">
