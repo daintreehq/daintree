@@ -6,6 +6,7 @@ vi.mock("electron", () => ({
 }));
 
 import { SitePreviewBridge } from "../SitePreviewBridge.js";
+import { isCdpDomainEnabled } from "../cdp/WebContentsCdpService.js";
 import { __resetCdpLeasesForTests, acquireCdpLease } from "../cdp/WebContentsCdpService.js";
 import { GUEST_PROTOCOL_VERSION } from "../sitePreview/guestProtocol.js";
 import { GUEST_RUNTIME_GLOBAL } from "../sitePreview/guestRuntime.js";
@@ -658,6 +659,45 @@ describe("SitePreviewBridge", () => {
     await shutdown;
     await expect(late).rejects.toThrow(/shutting down/);
     expect(harness.wc.debugger.listenerCount("message")).toBe(0);
+  });
+
+  it("releases a lease acquired after teardown stopped waiting for it", async () => {
+    vi.useFakeTimers();
+    try {
+      let release!: () => void;
+      harness.wc.debugger.gates.set(
+        "Page.enable",
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      );
+      const bound = harness.bridge.bind({
+        projectId: PROJECT_ID,
+        panelId: PANEL_ID,
+        runtimeSource: "",
+        mode: "browse",
+      });
+      await vi.waitFor(() => {
+        expect(harness.wc.debugger.methods()).toContain("Page.enable");
+      });
+
+      // Teardown gives the queued install a bounded wait and moves on.
+      const shutdown = harness.bridge.disposeAll();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await shutdown;
+
+      harness.wc.debugger.gates.delete("Page.enable");
+      release();
+      await bound.catch(() => undefined);
+      await vi.runAllTimersAsync();
+
+      // The acquisition that outran the wait must let go: nothing owns the
+      // binding any more, so nothing may hold the domains on for it.
+      expect(isCdpDomainEnabled(WEB_CONTENTS_ID, "Runtime")).toBe(false);
+      expect(harness.wc.debugger.listenerCount("message")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not install twice for one epoch when a navigation lands mid-install", async () => {

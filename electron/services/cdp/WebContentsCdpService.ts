@@ -35,6 +35,17 @@ export type CdpDomain = "Page" | "Runtime" | "Log";
 const DOMAIN_ORDER: readonly CdpDomain[] = ["Page", "Runtime", "Log"];
 
 /**
+ * Domains switched off when their last holder releases. `Page` is not one of
+ * them: the freeze/unfreeze path in `webContentsLifecycle.ts` and the OAuth
+ * restore in `webview.ts` enable it ad hoc, hold no lease, and rely on it
+ * staying on for the command they send next — and nothing ever disabled it
+ * before this service existed. Enabling an enabled domain is a no-op, so a
+ * later lease pays nothing for the domain being left on; the entry merely
+ * forgets it once its last holder goes.
+ */
+const DISABLED_ON_LAST_RELEASE: ReadonlySet<CdpDomain> = new Set(["Runtime", "Log"]);
+
+/**
  * Ceiling on tracked contexts, so a page spawning frames in a loop cannot grow
  * the snapshot.
  *
@@ -413,6 +424,11 @@ class LeaseImpl implements CdpLease {
     return this.invalidated_;
   }
 
+  /** Dead without a word to the holder; the test reset's way of retiring a handle. */
+  retire(): void {
+    this.invalidated_ = true;
+  }
+
   invalidate(): void {
     if (this.invalidated_) return;
     this.invalidated_ = true;
@@ -454,7 +470,15 @@ class LeaseImpl implements CdpLease {
       for (const domain of [...DOMAIN_ORDER].reverse()) {
         if (!this.domains.includes(domain)) continue;
         const state = domainState(this.entry, domain);
-        if (state.holders === 0) await disableDomain(this.entry, domain);
+        if (state.holders !== 0) continue;
+        if (DISABLED_ON_LAST_RELEASE.has(domain)) {
+          await disableDomain(this.entry, domain);
+        } else if (!state.enablePromise && !state.disablePromise) {
+          // Left on in the guest, forgotten here: the next lease re-sends the
+          // enable, which is a no-op on a domain already on, and a forgotten
+          // domain does not keep the entry — and its listener — alive.
+          state.enabled = false;
+        }
       }
     } finally {
       this.entry.pendingReleases--;
@@ -522,7 +546,10 @@ export async function acquireCdpLease(
 export function __resetCdpLeasesForTests(): void {
   for (const entry of [...entries.values()]) {
     entry.invalidated = true;
+    for (const lease of entry.leases) lease.retire();
     entry.leases.clear();
+    entry.contexts.clear();
+    entry.domains.clear();
     dropEntry(entry);
   }
   entries.clear();

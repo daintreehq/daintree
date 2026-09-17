@@ -676,11 +676,19 @@ export class SitePreviewBridge {
     // the contexts to — which is why the snapshot is read from the lease rather
     // than collected here.
     if (!binding.lease) {
-      binding.lease = await acquireCdpLease(wc, ["Page", "Runtime"], {
+      const lease = await acquireCdpLease(wc, ["Page", "Runtime"], {
         onInvalidated: () => {
           void this.teardown(binding, "debugger-detached").catch(() => undefined);
         },
       });
+      // Teardown waits on this queue only so long. An acquisition that outran
+      // that wait has nothing left to serve, and a lease parked on a torn-down
+      // binding would hold the domains on for good.
+      if (binding.detached || this.closed) {
+        await lease.release().catch(() => undefined);
+        return;
+      }
+      binding.lease = lease;
     }
     // Re-read per install, so the main frame id is refreshed on bind and after
     // every navigation.

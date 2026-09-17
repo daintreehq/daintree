@@ -45,9 +45,9 @@ The specification explicitly permits this substitution: "replacing comment bound
 
 ### What it does not give us
 
-`__svelte_meta` is attached by the **dev** runtime only. A production build has none, which is correct — the builder is a development tool — but it means the supported-baseline check is load-bearing rather than cosmetic.
+`__svelte_meta` is attached by the **dev** runtime only. A production build has none, which is correct — the builder is a development tool — but it means a running dev server is the precondition, not a detail: the guest reports `not-dev-build` when the metadata is missing on a page that looks built, and the panel says so rather than tracing nothing.
 
-It also does not survive an HMR update as an object identity. A Vite update **replaces the DOM nodes**; `__svelte_meta` is correctly re-attached to the new ones, but any node reference the host was holding is dead. Selection is therefore stored as an identity and re-resolved after every document change, never as a node handle. A stale selection goes stale visibly; it is never re-pointed at whatever now occupies the old position.
+It also does not survive an HMR update as an object identity. A Vite update **replaces the DOM nodes**; `__svelte_meta` is correctly re-attached to the new ones, but any node reference the host was holding is dead. Selection is therefore stored as an identity, never as a node handle, and every document change marks it stale; it is proven again only by a fresh selection or by the host asking the page to re-select that identity. A stale selection goes stale visibly; it is never re-pointed at whatever now occupies the old position.
 
 ## Shape
 
@@ -102,7 +102,7 @@ The page is untrusted. It is an application under development and a same-origin 
 
 **The guest reports observations. The host resolves identity.**
 
-A guest message carries the raw `__svelte_meta` it read, geometry, and a runtime occurrence id. It never carries a file path the host will act on, a source range, or a revision. The host takes the reported location, reads the file itself through the scope-contained plugin filesystem API, parses it, and derives the range. The worst a lying page can do is point the inspector at the wrong element _of its own project_; it cannot address another file. What is host-derived is what matters: the file, the range and the revision come from the host's own contained read, so no message can make the panel or the prompt cite source the host did not read. Other fields stay observations and are shown as such — the element's label, the ancestry chain and the count of copies sharing a location are the page's word, and a page that lies about them describes its own elements wrongly. Sending a request to an agent comes from a trusted UI action, never from a message.
+A guest message carries the raw `__svelte_meta` it read, geometry, and a runtime occurrence id. It never carries a file path the host will act on, a source range, or a revision. The host takes the reported location, reads the file itself through the scope-contained plugin filesystem API, parses it, and derives the range. The worst a lying page can do is point the inspector at the wrong element _of its own project_; it cannot address another file. What is host-derived is what matters: the file, the range and the revision come from the host's own contained read, so no message can make the prompt's source references cite bytes the host did not read. Other fields stay observations and are shown as such — the element's label, the ancestry chain the trail's crumbs are drawn from (their paths included, until a crumb is resolved to a definition the host read), and the count of copies sharing a location are the page's word, and a page that lies about them describes its own elements wrongly. Sending a request to an agent comes from a trusted UI action, never from a message.
 
 Every envelope is validated on five fields before its payload is looked at — protocol version, session, document epoch, sequence, and size — so a stale runtime from a previous binding, a replayed message, or an oversized body is dropped without interpretation.
 

@@ -69,7 +69,8 @@ export class SourceTracker {
     if (this.files.size >= MAX_TRACKED_FILES) return null;
 
     const directory = path.dirname(absolutePath);
-    if (!this.directories.has(directory)) {
+    const watched = this.directories.get(directory);
+    if (!watched) {
       if (this.directories.size >= MAX_WATCHED_DIRECTORIES) return null;
       this.directories.set(directory, this.watch(directory));
     }
@@ -80,6 +81,16 @@ export class SourceTracker {
       recheckQueued: false,
     };
     this.files.set(absolutePath, file);
+    // A new watcher reconciles every file in its directory once it is wired;
+    // a file joining a directory already watched gets no such pass, and a
+    // change that landed between its read and this registration would go
+    // unreported until the next event. Reconcile it once, after the caller has
+    // recorded the revision it read.
+    if (watched) {
+      void watched.then((dispose) => {
+        if (dispose && this.files.get(absolutePath) === file) void this.recheck(absolutePath, file);
+      });
+    }
     return file;
   }
 
