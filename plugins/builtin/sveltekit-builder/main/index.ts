@@ -97,14 +97,21 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   const lock = new KeyedLock();
   const reader = projectReader(host.fs);
 
-  const post = (channel: string, payload: unknown): void => {
-    void host.postToPanel(channel, payload, null).catch((error: unknown) => {
+  // Every push names the preview panel it is about: the workspace's owner
+  // subscribes per panel, so a builder on another preview — or in another
+  // project's window — never receives it and never has to filter it out.
+  const post = (channel: string, payload: unknown, previewPanelId: string): void => {
+    void host.postToPanel(channel, payload, previewPanelId).catch((error: unknown) => {
       host.logger.warn("site-builder push failed", { channel, error: String(error) });
     });
   };
 
-  const warnIssue = (code: string, message: string): void => {
-    post(PUSH_CHANNELS.issue, IssuePushSchema.parse({ severity: "warning", code, message }));
+  const warnIssue = (code: string, message: string, previewPanelId: string): void => {
+    post(
+      PUSH_CHANNELS.issue,
+      IssuePushSchema.parse({ severity: "warning", code, message }),
+      previewPanelId
+    );
   };
 
   // Declared in the manifest so the palette lists it before activation; the
@@ -153,7 +160,8 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
         if (!scan.inspection) return { status: "no-app" as const };
         warnIssue(
           "APP_SCAN_TRUNCATED",
-          "This worktree is too large to scan completely. Opened the one SvelteKit app found; pick another app root if this is the wrong one."
+          "This worktree is too large to scan completely. Opened the one SvelteKit app found; pick another app root if this is the wrong one.",
+          args.previewPanelId
         );
       }
 
@@ -163,6 +171,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
         id,
         projectId: args.projectId,
         worktreeId: args.worktreeId,
+        previewPanelId: args.previewPanelId,
         worktreePath,
         appRoot,
         support,
@@ -172,7 +181,11 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
           fs: host.fs,
           workspaceSessionId: id,
           push: (payload) =>
-            post(PUSH_CHANNELS.sourceChanged, SourceChangedPushSchema.parse(payload)),
+            post(
+              PUSH_CHANNELS.sourceChanged,
+              SourceChangedPushSchema.parse(payload),
+              args.previewPanelId
+            ),
           warn: (message, detail) => host.logger.warn(message, detail),
         }),
         edits: new Map(),

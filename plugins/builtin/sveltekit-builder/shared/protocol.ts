@@ -289,6 +289,12 @@ export const WorkspaceOpenArgsSchema = z
     worktreePath: z.string().min(1),
     /** Omit to auto-detect; required when the worktree holds more than one app. */
     appRoot: z.string().min(1).optional(),
+    /**
+     * The dev preview panel the workspace serves. Pushes about the workspace —
+     * a source file changing under it, a main-side issue — go to this panel
+     * alone, so a builder on another preview never sees them.
+     */
+    previewPanelId: z.string().min(1).max(256),
   })
   .strict();
 export type WorkspaceOpenArgs = z.infer<typeof WorkspaceOpenArgsSchema>;

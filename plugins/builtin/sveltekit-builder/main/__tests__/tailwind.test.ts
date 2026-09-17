@@ -31,6 +31,7 @@ async function open(css: string | null) {
     worktreeId: "w1",
     worktreePath: sandbox.worktree,
     appRoot: sandbox.appRoot,
+    previewPanelId: "preview-1",
   });
   const { workspaceSessionId } = opened;
   return {

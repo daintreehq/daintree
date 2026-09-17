@@ -18,7 +18,13 @@ async function open() {
   await activate(test.host);
   const opened = await test.invoke<{ status: string; workspaceSessionId: string }>(
     CHANNELS.workspaceOpen,
-    { projectId: "p1", worktreeId: "w1", worktreePath: sandbox.worktree, appRoot: sandbox.appRoot }
+    {
+      projectId: "p1",
+      worktreeId: "w1",
+      worktreePath: sandbox.worktree,
+      appRoot: sandbox.appRoot,
+      previewPanelId: "preview-1",
+    }
   );
   expect(opened.status).toBe("ready");
   const resolve = (callSites: Array<{ file: string; line: number; column: number }>) =>

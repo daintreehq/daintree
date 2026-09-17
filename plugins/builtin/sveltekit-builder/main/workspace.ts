@@ -14,6 +14,8 @@ export interface Workspace {
   readonly id: string;
   readonly projectId: string;
   readonly worktreeId: string;
+  /** The dev preview panel whose builder opened this workspace; its pushes go there. */
+  readonly previewPanelId: string;
   readonly worktreePath: string;
   readonly appRoot: string;
   readonly support: SupportVerdict;
