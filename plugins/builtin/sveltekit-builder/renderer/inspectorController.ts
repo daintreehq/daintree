@@ -66,6 +66,11 @@ export interface SitePreviewApi {
   }): Promise<SitePreviewBindingState>;
   detach(request: { sessionId: string }): Promise<void>;
   setMode(request: { sessionId: string; mode: SitePreviewMode }): Promise<SitePreviewBindingState>;
+  /** Select the element compiled from `loc` in the page; false when it is not there. */
+  reselect(request: {
+    sessionId: string;
+    loc: { file: string; line: number; column: number };
+  }): Promise<boolean>;
   getState(request: { sessionId: string }): Promise<SitePreviewBindingState | null>;
   onEvent(callback: (payload: SitePreviewPushPayload) => void): () => void;
 }
@@ -188,6 +193,13 @@ export interface InspectorState {
   issue: InspectorIssue | null;
   /** A write or undo is in flight. Independent of selection, which can change under it. */
   mutating: boolean;
+  /**
+   * The page is being asked to select the edited element again, so a fresh
+   * observation can re-prove it. The selection is stale meanwhile — its ranges
+   * are spent — but the panel need not say so for the hundred milliseconds it
+   * takes the page to answer.
+   */
+  reselecting: boolean;
 }
 
 export type ClassCompletion =
@@ -207,6 +219,7 @@ export const INITIAL_INSPECTOR_STATE: InspectorState = {
   receipt: null,
   issue: null,
   mutating: false,
+  reselecting: false,
 };
 
 const MAX_BUFFERED_EVENTS = 64;
@@ -217,6 +230,8 @@ const REATTACH_REASONS: ReadonlySet<SitePreviewDetachReason> = new Set([
   "debugger-detached",
 ]);
 const REATTACH_DELAY_MS = 300;
+/** How long the page gets to answer a reselect before the stale notice shows after all. */
+const RESELECT_SETTLE_MS = 1500;
 /** About two minutes in all: long enough for a cold dev server to serve its first page. */
 const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000, 30000, 60000];
 
@@ -446,6 +461,15 @@ export class InspectorController {
     void this.openWorkspace();
   }
 
+  /**
+   * Where the selection is written, for keeping it through this panel's own
+   * writes and the reload they cause. Updated from every proven resolution;
+   * consulted only when a write is pending a refresh.
+   */
+  private continuityLoc: { file: string; line: number; column: number } | null = null;
+  private reselectOnReady = false;
+  private reselectTimer: ReturnType<typeof setTimeout> | null = null;
+
   async openWorkspace(appRoot: string | undefined = this.chosenAppRoot): Promise<void> {
     this.chosenAppRoot = appRoot;
     const { projectId, worktreeId, worktreePath } = this.context;
@@ -523,6 +547,9 @@ export class InspectorController {
 
   private closeWorkspace(): void {
     this.workspaceRequest++;
+    this.continuityLoc = null;
+    this.reselectOnReady = false;
+    this.clearReselectTimer();
     const workspace = this.state.workspace;
     if (workspace.status === "ready") this.releaseWorkspace(workspace.workspaceSessionId);
     // Source identity and undo both belong to the workspace that minted them.
@@ -786,6 +813,13 @@ export class InspectorController {
     const patch: Partial<InspectorState> = { epoch };
     if (this.state.page && this.state.page.epoch < epoch) patch.page = null;
     const selection = this.state.selection;
+    const receipt = this.state.receipt;
+    const ourReload =
+      receipt !== null &&
+      !receipt.previewRefreshed &&
+      receipt.epochAtWrite !== null &&
+      epoch > receipt.epochAtWrite &&
+      this.continuityLoc !== null;
     if (
       (selection.status === "ready" &&
         selection.selection.documentEpoch < epoch &&
@@ -795,6 +829,13 @@ export class InspectorController {
       Object.assign(patch, this.staleSelectionPatch("document-changed"));
     } else if (selection.status === "resolving" && selection.epoch < epoch) {
       patch.selection = { status: "lost" };
+    }
+    // The reload this panel's own write caused. The ranges are spent, so the
+    // selection is stale — but the element is still there in the new
+    // document, and the page can be asked for it as soon as it has one.
+    if (ourReload && (selection.status === "ready" || selection.status === "observed")) {
+      patch.reselecting = true;
+      this.reselectOnReady = true;
     }
     if (this.state.issue) patch.issue = null;
     this.update(patch);
@@ -826,6 +867,10 @@ export class InspectorController {
           patch.receipt = { ...receipt, previewRefreshed: true };
         }
         this.update(patch);
+        if (this.reselectOnReady) {
+          this.reselectOnReady = false;
+          void this.reselectNow();
+        }
         return;
       }
       case "selectionChanged":
@@ -897,11 +942,23 @@ export class InspectorController {
         ? [worktreeRelative(workspace.appRoot, this.context.worktreePath, node.loc.file)]
         : []
     );
-    if (clickedFiles.some((file) => file !== null && this.changedRecently(file))) {
+    // A reselect this controller asked for is exempt: it names the exact
+    // location of the last proof, main re-proves it against the new bytes, and
+    // the answer is checked below to still be the same element.
+    if (
+      !this.state.reselecting &&
+      clickedFiles.some((file) => file !== null && this.changedRecently(file))
+    ) {
       this.update({ ...base, selection: { status: "settling" } });
       return;
     }
 
+    // What a reselect would be continuing. Read before the resolving state
+    // replaces it, and put back if the re-proof turns out to name something else.
+    const priorReady =
+      this.state.reselecting && this.state.selection.status === "ready"
+        ? this.state.selection
+        : null;
     this.update({ ...base, selection: { status: "resolving", epoch, requestId: request } });
     let raw: unknown;
     try {
@@ -954,10 +1011,32 @@ export class InspectorController {
       this.update({ selection: { status: "lost" } });
       return;
     }
-    if (file !== null && this.changedRecently(file)) {
+    // Same exemption as before the resolve: a reselect this controller asked
+    // for is answered against the new bytes by main, and checked below.
+    if (file !== null && this.changedRecently(file) && !this.state.reselecting) {
       this.update({ selection: { status: "settling" } });
       return;
     }
+    // A re-proof must be of the same element: an edit that inserted lines
+    // above it can make the old location name a different node in the new
+    // source. A different tag, or a different file, is not a continuation —
+    // the stale state stands and the user selects again.
+    if (priorReady !== null) {
+      const before = priorReady.selection.nodes[0]?.definition;
+      const after = selection.nodes[0]?.definition;
+      if (
+        before &&
+        after &&
+        (before.tagName !== after.tagName || before.location.file !== after.location.file)
+      ) {
+        this.clearReselectTimer();
+        this.update({ selection: priorReady, reselecting: false });
+        return;
+      }
+    }
+    const location = selection.nodes[0]?.definition?.location ?? null;
+    this.continuityLoc = location ? { ...location } : null;
+    this.clearReselectTimer();
     this.update({
       selection: {
         status: "ready",
@@ -969,6 +1048,7 @@ export class InspectorController {
         definitions: null,
         revisions: null,
       },
+      reselecting: false,
     });
     void this.resolveDefinitions(selection, component);
   }
@@ -1133,6 +1213,43 @@ export class InspectorController {
   private isSelection(selectionId: string): boolean {
     const selection = this.state.selection;
     return selection.status === "ready" && selection.selection.selectionId === selectionId;
+  }
+
+  /**
+   * Ask the page for the element at the last proven location. A true answer
+   * means a fresh `selectionChanged` is on its way and `handleSelection` will
+   * re-prove it; anything else leaves the stale state — and its notice — as it
+   * is. A guard timer does the same if the page goes quiet.
+   */
+  private async reselectNow(): Promise<void> {
+    const loc = this.continuityLoc;
+    const binding = this.state.binding;
+    if (loc === null || binding.status !== "bound") {
+      this.update({ reselecting: false });
+      return;
+    }
+    this.clearReselectTimer();
+    this.reselectTimer = setTimeout(() => {
+      this.reselectTimer = null;
+      if (this.state.reselecting) this.update({ reselecting: false });
+    }, RESELECT_SETTLE_MS);
+    let found: boolean;
+    try {
+      found = await this.deps.sitePreview.reselect({ sessionId: binding.sessionId, loc });
+    } catch {
+      found = false;
+    }
+    if (!found) {
+      this.clearReselectTimer();
+      this.update({ reselecting: false });
+    }
+  }
+
+  private clearReselectTimer(): void {
+    if (this.reselectTimer !== null) {
+      clearTimeout(this.reselectTimer);
+      this.reselectTimer = null;
+    }
   }
 
   private staleSelectionPatch(reason: StaleReason): Partial<InspectorState> {
@@ -1333,7 +1450,11 @@ export class InspectorController {
           ...(stillSelected || this.selectionFile() === result.receipt.file
             ? this.staleSelectionPatch("edited")
             : {}),
+          // …and the page is asked for the element again, so main can re-prove
+          // it. The stale patch above stands until that proof arrives.
+          reselecting: stillSelected && this.continuityLoc !== null,
         });
+        if (stillSelected && this.continuityLoc !== null) void this.reselectNow();
         return true;
       case "no-op":
         this.update({ edit: stillSelected ? { status: "no-op", surface } : { status: "idle" } });
@@ -1506,6 +1627,7 @@ export class InspectorController {
   }
 
   dispose(): void {
+    this.clearReselectTimer();
     if (this.disposed) return;
     this.clearReattach();
     this.clearConnectRetry();

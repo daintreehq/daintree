@@ -41,9 +41,24 @@ export interface GuestTransport {
  * What the host drives after injection. Everything is synchronous: the host
  * calls these over `Runtime.evaluate`, and a promise would cost a round trip.
  */
+/** A compiled source location, as `__svelte_meta.loc` carries it. */
+export interface GuestSourceLoc {
+  file: string;
+  line: number;
+  column: number;
+}
+
 export interface GuestRuntimeHandle {
   setMode(mode: GuestMode): void;
   getMode(): GuestMode;
+  /**
+   * Select the element compiled from `loc`, as a click on it would: the
+   * overlay moves and a `selectionChanged` observation goes out, so the host
+   * re-resolves it with fresh proof. Returns false — and changes nothing —
+   * when no such element is in the document. The host uses this to keep a
+   * selection through its own write and the reload that follows.
+   */
+  reselect(loc: GuestSourceLoc): boolean;
   /** Repaint the overlay now, e.g. after a host-side zoom or fit change. */
   refresh(): void;
   /**

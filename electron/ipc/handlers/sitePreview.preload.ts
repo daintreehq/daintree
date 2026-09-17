@@ -5,6 +5,7 @@ export const SITE_PREVIEW_METHOD_CHANNELS = {
   bind: "site-preview:bind",
   detach: "site-preview:detach",
   setMode: "site-preview:set-mode",
+  reselect: "site-preview:reselect",
   getState: "site-preview:get-state",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 

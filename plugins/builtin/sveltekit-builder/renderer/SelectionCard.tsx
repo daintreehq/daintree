@@ -64,17 +64,20 @@ export function SelectionCard({
 export function SelectionIdentity({
   selection,
   worktreePath = null,
+  reselecting = false,
 }: {
   selection: ReadySelection;
   /** Needed only for Open in editor, which wants an absolute path. */
   worktreePath?: string | null;
+  /** The page is re-observing the element; the stale notice waits for its answer. */
+  reselecting?: boolean;
 }) {
   const nodes = selection.selection.nodes;
   const node = nodes[0];
   const { copy, copiedText } = useCopyWithFeedback({ announcement: "Path copied" });
   if (!node) return null;
   const definition = node.definition;
-  const stale = selection.stale ? STALE_COPY[selection.stale] : null;
+  const stale = selection.stale && !reselecting ? STALE_COPY[selection.stale] : null;
   // A component picked on the page is named as the component, with the element
   // it was reached through left to the trail below.
   const picked =

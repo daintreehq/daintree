@@ -373,7 +373,11 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
           scrolls it away. */}
       {selection.status === "ready" ? (
         <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3">
-          <SelectionIdentity selection={selection} worktreePath={props.worktreePath} />
+          <SelectionIdentity
+            selection={selection}
+            worktreePath={props.worktreePath}
+            reselecting={state.reselecting}
+          />
         </div>
       ) : selection.status === "resolving" ? (
         <ResolvingHeader />

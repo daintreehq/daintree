@@ -186,6 +186,10 @@ export function createPreviewHost() {
     },
     detach: async () => undefined,
     setMode: async (request: { mode: SitePreviewMode }) => state("preview-1", request.mode),
+    reselect: async (request: { loc: SiteGuestNodeObservation["loc"] }) => {
+      setTimeout(() => host.select(host.currentEpoch, [{ ...OBSERVATION, loc: request.loc }]), 0);
+      return true;
+    },
     getState: async () => null,
     onEvent: (callback: (payload: SitePreviewPushPayload) => void) => {
       previewListeners.add(callback);
@@ -264,6 +268,7 @@ export function createPreviewHost() {
     plugin: { invoke, on },
     handlers,
     control,
+    currentEpoch: 0,
     pushPreview(payload: SitePreviewPushPayload) {
       for (const listener of [...previewListeners]) listener(payload);
     },
@@ -272,6 +277,7 @@ export function createPreviewHost() {
       for (const listener of [...(pluginListeners.get(channel) ?? [])]) listener(payload);
     },
     documentReady(epoch: number) {
+      host.currentEpoch = epoch;
       host.pushPreview({
         kind: "guest-event",
         sessionId: "session-1",
