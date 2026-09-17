@@ -8,19 +8,12 @@ import { saveCurrentProjectSettings } from "../helpers/projectSettings";
 import { getGridPanelIds } from "../helpers/panels";
 import { fakeAgentEnv, ptyWrite } from "../helpers/fakeAgent";
 import { SEL } from "../helpers/selectors";
-import { T_MEDIUM } from "../helpers/timeouts";
-import {
-  CARD_FILE,
-  createSvelteKitProject,
-  PAGE_FILE,
-  PAGE_SOURCE,
-} from "./helpers/sveltekitProject";
+import { CARD_FILE, createSvelteKitProject, PAGE_FILE } from "./helpers/sveltekitProject";
 import { installSiteAgent } from "./helpers/siteAgent";
 
 const PLUGIN_ID = "daintree.sveltekit-builder";
 const TOGGLE_ACTION = `${PLUGIN_ID}.toggle-builder`;
 const TOGGLE_TITLE = "Toggle Site Builder";
-const HEADING_CLASSES = 'class="text-4xl font-bold"';
 const AGENT_CLASSES = "bg-indigo-600 text-white";
 
 // A cold Vite start compiles SvelteKit and Tailwind before the first byte.
@@ -164,8 +157,6 @@ async function selectInPreview(page: Page, selector: string): Promise<void> {
     .toContain(`${PAGE_FILE}:2`);
 }
 
-const readPage = () => readFileSync(path.join(projectDir, ...PAGE_FILE.split("/")), "utf8");
-
 /** The dev preview panel with the Site Builder switched on: its strip and drawer. */
 function inspector(page: Page) {
   return page
@@ -177,8 +168,9 @@ function inspector(page: Page) {
  * The SvelteKit Site Builder against a real SvelteKit 2 / Svelte 5 / Tailwind 4
  * dev server, through the real app: enable the built-in, switch it on from the
  * plugin tray so it starts the site in a dev preview, toggle it from the
- * preview's own toolbar, point at an element, edit its classes on disk, undo,
- * then hand the element to an agent terminal and watch the site change.
+ * preview's own toolbar, point at an element, walk up to the component that
+ * drew it, then hand that component to an agent terminal and watch the site
+ * change.
  *
  * Every step is its own test in a serial block, so a failure names the first
  * link in the chain that broke instead of timing out at the end.
@@ -303,7 +295,7 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     await expect(toggle).toHaveAttribute("aria-pressed", "false", { timeout: PLUGIN_TIMEOUT });
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
-    await expect(strip.getByText("Click an element to edit it or ask an agent")).toBeVisible({
+    await expect(strip.getByText("Click an element to ask an agent about it")).toBeVisible({
       timeout: PLUGIN_TIMEOUT,
     });
     await expect(strip.getByRole("button", { name: "Select" })).toHaveAttribute(
@@ -325,10 +317,9 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     await expect(details.getByRole("region", { name: "Selected element" })).toContainText(
       `${PAGE_FILE}:2`
     );
-    // Open by default; opened here only if a remembered preference folded it.
-    const edits = panel.getByRole("button", { name: "Edit directly" });
-    if ((await edits.getAttribute("aria-expanded")) !== "true") await edits.click();
-    await expect(panel.getByRole("list", { name: "Classes" })).toContainText("text-4xl");
+    // And the composer is right there, unasked: the panel's one route is never
+    // behind a disclosure, so a traced element is immediately sendable.
+    await expect(panel.getByRole("textbox", { name: "Request for the agent" })).toBeVisible();
   });
 
   test("Option+Up selects the component that drew an element", async () => {
@@ -350,31 +341,9 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     await expect(scope).toHaveAttribute("aria-pressed", "true");
     await window.screenshot({ path: test.info().outputPath("component-selected.png") });
 
-    // Back to the heading for the edit steps.
+    // Back to the heading, so the next test starts from an element selection.
     await selectInPreview(window, "h1");
     await window.screenshot({ path: test.info().outputPath("element-selected.png") });
-  });
-
-  test("adding a class writes it to the component source", async () => {
-    const { window } = ctx;
-    const panel = inspector(window);
-    const input = panel.getByRole("combobox", { name: "Add a class" });
-    await input.fill("underline");
-    await input.press("Enter");
-
-    await expect
-      .poll(readPage, { timeout: PLUGIN_TIMEOUT })
-      .toBe(PAGE_SOURCE.replace(HEADING_CLASSES, 'class="text-4xl font-bold underline"'));
-    await expect(panel.getByRole("region", { name: "Last change" })).toBeVisible({
-      timeout: T_MEDIUM,
-    });
-  });
-
-  test("undo restores the original bytes", async () => {
-    const { window } = ctx;
-    const panel = inspector(window);
-    await panel.getByRole("button", { name: "Undo" }).click();
-    await expect.poll(readPage, { timeout: PLUGIN_TIMEOUT }).toBe(PAGE_SOURCE);
   });
 
   test("a new Claude session restyles the selected component on the live page", async () => {
@@ -390,9 +359,9 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     const before = await cardBackgrounds();
     expect(before).toHaveLength(3);
 
-    // Pick the FeatureCard component, the way a user would. The undo just
-    // before this reloads the page, and a pick made before that update lands
-    // is dropped with the node it named — so pick until the page has settled.
+    // Pick the FeatureCard component, the way a user would. A pick made before
+    // the page has settled is dropped with the node it named, so pick until it
+    // sticks.
     const identity = window
       .getByRole("complementary", { name: "Site Builder details" })
       .getByRole("region", { name: "Selected element" });

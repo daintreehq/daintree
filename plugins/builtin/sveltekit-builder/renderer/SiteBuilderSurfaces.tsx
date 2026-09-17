@@ -1,11 +1,4 @@
-import {
-  useEffect,
-  useRef,
-  useState,
-  useSyncExternalStore,
-  type ComponentType,
-  type ReactNode,
-} from "react";
+import { useEffect, useRef, useSyncExternalStore, type ComponentType, type ReactNode } from "react";
 import {
   AlertTriangle,
   ChevronRight,
@@ -15,8 +8,6 @@ import {
   MousePointer2,
   PanelRightClose,
   PanelRightOpen,
-  Pencil,
-  Sparkles,
   SquareDashedMousePointer,
   Unplug,
   X,
@@ -46,9 +37,8 @@ import {
   type InspectorState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
-import { InspectorDisclosure, PropertyRow, SectionHeader } from "./InspectorSection.js";
-import { SelectionEdits, SelectionIdentity, type SelectionActions } from "./SelectionCard.js";
-import { ReceiptView } from "./ReceiptView.js";
+import { PropertyRow, SectionHeader } from "./InspectorSection.js";
+import { SelectionIdentity } from "./SelectionCard.js";
 import { AgentComposer } from "./AgentComposer.js";
 import {
   composerMemoryKey,
@@ -106,19 +96,6 @@ function useBuilder(props: DevPreviewToolSurfaceProps): {
 
 const subscribeNothing = (): (() => void) => () => {};
 const initialSnapshot = (): InspectorState => INITIAL_INSPECTOR_STATE;
-
-function actionsFor(controller: InspectorController): SelectionActions {
-  return {
-    setText: (selectionId, text) => void controller.setText(selectionId, text),
-    addClasses: (selectionId, tokens) => controller.addClasses(selectionId, tokens),
-    removeClass: (selectionId, token) => void controller.removeClass(selectionId, token),
-    completeClasses: (query) => controller.completeClasses(query),
-    describeClass: (token) => controller.describeClass(token),
-    replaceClasses: (selectionId, remove, add) =>
-      controller.replaceClasses(selectionId, remove, add),
-    classConflicts: (existing, candidates) => controller.classConflicts(existing, candidates),
-  };
-}
 
 /** The strip under the browser toolbar: mode, what is selected, and close. */
 export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
@@ -333,12 +310,11 @@ function StripStatus({
         </StripMessage>
       );
     }
-    const previewOnly = workspace.status === "ready" && workspace.support.level === "preview-only";
+    // One sentence, whatever the project's Svelte version: what the builder
+    // offers no longer depends on whether the source can be written to here.
     return (
       <StripMessage icon={SquareDashedMousePointer}>
-        {previewOnly
-          ? "Click an element to ask an agent about it"
-          : "Click an element to edit it or ask an agent"}
+        Click an element to ask an agent about it
       </StripMessage>
     );
   }
@@ -421,19 +397,6 @@ function StripTrail({
  */
 export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
   const { controller, state } = useBuilder(props);
-  // Open by default, and held here rather than per-selection so picking the next
-  // element doesn't fold away the editors.
-  //
-  // Direct editing is one of the two answers to "can I change this" — the other
-  // being the composer below it — and the user in the tight loop (spot it,
-  // click it, fix it) is reaching for it dozens of times a session. Starting it
-  // collapsed made the cheapest route the one that costs an extra click, while
-  // the empty composer held ~280px above it. Collapsing is a preference the
-  // user expresses once and this remembers.
-  const [editsOpen, setEditsOpen] = useState(true);
-  // Its peer. Two section headers of the same rank, one with a chevron and one
-  // without, left the reader guessing which of them folds.
-  const [agentOpen, setAgentOpen] = useState(true);
   const memoryKey = composerMemoryKey(props.panelId, props.worktreeId);
   // A draft or an agent request outlives the selection it was about; keep
   // both reachable.
@@ -446,7 +409,6 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
     composer.delivery !== null ||
     composer.draft.trim() !== "" ||
     selection.status !== "none" ||
-    state.receipt !== null ||
     state.issue !== null ||
     workspaceNotice;
   if (!open || collapsed) return null;
@@ -473,16 +435,11 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
         <ResolvingHeader />
       ) : null}
 
-      {/* Under the pinned identity the first section's header sits 4px below
-          the rule, as "Ask an agent" does below its own; the notices that lead
-          the other states keep the full inset. */}
-      <ScrollShadow
-        className="min-h-0 flex-1"
-        scrollClassName={cn(
-          "flex flex-col gap-3 px-3 pb-3",
-          selection.status === "ready" ? "pt-1" : "pt-3"
-        )}
-      >
+      {/* One inset in every state. The two used to differ because a disclosure
+          header carried its own padding under the rule; with the composer
+          starting directly there, a 4px gap read as the panel touching its own
+          divider. */}
+      <ScrollShadow className="min-h-0 flex-1" scrollClassName="flex flex-col gap-3 p-3">
         {state.issue ? (
           <InspectorNotice
             tone={state.issue.severity}
@@ -498,61 +455,26 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
         <WorkspaceStatus state={state} controller={controller} worktreePath={props.worktreePath} />
         {selection.status === "ready" ? null : <SelectionBody state={state} />}
 
-        {/* The two routes, as peers. Direct editing used to sit below the composer
-          inside a native `details`, which made a two-keystroke fix a
-          disclose-and-scroll operation and put the editors below the fold on any
-          laptop viewport — while the empty composer held ~280px above them. They
-          answer the same question ("can I change it, and how"), so they get the
-          same weight and the same section grammar. */}
-        {selection.status === "ready" ? (
-          <InspectorDisclosure
-            title="Edit directly"
-            icon={Pencil}
-            open={editsOpen}
-            onOpenChange={setEditsOpen}
-          >
-            <SelectionEdits state={state} selection={selection} actions={actionsFor(controller)} />
-          </InspectorDisclosure>
-        ) : null}
-
+        {/* The panel's one route, and therefore not a section of it. There is no
+          header, no glyph and no disclosure: this plugin exists to hand a
+          selection to an agent, so the composer is what the drawer *is* below
+          its identity. A header would have named the obvious and spent 32px of
+          a 360px panel doing it; a disclosure would have let the user fold away
+          the only thing here. `aria-label` on the composer keeps the grouping
+          for assistive technology without drawing one. */}
         {state.workspace.status === "ready" &&
         (selection.status === "ready" ||
           composer.draft.trim() !== "" ||
           composer.delivery !== null) ? (
-          <InspectorDisclosure
-            title="Ask an agent"
-            icon={Sparkles}
-            open={agentOpen}
-            onOpenChange={setAgentOpen}
-            // Full-bleed like the header's rule: an inset hairline beside a
-            // full-width one was two divider treatments in one panel.
-            className={
-              selection.status === "ready"
-                ? "-mx-3 border-t border-border-subtle px-3 pt-1"
-                : undefined
-            }
-          >
-            <AgentComposer
-              memoryKey={memoryKey}
-              controller={controller}
-              selection={selection}
-              worktreeId={props.worktreeId}
-              worktreePath={props.worktreePath}
-            />
-          </InspectorDisclosure>
+          <AgentComposer
+            memoryKey={memoryKey}
+            controller={controller}
+            selection={selection}
+            worktreeId={props.worktreeId}
+            worktreePath={props.worktreePath}
+          />
         ) : null}
       </ScrollShadow>
-
-      {/* Pinned to the foot of the drawer, not trailing the content: a write and
-          its Undo land in the same place every time. `mt-auto` only
-          bottom-aligned it when the content happened to be short, so after any
-          real edit the receipt was below the fold — the one control the user
-          most needs to reach in a hurry. */}
-      {state.receipt ? (
-        <div className="shrink-0 border-t border-border-subtle px-3 pb-3 pt-2">
-          <ReceiptView state={state.receipt} onUndo={() => void controller.undo()} />
-        </div>
-      ) : null}
     </aside>
   );
 }
@@ -561,23 +483,13 @@ function workspaceNeedsAttention(state: InspectorState): boolean {
   const workspace = state.workspace;
   // Several apps keep the drawer open for the switcher: choosing the wrong one
   // must stay fixable before anything is selected, and after a switch clears it.
-  if (workspace.status === "ready") {
-    return capabilityGaps(workspace) !== null || workspace.appRoots.length > 1;
-  }
+  //
+  // A ready workspace has nothing else to report. It used to also raise whether
+  // direct editing and class completion were available here — capabilities the
+  // panel no longer offers, so their absence is no longer a gap the user can do
+  // anything about, and saying so was a warning about a road that isn't there.
+  if (workspace.status === "ready") return workspace.appRoots.length > 1;
   return workspace.status !== "idle" && workspace.status !== "opening";
-}
-
-/**
- * What a ready workspace can't do, as main reported it: direct editing from the
- * version verdict, class awareness from the Tailwind loader. A site that
- * doesn't use Tailwind is missing nothing, so it has no gap to show.
- */
-function capabilityGaps(workspace: Extract<InspectorState["workspace"], { status: "ready" }>) {
-  const editing = workspace.support.level === "full" ? null : workspace.support.reasons;
-  const tailwind = workspace.tailwind;
-  const suggestions =
-    tailwind.status === "unavailable" && !tailwind.unused ? [tailwind.reason] : null;
-  return editing === null && suggestions === null ? null : { editing, suggestions };
 }
 
 function WorkspaceStatus({
@@ -591,13 +503,7 @@ function WorkspaceStatus({
 }) {
   const workspace = state.workspace;
   if (workspace.status === "idle" || workspace.status === "opening") return null;
-  if (
-    workspace.status === "ready" &&
-    capabilityGaps(workspace) === null &&
-    workspace.appRoots.length < 2
-  ) {
-    return null;
-  }
+  if (workspace.status === "ready" && workspace.appRoots.length < 2) return null;
   // One surface for everything about the project rather than the element, so
   // a setup problem and an element-level limitation never look like the same
   // kind of notice sat in the same column.
@@ -699,14 +605,10 @@ function SiteSourceBody({
         </InspectorNotice>
       );
     case "ready": {
-      const gaps = capabilityGaps(workspace);
-      if (gaps === null && workspace.appRoots.length < 2) return null;
-      // Suggestions and direct editing are independent capabilities, reported
-      // separately by main. Each row says whether it works here and why not,
-      // and whatever still works is still offered.
+      if (workspace.appRoots.length < 2) return null;
       return (
         <div className="flex flex-col gap-1">
-          {workspace.appRoots.length > 1 ? (
+          {
             // Choosing the wrong app has to be recoverable from where the
             // choice shows, not by closing the builder to be asked again.
             <PropertyRow label="App">
@@ -737,69 +639,11 @@ function SiteSourceBody({
                 </SelectContent>
               </Select>
             </PropertyRow>
-          ) : null}
-          {gaps === null ? null : (
-            <>
-              <CapabilityRow
-                label="Direct editing"
-                available={gaps.editing === null}
-                reasons={gaps.editing ?? []}
-                note="You can still select elements and ask an agent to change them."
-              />
-              {gaps.suggestions ? (
-                <CapabilityRow
-                  label="Class suggestions"
-                  available={false}
-                  reasons={gaps.suggestions}
-                  note={
-                    gaps.editing === null
-                      ? "Classes you type are still written exactly as typed."
-                      : "Class names can't be checked for this project."
-                  }
-                />
-              ) : null}
-            </>
-          )}
+          }
         </div>
       );
     }
   }
-}
-
-function CapabilityRow({
-  label,
-  available,
-  reasons,
-  note,
-}: {
-  label: string;
-  available: boolean;
-  reasons: string[];
-  note: string;
-}) {
-  // A flat block rather than a 64px-labelled row: two capabilities are not a
-  // property list, and the names that describe them accurately ("Class
-  // suggestions") do not fit a label column. The name and its verdict share a
-  // line; the reasons and what still works follow.
-  return (
-    <div className="flex flex-col gap-0.5 py-1 text-xs">
-      <p className="flex items-center gap-1.5 text-text-primary">
-        {available ? null : (
-          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" aria-hidden="true" />
-        )}
-        <span className="font-medium">{label}</span>
-        <span className="text-text-secondary">{available ? "available" : "unavailable"}</span>
-      </p>
-      {available
-        ? null
-        : reasons.map((reason) => (
-            <p key={reason} className="pl-5 text-text-secondary">
-              {sentence(reason)}
-            </p>
-          ))}
-      {available ? null : <p className="pl-5 text-text-secondary">{note}</p>}
-    </div>
-  );
 }
 
 /**
@@ -861,9 +705,4 @@ function SelectionBody({ state }: { state: InspectorState }) {
     case "ready":
       return <SelectionIdentity selection={selection} worktreePath={null} />;
   }
-}
-
-/** Main's reasons are clauses; followed by a second sentence they need a stop. */
-function sentence(text: string): string {
-  return /[.!?]$/.test(text.trim()) ? text : `${text}.`;
 }

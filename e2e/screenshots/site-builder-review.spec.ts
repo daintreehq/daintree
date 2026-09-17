@@ -269,20 +269,8 @@ test("site builder — states, interactions and themes", async ({ page }) => {
   // Interaction states no fixture can hold, in the primary theme.
   const theme = THEMES[0]!;
 
-  // The class autocomplete open over its listbox — the one combobox in the surface.
-  {
-    await open(page, "edits", theme);
-    const input = page.getByRole("combobox", { name: "Add a class" });
-    await input.click();
-    await input.fill("shadow");
-    await expect(page.getByRole("listbox", { name: "Class suggestions" })).toBeVisible({
-      timeout: 10_000,
-    });
-    await page.waitForTimeout(200);
-    written.push(await snapRegion(page, `edits--${theme}--class-autocomplete.png`));
-  }
-
-  // The agent destination picker open: the composer's one menu.
+  // The agent destination picker open: the composer's one menu, and the one
+  // place the destination's own mark is seen beside every alternative.
   {
     await open(page, "element", theme);
     await page.getByRole("combobox", { name: "Agent to send to" }).click();
@@ -301,21 +289,16 @@ test("site builder — states, interactions and themes", async ({ page }) => {
     written.push(await snap(frame, `composing--${theme}--send-focused.png`));
   }
 
-  // Hover on a class token's remove control, which only exists on hover.
+  // A narrow drawer on a short viewport: the width is capped at 360px, so the
+  // test of the layout is height. `sent` is the densest state the drawer has —
+  // identity, a delivery notice with two actions, the request record and the
+  // composer — and it is where anything that pushes the composer out of reach
+  // shows up first.
   {
-    const frame = await open(page, "edits", theme);
-    await page.getByRole("button", { name: "Remove px-6" }).hover();
-    await page.waitForTimeout(150);
-    written.push(await snap(frame, `edits--${theme}--token-hover.png`));
-  }
-
-  // A narrow drawer: the width is fixed at 360px, so the test of the layout is a
-  // short viewport, where notices stack and push the composer below the fold.
-  {
-    await open(page, "multiple", theme);
+    await open(page, "sent", theme);
     await page.setViewportSize({ width: 1100, height: 560 });
     await page.waitForTimeout(250);
-    written.push(await snap(page.locator(FRAME).first(), `multiple--${theme}--short.png`));
+    written.push(await snap(page.locator(FRAME).first(), `sent--${theme}--short.png`));
   }
 
   // One state across every built-in theme. Theme-specific collapse is real and

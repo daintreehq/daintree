@@ -1,6 +1,8 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ChevronRight, Lightbulb } from "lucide-react";
+import { ChevronRight, SquareTerminal } from "lucide-react";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
+import { getAgentConfig } from "@/config/agents";
+import { BrandMark } from "@/components/icons/BrandMark";
 import { isAgentLaunchable } from "@shared/utils/agentAvailability";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import { actionService } from "@/services/ActionService";
@@ -153,7 +155,6 @@ export function AgentComposer({
   const setChosen = (next: string | null) => updateComposerMemory(memoryKey, { chosen: next });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
-  const [ideasOpen, setIdeasOpen] = useState(false);
 
   const launchable: Destination[] = launchOrder(
     availabilityKnown ? LAUNCHABLE_AGENT_IDS : LEADING_AGENTS
@@ -398,49 +399,6 @@ export function AgentComposer({
 
   return (
     <div aria-label="Ask an agent" className="flex flex-col gap-2">
-      {destinations.length > 0 ? (
-        <PropertyRow label="Agent">
-          <Select value={destination ? keyOf(destination) : ""} onValueChange={setChosen}>
-            {/* Full width, not a 180px stub: the session name is how two claudes
-                in the same worktree are told apart, and it was truncating to
-                `claude · pricing polis…` beside 280px of empty row. */}
-            <SelectTrigger aria-label="Agent to send to" className="h-7 min-w-0 flex-1 text-xs">
-              <SelectValue placeholder="Choose an agent" />
-            </SelectTrigger>
-            {/* As wide as its trigger: session titles run long, and a menu
-                sized to them spilled past the drawer's left gutter. */}
-            <SelectContent className="w-[var(--radix-select-trigger-width)]">
-              {targets.length > 0 ? (
-                <SelectGroup>
-                  <SelectLabel>Running in this worktree</SelectLabel>
-                  {targets.map((target) => (
-                    <SelectItem
-                      key={target.terminalId}
-                      value={`terminal:${target.terminalId}`}
-                      title={target.title}
-                    >
-                      <span className="block truncate">{target.title}</span>
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ) : null}
-              {launchable.length > 0 ? (
-                <SelectGroup>
-                  <SelectLabel>Start a new session</SelectLabel>
-                  {launchable.map((option) =>
-                    option.kind === "launch" ? (
-                      <SelectItem key={option.agentId} value={`launch:${option.agentId}`}>
-                        {`New ${option.name}`}
-                      </SelectItem>
-                    ) : null
-                  )}
-                </SelectGroup>
-              ) : null}
-            </SelectContent>
-          </Select>
-        </PropertyRow>
-      ) : null}
-
       {retargetable && current ? (
         <div className="flex min-w-0 items-center justify-between gap-2 text-xs">
           <span className="min-w-0 truncate text-text-secondary" title={subjectLabel}>
@@ -478,8 +436,9 @@ export function AgentComposer({
                 }))}
                 value={String(subject.scope)}
                 onChange={(value) => chooseScope(Number(value))}
-                // The select above it is 28px; a 24px track in the next row read
-                // as a different kind of control.
+                // 28px, matching the destination picker in the footer and the
+                // property rows above: a 24px track read as a different kind of
+                // control sitting in the same column.
                 className="h-7 max-w-full"
               />
             </div>
@@ -544,33 +503,73 @@ export function AgentComposer({
         className="placeholder:text-text-secondary"
       />
 
-      {/* A footer row rather than a button floating inside the field: the
+      {/* The composer's own action footer: where the request is going on the
+          left, the trigger that sends it on the right, on one baseline — so
+          "which agent gets this" is read in the same glance as Send rather
+          than in a labelled row three controls further up.
+
+          A footer row rather than a button floating inside the field: the
           plate overlapped the text, its focus ring met the field's border, and
           it was the brightest object in the drawer while being its lightest
-          action. Ideas sits at the left of the same row, so the row is always
-          there and the drawer's height no longer jumps as the draft fills.
+          action. Fixed height, always present, so the drawer does not jump as
+          the draft fills.
           `contrast`, not `default`: the house rule reserves accent for a single
-          load-bearing signal per focus region, and the class input's focus ring
-          is already spending it. */}
+          load-bearing signal per focus region, and the field's focus ring is
+          already spending it. */}
       <div className="flex h-8 items-center justify-between gap-2">
-        {!draft.trim() && !(delivery && !deliveryDismissed) ? (
-          <button
-            type="button"
-            aria-expanded={ideasOpen}
-            aria-controls={`${inputId}-ideas`}
-            onClick={() => setIdeasOpen((open) => !open)}
-            className="-ml-1 flex h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
-          >
-            <Lightbulb className="h-3 w-3" aria-hidden="true" />
-            Ideas
-            <ChevronRight
-              aria-hidden="true"
-              className={cn(
-                "h-3 w-3 transition-transform duration-150 ease-out",
-                ideasOpen && "rotate-90"
-              )}
-            />
-          </button>
+        {destinations.length > 0 ? (
+          <Select value={destination ? keyOf(destination) : ""} onValueChange={setChosen}>
+            {/* Quiet by construction: a bordered field here would read as a
+                second input beside the one above it, and would out-weigh Send.
+                It carries the agent's own mark, so the destination is legible
+                before the title is read.
+
+                `border-transparent`, never `border-0`: this control's focus
+                indicator IS its border (the house recipe is "border-shift, no
+                ring"), so removing the border removes the only thing that shows
+                it focused — and keeping it transparent also stops the row
+                shifting by 2px when it takes focus.
+
+                The `[&>span]` overrides undo the trigger's own `line-clamp-1`,
+                which switches the value to a `-webkit-box` and drops the mark
+                off the text's baseline. */}
+            <SelectTrigger
+              aria-label="Agent to send to"
+              className="h-7 min-w-0 flex-1 border-transparent bg-transparent px-1 text-xs hover:bg-overlay-subtle [&>span]:flex [&>span]:min-w-0 [&>span]:items-center"
+            >
+              <SelectValue placeholder="Choose an agent" />
+            </SelectTrigger>
+            {/* As wide as its trigger: session titles run long, and a menu
+                sized to them spilled past the drawer's left gutter. */}
+            <SelectContent className="w-[var(--radix-select-trigger-width)]">
+              {targets.length > 0 ? (
+                <SelectGroup>
+                  <SelectLabel>Running in this worktree</SelectLabel>
+                  {targets.map((target) => (
+                    <SelectItem
+                      key={target.terminalId}
+                      value={`terminal:${target.terminalId}`}
+                      title={target.title}
+                    >
+                      <DestinationLabel agentId={target.agentId} label={target.title} />
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ) : null}
+              {launchable.length > 0 ? (
+                <SelectGroup>
+                  <SelectLabel>Start a new session</SelectLabel>
+                  {launchable.map((option) =>
+                    option.kind === "launch" ? (
+                      <SelectItem key={option.agentId} value={`launch:${option.agentId}`}>
+                        <DestinationLabel agentId={option.agentId} label={`New ${option.name}`} />
+                      </SelectItem>
+                    ) : null
+                  )}
+                </SelectGroup>
+              ) : null}
+            </SelectContent>
+          </Select>
         ) : (
           <span />
         )}
@@ -603,10 +602,13 @@ export function AgentComposer({
         />
       ) : null}
 
-      {/* Not beside a delivery notice: an "Ideas" prompt under "Sent to claude"
-          read as a leftover, and the row appearing and vanishing as the draft
-          filled made the panel's height jump. */}
-      {!draft.trim() && ideasOpen && !(delivery && !deliveryDismissed) ? (
+      {/* Shown, not hidden behind an "Ideas" toggle. They are the starting
+          points for the one thing this panel does, and a disclosure made the
+          panel's primary affordance cost a click to discover. Below the footer,
+          so revealing or spending them never moves Send under the pointer.
+          Not beside a delivery notice: suggestions under "Sent to claude" read
+          as a leftover. */}
+      {!draft.trim() && !(delivery && !deliveryDismissed) ? (
         <div
           id={`${inputId}-ideas`}
           role="group"
@@ -647,6 +649,37 @@ export function AgentComposer({
         </p>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * A destination, wearing the CLI's own mark.
+ *
+ * Radix clones the selected item's children into the trigger, so rendering the
+ * mark here is what puts it on the closed control too — the destination is
+ * identifiable before its session title is read, which is the whole point in a
+ * worktree running two of them. `BrandMark` owns the ink: the glyph itself
+ * stays on `currentColor` and the theme decides what a third-party logo is
+ * allowed to look like on this backdrop.
+ *
+ * An agent the host can't name still gets a slot in the same column — a mark
+ * that sometimes vanishes would make the titles beside it disagree about where
+ * they start.
+ */
+function DestinationLabel({ agentId, label }: { agentId: string | null; label: string }) {
+  const config = agentId ? getAgentConfig(agentId) : null;
+  const Icon = config?.icon;
+  return (
+    <span className="flex min-w-0 items-center gap-1.5">
+      {Icon && config ? (
+        <BrandMark brandColor={config.color}>
+          <Icon size={14} className="shrink-0" />
+        </BrandMark>
+      ) : (
+        <SquareTerminal className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
+      )}
+      <span className="min-w-0 truncate">{label}</span>
+    </span>
   );
 }
 
