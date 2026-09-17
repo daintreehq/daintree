@@ -1670,6 +1670,42 @@ describe("ResourceGovernor", () => {
 
       governor.dispose();
     });
+
+    it("keeps a terminal in graceful capture reading while its neighbour pauses (#12432)", () => {
+      const capturing = createMockCoordinator();
+      const neighbour = createMockCoordinator();
+      const coordinators: Record<string, ReturnType<typeof createMockCoordinator>> = {
+        t1: capturing,
+        t2: neighbour,
+      };
+      const deps = createMockDeps({
+        getTerminalIds: vi.fn().mockReturnValue(["t1", "t2"]),
+        getPauseCoordinator: vi.fn((id: string) => coordinators[id]?.coordinator),
+      });
+      capturing.coordinator.enterCaptureMode();
+
+      mockMemoryUsage(490);
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+      vi.advanceTimersByTime(2000);
+
+      expect(neighbour.coordinator.isReadPaused).toBe(true);
+      expect(capturing.coordinator.isReadPaused).toBe(false);
+      expect(capturing.raw.pause).not.toHaveBeenCalled();
+
+      // The governor's hold is on record, so a terminal whose close did not
+      // take is paused along with everything else.
+      capturing.coordinator.exitCaptureMode();
+      expect(capturing.coordinator.isReadPaused).toBe(true);
+
+      // Relief releases both through the governor's own bookkeeping.
+      mockMemoryUsage(100);
+      vi.advanceTimersByTime(2000);
+      expect(capturing.coordinator.isReadPaused).toBe(false);
+      expect(neighbour.coordinator.isReadPaused).toBe(false);
+
+      governor.dispose();
+    });
   });
 
   describe("setResourceProfile", () => {

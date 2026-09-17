@@ -418,6 +418,7 @@ export function createPipelineHarness(terminalId = TERMINAL_ID): PipelineHarness
       if (agentId !== EXPECTED_LIVE_AGENT_ID) agentQueueIdMisses += 1;
       agentQueueChars += data.length;
     },
+    shouldDiscardCapturedChunk: (): boolean => false,
   });
 
   let oscStripLeaks = 0;

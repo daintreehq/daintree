@@ -71,8 +71,11 @@ interface InspectablePauseCoordinator {
   pause: TestMock;
   resume: TestMock;
   forceReleaseAll: TestMock;
+  enterCaptureMode: TestMock;
+  exitCaptureMode: TestMock;
   heldTokens: Set<string>;
   readonly isPaused: boolean;
+  readonly isCapturing: boolean;
 }
 
 type PendingSegment = { data: Uint8Array; offset: number };
@@ -225,6 +228,7 @@ vi.mock("../services/PtyManager.js", () => {
     setImagePathProbe = vi.fn();
     setPtyPool = vi.fn();
     setAnalysisWorkerPool = vi.fn();
+    setGracefulCaptureHost = vi.fn();
     setActivityMonitorTier = vi.fn();
     spawn = vi.fn((id: string, options: { projectId?: string }) => {
       if (!hostState.terminals.has(id)) {
@@ -350,6 +354,27 @@ vi.mock("../pty-host/index.js", async () => {
       this.heldTokens.clear();
       this.raw.resume();
     });
+
+    capturing = false;
+    enterCaptureMode = vi.fn(() => {
+      this.capturing = true;
+    });
+    exitCaptureMode = vi.fn(() => {
+      this.capturing = false;
+      return [];
+    });
+
+    get isCapturing(): boolean {
+      return this.capturing;
+    }
+
+    get isReadPaused(): boolean {
+      return this.heldTokens.size > 0 && !this.capturing;
+    }
+
+    hasToken(token: string): boolean {
+      return this.heldTokens.has(token);
+    }
 
     get isPaused(): boolean {
       return this.heldTokens.size > 0;
@@ -2047,5 +2072,110 @@ describe("pty-host adversarial", () => {
     expect(terminals.find((t) => t.terminalId === "t1" && (t.droppedBytes as number) > 0)).toBe(
       undefined
     );
+  });
+
+  describe("graceful capture (#12432)", () => {
+    type CaptureHost = {
+      open(id: string): { shouldDiscard(data: string): boolean; close(): void } | null;
+    };
+
+    async function openCapture() {
+      const parentPort = await loadHost();
+      const terminal = createTerminal("t1");
+      hostState.terminals.set("t1", terminal);
+      parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+      await flushMicrotasks();
+      const coordinator = hostState.coordinators[hostState.coordinators.length - 1]!;
+      const manager = hostState.currentPtyManager as MiniEmitter & {
+        setGracefulCaptureHost: TestMock;
+      };
+      expect(manager.setGracefulCaptureHost).toHaveBeenCalledTimes(1);
+      const host = manager.setGracefulCaptureHost.mock.calls[0]![0] as CaptureHost;
+      const lease = host.open("t1");
+      if (!lease) throw new Error("expected a capture window");
+      parentPort.postMessage.mockClear();
+      return { parentPort, terminal, coordinator, manager, host, lease };
+    }
+
+    function dataLossPulses(parentPort: MockParentPort) {
+      return terminalStatusPayloads(parentPort).filter((p) => p.status === "data-loss");
+    }
+
+    it("opens and closes capture on the terminal's own coordinator", async () => {
+      const { coordinator, host, lease } = await openCapture();
+      expect(coordinator.enterCaptureMode).toHaveBeenCalledTimes(1);
+      expect(coordinator.isCapturing).toBe(true);
+      expect(host.open("t1")).toBeNull();
+
+      lease.close();
+      expect(coordinator.exitCaptureMode).toHaveBeenCalledTimes(1);
+      expect(coordinator.isCapturing).toBe(false);
+    });
+
+    it("opens nothing for a terminal the host does not know", async () => {
+      const { host } = await openCapture();
+      expect(host.open("ghost")).toBeNull();
+    });
+
+    it("discards only while a hold is recorded, and marks a survivor's gap once", async () => {
+      const { parentPort, coordinator, lease } = await openCapture();
+
+      expect(lease.shouldDiscard("kept")).toBe(false);
+      coordinator.pause("ipc-queue");
+      expect(lease.shouldDiscard("⚠".repeat(10))).toBe(true);
+      expect(lease.shouldDiscard("a".repeat(20))).toBe(true);
+      expect(dataLossPulses(parentPort)).toEqual([]);
+
+      lease.close();
+      lease.close();
+      await flushMicrotasks();
+
+      const pulses = dataLossPulses(parentPort);
+      expect(pulses).toHaveLength(1);
+      expect(pulses[0]).toMatchObject({ type: "terminal-status", id: "t1", droppedBytes: 50 });
+      expect(lease.shouldDiscard("after")).toBe(false);
+    });
+
+    it("marks no gap on a terminal that was killed", async () => {
+      const { parentPort, terminal, coordinator, lease } = await openCapture();
+      coordinator.pause("resource-governor");
+      lease.shouldDiscard("held");
+      terminal.wasKilled = true;
+
+      lease.close();
+      await flushMicrotasks();
+
+      expect(dataLossPulses(parentPort)).toEqual([]);
+    });
+
+    it("retires the window when the terminal exits first", async () => {
+      const { parentPort, terminal, coordinator, manager, host, lease } = await openCapture();
+      coordinator.pause("resource-governor");
+      lease.shouldDiscard("held");
+
+      manager.emit("exit", "t1", 0);
+      await flushMicrotasks();
+      expect(coordinator.exitCaptureMode).toHaveBeenCalledTimes(1);
+      expect(dataLossPulses(parentPort)).toEqual([]);
+
+      // A respawn at the same id starts without an exemption, and the old
+      // teardown's late close has nothing left to end.
+      parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
+      await flushMicrotasks();
+      terminal.wasKilled = false;
+      const successor = hostState.coordinators[hostState.coordinators.length - 1]!;
+      expect(successor).not.toBe(coordinator);
+
+      lease.close();
+      await flushMicrotasks();
+      expect(dataLossPulses(parentPort)).toEqual([]);
+      expect(successor.enterCaptureMode).not.toHaveBeenCalled();
+      expect(successor.exitCaptureMode).not.toHaveBeenCalled();
+
+      successor.pause("resource-governor");
+      expect(lease.shouldDiscard("fresh")).toBe(false);
+      expect(host.open("t1")).not.toBeNull();
+      expect(successor.enterCaptureMode).toHaveBeenCalledTimes(1);
+    });
   });
 });

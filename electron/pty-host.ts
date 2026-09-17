@@ -76,6 +76,7 @@ import {
   type TerminalWorkerConnection,
 } from "./pty-host/handlers/index.js";
 import { PluginPtyProcessManager } from "./pty-host/services/PluginPtyProcessManager.js";
+import { GracefulCaptureTracker } from "./pty-host/GracefulCaptureTracker.js";
 import { PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS } from "./services/pty/types.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 import { startEventLoopMonitor } from "./pty-host/eventLoopMonitor.js";
@@ -463,6 +464,26 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
   pauseCoordinators.set(id, coordinator);
   return coordinator;
 }
+
+// Terminals whose graceful-shutdown quit handshake is waiting on their output
+// (#12432). TerminalProcess opens and closes the windows through PtyManager.
+const gracefulCaptureTracker = new GracefulCaptureTracker({
+  getPauseCoordinator,
+  getOrCreatePauseCoordinator,
+  isTerminalLive: (id) => {
+    const terminal = ptyManager.getTerminal(id);
+    return terminal !== undefined && !terminal.wasKilled && !terminal.isExited;
+  },
+  emitDataLoss: (id, droppedBytes) =>
+    sendEvent({
+      type: "terminal-status",
+      id,
+      status: "data-loss",
+      droppedBytes,
+      timestamp: Date.now(),
+    }),
+});
+ptyManager.setGracefulCaptureHost(gracefulCaptureTracker);
 
 // Per-window MessagePort connections for direct Renderer ↔ Pty Host communication
 const rendererConnections = new Map<number, RendererConnection>();
@@ -1255,6 +1276,9 @@ ptyManager.on(
     const coordinator = pauseCoordinators.get(id);
     if (coordinator) {
       coordinator.forceReleaseAll();
+      // Before the delete: the lease is only recognised against the
+      // coordinator it was opened on.
+      gracefulCaptureTracker.end(id, "terminal-exit");
       pauseCoordinators.delete(id);
     }
 
@@ -1695,6 +1719,7 @@ function cleanup(): void {
 
   resourceGovernor.dispose();
 
+  gracefulCaptureTracker.dispose();
   for (const coordinator of pauseCoordinators.values()) {
     coordinator.forceReleaseAll();
   }

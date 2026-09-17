@@ -36,7 +36,7 @@ import {
 // From ./pty/types.js rather than the ./pty/index.js barrel above: the
 // PtyManager unit tests mock that barrel wholesale, which would leave this
 // undefined and fire the budget timer on the next tick.
-import { GRACEFUL_KILL_TERMINAL_BUDGET_MS } from "./pty/types.js";
+import { GRACEFUL_KILL_TERMINAL_BUDGET_MS, type GracefulCaptureHost } from "./pty/types.js";
 import { computeSpawnContext, acquirePtyProcess } from "./pty/terminalSpawn.js";
 import { disposeTerminalSerializerService } from "./pty/TerminalSerializerService.js";
 import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
@@ -84,6 +84,7 @@ export class PtyManager extends EventEmitter {
   private processTreeCache: ProcessTreeCache | null = null;
   private lineageLedger: LineageKillSource | null = null;
   private imagePathProbe: ImagePathProbe | null = null;
+  private gracefulCaptureHost: GracefulCaptureHost | null = null;
   private analysisWorkerPool: AnalysisWorkerPool | null = null;
   private activeProjectId: string | null = null;
   private sabModeEnabled = false;
@@ -128,6 +129,14 @@ export class PtyManager extends EventEmitter {
 
   setImagePathProbe(probe: ImagePathProbe): void {
     this.imagePathProbe = probe;
+  }
+
+  /**
+   * The pty-host's pause-hold owner, which opens a terminal's graceful-shutdown
+   * capture window (#12432). Without one, teardowns run under ordinary holds.
+   */
+  setGracefulCaptureHost(host: GracefulCaptureHost | null): void {
+    this.gracefulCaptureHost = host;
   }
 
   /**
@@ -495,6 +504,14 @@ export class PtyManager extends EventEmitter {
               return;
             }
             this.emit("submit-status", termId, state);
+          },
+          openGracefulCapture: (termId) => {
+            // Same staleness guard: a replaced incarnation must not open a
+            // window on the id its successor now owns.
+            if (this.registry.get(termId) !== terminalProcess) {
+              return null;
+            }
+            return this.gracefulCaptureHost?.open(termId) ?? null;
           },
           onPreserved: (termId) => {
             // Preserved terminals retain their full scrollback snapshot in

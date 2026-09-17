@@ -24,6 +24,7 @@ import { AgentStateService } from "./AgentStateService.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import {
   type ExitReason,
+  type GracefulCaptureLease,
   type PtySpawnOptions,
   type TerminalInfo,
   type TerminalPublicState,
@@ -126,6 +127,12 @@ export interface TerminalProcessCallbacks {
    * submits, which complete well inside the threshold and report nothing.
    */
   onSubmitStatus?: (id: string, state: TerminalSubmitStatusState) => void;
+  /**
+   * Opens this terminal's graceful-shutdown capture window (#12432), at most
+   * once per teardown. The owner keeps the PTY's reads flowing past its memory
+   * and backpressure holds until the lease is closed.
+   */
+  openGracefulCapture?: (id: string) => GracefulCaptureLease | null;
 }
 
 export interface TerminalProcessDependencies {
@@ -190,6 +197,7 @@ export class TerminalProcess {
   private identityWatcher!: IdentityWatcher;
 
   private gracefulShutdownInFlight: Promise<string | null> | null = null;
+  private gracefulCaptureLease: GracefulCaptureLease | null = null;
   private writeQueue!: WriteQueue;
   private inputController!: TerminalInputController;
   private ptyDataPipeline!: PtyDataPipeline;
@@ -529,6 +537,7 @@ export class TerminalProcess {
       },
       emitData: (data) => self.emitData(data),
       queueAgentOutput: (agentId, data) => self.queueAgentOutput(agentId, data),
+      shouldDiscardCapturedChunk: (data) => self.gracefulCaptureLease?.shouldDiscard(data) ?? false,
     });
     this.preservedSnapshotCapture = new PreservedSnapshotCapture({
       get id() {
@@ -1459,6 +1468,7 @@ export class TerminalProcess {
         return self.isAgentLive;
       },
       acquireInputLock: () => this.inputController.acquireShutdownInputLock(),
+      enterCaptureMode: () => this.enterGracefulCapture(),
       kill: (reason) => this.kill(reason),
     });
     this.gracefulShutdownInFlight = inFlight;
@@ -1477,6 +1487,19 @@ export class TerminalProcess {
     };
     void inFlight.then(clear, clear);
     return inFlight;
+  }
+
+  private enterGracefulCapture(): () => void {
+    const lease = this.callbacks.openGracefulCapture?.(this.id) ?? null;
+    if (!lease) return () => {};
+    this.gracefulCaptureLease = lease;
+    let closed = false;
+    return () => {
+      if (closed) return;
+      closed = true;
+      if (this.gracefulCaptureLease === lease) this.gracefulCaptureLease = null;
+      lease.close();
+    };
   }
 
   kill(
