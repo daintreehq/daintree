@@ -114,6 +114,12 @@ function text(): string {
 
 beforeEach(() => {
   context.current = { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" };
+  // The host only keeps a tool switched on for a preview the panel store
+  // holds; tests that need more of the panel replace this wholesale.
+  usePanelStore.setState({
+    panelIds: ["preview-1"],
+    panelsById: { "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid" } },
+  } as never);
   host = createFakeHost();
   uninstall = host.install();
   usePluginRuntimeStore.setState({
@@ -1560,6 +1566,9 @@ describe("lifetime", () => {
   it("keeps the binding across a remount", async () => {
     await mountSelected();
     cleanup();
+    // A tick later, not right away: a release deferred to a timer would pass
+    // an immediate check and still detach before the remount.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 5)));
     expect(host.sitePreview.detach).not.toHaveBeenCalled();
     mount();
     expect(screen.getByRole("region", { name: "Selected element" })).toBeTruthy();

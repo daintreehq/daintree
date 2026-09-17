@@ -209,6 +209,54 @@ describe("dev preview tool sessions", () => {
     expect(live()).toBeNull();
   });
 
+  it("does not switch off a tool the failing factory had itself switched to", async () => {
+    __resetDevPreviewToolsForTests();
+    const OTHER = "acme.tools.other";
+    registerDevPreviewTool({
+      id: OTHER,
+      pluginId: PLUGIN,
+      label: "Other",
+      Button: () => null,
+      createSession: makeSession,
+    });
+    register(() => {
+      useDevPreviewToolStore.getState().setActive(PANEL, OTHER);
+      return Promise.reject(new Error("the chunk failed to load"));
+    });
+    switchOn();
+    await Promise.resolve();
+    await Promise.resolve();
+    // The failure was the first tool's; the second is switched on and served.
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({ [PANEL]: OTHER });
+    expect(live()).not.toBeNull();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.disposals).toBe(0);
+  });
+
+  it("clears a tool switched on for a preview that is already gone or trashed", () => {
+    panels({});
+    switchOn();
+    expect(live()).toBeNull();
+    expect(sessions).toHaveLength(0);
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+
+    panels({ [PANEL]: "trash" });
+    switchOn();
+    expect(live()).toBeNull();
+    expect(sessions).toHaveLength(0);
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+  });
+
+  it("clears a tool switched on while its plugin is disabled", () => {
+    usePluginRuntimeStore.setState({ disabledPluginIds: new Set([PLUGIN]) });
+    switchOn();
+    expect(live()).toBeNull();
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+    // Re-enabling does not resurrect a selection that was never honoured.
+    usePluginRuntimeStore.setState({ disabledPluginIds: new Set() });
+    expect(live()).toBeNull();
+  });
+
   it("disposes a session whose factory switched its own tool off before returning", () => {
     __resetDevPreviewToolsForTests();
     register((next) => {

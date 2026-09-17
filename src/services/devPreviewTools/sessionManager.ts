@@ -106,8 +106,13 @@ function pushContext(panelId: string): void {
 }
 
 function adopt(panelId: string, entry: SessionEntry, session: DevPreviewToolSession): void {
-  if (entry.disposed || entries.get(panelId) !== entry) {
+  // The entry can still be registered while the store has moved on: a factory
+  // that switched tools before returning runs inside a reconcile that has not
+  // reached its entry yet. What the store says is the authority.
+  const named = useDevPreviewToolStore.getState().activeByPanel[panelId] === entry.toolId;
+  if (entry.disposed || entries.get(panelId) !== entry || !named) {
     disposeSession(entry.toolId, session);
+    if (!entry.disposed) reconcile();
     return;
   }
   entry.session = session;
@@ -168,10 +173,16 @@ function failEntry(panelId: string, entry: SessionEntry, error: unknown): void {
   if (entries.get(panelId) !== entry) return;
   entries.delete(panelId);
   entry.disposed = true;
-  entry.abort.abort();
   logError(`Dev preview tool "${entry.toolId}" failed to start`, error);
+  // Only a selection that is still this tool's is cleared: a factory that
+  // switched the preview to another tool before failing must not take that
+  // tool down with it. Decided before the abort fires, since an abort listener
+  // may move the selection too.
+  const mine = useDevPreviewToolStore.getState().activeByPanel[panelId] === entry.toolId;
+  entry.abort.abort();
   notify();
-  useDevPreviewToolStore.getState().setActive(panelId, null);
+  if (mine) useDevPreviewToolStore.getState().setActive(panelId, null);
+  else reconcile();
 }
 
 function disposeEntry(panelId: string, entry: SessionEntry): void {
@@ -215,10 +226,17 @@ function reconcile(): void {
 }
 
 function reconcileOnce(): void {
-  const active = useDevPreviewToolStore.getState().activeByPanel;
+  // A tool switched on for a preview that is gone, or by a plugin that is off,
+  // is cleared here rather than given a session: the store's own write-time
+  // prune only looks at entries that were already there.
+  enforceLifetime();
+  const before = useDevPreviewToolStore.getState().activeByPanel;
   for (const [panelId, entry] of [...entries]) {
-    if (active[panelId] !== entry.toolId) disposeEntry(panelId, entry);
+    if (before[panelId] !== entry.toolId) disposeEntry(panelId, entry);
   }
+  // Disposal ran tool code that may have moved the store; create against what
+  // it says now, not the snapshot the disposals were decided on.
+  const active = useDevPreviewToolStore.getState().activeByPanel;
   for (const [panelId, toolId] of Object.entries(active)) {
     if (entries.has(panelId)) continue;
     const tool = getAvailableDevPreviewTool(toolId);
@@ -248,6 +266,8 @@ function enforceLifetime(): void {
     const gone = panel === undefined || panel.location === "trash";
     const tool = getDevPreviewTool(toolId);
     if (gone || (tool !== undefined && disabledPluginIds.has(tool.pluginId))) {
+      // Each write re-enters `reconcile`, which either runs now or asks the
+      // pass in progress to go round again; both end on what the store says.
       useDevPreviewToolStore.getState().setActive(panelId, null);
     }
   }
