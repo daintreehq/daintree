@@ -20,6 +20,12 @@ export interface TrailCrumb {
   readonly label: string;
   /** Components carry a file; the element itself does not. */
   readonly file: string | null;
+  /**
+   * Where the component was invoked — the identity a picked component is
+   * matched on. Two nested components can share a label; they cannot share a
+   * call site.
+   */
+  readonly usedAt: { file: string; line: number; column: number } | null;
 }
 
 /**
@@ -34,10 +40,20 @@ export function trailFor(node: SelectedNode, { includeSelf = true } = {}): Trail
   const components: TrailCrumb[] = [];
   for (const entry of node.ancestry) {
     if (!isNamedComponent(entry)) continue;
-    components.push({ label: entry.componentTag, file: entry.location.file });
+    components.push({
+      label: entry.componentTag,
+      file: entry.location.file,
+      usedAt: {
+        file: entry.location.file,
+        line: entry.location.line,
+        column: entry.location.column,
+      },
+    });
   }
   components.reverse();
-  return includeSelf ? [...components, { label: elementLabel(node), file: null }] : components;
+  return includeSelf
+    ? [...components, { label: elementLabel(node), file: null, usedAt: null }]
+    : components;
 }
 
 /** `each`, `if` and `await` frames are control flow; generated frames are not the user's. */

@@ -120,9 +120,13 @@ function ClassInspector({
 }) {
   const [open, setOpen] = useState(false);
   const [inspection, setInspection] = useState<Inspection | null>(null);
-
+  // The request's lifetime is the token's, not the loading state's. An effect
+  // that depended on `inspection` re-ran its own cleanup the moment it set
+  // "loading", cancelled itself, and left the popover spinning forever.
+  const requested = useRef(false);
   useEffect(() => {
-    if (!open || inspection !== null) return;
+    if (!open || requested.current) return;
+    requested.current = true;
     let cancelled = false;
     setInspection({ status: "loading" });
     void complete(token).then((result) => {
@@ -135,9 +139,13 @@ function ClassInspector({
       setInspection(exact ? { status: "declared", css: exact.css } : { status: "none" });
     });
     return () => {
+      // Only an unmount cancels — the token's declaration does not change while
+      // the chip is on screen, so one answer serves every open.
       cancelled = true;
+      requested.current = false;
     };
-  }, [open, inspection, token, complete]);
+    // `open` is deliberately the only trigger: `complete` is stable per controller.
+  }, [open, token, complete]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -364,6 +372,7 @@ function ClassAddField({
             candidates={candidates}
             active={active}
             onPick={(candidate) => void submit(candidate)}
+            onActivate={setActive}
           />
         </PopoverContent>
       </Popover>
@@ -387,11 +396,13 @@ function CandidateList({
   candidates,
   active,
   onPick,
+  onActivate,
 }: {
   id: string;
   candidates: Candidate[];
   active: number;
   onPick: (candidate: string) => void;
+  onActivate: (index: number) => void;
 }) {
   return (
     <ul
@@ -408,6 +419,7 @@ function CandidateList({
           aria-selected={index === active}
           // Keep focus in the field: a mousedown here would blur it and close the list.
           onMouseDown={(event) => event.preventDefault()}
+          onMouseEnter={() => onActivate(index)}
           onClick={() => onPick(candidate.candidate)}
           className={cn(
             PALETTE_ROW_CLASS,
@@ -425,7 +437,7 @@ function CandidateList({
           aria-hidden="true"
           className="mt-1 border-t border-border-subtle px-2 pb-1 pt-1.5 font-mono text-3xs leading-relaxed text-text-secondary"
         >
-          <span className="line-clamp-3 whitespace-pre-wrap break-all">
+          <span className="block max-h-24 overflow-y-auto whitespace-pre-wrap break-all">
             {candidates[active].css}
           </span>
         </li>

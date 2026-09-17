@@ -37,8 +37,10 @@ export const STALE_COPY: Record<StaleReason, { title: string; detail: string }> 
     detail: "The source behind this element changed after you selected it.",
   },
   edited: {
-    title: "Select again — the edit moved its source",
-    detail: "The saved change moved this element in the file.",
+    // Not "moved": an equal-length replacement moves nothing. What is true is
+    // that the positions this selection was read from predate the write.
+    title: "Saved — select again to keep editing",
+    detail: "This selection was read before the write; select the element again to refresh it.",
   },
   "preview-detached": {
     title: "Select again — the preview disconnected",

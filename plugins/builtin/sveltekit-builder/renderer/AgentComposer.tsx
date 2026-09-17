@@ -493,6 +493,7 @@ export function AgentComposer({
         <button
           type="button"
           aria-expanded={ideasOpen}
+          aria-controls={`${inputId}-ideas`}
           onClick={() => setIdeasOpen((open) => !open)}
           className="-ml-1 flex h-6 w-fit items-center gap-1 rounded-[var(--radius-sm)] px-1 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
         >
@@ -508,7 +509,12 @@ export function AgentComposer({
         </button>
       ) : null}
       {!draft.trim() && ideasOpen && !(delivery && !deliveryDismissed) ? (
-        <div role="group" aria-label="Suggestions" className="grid grid-cols-2 gap-1">
+        <div
+          id={`${inputId}-ideas`}
+          role="group"
+          aria-label="Suggestions"
+          className="grid grid-cols-2 gap-1"
+        >
           {/* The shared pill variant, not a hand-rolled one: these sat beside the
               scope chips and the class tokens as a third geometry for the same
               idea. Prose, so proportional — the class tokens stay monospace
