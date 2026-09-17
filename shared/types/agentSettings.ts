@@ -1,6 +1,7 @@
 import { AGENT_REGISTRY, getEffectiveAgentConfig } from "../config/agentRegistry.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import { escapeShellArg, escapeShellArgOptional } from "../utils/shellEscape.js";
+import { systemPromptArgPositions } from "../utils/agentSystemPrompt.js";
 
 /**
  * Tri-state permission-bypass intent. `"on"`/`"off"` are explicit user choices
@@ -497,10 +498,17 @@ export function reconcileBypassFlags(
     }
   }
   if (stripTokens.size === 0) return [...flags];
+  // A standing instruction is free text that can equal a bypass token, and
+  // Codex's shares a `-c` with config-override bypass args (#12431). Stripping
+  // either half would orphan the other — a lone value becomes the first-turn
+  // prompt — so both are left alone.
+  const instruction = systemPromptArgPositions(flags, agentId);
+  const isStripped = (flag: string, index: number) =>
+    !instruction.has(index) && stripTokens.has(flag);
 
   if (!effectiveBypass || !resolved) {
     // Bypass not wanted: drop every occurrence of the canonical token(s).
-    return flags.filter((flag) => !stripTokens.has(flag));
+    return flags.filter((flag, index) => !isStripped(flag, index));
   }
 
   // Bypass wanted: replace the first canonical occurrence in place with the
@@ -510,8 +518,8 @@ export function reconcileBypassFlags(
   const resolvedTokens = resolved.split(/\s+/).filter(Boolean);
   const reconciled: string[] = [];
   let inserted = false;
-  for (const flag of flags) {
-    if (stripTokens.has(flag)) {
+  for (const [index, flag] of flags.entries()) {
+    if (isStripped(flag, index)) {
       if (!inserted) {
         reconciled.push(...resolvedTokens);
         inserted = true;
@@ -622,6 +630,11 @@ export interface GenerateAgentCommandOptions {
   clipboardDirectory?: string;
   /** Model ID to pass via --model flag (e.g., "claude-opus-4-6") */
   modelId?: string;
+  /**
+   * Raw argv pair carrying a standing instruction (#12431), from
+   * `resolveSystemPromptArgs` or `extractSystemPromptArgs`. Quoted here.
+   */
+  systemPromptArgs?: readonly string[];
   /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
   recipeArgs?: string;
   /** Additional CLI arguments from agent preset (whitespace-separated string) */
@@ -752,6 +765,14 @@ export function generateAgentCommand(
     } else {
       parts.push(escapeShellArg(flag));
     }
+  }
+
+  // The caller's standing instruction (#12431) goes after preset, recipe and
+  // settings args so it wins over one they carry — the CLI keeps the last. It
+  // is one argv token even when it holds spaces, so it is quoted whole rather
+  // than split like the preset/recipe strings above.
+  for (const arg of options?.systemPromptArgs ?? []) {
+    parts.push(arg.startsWith("-") ? arg : escapeShellArg(arg));
   }
 
   // Add initial prompt if provided
@@ -926,6 +947,7 @@ export function buildAgentLaunchFlags(
   agentId: string,
   options?: {
     modelId?: string;
+    systemPromptArgs?: readonly string[];
     presetArgs?: string[];
     globalSkipPermissions?: boolean;
     globalUseAltScreen?: boolean;
@@ -965,6 +987,13 @@ export function buildAgentLaunchFlags(
     globalSkipPermissions: options?.globalSkipPermissions,
   });
   flags.push(...settingsFlags);
+
+  // Standing instruction (#12431), last for the same reason as in
+  // generateAgentCommand. The CLI doesn't carry it into a resumed session on
+  // its own, so it is persisted with the rest.
+  if (options?.systemPromptArgs?.length) {
+    flags.push(...options.systemPromptArgs);
+  }
 
   // generateAgentFlags dedupes the decorations pair against its own output
   // only; a preset's args (pushed above) can carry it too. Converge on one.

@@ -35,6 +35,7 @@ import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel, type PanelInstance, type PanelTitleMode } from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -482,6 +483,12 @@ export const createRestartActions = (
         undefined,
         {
           modelId: currentTerminal.agentModelId,
+          // Only the preset went stale; the caller's standing instruction still
+          // applies and has no settings to be rebuilt from (#12431).
+          systemPromptArgs: extractSystemPromptArgs(
+            currentTerminal.agentLaunchFlags,
+            effectiveAgentId
+          ),
           globalSkipPermissions: runtimeForEnv.globalSkipPermissions,
           globalUseAltScreen: runtimeForEnv.globalUseAltScreen,
         }
@@ -1317,15 +1324,19 @@ export const createRestartActions = (
       );
       const globalSkipPermissions = agentSettings?.globalSkipPermissions ?? false;
       const globalUseAltScreen = agentSettings?.globalUseAltScreen ?? false;
+      // A failover swaps the provider, not the caller's standing instruction.
+      const systemPromptArgs = extractSystemPromptArgs(terminal.agentLaunchFlags, effectiveAgentId);
       const commandToRun = generateAgentCommand(baseCommand, effectiveEntry, effectiveAgentId, {
         clipboardDirectory,
         modelId: terminal.agentModelId,
+        systemPromptArgs,
         presetArgs: nextPreset.args?.join(" "),
         globalSkipPermissions,
         globalUseAltScreen,
       });
       const nextLaunchFlags = buildAgentLaunchFlags(effectiveEntry, effectiveAgentId, {
         modelId: terminal.agentModelId,
+        systemPromptArgs,
         presetArgs: nextPreset.args,
         globalSkipPermissions,
         globalUseAltScreen,

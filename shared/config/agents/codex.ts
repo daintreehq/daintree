@@ -103,6 +103,9 @@ export const config: AgentConfig = {
     // escalation in `resume.shutdownSignal`: that one quits the CLI, this one
     // cancels the turn and leaves the session up.
     interrupt: "double-escape",
+    // No dedicated flag: `developer_instructions` is a config key that adds to
+    // the built-in instructions, set through the same global `-c` override.
+    appendSystemPrompt: { flag: "-c", configKey: "developer_instructions" },
   },
   detection: {
     primaryPatterns: [

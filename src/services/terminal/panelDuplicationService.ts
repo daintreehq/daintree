@@ -18,6 +18,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { classifyLaunchRootAlignment } from "@/utils/worktreeAlignment";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import {
   buildAgentLaunchFlagsForRuntimeSettings,
   resolveAgentRuntimeSettings,
@@ -87,6 +88,12 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
         // Inheriting the source pane's would aim both panes at one conversation
         // and the CLI would reject the second launch outright.
         const agentSessionId = mintAssignedSessionId(panel.launchAgentId);
+        // Settings rebuild everything else; the source pane's standing
+        // instruction came from its launch caller, so carry it across (#12431).
+        const systemPromptArgs = extractSystemPromptArgs(
+          panel.agentLaunchFlags,
+          panel.launchAgentId
+        );
         const command = generateAgentCommand(
           agentConfig.command,
           effectiveEntry,
@@ -95,6 +102,7 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
             interactive: true,
             clipboardDirectory,
             modelId: panel.agentModelId,
+            systemPromptArgs,
             presetArgs: preset?.args?.join(" "),
             globalSkipPermissions,
             globalUseAltScreen,
@@ -105,7 +113,12 @@ async function resolveCommandForPanel(panel: PanelInstance): Promise<ResolvedCom
           effectiveEntry,
           panel.launchAgentId,
           preset,
-          { modelId: panel.agentModelId, globalSkipPermissions, globalUseAltScreen }
+          {
+            modelId: panel.agentModelId,
+            systemPromptArgs,
+            globalSkipPermissions,
+            globalUseAltScreen,
+          }
         );
         return {
           command,

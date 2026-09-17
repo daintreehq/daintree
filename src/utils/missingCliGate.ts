@@ -1,5 +1,6 @@
 import { stripAssignedSessionIdArgs, type AddPanelOptions } from "@shared/types";
 import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 
 /**
  * Narrow the preset environment out of the panel's untyped extension bag.
@@ -86,6 +87,8 @@ export interface MissingCliContinueArgs {
   removeOnExit?: boolean;
   spawnedBy?: PtyPanelData["spawnedBy"];
   focusPolicy?: PtyPanelData["focusPolicy"];
+  /** Only the caller's standing-instruction pair, never the gate's full set. */
+  agentLaunchFlags?: string[];
 }
 
 /**
@@ -105,6 +108,10 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
   if (!agentId) return null;
 
   const location = panel.location === "dock" ? "dock" : "grid";
+  // The caller's standing instruction (#12431) has no setting the launcher
+  // could rebuild it from, so it is the one piece of the gate's flag set that
+  // is replayed — as the exact pair, since that is what was validated.
+  const systemPromptArgs = extractSystemPromptArgs(panel.agentLaunchFlags, agentId);
   return {
     agentId,
     location,
@@ -127,6 +134,7 @@ export function buildMissingCliContinueArgs(panel: PtyPanelData): MissingCliCont
     removeOnExit: panel.removeOnExit,
     focusPolicy: panel.focusPolicy,
     spawnedBy: panel.spawnedBy,
+    ...(systemPromptArgs.length > 0 ? { agentLaunchFlags: systemPromptArgs } : {}),
   };
 }
 

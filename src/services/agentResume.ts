@@ -96,6 +96,13 @@ export function buildResumePanelOptions(
     worktreeId: target.worktreeId,
     command,
     location: "grid",
+    // Restart and restore rebuild from these, not from `command`; without them
+    // the pane would lose its launch configuration (model, standing
+    // instruction) the first time it restarts after this resume. Only a
+    // captured snapshot is stored: flags reconciliation injected into an empty
+    // one are not a complete configuration, and storing them would stop a
+    // restart from rebuilding the rest from settings.
+    agentLaunchFlags: session.agentLaunchFlags?.length ? resumeFlags : undefined,
     agentSessionId: session.sessionId,
   };
 }

@@ -648,6 +648,38 @@ describe("recipeStore", () => {
     expect(spawned.command).toContain("sonnet");
   });
 
+  // #12431: an in-memory recipe carries a live pane's captured flags; the
+  // standing instruction among them must reach the launch it spawns.
+  it("runRecipe applies a captured standing instruction to the spawned command", async () => {
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    useRecipeStore.setState({
+      recipes: [
+        {
+          id: "recipe-standing",
+          name: "Cloned Layout",
+          projectId: "project-1",
+          terminals: [
+            {
+              type: "claude",
+              title: "Claude",
+              agentLaunchFlags: ["--verbose", ...pair],
+              env: {},
+            },
+          ],
+          createdAt: Date.now(),
+        },
+      ],
+      isLoading: false,
+      currentProjectId: "project-1",
+    });
+
+    await useRecipeStore.getState().runRecipe("recipe-standing", "/tmp/worktree", "worktree-1");
+
+    const spawned = addTerminalMock.mock.calls[0]?.[0];
+    expect(spawned.command).toMatch(/--append-system-prompt ['"]Infer the best option['"]/);
+    expect(spawned.agentLaunchFlags).toEqual(["--verbose", ...pair]);
+  });
+
   it("runRecipe uses the availability-resolved agent executable", async () => {
     refreshCliAvailabilityMock.mockImplementation(async () => {
       cliAvailabilityState.details = {

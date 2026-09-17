@@ -226,6 +226,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input.",
           type: "string",
         },
+        systemPrompt: {
+          description:
+            "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it.",
+          type: "string",
+          maxLength: 2000,
+        },
         interactive: {
           description:
             "Whether the agent runs as a conversation the user can continue, rather than a single non-interactive pass.",
@@ -250,7 +256,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         activateDockOnCreate: {
           description:
-            "Whether to open the sidebar dock when the agent is placed there. Only meaningful for a dock placement; it changes what the user sees.",
+            "Whether to open the sidebar dock when the agent is placed there, which changes what the user sees.",
           type: "boolean",
         },
         env: {
@@ -266,7 +272,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         excludeFromPersistence: {
           description:
-            "Keeps the terminal out of the saved session, so it does not return after a restart. It also hides the panel from listings, status snapshots and agent-state reads, and spares it from bulk close and kill, so the caller cannot find or poll it afterwards. Use for throwaway work.",
+            "Keeps the terminal out of the saved session, so it does not return after a restart. Listings, status snapshots, agent-state reads and bulk close or kill all skip it, so the caller cannot find or poll it later. Use for throwaway work.",
           type: "boolean",
         },
         removeOnExit: {
@@ -301,7 +307,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         force: {
           description:
-            "Skips the check that the agent's CLI can actually run. Without it an unlaunchable CLI opens a setup diagnostic instead of failing; with it the process is started anyway and simply fails. Leave it off unless the check itself is known to be wrong.",
+            "Skips the check that the agent's CLI can run, so an unlaunchable CLI is started and fails rather than opening a setup diagnostic. Leave off unless that check is known to be wrong.",
           type: "boolean",
         },
         name: {

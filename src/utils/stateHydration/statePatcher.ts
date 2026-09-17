@@ -21,6 +21,7 @@ import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
+  buildAgentLaunchFlags,
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
@@ -33,6 +34,7 @@ import {
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 // Re-exported rather than defined here: main counts the agent panels a project
 // would restore (#11801) and has to resolve identity by the same rule this
 // respawn path does, so the rule lives somewhere both processes can reach.
@@ -620,6 +622,12 @@ export function buildArgsForRespawn(
     const effectiveInline = resolveEffectiveInlineMode(effectiveEntry, agentId, globalUseAltScreen);
     const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
     const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
+    // A stale preset voids the captured flags, but not the caller's standing
+    // instruction (#12431), which no setting can rebuild. It is carried into
+    // every command the settings-derived branches below build.
+    const staleSystemPromptArgs = presetWasStale
+      ? extractSystemPromptArgs(saved.agentLaunchFlags, agentId)
+      : [];
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
     // Reconcile the persisted snapshot against both live resolutions (#10432 the
     // bypass token, #10876 the `--no-alt-screen` inline flag): a snapshot must
@@ -642,11 +650,25 @@ export function buildArgsForRespawn(
       ? reconcileFlags(rawPersistedFlags as string[])
       : rawPersistedFlags;
     reconciledLaunchFlags = persistedFlags;
+    // Stored in place of the voided snapshot so the next restart still has the
+    // instruction to replay: the same settings-derived set the fresh command
+    // below is built from.
+    if (staleSystemPromptArgs.length > 0) {
+      reconciledLaunchFlags = reconcileFlags(
+        buildAgentLaunchFlags(effectiveEntry, agentId, {
+          modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
+          globalSkipPermissions,
+          globalUseAltScreen,
+        })
+      );
+    }
     // Resume commands prepend launch flags, so the bypass / inline tokens must be
     // injected even when no flags were captured — a session launched before
     // either feature existed should honour the current resolution (#10432, #10876).
-    // Only diverges from persistedFlags in that inject-from-empty case.
-    const injectedFromEmpty = reconcileFlags([]);
+    // Only diverges from persistedFlags in that inject-from-empty case, which is
+    // also where a stale preset's standing instruction rides.
+    const injectedFromEmpty = reconcileFlags([...staleSystemPromptArgs]);
     const resumeFlags =
       !hasPersistedFlags && injectedFromEmpty.length > 0 ? injectedFromEmpty : persistedFlags;
 
@@ -678,6 +700,7 @@ export function buildArgsForRespawn(
           ? generateAgentCommand(baseCommand, effectiveEntry, agentId, {
               clipboardDirectory,
               modelId: saved.agentModelId,
+              systemPromptArgs: staleSystemPromptArgs,
               presetArgs: preset?.args?.join(" "),
               globalSkipPermissions,
               globalUseAltScreen,
@@ -721,6 +744,7 @@ export function buildArgsForRespawn(
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
           modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
@@ -799,6 +823,7 @@ export function buildArgsForRespawn(
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
           modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
@@ -872,7 +897,7 @@ export function buildArgsForRespawn(
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
     agentLaunchFlags: presetWasStale
-      ? undefined
+      ? reconciledLaunchFlags
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     agentModelId: saved.agentModelId,
     spawnedBy: saved.spawnedBy,

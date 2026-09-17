@@ -3,6 +3,7 @@ import { agentSettingsClient, systemClient } from "@/clients";
 import { getAgentConfig } from "@/config/agents";
 import { generateAgentCommand, buildAgentLaunchFlags, mintAssignedSessionId } from "@shared/types";
 import type { RecipeTerminal } from "@shared/types";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { preflightSpawnBatchLimit } from "@/store/panelLimitStore";
 import { isMcpSpawnFocusSuppressed } from "@/store/mcpSpawnFocusGuard";
 import { isAssistantFocused } from "@/store/macroFocusStore";
@@ -112,6 +113,10 @@ export async function spawnPanelsFromRecipe(options: SpawnPanelsOptions): Promis
             const command = generateAgentCommand(baseCommand, entry, agentId, {
               clipboardDirectory,
               modelId: t.agentModelId,
+              // A cloned layout carries the source pane's captured flags; its
+              // standing instruction has to reach this first launch too, not
+              // only the restarts that replay those flags (#12431).
+              systemPromptArgs: extractSystemPromptArgs(t.agentLaunchFlags, agentId),
               recipeArgs: t.args?.trim() || undefined,
               globalSkipPermissions,
               globalUseAltScreen,

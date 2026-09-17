@@ -128,6 +128,18 @@ describe("buildMissingCliContinueArgs", () => {
     expect(args).not.toHaveProperty("command");
   });
 
+  // #12431: the standing instruction is the caller's, not rebuildable from
+  // settings, so it is the one part of the flag set the re-check carries.
+  it("replays only the standing-instruction pair out of the gate's flags", () => {
+    const args = buildMissingCliContinueArgs(
+      gate({
+        agentLaunchFlags: ["--verbose", "--append-system-prompt", "Be terse", "--model", "opus"],
+      })
+    );
+
+    expect(args?.agentLaunchFlags).toEqual(["--append-system-prompt", "Be terse"]);
+  });
+
   it("keeps a deliberately preset-free launch preset-free", () => {
     // undefined would let the agent-level default reappear on recovery.
     expect(buildMissingCliContinueArgs(gate({ agentPresetId: undefined }))?.presetId).toBeNull();

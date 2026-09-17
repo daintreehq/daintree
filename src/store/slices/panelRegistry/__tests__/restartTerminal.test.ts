@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
@@ -1464,5 +1464,105 @@ describe("restartTerminal carries the run's worktree onto the new pty record", (
     await usePanelStore.getState().restartTerminal("test-1");
 
     expect(mockSpawn.mock.calls[0]![0].worktreeId).toBeUndefined();
+  });
+});
+
+/**
+ * A standing instruction comes from the launch caller, not from settings, so
+ * the respawns that rebuild flags from settings have to carry it over (#12431).
+ */
+describe("restartTerminal keeps the launch's standing instruction", () => {
+  const pair = ["--append-system-prompt", "Infer the best option"];
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockImplementation(
+      (_entry: unknown, _agentId: unknown, options?: { systemPromptArgs?: string[] }) => [
+        "--rebuilt",
+        ...(options?.systemPromptArgs ?? []),
+      ]
+    );
+    // No saved settings: every rebuilt flag comes from the mock above.
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockReset();
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  afterAll(() => {
+    buildAgentLaunchFlagsMock.mockReset();
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+  });
+
+  it("replays persisted flags unchanged on an ordinary restart", async () => {
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentLaunchFlags: ["--persisted-flag", ...pair],
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--persisted-flag", ...pair]);
+  });
+
+  it("carries it through the rebuild when the panel's preset has gone stale", async () => {
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentPresetId: "deleted-preset",
+      agentLaunchFlags: ["--provider", "gone", ...pair],
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.agentLaunchFlags).toEqual(["--rebuilt", ...pair]);
+    expect(payload.agentLaunchFlags).not.toContain("gone");
+    expect(usePanelStore.getState().panelsById["test-1"]).toMatchObject({
+      agentLaunchFlags: ["--rebuilt", ...pair],
+    });
+  });
+
+  it("carries it across a preset fallback hop", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      agentPresetId: "blue-provider",
+      agentLaunchFlags: ["--provider", "blue", ...pair],
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    const { generateAgentCommand } = await import("@shared/types");
+    expect(vi.mocked(generateAgentCommand)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.anything(),
+      "claude",
+      expect.objectContaining({ systemPromptArgs: pair, presetArgs: "--provider amber" })
+    );
+    expect(mockSpawn.mock.calls[0]![0].agentLaunchFlags).toEqual(["--rebuilt", ...pair]);
   });
 });

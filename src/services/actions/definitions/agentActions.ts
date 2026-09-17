@@ -32,6 +32,12 @@ import {
 } from "@shared/config/agentIds";
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
+import {
+  hasSystemPromptOverride,
+  resolveSystemPromptArgs,
+  SYSTEM_PROMPT_MAX_LENGTH,
+} from "@shared/utils/agentSystemPrompt";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
 import type { ActionContext, ActionId } from "@shared/types/actions";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
@@ -341,6 +347,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .describe(
           "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input."
         ),
+      systemPrompt: z
+        .string()
+        .max(SYSTEM_PROMPT_MAX_LENGTH)
+        .optional()
+        .describe(
+          "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it."
+        ),
       interactive: z
         .boolean()
         .optional()
@@ -364,7 +377,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Whether to open the sidebar dock when the agent is placed there. Only meaningful for a dock placement; it changes what the user sees."
+          "Whether to open the sidebar dock when the agent is placed there, which changes what the user sees."
         ),
       env: z
         .record(z.string(), z.string())
@@ -376,7 +389,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Keeps the terminal out of the saved session, so it does not return after a restart. It also hides the panel from listings, status snapshots and agent-state reads, and spares it from bulk close and kill, so the caller cannot find or poll it afterwards. Use for throwaway work."
+          "Keeps the terminal out of the saved session, so it does not return after a restart. Listings, status snapshots, agent-state reads and bulk close or kill all skip it, so the caller cannot find or poll it later. Use for throwaway work."
         ),
       removeOnExit: z
         .boolean()
@@ -402,7 +415,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Skips the check that the agent's CLI can actually run. Without it an unlaunchable CLI opens a setup diagnostic instead of failing; with it the process is started anyway and simply fails. Leave it off unless the check itself is known to be wrong."
+          "Skips the check that the agent's CLI can run, so an unlaunchable CLI is started and fails rather than opening a setup diagnostic. Leave off unless that check is known to be wrong."
         ),
       name: z
         .string()
@@ -437,6 +450,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         cwd,
         worktreeId,
         prompt,
+        systemPrompt,
         interactive,
         model,
         presetId,
@@ -456,6 +470,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         cwd?: string;
         worktreeId?: string;
         prompt?: string;
+        systemPrompt?: string;
         interactive?: boolean;
         model?: string;
         presetId?: string | null;
@@ -484,11 +499,22 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           `A panel with id '${requestedId}' already exists. Omit the requested id, or choose one no panel is using.`
         );
       }
+      // Refused here, before anything launches: the launcher swallows its own
+      // failures into `launched:false`, which a caller would read as a
+      // transient miss rather than an instruction this agent can never take.
+      const systemPromptArgs = resolveSystemPromptArgs(agentId, systemPrompt);
+      if (!systemPromptArgs.ok) throw new UnactionableTargetError(systemPromptArgs.reason);
+      if (systemPromptArgs.args.length > 0 && hasSystemPromptOverride(agentLaunchFlags, agentId)) {
+        throw new UnactionableTargetError(
+          "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
+        );
+      }
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
         cwd,
         worktreeId,
         prompt,
+        systemPromptArgs: systemPromptArgs.args.length > 0 ? systemPromptArgs.args : undefined,
         interactive,
         modelId: model,
         presetId,

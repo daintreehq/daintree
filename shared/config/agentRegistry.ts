@@ -672,6 +672,16 @@ export interface AgentConfig {
      * the Settings copy for the toggle.
      */
     decorations?: { offArgs: string[]; label: string; description: string };
+    /**
+     * How the CLI takes a standing instruction appended to its own system
+     * prompt — the agent-neutral `systemPrompt` argument of `agent.launch`
+     * (#12431). `flag` is followed by the text itself or, when `configKey` is
+     * set, by a TOML `configKey="text"` override (Codex's `-c`). Declare it only
+     * for a true append: a CLI that can only replace its whole system prompt
+     * (Gemini's `GEMINI_SYSTEM_MD`) leaves it undeclared, so the launch is
+     * refused rather than silently discarding the CLI's own instructions.
+     */
+    appendSystemPrompt?: { flag: string; configKey?: string };
     /** Whether the agent CLI supports bracketed paste input (default: true) */
     supportsBracketedPaste?: boolean;
     /** Escape sequence sent for Shift+Enter / soft newline (default: "\x1b\r") */

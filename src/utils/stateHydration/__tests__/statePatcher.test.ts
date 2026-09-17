@@ -1532,6 +1532,119 @@ describe("buildArgsForRespawn", () => {
     expect(result.title).not.toContain("Deleted");
   });
 
+  // #12431: the stale-preset strip voids the captured flags, but the caller's
+  // standing instruction has no setting to be rebuilt from, so it is kept.
+  it("keeps a standing instruction through a stale-preset strip", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--provider", "gone", ...pair],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined
+    );
+    expect(buildResumeCommandMock).toHaveBeenLastCalledWith("claude", "sess-1", pair);
+    expect(result.agentLaunchFlags).toEqual(pair);
+    expect(result.agentPresetId).toBeUndefined();
+  });
+
+  // A fresh conversation still gets its assigned id (#11782) when the
+  // instruction is carried: it rides the settings-derived command.
+  it("carries a stale-preset pane's instruction into a fresh settings-derived launch", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentLaunchFlags: ["--provider", "gone", ...pair],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { allowResumeLatest: false }
+    );
+    expect(result.agentSessionId).toBeTruthy();
+    expect(generateAgentCommandMock.mock.lastCall?.[3]).toMatchObject({
+      systemPromptArgs: pair,
+      sessionId: result.agentSessionId,
+    });
+    expect(result.agentLaunchFlags).toEqual(pair);
+  });
+
+  // A pane held for recovery (#12434) keeps the fresh command "Start new" runs;
+  // under a stale preset that is settings-derived and must carry it too.
+  it("carries a stale-preset pane's instruction into a held pane's fresh command", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--provider", "gone", ...pair],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { coldLaunch: { cwd: "/p", awaitingDestination: true } }
+    );
+    expect(result.restoreRecovery?.awaitingDestination).toBe(true);
+    expect(generateAgentCommandMock.mock.lastCall?.[3]).toMatchObject({
+      systemPromptArgs: pair,
+    });
+    expect(result.agentLaunchFlags).toEqual(pair);
+  });
+
+  it("still drops the captured flags on a stale-preset strip with no instruction", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentLaunchFlags: ["--provider", "gone"],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { allowResumeLatest: false }
+    );
+    expect(result.agentLaunchFlags).toBeUndefined();
+    expect(generateAgentCommandMock.mock.lastCall?.[3]).toMatchObject({ systemPromptArgs: [] });
+  });
+
   // Regression: the inverse — when the preset still resolves, everything is preserved.
   it("preserves agentPresetId/color/title when preset still resolves", () => {
     getMergedPresetMock.mockReturnValueOnce({

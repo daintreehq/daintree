@@ -4,6 +4,7 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { getAgentConfig } from "@shared/config/agentRegistry";
+import { escapeShellArgOptional } from "@shared/utils/shellEscape";
 
 /**
  * #12433 end to end: a passive exit capture persisted by Main's real writeback,
@@ -260,7 +261,11 @@ describe("passive exit capture → cold restore (#12433)", () => {
       // An exact id per pane, not "most recent in this folder".
       const args = byPane.get(paneId);
       expect(args?.agentSessionId).toBe(sessionId);
-      expect(args?.command).toContain(resume.args(sessionId).join(" "));
+      // Quoted the way the command builder quotes positional values (`-C '.'`).
+      const resumeArgs = resume
+        .args(sessionId)
+        .map((arg) => (arg.startsWith("-") ? arg : escapeShellArgOptional(arg)));
+      expect(args?.command).toContain(resumeArgs.join(" "));
     }
   });
 });
