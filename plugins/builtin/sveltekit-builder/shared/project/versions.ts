@@ -135,11 +135,11 @@ export function majorVersion(version: string | null): number | null {
 }
 
 /**
- * The packages whose major decides direct editing. A range, not a floor: source
- * is parsed with the bundled Svelte compiler and located through the dev
- * runtime's `__svelte_meta`, so a newer major inherits nothing it was not
- * tested against. Tailwind is not here — edits write class tokens exactly as
- * typed, and class awareness is gated on its own, by the Tailwind loader.
+ * The packages whose major decides the support verdict. A range, not a floor:
+ * source is parsed with the bundled Svelte compiler and located through the
+ * dev runtime's `__svelte_meta`, so a newer major inherits nothing it was not
+ * tested against. Tailwind is not here — the builder reads its version for the
+ * agent's context and nothing else.
  */
 const GATED: ReadonlyArray<{ key: TrackedPackageKey; major: number }> = [
   { key: "svelte", major: SUPPORTED_BASELINE.svelteMajor },
@@ -224,10 +224,12 @@ export function assessSupport(
       continue;
     }
     if (major < supported) {
-      reasons.push(`${pkg} ${installed} is installed; direct editing needs ${pkg} ${supported}`);
+      reasons.push(
+        `${pkg} ${installed} is installed; this builder is tested against ${pkg} ${supported}`
+      );
     } else if (major > supported) {
       reasons.push(
-        `${pkg} ${installed} is newer than direct editing supports (${pkg} ${supported}); inspecting and asking an agent still work`
+        `${pkg} ${installed} is newer than this builder was tested against (${pkg} ${supported}); tracing an element and asking an agent still work`
       );
     }
   }

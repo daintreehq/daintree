@@ -27,7 +27,6 @@ import {
   OBSERVATION,
   REVISION,
   createFakeHost,
-  makeReceipt,
   makeSelection,
   type FakeHost,
 } from "./testHost";
@@ -292,31 +291,23 @@ describe("preview binding", () => {
     expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(0);
   });
 
-  it("traces and offers the agent on a preview-only app, without direct edits", async () => {
+  it("traces and offers the agent on an app it can only preview", async () => {
     host.handlers.set(CHANNELS.workspaceOpen, () => ({
       status: "ready",
       workspaceSessionId: "ws-1",
       appRoot: "/repo",
-      support: { level: "preview-only", reasons: ["Found svelte 4.2.1; editing needs Svelte 5"] },
+      support: {
+        level: "preview-only",
+        reasons: ["svelte 4.2.1 is installed; tested against svelte 5"],
+      },
     }));
     await mountBound();
-    // The rule: a Svelte version this plugin cannot write to costs the user
+    // The rule: a Svelte version outside the supported range costs the user
     // nothing, so the panel says nothing about it. What the builder offers —
-    // trace an element, hand it to an agent — does not depend on being able to
-    // edit the source here, and a notice about a road that isn't there would
-    // read as a degraded panel.
+    // trace an element, hand it to an agent — is the same either way, and a
+    // notice about a road that isn't there would read as a degraded panel.
     expect(screen.queryByRole("region", { name: "Site source" })).toBeNull();
-    expect(screen.queryByText(/editing needs Svelte 5/)).toBeNull();
-    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
-      status: "ok",
-      selection: makeSelection({
-        documentEpoch: args.documentEpoch as number,
-        capabilities: [
-          { surface: "text", support: "inspect-only", reason: "unsupported-framework-version" },
-          { surface: "classes", support: "inspect-only", reason: "unsupported-framework-version" },
-        ],
-      }),
-    }));
+    expect(screen.queryByText(/tested against svelte 5/)).toBeNull();
     await act(async () => host.select(0));
     await screen.findByRole("textbox", { name: "Request for the agent" });
     expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
@@ -631,20 +622,13 @@ describe("an app inside a monorepo", () => {
       appRoot: APP,
       support: { level: "full" },
     }));
-    host.handlers.set(CHANNELS.selectionResolve, (args) => {
-      const selection = {
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: {
         ...makeSelection({ documentEpoch: args.documentEpoch as number }),
         appRoot: APP,
-      };
-      selection.nodes[0]!.definition!.revision = host.diskRevision;
-      return { status: "ok", selection };
-    });
-    // Main's receipts name files from the worktree; the page names them from the app.
-    host.handlers.set(CHANNELS.editApply, () => {
-      const receipt = makeReceipt({ beforeRevision: host.diskRevision, file: `apps/site/${FILE}` });
-      host.diskRevision = receipt.afterRevision;
-      return { status: "applied", receipt };
-    });
+      },
+    }));
   }
 
   it("opens and copies a picked component's file inside the app, as the agent prompt names it", async () => {

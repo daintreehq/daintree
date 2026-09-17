@@ -176,10 +176,10 @@ describe("assessSupport", () => {
     expect(oneAbove.verdict.level).toBe("preview-only");
     expect(kitAbove.verdict.level).toBe("preview-only");
     const reasons = oneAbove.verdict.level === "preview-only" ? oneAbove.verdict.reasons : [];
-    expect(reasons[0]).toMatch(/newer than direct editing supports/);
+    expect(reasons[0]).toMatch(/newer than this builder was tested against/);
   });
 
-  it("does not let Tailwind decide direct editing: classes are written exactly as typed", () => {
+  it("does not let Tailwind decide the verdict: its version is context, not a gate", () => {
     const declared = { svelte: "^5", "@sveltejs/kit": "^2", tailwindcss: "^3" };
     const tailwind3 = assessSupport(
       { svelte: "5.0.0", kit: "2.0.0", tailwind: "3.4.17", vite: null },
