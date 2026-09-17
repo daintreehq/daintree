@@ -194,6 +194,7 @@ describe("bridgePtyEvent", () => {
       worktreeId: string | null;
       terminalId: string;
       launchGeneration: number | null | undefined;
+      boundary: string;
     }> = [];
     events.on("agent-session:captured", (payload) => {
       payloads.push({
@@ -201,6 +202,7 @@ describe("bridgePtyEvent", () => {
         worktreeId: payload.record.worktreeId,
         terminalId: payload.terminalId,
         launchGeneration: payload.launchGeneration,
+        boundary: payload.boundary,
       });
     });
 
@@ -208,6 +210,7 @@ describe("bridgePtyEvent", () => {
       type: "agent-session-captured",
       terminalId: "term-9",
       launchGeneration: 3,
+      boundary: "exit",
       record: {
         sessionId: "sess-1",
         agentId: "claude",
@@ -220,7 +223,14 @@ describe("bridgePtyEvent", () => {
 
     expect(handled).toBe(true);
     expect(payloads).toEqual([
-      { sessionId: "sess-1", worktreeId: null, terminalId: "term-9", launchGeneration: 3 },
+      {
+        sessionId: "sess-1",
+        worktreeId: null,
+        terminalId: "term-9",
+        launchGeneration: 3,
+        // Provenance must survive the hop: only an exit may touch the saved pane.
+        boundary: "exit",
+      },
     ]);
   });
 

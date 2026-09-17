@@ -43,7 +43,10 @@ import { deleteSessionFile } from "./pty/terminalSessionPersistence.js";
 import { ledgerFactsFromSpawnOptions } from "./pty/lifecycleLedger.js";
 import { AgentTerminalLifecycleLedger } from "../../shared/utils/agentLifecycleLedger.js";
 import { events } from "./events.js";
-import { getGitBranch } from "../utils/gitUtils.js";
+import {
+  resolveCaptureBranch,
+  trackAgentSessionCapture,
+} from "./pty/agentSessionCaptureDelivery.js";
 import type { GracefulKillResult, TerminalResizeResult } from "../../shared/types/pty-host.js";
 import {
   isValidTerminalGeometry,
@@ -748,7 +751,9 @@ export class PtyManager extends EventEmitter {
       const terminal = this.registry.get(termId);
       const info = terminal?.getInfo();
 
-      void (async () => {
+      // Registered with the quit barrier as a whole: the id isn't known until
+      // the graceful kill returns, and a quit must still wait for it (#12433).
+      const expiry = (async () => {
         try {
           const { sessionId } = await this.gracefulKill(termId);
           // The assistant's overlay terminal must never produce a resume
@@ -759,7 +764,7 @@ export class PtyManager extends EventEmitter {
             // Best-effort branch stamp for resume sanity checks. The pty-host
             // has FS access but no WorkspaceClient, so resolve directly from
             // git with a short timeout; never let it block or fail the close.
-            const branch = info.cwd ? await getGitBranch(info.cwd) : null;
+            const branch = await resolveCaptureBranch(info.cwd);
             // Ship the captured record to Main rather than writing the journal
             // here — Main is the journal's single writer (two processes with
             // separate write queues doing read-modify-write on one file can
@@ -769,6 +774,7 @@ export class PtyManager extends EventEmitter {
             events.emit("agent-session:captured", {
               terminalId: termId,
               launchGeneration: info.launchGeneration,
+              boundary: "trash-expiry",
               record: {
                 sessionId,
                 agentId: info.launchAgentId,
@@ -797,6 +803,7 @@ export class PtyManager extends EventEmitter {
           }
         }
       })();
+      trackAgentSessionCapture(expiry);
     });
   }
 

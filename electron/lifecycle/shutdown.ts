@@ -4,6 +4,7 @@ import type { PtyClient } from "../services/PtyClient.js";
 import type { WorkspaceClient } from "../services/WorkspaceClient.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { journalAgentSession } from "../services/pty/agentSessionJournal.js";
+import { sealAndDrainCapturedSessionPersistence } from "../services/pty/agentSessionCapturePersistence.js";
 import { isAssistantTerminalRecord } from "../services/assistantTerminal.js";
 import { getLifecycleLedger } from "../services/pty/lifecycleLedger.js";
 import { getActiveAgentCount, showQuitWarning } from "../utils/quitWarning.js";
@@ -55,6 +56,8 @@ import { isSmokeTest } from "../setup/environment.js";
 import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
 import {
+  CAPTURE_DELIVERY_BUDGET_MS,
+  CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS,
   CLEANUP_TIMEOUT_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
@@ -424,12 +427,48 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
   let currentPhase = "service-disposal";
   let hardTimer: ReturnType<typeof setTimeout> | undefined;
 
+  // Finish passive session captures before anything they need is disposed
+  // (#12433). A pane whose agent exited on its own — or whose graceful scrape
+  // just failed — ships its id after an async tail, and persisting it needs the
+  // host, the journal and the project store. Producer first: the host delivers
+  // everything it has observed, and only then does Main stop accepting and wait
+  // for the writes those records started. Each step is bounded and neither can
+  // fail the chain; a capture that misses the window costs its own resume.
+  const capturePersistencePromise = gracefulShutdownPromise.then(async () => {
+    currentPhase = "capture-persistence";
+    if (ptyClient) {
+      try {
+        const delivery = await ptyClient.finishAgentSessionCaptures(CAPTURE_DELIVERY_BUDGET_MS);
+        if (!delivery.complete) {
+          console.warn(
+            `[MAIN] Session capture delivery incomplete at quit (${delivery.pending} pending)`
+          );
+        }
+      } catch (err) {
+        console.warn("[MAIN] Session capture delivery at quit failed:", err);
+      }
+    }
+    try {
+      const drain = await sealAndDrainCapturedSessionPersistence(
+        CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS
+      );
+      if (!drain.drained) {
+        console.warn(
+          `[MAIN] Captured session persistence still running at quit (${drain.pending} pending)`
+        );
+      }
+    } catch (err) {
+      console.warn("[MAIN] Captured session persistence drain failed:", err);
+    }
+    currentPhase = "service-disposal";
+  });
+
   // Stop the CCR config watcher and unwire PluginService's WorkspaceClient
   // reference before the Promise.all that disposes the WorkspaceClient.
   // Running these sequentially guarantees no file-change callback can fire
   // into a half-disposed WorkspaceClient during the await. Both wrap their
   // own failures so a single throw can't strand the rest of shutdown.
-  const preDisposePromise = gracefulShutdownPromise.then(async () => {
+  const preDisposePromise = capturePersistencePromise.then(async () => {
     const ccr = getCcrConfigService();
     if (ccr) {
       try {

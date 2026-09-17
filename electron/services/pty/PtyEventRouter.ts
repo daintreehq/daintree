@@ -298,6 +298,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       broker.resolve(event.requestId, event.result);
       return true;
 
+    case "session-captures-finished":
+      broker.resolve(event.requestId, event.result);
+      return true;
+
     case "terminal-diagnostic-info":
       broker.resolve(event.requestId, event.info);
       return true;

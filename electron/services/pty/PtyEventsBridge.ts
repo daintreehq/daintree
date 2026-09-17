@@ -164,6 +164,7 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
       events.emit("agent-session:captured", {
         terminalId: event.terminalId,
         launchGeneration: event.launchGeneration,
+        boundary: event.boundary,
         record: event.record,
       });
       return true;

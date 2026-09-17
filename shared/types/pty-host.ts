@@ -347,6 +347,13 @@ export type PtyHostRequest =
       preserveSession?: boolean;
     }
   | { type: "trim-state"; targetLines: number; requestId: string; scope: TrimStateScope }
+  /**
+   * Quit-time producer barrier for `agent-session-captured` (#12433): deliver
+   * every capture the host has already observed, skipping the best-effort
+   * branch stamp, then reply. Permanent for the host — nothing after it waits
+   * on enrichment again.
+   */
+  | { type: "finish-session-captures"; requestId: string; budgetMs: number }
   | { type: "set-resource-monitoring"; enabled: boolean }
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
@@ -645,6 +652,7 @@ export type PtyHostEvent =
       type: "agent-session-captured";
       terminalId: string;
       launchGeneration?: number | null;
+      boundary: AgentSessionCaptureBoundary;
       record: Omit<AgentSessionRecord, "savedAt">;
     }
   | { type: "terminal-pid"; id: string; pid: number }
@@ -668,6 +676,11 @@ export type PtyHostEvent =
   | { type: "all-terminals"; requestId: string; terminals: PtyHostTerminalInfo[] }
   | { type: "memory-rollup"; requestId: string; rollup: MemoryRollup }
   | { type: "trim-state-result"; requestId: string; result: TrimStateResult }
+  | {
+      type: "session-captures-finished";
+      requestId: string;
+      result: AgentSessionCaptureFinishResult;
+    }
   | {
       type: "semantic-search-result";
       requestId: string;
@@ -802,6 +815,21 @@ export type PtyHostResponseEvent = Exclude<
  */
 export interface GracefulKillResult {
   sessionId: string | null;
+}
+
+/**
+ * Which lifecycle boundary produced an `agent-session-captured` record. Only
+ * `exit` — the PTY incarnation ending for good — identifies a session the
+ * saved pane can own; a demotion leaves a live shell that may host another
+ * conversation, and trash expiry belongs to a pane the user already closed.
+ */
+export type AgentSessionCaptureBoundary = "exit" | "demotion" | "trash-expiry";
+
+/** Reply to `finish-session-captures`: whether every observed capture was delivered. */
+export interface AgentSessionCaptureFinishResult {
+  complete: boolean;
+  /** Captures still undelivered when the budget ran out. */
+  pending: number;
 }
 
 /**

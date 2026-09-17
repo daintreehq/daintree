@@ -22,6 +22,11 @@ const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(unde
 const waitForBurstRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const consumeRestoreQuotaMock = vi.hoisted(() => vi.fn(() => false));
 
+const noteTerminalLaunchMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../../services/pty/agentSessionCapturePersistence.js", () => ({
+  noteTerminalLaunch: noteTerminalLaunchMock,
+}));
+
 vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: {
     getCurrentProject: mockGetCurrentProject,
@@ -333,6 +338,47 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(ptyClient.spawn).toHaveBeenCalledTimes(1);
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.projectId).toBe("project-a-id");
+  });
+
+  it("records each spawned launch's resume intent (#12433)", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+    const id = await getSpawnHandler()({} as Electron.IpcMainInvokeEvent, {
+      projectId: "project-a-id",
+      cols: 80,
+      rows: 24,
+      command: "codex",
+    });
+
+    // After the spawn, whose generation the intent is keyed to.
+    expect(noteTerminalLaunchMock).toHaveBeenCalledTimes(1);
+    expect(noteTerminalLaunchMock).toHaveBeenCalledWith(id, {
+      command: ptyClient.spawn.mock.calls[0][1].command,
+      agentSessionId: undefined,
+    });
+    expect(ptyClient.spawn.mock.invocationCallOrder[0]).toBeLessThan(
+      noteTerminalLaunchMock.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("records nothing when the spawn itself throws", async () => {
+    mockGetProjectById.mockReturnValue(projectA);
+    mockRevokePaneConfig.mockResolvedValue(undefined);
+    ptyClient.spawn.mockImplementation(() => {
+      throw new Error("host gone");
+    });
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+
+    await expect(
+      getSpawnHandler()({} as Electron.IpcMainInvokeEvent, {
+        projectId: "project-a-id",
+        cols: 80,
+        rows: 24,
+        command: "codex",
+      })
+    ).rejects.toThrow(/Failed to spawn terminal/);
+    expect(noteTerminalLaunchMock).not.toHaveBeenCalled();
   });
 
   it("falls back to current project when projectId is not provided", async () => {

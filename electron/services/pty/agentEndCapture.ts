@@ -1,9 +1,9 @@
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { supportsSessionIdAssignment } from "../../../shared/types/agentSettings.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import { getGitBranch } from "../../utils/gitUtils.js";
 import { createLogger } from "../../utils/logger.js";
 import { events } from "../events.js";
+import { resolveCaptureBranch, trackAgentSessionCapture } from "./agentSessionCaptureDelivery.js";
 import { createSessionIdMatcher } from "./sessionIdCapture.js";
 import type { TerminalInfo } from "./types.js";
 
@@ -57,7 +57,13 @@ const CAPTURE_SCAN_CHARS = 400;
 type AgentEndBoundary = "exit" | "demotion";
 
 type AgentEndCaptureOutcome =
-  "captured" | "preassigned" | "no-resume-config" | "no-pattern" | "no-match" | "needs-boundary";
+  | "captured"
+  | "preassigned"
+  | "assistant"
+  | "no-resume-config"
+  | "no-pattern"
+  | "no-match"
+  | "needs-boundary";
 
 interface AgentEndCaptureArgs {
   terminalId: string;
@@ -96,6 +102,13 @@ export function captureAgentEndSession(args: AgentEndCaptureArgs): void {
       captured: outcome === "captured" || outcome === "preassigned",
     });
   };
+
+  // The assistant's overlay terminal is not a resumable grid pane and must
+  // never produce a resume record (#12183), exactly as trash expiry skips it.
+  if (terminal.isAssistantTerminal === true) {
+    logOutcome("assistant");
+    return;
+  }
 
   const resume = getEffectiveAgentConfig(agentId)?.resume;
   if (resume?.kind !== "session-id") {
@@ -176,15 +189,17 @@ function emitCapture(args: AgentEndCaptureArgs, sessionId: string): void {
   // explicit fail-open, leaving sessionId dedupe to collapse true duplicates.
   const launchGeneration = boundary === "exit" ? terminal.launchGeneration : null;
 
-  void (async () => {
+  const delivery = (async () => {
     try {
       // Best-effort branch stamp for resume sanity checks, mirroring the
       // trash-expiry capture: the pty-host has FS access but no WorkspaceClient,
-      // and getGitBranch is bounded and never throws.
-      const branch = cwd ? await getGitBranch(cwd) : null;
+      // and the lookup is bounded, never throws, and is skipped once a quit
+      // asks for the observed ids (#12433).
+      const branch = await resolveCaptureBranch(cwd);
       events.emit("agent-session:captured", {
         terminalId,
         launchGeneration,
+        boundary,
         record: { ...record, ...(branch ? { branch } : {}) },
       });
     } catch (error) {
@@ -200,4 +215,5 @@ function emitCapture(args: AgentEndCaptureArgs, sessionId: string): void {
       });
     }
   })();
+  trackAgentSessionCapture(delivery);
 }

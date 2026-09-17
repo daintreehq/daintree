@@ -9,6 +9,13 @@ const projectStoreMock = vi.hoisted(() => ({
 
 vi.mock("../../../services/ProjectStore.js", () => ({ projectStore: projectStoreMock }));
 
+const { noteRendererSessionIdentityEdits } = vi.hoisted(() => ({
+  noteRendererSessionIdentityEdits: vi.fn(),
+}));
+vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
+  noteRendererSessionIdentityEdits,
+}));
+
 import { terminalLayoutNamespace, sanitizeFieldEdits } from "../terminalLayout.js";
 
 const setTerminals = terminalLayoutNamespace.ops.setTerminals.handler as (payload: {
@@ -331,6 +338,89 @@ describe("setTerminals session-id preservation (#11461)", () => {
     await setTerminals({ projectId: "p1", terminals: [withSession("1")] });
 
     expect(sessionIdOf(saved(), "1")).toBeUndefined();
+  });
+});
+
+describe("setTerminals — identity edits reach capture writeback (#12433)", () => {
+  beforeEach(() => {
+    noteRendererSessionIdentityEdits.mockReset();
+  });
+
+  const claimed = (): string[] =>
+    noteRendererSessionIdentityEdits.mock.calls.flatMap(([ids]) => [...(ids as Iterable<string>)]);
+
+  it("reports the panes whose session id the renderer claims to have changed", async () => {
+    const order: string[] = [];
+    noteRendererSessionIdentityEdits.mockImplementation(() => order.push("noted"));
+    projectStoreMock.enqueueProjectStateUpdate.mockImplementation(async () => {
+      order.push("enqueued");
+    });
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1"), term("2")],
+      changedIds: ["1", "2"],
+      removedIds: [],
+      fieldEdits: [{ id: "2", fields: ["agentSessionId"] }],
+    });
+
+    expect(claimed()).toEqual(["2"]);
+    // Ahead of the save, so a capture already queued behind it sees the edit.
+    expect(order).toEqual(["noted", "enqueued"]);
+  });
+
+  it("reports nothing for an ordinary save or one with no usable claim", async () => {
+    onDisk(baseState([term("1")]));
+
+    await setTerminals({ projectId: "p1", terminals: [term("1")], changedIds: ["1"] });
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1")],
+      changedIds: ["1"],
+      fieldEdits: [
+        { id: "1", fields: ["title"] },
+        { id: 7, fields: ["agentSessionId"] },
+      ],
+    });
+
+    expect(claimed()).toEqual([]);
+  });
+
+  it.each([
+    ["not marked changed", { terminals: ["1", "2"], changedIds: ["1"], removedIds: [] }],
+    [
+      "changed but tombstoned",
+      { terminals: ["1", "2"], changedIds: ["1", "2"], removedIds: ["2"] },
+    ],
+    [
+      "changed but missing from the snapshot",
+      { terminals: ["1"], changedIds: ["1", "2"], removedIds: [] },
+    ],
+  ])("reports nothing for a claim on a pane %s", async (_label, delta) => {
+    onDisk(baseState([term("1"), term("2")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: delta.terminals.map((id) => term(id)),
+      changedIds: delta.changedIds,
+      removedIds: delta.removedIds,
+      // The merge ignores this claim, so capture writeback must too.
+      fieldEdits: [{ id: "2", fields: ["agentSessionId"] }],
+    });
+
+    expect(claimed()).toEqual([]);
+  });
+
+  it("reports nothing for a legacy full-replace write, whose claims the merge ignores", async () => {
+    onDisk(baseState([term("1")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1")],
+      fieldEdits: [{ id: "1", fields: ["agentSessionId"] }],
+    });
+
+    expect(claimed()).toEqual([]);
   });
 });
 

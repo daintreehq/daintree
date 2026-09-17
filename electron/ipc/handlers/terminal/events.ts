@@ -6,7 +6,10 @@ import { CHANNELS } from "../../channels.js";
 import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
-import { journalAgentSession } from "../../../services/pty/agentSessionJournal.js";
+import {
+  acceptCapturedAgentSession,
+  releaseSupersededCapturedSession,
+} from "../../../services/pty/agentSessionCapturePersistence.js";
 import type {
   SpawnResult,
   TerminalResizeResult,
@@ -66,7 +69,11 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
-    if (!result.success) {
+    if (result.success) {
+      // A confirmed relaunch may supersede a session a natural exit left on
+      // the pane (#12433); a refused one leaves the running process's id alone.
+      releaseSupersededCapturedSession(id, result.launchGeneration);
+    } else {
       // Async pty-host spawn rejection (PENDING_SPAWNS_CAPPED, bad shell path,
       // etc.) doesn't throw from ptyClient.spawn(). Revoke any minted pane
       // config so the token doesn't outlive the never-running PTY.
@@ -180,20 +187,14 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(unsubTerminalRestored);
 
   // Resume records captured by the pty-host (trash expiry, natural agent
-  // exit, `/quit` demotion). Main is the
-  // journal's single writer — the pty-host writing the file itself would race
-  // main's own close-path writes (two processes, two write queues, one file)
-  // — so persist here through the exactly-once journal funnel, keyed by the
-  // capture's terminal generation, then signal renderers.
+  // exit, `/quit` demotion). Main is the single writer of both the journal and
+  // the saved pane — the pty-host writing either itself would race main's own
+  // close-path writes (two processes, two write queues, one file). Accepted
+  // synchronously so a quit can drain what is already in flight (#12433).
   const unsubSessionCaptured = events.on(
     "agent-session:captured",
     (payload: DaintreeEventMap["agent-session:captured"]) => {
-      void journalAgentSession(payload.record, {
-        terminalId: payload.terminalId,
-        generation: payload.launchGeneration,
-      }).catch((err) => {
-        console.error("[TerminalEvents] Failed to persist captured agent session:", err);
-      });
+      acceptCapturedAgentSession(payload);
     }
   );
   handlers.push(unsubSessionCaptured);
