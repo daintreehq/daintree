@@ -118,6 +118,7 @@ describe("TerminalRendererPolicy", () => {
       const callOrder: string[] = [];
       const applyDeferredResize = vi.fn(() => {
         callOrder.push("applyDeferredResize");
+        return true;
       });
       mockDeps.applyDeferredResize = applyDeferredResize;
       const terminal = mockManagedTerminal.terminal as unknown as {

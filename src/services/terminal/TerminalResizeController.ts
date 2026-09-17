@@ -3,8 +3,8 @@ import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import {
-  isCollapsedTerminalGeometry,
   isPlausibleTerminalGeometry,
+  isUsableTerminalGeometry,
   normalizeTerminalGridDimension,
 } from "@shared/types/terminal";
 import { getEffectiveScrollbarWidth } from "@/config/xtermConfig";
@@ -368,13 +368,16 @@ export class TerminalResizeController {
    *   measures about 23x4 — refusing THAT leaves xterm bigger than its
    *   container with its content clipped, and every later fit of the same
    *   container refuses again, so the pane never recovers.
-   * - `"derived"`: everything else. A grid extrapolated from cached cell metrics
-   *   with no live layout, scaled for a detached view, or replayed out of a
-   *   target cache, a snapshot header or the persisted size map. Nothing here
-   *   looked at a container, so a grid below a workable pane is evidence there
-   *   was no layout to read, and the strict floor applies. Declining costs only
-   *   staleness: both grids stay put and the reveal-time fresh measurement
-   *   corrects them.
+   * - `"derived"`: a grid EXTRAPOLATED rather than read — divided out of cached
+   *   cell metrics with no live layout, or scaled for a detached view against
+   *   forwarded window bounds. Nothing here looked at a container, so a grid
+   *   below a workable pane is evidence there was no layout to read, and the
+   *   strict floor applies. Declining costs only staleness: both grids stay put
+   *   and the reveal-time fresh measurement corrects them.
+   *
+   * A cache replay counts as `"measured"`, not `"derived"`: the observer writes
+   * its real measurements into that cache too, so the strict floor there would
+   * refuse a small pane the very target it had just measured.
    *
    * Refusal holds what the caller already has rather than clamping up to the
    * floor — nobody measured the floor either, and asserting an invented grid
@@ -395,7 +398,7 @@ export class TerminalResizeController {
     const managed = this.deps.getInstance(id);
     const refused =
       provenance === "measured"
-        ? isCollapsedTerminalGeometry({ cols, rows })
+        ? !isUsableTerminalGeometry({ cols, rows })
         : !isPlausibleTerminalGeometry({ cols, rows });
     if (!refused) {
       if (managed) managed.implausibleGridSignature = undefined;
@@ -863,8 +866,7 @@ export class TerminalResizeController {
     // The pixel floor is necessary but not sufficient. It is a fixed count of
     // pixels, while the grid those pixels become also depends on the gutter and
     // the cell: at the largest supported font a box sitting exactly on that
-    // floor still divides to FIT_MIN_COLS. Checked on columns alone because
-    // columns are what reflow rewraps.
+    // floor still divides to FIT_MIN_COLS.
     //
     // A conservative classification, not a proof — a genuine many-way split at
     // maximum font size can measure this narrow. These paths are where that
@@ -1000,10 +1002,16 @@ export class TerminalResizeController {
     }
   }
 
-  applyDeferredResize(id: string): void {
+  /**
+   * @returns false only when the target was REFUSED — the pane still needs a
+   * fresh measurement, and a caller that stamps the pixel cache on the way past
+   * would dedup the corrected observer tick away. Every other outcome, including
+   * "nothing to do", reports true.
+   */
+  applyDeferredResize(id: string): boolean {
     const managed = this.deps.getInstance(id);
-    if (!managed) return;
-    if (this.isResizeLocked(id)) return;
+    if (!managed) return true;
+    if (this.isResizeLocked(id)) return true;
 
     const currentCols = managed.terminal.cols;
     const currentRows = managed.terminal.rows;
@@ -1011,14 +1019,15 @@ export class TerminalResizeController {
     const targetRows = managed.latestRows;
 
     if (currentCols === targetCols && currentRows === targetRows) {
-      return;
+      return true;
     }
 
     // Same reason as `forceImmediateResize`: this replays the target cache, and
     // the wake paths that call it are exactly where a pane that collapsed while
-    // hidden would re-assert that grid to both halves (#12442).
-    if (this.refusesGrid(id, targetCols, targetRows, "deferred-resync", "derived")) {
-      return;
+    // hidden would re-assert that grid to both halves (#12442). Same floor too,
+    // and for the same reason — the cache holds real measurements as well.
+    if (this.refusesGrid(id, targetCols, targetRows, "deferred-resync", "measured")) {
+      return false;
     }
 
     // #10863 backstop at the choke point: every OUT-OF-BAND deferred resync
@@ -1034,7 +1043,7 @@ export class TerminalResizeController {
     if (!managed.isAltBuffer && hasStreamingWrites(managed, Date.now())) {
       managed.revealPendingRepair = true;
       managed.revealPendingGeneration = managed.attachGeneration;
-      return;
+      return true;
     }
 
     // Wake-time atomic resync: bypass the settled-strategy 500ms debounce so
@@ -1047,6 +1056,7 @@ export class TerminalResizeController {
     this.resizeTerminal(managed, targetCols, targetRows);
     terminalClient.resize(id, targetCols, targetRows);
     this.pinToBottomAfterResize(managed);
+    return true;
   }
 
   /**
@@ -1347,11 +1357,13 @@ export class TerminalResizeController {
     if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols <= 0 || rows <= 0) {
       return;
     }
-    // The target cache is not a measurement — it is whatever was last written
-    // to it, including by a path that has since been refused. Ask before
-    // asserting it to the PTY, and before cancelling queued work that may hold
-    // a grid something did measure (#12442).
-    if (this.refusesGrid(id, cols, rows, "force-immediate", "derived")) {
+    // The target cache is not itself a measurement — it is whatever was last
+    // written to it, including by a path that has since been refused. Ask before
+    // asserting it to the PTY, and before cancelling queued work that may hold a
+    // grid something did measure (#12442). The collapse floor, though: the
+    // observer writes its real measurements here too, so the strict floor would
+    // refuse a small pane the very target it had just measured.
+    if (this.refusesGrid(id, cols, rows, "force-immediate", "measured")) {
       return;
     }
 

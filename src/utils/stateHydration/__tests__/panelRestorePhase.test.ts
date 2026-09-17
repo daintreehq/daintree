@@ -582,9 +582,21 @@ describe("restorePanelsPhase — saved panels", () => {
 
   it("falls back to a healthy persisted size when the live PTY grid is collapsed", async () => {
     const ctx = makeContext({ terminalSizes: { t1: { cols: 203, rows: 51 } } });
-    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 3, ptyRows: 90 }));
+    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 80, ptyRows: 1 }));
     await restorePanelsPhase([panel("t1")], ctx);
     expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
+  });
+
+  it("boots a small pane on its own real grid rather than a default (#12442)", async () => {
+    // The counterweight to every refusal here. A pane at the smallest supported
+    // size and the largest supported font measures about this, and its
+    // surviving PTY is on that grid: discarding it would construct xterm at
+    // 80x24 while the PTY streams a 23-column agent into it — the split this
+    // resolver exists to close.
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 23, rows: 4 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 23, ptyRows: 4 }));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 23, rows: 4 });
   });
 
   /**

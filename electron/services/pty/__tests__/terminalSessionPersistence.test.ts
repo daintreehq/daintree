@@ -338,8 +338,10 @@ describe("terminalSessionPersistence", () => {
         // The files #12442 left on disk: five of the reporter's seven snapshots
         // recorded a 2x1 capture grid. Honouring that header parks the mirror on
         // it at every restore, which is how the collapse outlived the panes.
+        // Both axes, since a one-row mirror corrupts a frame just as a
+        // two-column one does.
         "term-v2-collapsed": "DAINTREE_SESSION_v2\n2x1\npayload",
-        "term-v2-narrow": "DAINTREE_SESSION_v2\n3x90\npayload",
+        "term-v2-one-row": "DAINTREE_SESSION_v2\n80x1\npayload",
       };
       for (const [id, contents] of Object.entries(cases)) {
         await writeSessionFile(id, contents);

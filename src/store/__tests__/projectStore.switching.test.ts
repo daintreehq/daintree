@@ -448,14 +448,21 @@ describe("buildOutgoingState terminal sizes", () => {
     // at 2x1 on the next restore. What disqualifies them is that no pane was
     // ever showing them.
     mockTerminalGrids.set("t1", { cols: 2, rows: 1 });
-    mockTerminalGrids.set("t2", { cols: 3, rows: 90 });
+    mockTerminalGrids.set("t2", { cols: 80, rows: 1 });
     mockTerminalGrids.set("t3", { cols: 302, rows: 90 });
+    // A pane at the smallest supported size and the largest supported font.
+    // Persisting it is the whole point: the map is a record of a measurement.
+    mockTerminalGrids.set("t4", { cols: 23, rows: 4 });
     const outgoing = await switchWithPanels({
       t1: terminalPanel("t1"),
       t2: terminalPanel("t2"),
       t3: terminalPanel("t3"),
+      t4: terminalPanel("t4"),
     });
-    expect(outgoing.terminalSizes).toEqual({ t3: { cols: 302, rows: 90 } });
+    expect(outgoing.terminalSizes).toEqual({
+      t3: { cols: 302, rows: 90 },
+      t4: { cols: 23, rows: 4 },
+    });
   });
 
   it("excludes panels the switch does not persist", async () => {

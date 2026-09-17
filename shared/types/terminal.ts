@@ -137,18 +137,18 @@ export const COLLAPSED_TERMINAL_COLS = 2;
 export const COLLAPSED_TERMINAL_ROWS = 1;
 
 /**
- * True when `value` is the degenerate grid an unlaid-out box yields rather than
- * a measurement — at or under {@link COLLAPSED_TERMINAL_COLS} x
- * {@link COLLAPSED_TERMINAL_ROWS}, or not a structurally valid grid at all.
+ * True when `value` is a grid some container could actually have produced —
+ * structurally valid and past {@link COLLAPSED_TERMINAL_COLS} x
+ * {@link COLLAPSED_TERMINAL_ROWS}.
  *
- * Phrased as a rejection test because that is how every call site reads it. A
- * collapsed grid is refused, never clamped upward: inventing a grid nobody
- * measured splits xterm from the PTY exactly as thoroughly as a tiny one does,
- * so callers hold the geometry they already have.
+ * The universal floor. Callers refuse `!isUsableTerminalGeometry(...)` rather
+ * than clamping up to it: inventing a grid nobody measured splits xterm from
+ * the PTY exactly as thoroughly as a tiny one does, so they hold the geometry
+ * they already have.
  */
-export function isCollapsedTerminalGeometry(value: unknown): boolean {
-  if (!isValidTerminalGeometry(value)) return true;
-  return value.cols <= COLLAPSED_TERMINAL_COLS || value.rows <= COLLAPSED_TERMINAL_ROWS;
+export function isUsableTerminalGeometry(value: unknown): value is TerminalGeometry {
+  if (!isValidTerminalGeometry(value)) return false;
+  return value.cols > COLLAPSED_TERMINAL_COLS && value.rows > COLLAPSED_TERMINAL_ROWS;
 }
 
 /**
@@ -165,19 +165,22 @@ export const MIN_PLAUSIBLE_TERMINAL_ROWS = 5;
 /**
  * True when `value` is a grid a pane could plausibly have been MEASURED at.
  *
- * The strict floor, and the one that answers what #12442 actually asks. The
- * three origins it names all produce a number with no measurement behind it: a
- * grid derived from cached cell metrics with no live layout, a grid scaled for a
- * detached background view, and a grid replayed out of persistence or a target
- * cache. There, anything below a workable pane is evidence the box was never
- * laid out, and refusing costs only staleness — both grids stay put and the
- * reveal-time fresh measurement corrects them.
+ * The strict floor, for the two paths that EXTRAPOLATE a grid instead of
+ * reading one: `resizeGridFromCachedCellMetrics`, which divides a box by a
+ * cached cell with no live layout to check against, and the background-window
+ * scaling that multiplies a session-anchored origin by forwarded window bounds.
+ * Neither looked at a container, so a grid below a workable pane is evidence
+ * there was no layout to read — and refusing costs only staleness, because both
+ * grids stay put and the reveal-time fresh measurement corrects them.
  *
- * It must NOT gate a live measurement of a visible box. A pane at the smallest
+ * It must NOT gate a measurement, nor a RECORD of one. A pane at the smallest
  * supported size and the largest supported font genuinely measures under this
- * floor, and refusing a real measurement leaves xterm bigger than its container
- * with its content clipped — permanently, since every later fit of that same
- * container refuses too. Those paths take {@link isCollapsedTerminalGeometry}.
+ * floor, so refusing it leaves xterm bigger than its container with the content
+ * clipped — permanently, since every later fit of that container refuses too.
+ * The same goes for the values that carry a measurement forward: a snapshot's
+ * capture grid (the width its bytes were encoded at), a persisted
+ * `terminalSizes` entry, a surviving PTY's geometry, a parked attach target.
+ * All of those take {@link isUsableTerminalGeometry}.
  */
 export function isPlausibleTerminalGeometry(value: unknown): value is TerminalGeometry {
   if (!isValidTerminalGeometry(value)) return false;

@@ -1416,7 +1416,7 @@ describe("project:switch outgoing terminalSizes merge", () => {
         terminalSizes: {
           t1: { cols: 80, rows: 24 },
           collapsed: { cols: 2, rows: 1 },
-          narrow: { cols: 3, rows: 90 },
+          narrow: { cols: 80, rows: 1 },
           sib: { cols: 100, rows: 30 },
         },
       },

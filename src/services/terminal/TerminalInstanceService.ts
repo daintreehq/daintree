@@ -54,7 +54,7 @@ import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackControl
 import { hasUsableRenderer } from "./xtermRendererProbe";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
-import { isPlausibleTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
+import { isUsableTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
@@ -830,8 +830,9 @@ class TerminalInstanceService {
     // a geometry xterm never adopts (#11641). Shared FLOOR for the same reason
     // one layer down — a parked target is what the attach rAF applies instead
     // of measuring, so a collapsed grid parked here boots the pane into it
-    // (#12442).
-    if (isPlausibleTerminalGeometry({ cols, rows })) {
+    // (#12442). Only the collapse floor: hydration parks a surviving PTY's real
+    // geometry here, and a small pane's true size must reach the constructor.
+    if (isUsableTerminalGeometry({ cols, rows })) {
       instance.targetCols = cols;
       instance.targetRows = rows;
     }

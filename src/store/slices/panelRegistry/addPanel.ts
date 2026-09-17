@@ -52,7 +52,7 @@ import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { countPanelsTowardLimit } from "./panelCount";
-import { isPlausibleTerminalGeometry } from "@shared/types/terminal";
+import { isUsableTerminalGeometry } from "@shared/types/terminal";
 
 // Lazy accessor to break circular dependency: addPanel -> projectStore -> panelPersistence -> addPanel.
 // Resolved on first call (after app init), then cached.
@@ -198,13 +198,20 @@ function getAttachedGridDims(id: string): { cols: number; rows: number } | null 
   const managed = terminalInstanceService.get(id);
   if (!managed?.terminal.element?.isConnected) return null;
   const grid = { cols: managed.terminal.cols, rows: managed.terminal.rows };
-  // Attached is not the same as measured. A pane attached into a container that
+  // Attached is not the same as laid out. A pane attached into a container that
   // has not laid out yet holds whatever grid it was constructed on, and the
   // post-spawn re-assert would then hand that to the PTY as the pane's real
-  // size — one of the routes to #12442. Treated as no measurement at all, so
-  // the caller keeps the spawn dims and the first real fit corrects both halves.
-  if (!isPlausibleTerminalGeometry(grid)) {
-    logWarn("[TerminalStore] Ignoring implausible attached grid", { id, ...grid });
+  // size — one of the routes to #12442. A collapsed grid is treated as no
+  // measurement at all, so the caller keeps the spawn dims and the first real
+  // fit corrects both halves. Anything above that is taken at face value: this
+  // often IS the fitted grid, and second-guessing it would discard the very
+  // measurement the re-assert exists to deliver.
+  if (!isUsableTerminalGeometry(grid)) {
+    logWarn("[TerminalStore] Ignoring a collapsed attached grid", {
+      id,
+      cols: managed.terminal.cols,
+      rows: managed.terminal.rows,
+    });
     return null;
   }
   return grid;
@@ -659,7 +666,7 @@ export const createAddPanelActions = (
     // XtermAdapter is about to fit to, and the two never co-occur (an overlay
     // is never a restore). Re-validated here because `addPanel` is also reached
     // from plugins and MCP.
-    const restoredDims = isPlausibleTerminalGeometry(options.initialTerminalGeometry)
+    const restoredDims = isUsableTerminalGeometry(options.initialTerminalGeometry)
       ? options.initialTerminalGeometry
       : null;
     const constructionDims = overlayDims ?? restoredDims;

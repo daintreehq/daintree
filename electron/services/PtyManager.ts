@@ -49,7 +49,7 @@ import {
 } from "./pty/agentSessionCaptureDelivery.js";
 import type { GracefulKillResult, TerminalResizeResult } from "../../shared/types/pty-host.js";
 import {
-  isCollapsedTerminalGeometry,
+  isUsableTerminalGeometry,
   isValidTerminalGeometry,
   type SerializedTerminalSnapshot,
 } from "../../shared/types/terminal.js";
@@ -481,7 +481,7 @@ export class PtyManager extends EventEmitter {
     // mirrors with no resize to correct them afterwards (#12442). Replaced with
     // the ordinary default rather than refused: a spawn cannot be declined over
     // its geometry, and the first real fit re-sizes the pane either way.
-    if (isCollapsedTerminalGeometry({ cols: options.cols, rows: options.rows })) {
+    if (!isUsableTerminalGeometry({ cols: options.cols, rows: options.rows })) {
       logWarn(
         `Terminal ${id} spawn geometry ${options.cols}x${options.rows} is collapsed; booting at ${DEFAULT_SPAWN_COLS}x${DEFAULT_SPAWN_ROWS}`
       );
@@ -702,7 +702,7 @@ export class PtyManager extends EventEmitter {
    * too — the PTY keeps the size it has, which is the last grid something
    * actually measured.
    *
-   * The floor is `isCollapsedTerminalGeometry`, not the stricter plausibility
+   * The floor is `isUsableTerminalGeometry`, not the stricter plausibility
    * one, because a request arrives here with no provenance: a genuinely small
    * visible pane's measurement is indistinguishable from an extrapolated one,
    * and refusing the former would leave xterm and the PTY split at every size
@@ -715,7 +715,7 @@ export class PtyManager extends EventEmitter {
    */
   resize(id: string, cols: number, rows: number, transport = "unknown"): void {
     const terminal = this.registry.get(id);
-    if (isCollapsedTerminalGeometry({ cols, rows })) {
+    if (!isUsableTerminalGeometry({ cols, rows })) {
       const reason = isValidTerminalGeometry({ cols, rows })
         ? `collapsed dims ${cols}x${rows}`
         : `invalid dims ${cols}x${rows}`;
