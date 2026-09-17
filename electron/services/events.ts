@@ -899,6 +899,12 @@ export type DaintreeEventMap = {
      * produce several records.
      */
     launchGeneration?: number | null;
+    /**
+     * Where the capture came from. Explicit rather than read off a `null`
+     * generation, which also means "frozen but unknown"; only `exit` may
+     * write the id back to the saved pane.
+     */
+    boundary: import("../../shared/types/pty-host.js").AgentSessionCaptureBoundary;
     record: Omit<
       import("../../shared/types/ipc/agentSessionHistory.js").AgentSessionRecord,
       "savedAt"

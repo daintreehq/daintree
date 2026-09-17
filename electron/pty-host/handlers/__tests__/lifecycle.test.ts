@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { createPtyHostMessageDispatcher } from "../index.js";
 import type { HostContext } from "../types.js";
 import type { SerializedTerminalSnapshot } from "../../../../shared/types/terminal.js";
+import {
+  resetAgentSessionCaptureDeliveryForTests,
+  trackAgentSessionCapture,
+} from "../../../services/pty/agentSessionCaptureDelivery.js";
 
 // Snapshots cross the pty-host boundary with their capture grid (#11552).
 const STATE_PAYLOAD: SerializedTerminalSnapshot = { data: "state-payload", cols: 80, rows: 24 };
@@ -388,6 +392,55 @@ describe("lifecycle kill handlers — trackKilledPid", () => {
         result: { id: "t2", agentSessionId: null },
       },
     ]);
+  });
+
+  describe("finish-session-captures (#12433)", () => {
+    afterEach(() => {
+      resetAgentSessionCaptureDeliveryForTests();
+    });
+
+    it("acknowledges only after every observed capture went out", async () => {
+      const ctx = makeCtx();
+      let deliver!: () => void;
+      // A capture still in its async tail; delivering it is a sendEvent on the
+      // same port, exactly as the pty-host's bus forwarder does.
+      trackAgentSessionCapture(
+        new Promise<void>((resolve) => {
+          deliver = () => {
+            ctx.sendEvent({
+              type: "agent-session-captured",
+              terminalId: "t1",
+              launchGeneration: 1,
+              boundary: "exit",
+              record: {
+                sessionId: "synthetic",
+                agentId: "codex",
+                worktreeId: null,
+                title: null,
+                projectId: "p1",
+              },
+            });
+            resolve();
+          };
+        })
+      );
+      const dispatch = createPtyHostMessageDispatcher(ctx);
+
+      const handled = dispatch({ type: "finish-session-captures", requestId: "r9", budgetMs: 750 });
+      await Promise.resolve();
+      expect(ctx.sendEvent).not.toHaveBeenCalled();
+
+      deliver();
+      await handled;
+
+      const sent = (ctx.sendEvent as ReturnType<typeof vi.fn>).mock.calls.map(([e]) => e.type);
+      expect(sent).toEqual(["agent-session-captured", "session-captures-finished"]);
+      expect((ctx.sendEvent as ReturnType<typeof vi.fn>).mock.calls[1]![0]).toEqual({
+        type: "session-captures-finished",
+        requestId: "r9",
+        result: { complete: true, pending: 0 },
+      });
+    });
   });
 
   it("graceful-kill-by-project handles empty project", async () => {

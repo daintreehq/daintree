@@ -107,6 +107,7 @@ import type {
   HostThrottlePayload,
   MemoryRollup,
   GracefulKillResult,
+  AgentSessionCaptureFinishResult,
   PtyHostWorkerGovernanceSnapshot,
   TrimStateResult,
   TrimStateScope,
@@ -2637,6 +2638,45 @@ export class PtyClient extends EventEmitter {
       summary.skipped += result.skipped;
     }
     return summary;
+  }
+
+  /**
+   * Quit-time producer barrier (#12433): have every reachable shard deliver the
+   * session captures it has already observed, then acknowledge. Captures ride
+   * the same port ahead of each acknowledgement, so once this resolves the
+   * records are on Main's bus — persisting them is the caller's next step.
+   *
+   * Never rejects. `complete` is false when any live shard ran out of budget,
+   * could not answer, or could not be reached — as in `trimState`, a shard
+   * that cannot be asked is not evidence that it had nothing to deliver.
+   */
+  async finishAgentSessionCaptures(budgetMs: number): Promise<AgentSessionCaptureFinishResult> {
+    const liveShards = [...this.shards.values()].filter((shard) => !shard.retired);
+    const reachable = new Set(this.fanOutShards());
+    const results = await Promise.all(
+      liveShards.map((shard) =>
+        reachable.has(shard)
+          ? sendPtyHostRpc<AgentSessionCaptureFinishResult>(
+              shard,
+              "finish-session-captures",
+              (requestId) => ({ type: "finish-session-captures", requestId, budgetMs }),
+              // The host bounds its own wait; this only covers one that stopped answering.
+              { method: "finish-session-captures", timeoutMs: budgetMs + 500 }
+            ).catch(() => null)
+          : Promise.resolve(null)
+      )
+    );
+    let complete = true;
+    let pending = 0;
+    for (const result of results) {
+      if (!result) {
+        complete = false;
+        continue;
+      }
+      complete &&= result.complete;
+      pending += result.pending;
+    }
+    return { complete, pending };
   }
 
   /** Suppress or resume terminal session persistence across all shards */

@@ -149,6 +149,13 @@ export class AgentTerminalLifecycleLedger {
   private entries = new Map<string, LedgerEntry>();
   private generationMarks = new Map<string, GenerationMark>();
   private anomalies: LedgerAnomaly[] = [];
+  /**
+   * Highest generation ever evicted. A terminal the ledger no longer holds
+   * restarts its count above this, so a delayed completion for an evicted
+   * incarnation can never match — or share generation marks with — a later
+   * launch of the same id.
+   */
+  private evictedGenerationFloor = 0;
   private readonly maxTerminals: number;
   private readonly maxAnomalies: number;
   private readonly maxGenerationMarks: number;
@@ -181,7 +188,8 @@ export class AgentTerminalLifecycleLedger {
     options?: { generation?: number }
   ): number {
     const previous = this.entries.get(terminalId);
-    const generation = options?.generation ?? (previous?.generation ?? 0) + 1;
+    const generation =
+      options?.generation ?? (previous?.generation ?? this.evictedGenerationFloor) + 1;
     // Re-insert so Map iteration order stays oldest-first for eviction.
     this.entries.delete(terminalId);
     this.entries.set(terminalId, {
@@ -340,7 +348,9 @@ export class AgentTerminalLifecycleLedger {
         return {
           accepted: false,
           reason: "duplicate-journal",
-          detail: `already journaled ${mark.journaledSessionId}`,
+          // Never the id itself: anomalies reach logs and support bundles,
+          // and a session id is a resume credential.
+          detail: "already journaled",
         };
       }
       mark.journaledSessionId = sessionId;
@@ -390,6 +400,7 @@ export class AgentTerminalLifecycleLedger {
     this.entries.clear();
     this.generationMarks.clear();
     this.anomalies = [];
+    this.evictedGenerationFloor = 0;
   }
 
   private snapshotEntry(entry: LedgerEntry): LedgerEntrySnapshot {
@@ -505,13 +516,18 @@ export class AgentTerminalLifecycleLedger {
     // Prefer evicting closed entries (oldest first); fall back to oldest live.
     for (const [id, entry] of this.entries) {
       if (entry.closedAt !== undefined) {
-        this.entries.delete(id);
+        this.evict(id, entry);
         if (this.entries.size <= this.maxTerminals) return;
       }
     }
-    for (const id of this.entries.keys()) {
-      this.entries.delete(id);
+    for (const [id, entry] of this.entries) {
+      this.evict(id, entry);
       if (this.entries.size <= this.maxTerminals) return;
     }
+  }
+
+  private evict(terminalId: string, entry: LedgerEntry): void {
+    this.entries.delete(terminalId);
+    this.evictedGenerationFloor = Math.max(this.evictedGenerationFloor, entry.generation);
   }
 }

@@ -1,4 +1,5 @@
 import { projectStore } from "../../services/ProjectStore.js";
+import { noteRendererSessionIdentityEdits } from "../../services/pty/agentSessionCapturePersistence.js";
 import { isValidTerminalGeometry } from "../../../shared/types/terminal.js";
 import {
   TerminalSnapshotSchema,
@@ -156,6 +157,15 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         const changedIds = sanitizeIdList(payload.changedIds);
         const removedIds = sanitizeIdList(payload.removedIds);
         const fieldEdits = sanitizeFieldEdits(payload.fieldEdits);
+        if (changedIds !== undefined && fieldEdits) {
+          // Taken when the save is accepted, ahead of any capture writeback the
+          // queue has yet to run, so that writeback can't undo the edit (#12433).
+          noteRendererSessionIdentityEdits(
+            fieldEdits
+              .filter((edit) => edit.fields.includes("agentSessionId"))
+              .map((edit) => edit.id)
+          );
+        }
 
         await projectStore.enqueueProjectStateUpdate(projectId, (existingState) => ({
           projectId,

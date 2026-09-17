@@ -1489,6 +1489,7 @@ events.on("agent-session:captured", (payload) => {
     type: "agent-session-captured",
     terminalId: payload.terminalId,
     launchGeneration: payload.launchGeneration,
+    boundary: payload.boundary,
     record: payload.record,
   });
 });

@@ -1086,6 +1086,90 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("quit-time capture barrier (#12433)", () => {
+    it("asks every shard to deliver, and hears each capture before the reply", async () => {
+      const { events } = await import("../events.js");
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+      const seen: string[] = [];
+      const off = events.on("agent-session:captured", (payload) => {
+        seen.push(payload.terminalId);
+      });
+
+      const promise = client.finishAgentSessionCaptures(750).then((result) => {
+        seen.push("finished");
+        return result;
+      });
+      const defaultReq = messagesOfType(defaultShard().child, "finish-session-captures")[0];
+      const shardAReq = messagesOfType(shardA.child, "finish-session-captures")[0];
+      expect(defaultReq).toEqual({
+        type: "finish-session-captures",
+        requestId: expect.any(String),
+        budgetMs: 750,
+      });
+      defaultShard().child.emit("message", {
+        type: "session-captures-finished",
+        requestId: defaultReq.requestId,
+        result: { complete: true, pending: 0 },
+      });
+      // The host sends its last capture, then its acknowledgement, on one port.
+      shardA.child.emit("message", {
+        type: "agent-session-captured",
+        terminalId: "t1",
+        launchGeneration: 1,
+        boundary: "exit",
+        record: {
+          sessionId: "synthetic",
+          agentId: "codex",
+          worktreeId: null,
+          title: null,
+          projectId: "project-a",
+        },
+      });
+      shardA.child.emit("message", {
+        type: "session-captures-finished",
+        requestId: shardAReq.requestId,
+        result: { complete: true, pending: 0 },
+      });
+
+      expect(await promise).toEqual({ complete: true, pending: 0 });
+      expect(seen).toEqual(["t1", "finished"]);
+      off();
+      client.dispose();
+    });
+
+    it("reports incomplete when a shard runs out of budget or cannot be asked", async () => {
+      const client = createFabricClient();
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      // Deliberately never ready.
+
+      const promise = client.finishAgentSessionCaptures(750);
+      const defaultReq = messagesOfType(defaultShard().child, "finish-session-captures")[0];
+      defaultShard().child.emit("message", {
+        type: "session-captures-finished",
+        requestId: defaultReq.requestId,
+        result: { complete: false, pending: 2 },
+      });
+
+      expect(messagesOfType(shardA.child, "finish-session-captures")).toHaveLength(0);
+      expect(await promise).toEqual({ complete: false, pending: 2 });
+      client.dispose();
+    });
+
+    it("never rejects when a shard stops answering", async () => {
+      const client = createFabricClient();
+
+      const promise = client.finishAgentSessionCaptures(750);
+      await vi.advanceTimersByTimeAsync(1_250);
+
+      expect(await promise).toEqual({ complete: false, pending: 0 });
+      client.dispose();
+    });
+  });
+
   describe("failure containment hardening", () => {
     it("migrates to the default shard when a project shard's fork fails, without a global host-crash", async () => {
       const client = createFabricClient();

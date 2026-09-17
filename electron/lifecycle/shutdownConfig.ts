@@ -15,6 +15,16 @@ export const CLEANUP_TIMEOUT_MS = 10_000;
 // is waited on, not what survives (#12180).
 export const PROJECT_GRACEFUL_KILL_TIMEOUT_MS = 4_000;
 
+// Quit-time capture barrier (#12433), run after the graceful kills and before
+// anything is disposed. The host first delivers the session ids it has already
+// observed — its branch stamp is skipped, so this is an IPC round-trip plus any
+// trash-expiry kill still settling — then Main waits for the journal and saved-
+// pane writes those ids started. Both are bounded here because they sit inside
+// CLEANUP_TIMEOUT_MS alongside PROJECT_GRACEFUL_KILL_TIMEOUT_MS and the database
+// drains after them: 4000 + 750 + 1500 still leaves the tail most of its room.
+export const CAPTURE_DELIVERY_BUDGET_MS = 750;
+export const CAPTURE_PERSISTENCE_DRAIN_BUDGET_MS = 1_500;
+
 // Bounds the post-cleanup tail — the telemetry flush and perf-trace flush that run
 // AFTER the cleanup race resolves and are therefore NOT covered by
 // CLEANUP_TIMEOUT_MS. Sized for the worst-case closeTelemetry(): the Sentry

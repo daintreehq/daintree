@@ -8,6 +8,11 @@ import { makeAgentResult, makeNoAgentResult } from "../../ProcessDetector.js";
 import { events } from "../../events.js";
 import type { DaintreeEventMap } from "../../events.js";
 import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
+import { getGitBranch } from "../../../utils/gitUtils.js";
+import {
+  finishAgentSessionCaptures,
+  resetAgentSessionCaptureDeliveryForTests,
+} from "../agentSessionCaptureDelivery.js";
 
 vi.mock("node-pty", () => {
   return { spawn: vi.fn() };
@@ -196,6 +201,7 @@ describe("passive agent session capture", () => {
     }
     unsubscribe();
     vi.clearAllMocks();
+    resetAgentSessionCaptureDeliveryForTests();
   });
 
   function track(terminal: TerminalProcess): TerminalProcess {
@@ -226,6 +232,7 @@ describe("passive agent session capture", () => {
       expect(captured[0].terminalId).toBe("t-passive");
       // A PTY exit is one close per incarnation, so it keeps the ledger gate.
       expect(captured[0].launchGeneration).toBe(7);
+      expect(captured[0].boundary).toBe("exit");
       expect(captured[0].record).toEqual({
         sessionId: SESSION_ID,
         agentId: "codex",
@@ -327,6 +334,17 @@ describe("passive agent session capture", () => {
       expect(captured).toHaveLength(0);
     });
 
+    it("stays silent for the assistant's overlay terminal", async () => {
+      // Not a resumable grid pane, exactly as trash expiry treats it (#12183).
+      const terminal = track(createTerminal({ isAssistantTerminal: true }));
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured).toHaveLength(0);
+    });
+
     it("stays silent for a terminal that never hosted an agent", async () => {
       const terminal = track(createTerminal({ launchAgentId: undefined }));
       mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
@@ -350,6 +368,9 @@ describe("passive agent session capture", () => {
       // Deliberately ungated: a surviving shell can host several agent runs in
       // one generation, and gating would let the first consume the only slot.
       expect(captured[0].launchGeneration).toBeNull();
+      // Named explicitly, not implied by the null above — which also means
+      // "unknown" to the journal.
+      expect(captured[0].boundary).toBe("demotion");
     });
 
     it("still clears the live identity and emits agent:exited", async () => {
@@ -460,6 +481,40 @@ describe("passive agent session capture", () => {
       await flushCapture();
       expect(terminal.getInfo().detectedAgentId).toBe("codex");
       expect(captured).toHaveLength(0);
+    });
+  });
+
+  describe("quit-time delivery barrier (#12433)", () => {
+    it("delivers an id still waiting on its branch stamp, without the stamp", async () => {
+      // A wedged git probe: the stamp would never arrive on its own.
+      vi.mocked(getGitBranch).mockImplementationOnce(() => new Promise<string | null>(() => {}));
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(captured).toHaveLength(0);
+
+      const result = await finishAgentSessionCaptures(1_000);
+
+      expect(result).toEqual({ complete: true, pending: 0 });
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record.sessionId).toBe(SESSION_ID);
+      expect(captured[0].record).not.toHaveProperty("branch");
+    });
+
+    it("skips the branch stamp entirely for a capture after the barrier", async () => {
+      await finishAgentSessionCaptures(0);
+      const terminal = track(createTerminal());
+      promoteCodex(terminal);
+      mockPty(terminal).__emitData(`${codexHint(SESSION_ID)}\n`);
+      mockPty(terminal).__emitExit(0);
+
+      await flushCapture();
+      expect(getGitBranch).not.toHaveBeenCalled();
+      expect(captured).toHaveLength(1);
+      expect(captured[0].record).not.toHaveProperty("branch");
     });
   });
 

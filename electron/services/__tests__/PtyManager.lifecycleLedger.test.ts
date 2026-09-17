@@ -440,6 +440,8 @@ describe("PtyManager lifecycle ledger", () => {
         expect.objectContaining({
           terminalId: "t1",
           launchGeneration: 3,
+          // Trash expiry journals only; it never claims the saved pane.
+          boundary: "trash-expiry",
           record: expect.objectContaining({
             sessionId: "sess-1",
             agentId: "claude",

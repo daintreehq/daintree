@@ -11,8 +11,8 @@ vi.mock("../../../utils.js", () => ({ broadcastToRenderer, broadcastToProjectRen
 vi.mock("../../../../services/McpPaneConfigService.js", () => ({
   mcpPaneConfigService: { revokePaneConfig: vi.fn().mockResolvedValue(undefined) },
 }));
-vi.mock("../../../../services/pty/agentSessionJournal.js", () => ({
-  journalAgentSession: vi.fn(),
+vi.mock("../../../../services/pty/agentSessionCapturePersistence.js", () => ({
+  acceptCapturedAgentSession: vi.fn(),
 }));
 // The real bus's `on()` returns an unsubscribe function, which the handler
 // pushes straight onto its cleanup list — a bare EventEmitter returns itself
