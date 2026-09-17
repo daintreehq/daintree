@@ -74,7 +74,12 @@ function makeHarness(overrides: { guestProject?: string | null; panelKind?: stri
   // Stands in for the host's guest-adapter registry: the bridge never sees a
   // caller-supplied body, so a test that wants one registers it here.
   const adapterBodies = new Map<string, string>([[ADAPTER_ID, ""]]);
-  const adapterLoad: { fails: boolean; gate: Promise<void> | null } = { fails: false, gate: null };
+  const adapterLoad: {
+    fails: boolean;
+    gate: Promise<void> | null;
+    /** Called when a load starts, so a test can wait for the read to be in flight. */
+    onEnter: (() => void) | null;
+  } = { fails: false, gate: null, onEnter: null };
   const bridge = new SitePreviewBridge({
     push: (payload) => pushed.push(payload),
     listGuests: () => [
@@ -92,6 +97,7 @@ function makeHarness(overrides: { guestProject?: string | null; panelKind?: stri
     resolveGuestAdapter: (adapterId) =>
       adapterBodies.has(adapterId) ? { id: adapterId, pluginId: PLUGIN_ID } : null,
     loadGuestAdapterSource: async (adapterId) => {
+      adapterLoad.onEnter?.();
       if (adapterLoad.gate) await adapterLoad.gate;
       if (adapterLoad.fails) throw new Error("asset missing");
       return adapterBodies.get(adapterId) ?? "";
@@ -204,6 +210,9 @@ describe("SitePreviewBridge", () => {
     harness.adapterLoad.gate = new Promise<void>((resolve) => {
       release = resolve;
     });
+    const entered = new Promise<void>((resolve) => {
+      harness.adapterLoad.onEnter = resolve;
+    });
 
     const bind = harness.bridge.bind({
       projectId: PROJECT_ID,
@@ -212,11 +221,49 @@ describe("SitePreviewBridge", () => {
       mode: "browse",
     });
     // The read is the first await a bind performs, so a shutdown can finish
-    // walking the bindings map before this one is ever in it.
+    // walking the bindings map before this one is ever in it. Wait for the
+    // read to be in flight: a shutdown before the bind even runs proves nothing.
+    await entered;
     await harness.bridge.disposeAll();
     release!();
 
     await expect(bind).rejects.toThrow(/shutting down/);
+    expect(harness.bridge.listCandidates(PROJECT_ID)[0]?.boundSessionId).toBeNull();
+    expect(harness.wc.debugger.listenerCount("message")).toBe(0);
+  });
+
+  it("registers no successor when the bridge shuts down while a rebind tears down its predecessor", async () => {
+    const first = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    // Hold the predecessor's teardown on its last CDP call so a shutdown can
+    // land while the successor is still waiting to be inserted.
+    let release!: () => void;
+    harness.wc.debugger.gates.set(
+      "Runtime.removeBinding",
+      new Promise<void>((resolve) => {
+        release = resolve;
+      })
+    );
+    const rebind = harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    await vi.waitFor(() => {
+      expect(harness.wc.debugger.methods()).toContain("Runtime.removeBinding");
+    });
+    const shutdown = harness.bridge.disposeAll();
+    harness.wc.debugger.gates.delete("Runtime.removeBinding");
+    release();
+    await shutdown;
+
+    await expect(rebind).rejects.toThrow(/shutting down/);
+    expect(harness.bridge.getState(PROJECT_ID, first.sessionId)).toBeNull();
     expect(harness.bridge.listCandidates(PROJECT_ID)[0]?.boundSessionId).toBeNull();
     expect(harness.wc.debugger.listenerCount("message")).toBe(0);
   });

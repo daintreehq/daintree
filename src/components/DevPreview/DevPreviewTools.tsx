@@ -108,14 +108,14 @@ function returnFocusToToggle(tag: string): void {
   const surface = from?.closest("[data-dev-preview-tool-surface]");
   if (surface?.getAttribute("data-dev-preview-tool-surface") !== tag) return;
   // A keyboard close keeps its ring, as the overlay policy has it; a pointer
-  // close restores ringlessly and suppresses the toggle's tooltip, which Radix
-  // would otherwise open with the pointer nowhere near it.
+  // close restores ringlessly. Either way the toggle's tooltip is suppressed:
+  // Radix opens it on focus, and a restore is not the user arriving.
   const keyboard = focusVisible(from);
   const wrapper = document.querySelector(`[data-dev-preview-tool-toggle="${tag}"]`);
   const neighbour = toolbarNeighbour(wrapper);
   const toggle = wrapper?.querySelector("button");
   if (toggle instanceof HTMLElement) {
-    if (!keyboard) armTooltipFocusSuppression();
+    armTooltipFocusSuppression();
     toggle.focus(keyboard ? undefined : { preventScroll: true, focusVisible: false });
   }
   // The toggle itself can go with the surfaces — an active tool the
@@ -125,7 +125,7 @@ function returnFocusToToggle(tag: string): void {
   requestAnimationFrame(() => {
     if (document.activeElement !== document.body) return;
     if (!neighbour?.isConnected) return;
-    if (!keyboard) armTooltipFocusSuppression();
+    armTooltipFocusSuppression();
     neighbour.focus(keyboard ? undefined : { preventScroll: true, focusVisible: false });
   });
 }
@@ -146,10 +146,17 @@ function focusVisible(element: Element | null | undefined): boolean {
  * answer is remembered with the worktree it was about, so a preview switching
  * worktrees never shows a button the old answer earned.
  */
-function useToolApplies(tool: DevPreviewTool, context: DevPreviewToolContext): boolean {
+function useToolApplies(
+  tool: DevPreviewTool,
+  context: DevPreviewToolContext,
+  active: boolean
+): boolean {
   const { panelId, projectId, worktreeId, worktreePath, url, isWebviewReady } = context;
   const isAvailable = tool.isAvailable;
   const [answer, setAnswer] = useState<{ worktreePath: string | null; ok: boolean } | null>(null);
+  // `active` is a dependency on purpose: a command switching the tool on has
+  // just had the predicate say yes, and a "no" this host remembered from before
+  // the app existed would hide the toggle again the moment the tool went off.
   useEffect(() => {
     if (!isAvailable) return;
     let cancelled = false;
@@ -167,7 +174,7 @@ function useToolApplies(tool: DevPreviewTool, context: DevPreviewToolContext): b
     return () => {
       cancelled = true;
     };
-  }, [isAvailable, panelId, projectId, worktreeId, worktreePath, url, isWebviewReady]);
+  }, [isAvailable, panelId, projectId, worktreeId, worktreePath, url, isWebviewReady, active]);
   if (!isAvailable) return true;
   return answer !== null && answer.ok && answer.worktreePath === worktreePath;
 }
@@ -183,7 +190,7 @@ function DevPreviewToolButton({
   active: boolean;
   onToggle: () => void;
 }) {
-  const applies = useToolApplies(tool, context);
+  const applies = useToolApplies(tool, context, active);
   // An active tool stays reachable whatever the predicate says or hasn't said
   // yet: the one control that switches it off must not vanish under the user.
   if (!active && !applies) return null;

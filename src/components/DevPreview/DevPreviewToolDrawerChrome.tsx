@@ -37,14 +37,21 @@ function usePaneWidth(root: HTMLElement | null): number {
 
 /**
  * Drag-to-resize for the drawer's page-facing (left) edge, committed to the
- * store once per gesture. Mirrors `useDockPopoverResize`: the live width stays
- * local so the drag is fluid, and document listeners keep it alive when the
- * pointer leaves the thin strip.
+ * store once per gesture. The live width stays local so the drag is fluid.
+ *
+ * Pointer capture, not document listeners and not a shield: the drag crosses
+ * the page, which is an out-of-process `<webview>` that takes the pointer the
+ * moment it enters, and the panel around it is `contain: content`, so a
+ * `fixed` shield cannot reach past the panel's own edge into a neighbour.
+ * Capture retargets every pointer event to the handle whatever is under it,
+ * and a lost capture ends the gesture rather than leaving it stuck.
  */
 function useDrawerResize(): {
   draft: number | null;
   isResizing: boolean;
-  start: (e: React.MouseEvent, from: number) => void;
+  start: (e: React.PointerEvent, from: number) => void;
+  move: (e: React.PointerEvent) => void;
+  end: () => void;
   onKeyDown: (e: React.KeyboardEvent, from: number) => void;
   reset: () => void;
 } {
@@ -59,11 +66,17 @@ function useDrawerResize(): {
   // `from` is the width the drawer is actually showing, which is not the stored
   // width once a narrow pane has capped it: a drag starting from the stored
   // width would spend its first pixels moving nothing.
-  const start = useCallback((e: React.MouseEvent, from: number) => {
+  const start = useCallback((e: React.PointerEvent, from: number) => {
     // Only the primary button resizes; anything else falls through rather
     // than locking the body cursor.
     if (e.button !== 0) return;
     e.preventDefault();
+    try {
+      e.currentTarget.setPointerCapture(e.pointerId);
+    } catch {
+      // A pointer that is already gone cannot be captured; the gesture then
+      // ends on the first pointerup the handle still sees.
+    }
     dragStartXRef.current = e.clientX;
     dragStartWidthRef.current = from;
     draftRef.current = from;
@@ -71,33 +84,34 @@ function useDrawerResize(): {
     setIsResizing(true);
   }, []);
 
+  const move = useCallback((e: React.PointerEvent) => {
+    // The drawer is docked right, so dragging left (smaller clientX) grows it.
+    const next = clampToolDrawerWidth(
+      dragStartWidthRef.current + (dragStartXRef.current - e.clientX)
+    );
+    draftRef.current = next;
+    setDraft(next);
+  }, []);
+
+  const end = useCallback(() => {
+    const moved = draftRef.current !== dragStartWidthRef.current;
+    setDraft(null);
+    setIsResizing(false);
+    if (moved) setDrawerWidth(draftRef.current);
+  }, [setDrawerWidth]);
+
   useEffect(() => {
     if (!isResizing) return;
-    const onMove = (e: MouseEvent) => {
-      // The drawer is docked right, so dragging left (smaller clientX) grows it.
-      const next = clampToolDrawerWidth(
-        dragStartWidthRef.current + (dragStartXRef.current - e.clientX)
-      );
-      draftRef.current = next;
-      setDraft(next);
-    };
-    const onUp = () => {
-      const moved = draftRef.current !== dragStartWidthRef.current;
-      setDraft(null);
-      setIsResizing(false);
-      if (moved) setDrawerWidth(draftRef.current);
-    };
-    document.addEventListener("mousemove", onMove);
-    document.addEventListener("mouseup", onUp);
+    // A window that loses focus mid-drag never sees the pointer go up.
+    window.addEventListener("blur", end);
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
     return () => {
-      document.removeEventListener("mousemove", onMove);
-      document.removeEventListener("mouseup", onUp);
+      window.removeEventListener("blur", end);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
     };
-  }, [isResizing, setDrawerWidth]);
+  }, [isResizing, end]);
 
   const onKeyDown = useCallback(
     (e: React.KeyboardEvent, from: number) => {
@@ -114,7 +128,7 @@ function useDrawerResize(): {
 
   const reset = useCallback(() => setDrawerWidth(TOOL_DRAWER_DEFAULT_WIDTH), [setDrawerWidth]);
 
-  return { draft, isResizing, start, onKeyDown, reset };
+  return { draft, isResizing, start, move, end, onKeyDown, reset };
 }
 
 /**
@@ -138,7 +152,7 @@ export function DevPreviewToolDrawerChrome({
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
   const paneWidth = usePaneWidth(root);
   const stored = useDevPreviewToolStore((s) => s.drawerWidth);
-  const { draft, isResizing, start, onKeyDown, reset } = useDrawerResize();
+  const { draft, isResizing, start, move, end, onKeyDown, reset } = useDrawerResize();
   const wanted = draft ?? stored;
 
   // Unmeasured (first paint, or a pane that never reports) docks: the common
@@ -146,6 +160,15 @@ export function DevPreviewToolDrawerChrome({
   // would be a worse first frame than one that starts docked.
   const floating = paneWidth > 0 && paneWidth - wanted < PAGE_MIN_WIDTH;
   const width = floating ? Math.min(wanted, Math.max(paneWidth - OVERLAY_GUTTER, 0)) : wanted;
+  // The range the handle announces is the one this pane can honour, not the
+  // store's: a narrow pane caps the drawer below the nominal minimum, and a
+  // reader told "280 to 560" of a 264px drawer is being lied to.
+  const effectiveMax =
+    paneWidth > 0
+      ? Math.min(TOOL_DRAWER_MAX_WIDTH, paneWidth - OVERLAY_GUTTER)
+      : TOOL_DRAWER_MAX_WIDTH;
+  const rangeMax = Math.max(Math.round(width), Math.round(effectiveMax));
+  const rangeMin = Math.min(TOOL_DRAWER_MIN_WIDTH, Math.round(width));
 
   return (
     <div
@@ -172,10 +195,14 @@ export function DevPreviewToolDrawerChrome({
         aria-orientation="vertical"
         aria-label="Resize tool drawer (double-click to reset)"
         aria-valuenow={Math.round(width)}
-        aria-valuemin={TOOL_DRAWER_MIN_WIDTH}
-        aria-valuemax={TOOL_DRAWER_MAX_WIDTH}
+        aria-valuemin={rangeMin}
+        aria-valuemax={rangeMax}
         tabIndex={0}
-        onMouseDown={(e) => start(e, width)}
+        onPointerDown={(e) => start(e, width)}
+        onPointerMove={isResizing ? move : undefined}
+        onPointerUp={isResizing ? end : undefined}
+        onPointerCancel={isResizing ? end : undefined}
+        onLostPointerCapture={isResizing ? end : undefined}
         onKeyDown={(e) => onKeyDown(e, width)}
         onDoubleClick={reset}
         className={cn(
@@ -197,12 +224,6 @@ export function DevPreviewToolDrawerChrome({
       <div data-drawer-content className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {children}
       </div>
-      {/* The drag crosses the page, and the page is an out-of-process
-          `<webview>` that takes the pointer the moment it enters — so the
-          gesture gets a shield over everything for as long as it lasts. */}
-      {isResizing ? (
-        <div aria-hidden="true" className="fixed inset-0 z-50 cursor-col-resize" />
-      ) : null}
     </div>
   );
 }

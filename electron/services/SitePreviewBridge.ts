@@ -354,6 +354,16 @@ export class SitePreviewBridge {
         await this.teardown(existing, "rebound");
       }
     }
+    // The predecessor's teardown is another await a shutdown can finish
+    // under, and it removed the predecessor from the map first — so the
+    // shutdown's walk saw nothing, and a successor added now would outlive it.
+    if (this.closed) {
+      throw new AppError({
+        code: "CANCELLED",
+        message: "The site preview bridge is shutting down",
+        context: { panelId },
+      });
+    }
 
     const binding: Binding = {
       sessionId: this.deps.newSessionId(),
