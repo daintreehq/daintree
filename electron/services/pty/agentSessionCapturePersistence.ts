@@ -240,7 +240,13 @@ interface LaunchIntent {
 }
 
 /** The latest renderer-requested launch of each pane, as the ledger minted it. */
-const launchIntents = new Map<string, LaunchIntent>();
+const requestedLaunches = new Map<string, LaunchIntent>();
+
+/**
+ * The latest of those the host confirmed. Only these decide a release: a
+ * refused spawn leaves the previous process — whatever it resumed — running.
+ */
+const confirmedLaunches = new Map<string, LaunchIntent>();
 
 /**
  * Record what a renderer-requested spawn asked for, keyed to the generation
@@ -254,7 +260,7 @@ export function noteTerminalLaunch(
 ): void {
   const entry = getLifecycleLedger().getEntry(terminalId);
   if (!entry) return;
-  rememberBounded(launchIntents, terminalId, {
+  rememberBounded(requestedLaunches, terminalId, {
     generation: entry.generation,
     projectId: entry.facts.projectId,
     command: launch.command,
@@ -275,9 +281,9 @@ function launchResumes(launch: LaunchIntent, sessionId: string): boolean {
  * or by assignment — keeps it.
  *
  * Driven by a successful spawn result, and decided only when the queued update
- * runs, against the latest launch and the current claim: a later relaunch
- * that resumes the id, a spawn in another project, or a claim the renderer
- * has since taken over all leave the pane alone. The claim itself survives
+ * runs, against the latest confirmed launch and the current claim: a later
+ * confirmed relaunch that resumes the id, a spawn in another project, or a
+ * claim the renderer has since taken over all leave the pane alone. The claim itself survives
  * until the removal is saved, so a failed save still lets the successor's
  * capture replace the id.
  */
@@ -285,9 +291,11 @@ export function releaseSupersededCapturedSession(
   terminalId: string,
   spawnedGeneration: number | undefined
 ): void {
-  const launch = launchIntents.get(terminalId);
+  const launch = requestedLaunches.get(terminalId);
+  if (!launch || spawnedGeneration !== launch.generation) return;
+  rememberBounded(confirmedLaunches, terminalId, launch);
   const claim = authoredIds.get(terminalId);
-  if (!launch || !claim || spawnedGeneration !== launch.generation) return;
+  if (!claim) return;
   if (launch.generation <= claim.generation || launch.projectId !== claim.projectId) return;
 
   const projectId = claim.projectId;
@@ -296,7 +304,7 @@ export function releaseSupersededCapturedSession(
     projectStore
       .enqueueProjectStateUpdate(projectId, (state) => {
         const current = authoredIds.get(terminalId);
-        const latest = launchIntents.get(terminalId);
+        const latest = confirmedLaunches.get(terminalId);
         if (
           !current ||
           !latest ||
@@ -447,7 +455,8 @@ export async function sealAndDrainCapturedSessionPersistence(
 export function resetCapturedSessionPersistenceForTests(): void {
   authoredIds.clear();
   revokedGenerations.clear();
-  launchIntents.clear();
+  requestedLaunches.clear();
+  confirmedLaunches.clear();
   inFlight.clear();
   sealed = false;
 }

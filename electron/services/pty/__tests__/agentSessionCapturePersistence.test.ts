@@ -801,6 +801,20 @@ describe("captured agent session persistence (#12433)", () => {
       expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
     });
 
+    it("decides on the latest launch the host confirmed, not one it refused", async () => {
+      await filledByFirstExit();
+      const hold = holdQueue();
+      const resumed = relaunch({ command: `codex resume ${SESSION_ID}` });
+      releaseSupersededCapturedSession(TERMINAL_ID, resumed);
+      // A fresh spawn the host then refuses (the resumed process is still
+      // live): recorded, never confirmed, so it must not count.
+      relaunch();
+      hold.release();
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
     it("never clears the id for a relaunch into another project", async () => {
       await filledByFirstExit();
       const moved = relaunch({ command: "codex" }, { projectId: OTHER_PROJECT_ID });
