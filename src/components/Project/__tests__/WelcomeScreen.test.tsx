@@ -934,6 +934,40 @@ describe("WelcomeScreen", () => {
     expect(screen.getByText("Getting started")).toBeTruthy();
   });
 
+  // --- Container-scaled layout (#12438) ---
+
+  // jsdom evaluates no container queries, so these pin the structure the
+  // queries depend on rather than the rendered sizes.
+  it.each([
+    ["returning users", mockProjects],
+    ["first-time users", []],
+  ])("scales off an uncapped container inside the scroller for %s", (_, projects) => {
+    storeState = { ...storeState, projects };
+    const { container } = render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    const roots = container.querySelectorAll<HTMLElement>('[class*="@container/welcome"]');
+    expect(roots).toHaveLength(1);
+    const root = roots[0]!;
+
+    // On the scroller itself the query would measure a width that changes as the
+    // scrollbar comes and goes; the gutter keeps the child's width fixed instead.
+    const scroller = root.parentElement;
+    expect(scroller).toBe(container.firstElementChild);
+    expect(scroller!.classList.contains("overflow-y-auto")).toBe(true);
+    expect(scroller!.classList.contains("[scrollbar-gutter:stable_both-edges]")).toBe(true);
+    expect(root.classList.contains("overflow-y-auto")).toBe(false);
+
+    // A root capped at the column's width could never satisfy a wider query.
+    expect(root.classList.contains("w-full")).toBe(true);
+    expect(Array.from(root.classList).some((token) => token.startsWith("max-w-"))).toBe(false);
+
+    const column = root.querySelector<HTMLElement>(":scope > .max-w-2xl");
+    expect(column).not.toBeNull();
+    expect(column!.classList.contains("@min-[1536px]/welcome:max-w-3xl")).toBe(true);
+    expect(column!.classList.contains("@min-[1920px]/welcome:max-w-4xl")).toBe(true);
+    expect(column!.contains(screen.getByTestId("quick-actions"))).toBe(true);
+  });
+
   // --- Agent Welcome Card (#5111) ---
 
   describe("agent welcome card", () => {
