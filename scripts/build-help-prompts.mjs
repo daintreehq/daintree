@@ -14,6 +14,7 @@ const SRC_DIR = path.join(root, "scripts/help-src");
 const HELP_DIR = path.join(root, "help");
 
 const SHARED = path.join(SRC_DIR, "SHARED.md");
+const SHARED_TAIL = path.join(SRC_DIR, "SHARED.tail.md");
 const TARGETS = [
   {
     out: path.join(HELP_DIR, "CLAUDE.md"),
@@ -22,12 +23,19 @@ const TARGETS = [
       path.join(SRC_DIR, "CLAUDE.tasks.md"),
       path.join(SRC_DIR, "CLAUDE.tier.md"),
       SHARED,
+      path.join(SRC_DIR, "CLAUDE.transcript.md"),
+      SHARED_TAIL,
       path.join(SRC_DIR, "CLAUDE.tail.md"),
     ],
   },
   {
     out: path.join(HELP_DIR, "AGENTS.md"),
-    parts: [path.join(SRC_DIR, "AGENTS.head.md"), SHARED],
+    parts: [
+      path.join(SRC_DIR, "AGENTS.head.md"),
+      SHARED,
+      path.join(SRC_DIR, "AGENTS.transcript.md"),
+      SHARED_TAIL,
+    ],
   },
 ];
 
