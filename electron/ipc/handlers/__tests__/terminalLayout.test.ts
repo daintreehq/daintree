@@ -386,6 +386,25 @@ describe("setTerminals — identity edits reach capture writeback (#12433)", () 
     expect(claimed()).toEqual([]);
   });
 
+  it("reports nothing for a claim the merge will not apply", async () => {
+    onDisk(baseState([term("1"), term("2")]));
+
+    await setTerminals({
+      projectId: "p1",
+      terminals: [term("1")],
+      changedIds: ["1"],
+      removedIds: ["3"],
+      fieldEdits: [
+        // Not in changedIds: the merge keeps the stored value.
+        { id: "2", fields: ["agentSessionId"] },
+        // Tombstoned, and absent from the snapshot.
+        { id: "3", fields: ["agentSessionId"] },
+      ],
+    });
+
+    expect(claimed()).toEqual([]);
+  });
+
   it("reports nothing for a legacy full-replace write, whose claims the merge ignores", async () => {
     onDisk(baseState([term("1")]));
 

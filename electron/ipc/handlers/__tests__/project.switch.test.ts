@@ -74,6 +74,11 @@ vi.mock("../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+const noteRendererSessionIdentityEditsMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
+  noteRendererSessionIdentityEdits: noteRendererSessionIdentityEditsMock,
+}));
+
 vi.mock("../../../services/ProjectSwitchService.js", () => ({
   ProjectSwitchService: class MockProjectSwitchService {
     onSwitch = vi.fn();
@@ -1248,6 +1253,7 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
     });
 
     expect(terminals.find((t) => t.id === "t1")?.agentSessionId).toBe("captured");
+    expect(noteRendererSessionIdentityEditsMock.mock.calls.flatMap(([ids]) => ids)).toEqual([]);
   });
 
   it("clears it when the outgoing delta claims the change", async () => {
@@ -1261,6 +1267,9 @@ describe("project:switch outgoing agentSessionId field merge (#11461)", () => {
     });
 
     expect(terminals.find((t) => t.id === "t1")?.agentSessionId).toBeUndefined();
+    // The same authority an ordinary save carries reaches capture writeback,
+    // so a capture still queued can't put the id back (#12433).
+    expect(noteRendererSessionIdentityEditsMock).toHaveBeenCalledWith(["t1"]);
   });
 });
 

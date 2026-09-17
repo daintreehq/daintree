@@ -72,6 +72,7 @@ import {
   acceptCapturedAgentSession,
   noteRendererSessionIdentityEdits,
   persistCapturedAgentSession,
+  releaseSupersededCapturedSession,
   resetCapturedSessionPersistenceForTests,
   sealAndDrainCapturedSessionPersistence,
   writeBackCapturedSessionId,
@@ -159,6 +160,20 @@ function holdQueue(projectId = PROJECT_ID): { release: () => void; settled: Prom
     return null;
   });
   return { release: () => gate.resolve(), settled };
+}
+
+/** Holds the next project-state save until released. */
+function holdNextSave(): { release: () => void; reached: Promise<void> } {
+  const manager = stateRef.manager!;
+  const save = manager.saveProjectState.bind(manager);
+  const gate = deferred();
+  const reached = deferred();
+  vi.spyOn(manager, "saveProjectState").mockImplementationOnce(async (id, state) => {
+    reached.resolve();
+    await gate.promise;
+    return save(id, state);
+  });
+  return { release: () => gate.resolve(), reached: reached.promise };
 }
 
 describe("captured agent session persistence (#12433)", () => {
@@ -252,6 +267,41 @@ describe("captured agent session persistence (#12433)", () => {
         writeBackCapturedSessionId(capture(second, { record: { sessionId: "second-session" } }))
       ).resolves.toBe("conflict");
       expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("keeps a renderer edit that lands while the write is still saving", async () => {
+      const first = launch();
+      await seed([pane()]);
+      const held = holdNextSave();
+
+      const pending = writeBackCapturedSessionId(capture(first));
+      await held.reached;
+      noteRendererSessionIdentityEdits([TERMINAL_ID]);
+      held.release();
+      await expect(pending).resolves.toBe("filled");
+
+      // The renderer spoke last, so the id is no longer this path's to replace.
+      const second = launch();
+      await expect(
+        writeBackCapturedSessionId(capture(second, { record: { sessionId: "second-session" } }))
+      ).resolves.toBe("conflict");
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("keeps its earlier claim when a superseding write fails to save", async () => {
+      const first = launch();
+      await seed([pane()]);
+      await writeBackCapturedSessionId(capture(first));
+      const second = launch();
+      const successor = capture(second, { record: { sessionId: "second-session" } });
+
+      vi.spyOn(stateRef.manager!, "saveProjectState").mockRejectedValueOnce(new Error("disk full"));
+      await expect(writeBackCapturedSessionId(successor)).resolves.toBe("failed");
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+
+      // Nothing reached disk, so the first write's claim still stands.
+      await expect(writeBackCapturedSessionId(successor)).resolves.toBe("superseded");
+      expect((await savedPane())?.agentSessionId).toBe("second-session");
     });
 
     it("rejects a capture from a generation a respawn already replaced", async () => {
@@ -447,6 +497,71 @@ describe("captured agent session persistence (#12433)", () => {
       expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
     });
 
+    it.each(["passive", "graceful"] as const)(
+      "settles one owner when graceful and passive capture of an exit overlap (%s queued first)",
+      async (first) => {
+        const generation = launch();
+        const neighbour = getLifecycleLedger().recordLaunch("pane-2", {
+          projectId: PROJECT_ID,
+          launchAgentId: "codex",
+        });
+        await seed([pane(), pane({ id: "pane-2" })]);
+        const hold = holdQueue();
+
+        const passive = () => persistCapturedAgentSession(capture(generation));
+        // What a graceful close does with its own capture of the same exit:
+        // journal it, and overwrite the saved pane unconditionally.
+        const graceful = () =>
+          Promise.all([
+            journalAgentSession(capture(generation).record, {
+              terminalId: TERMINAL_ID,
+              generation,
+            }),
+            stateRef.manager!.enqueueProjectStateUpdate(PROJECT_ID, (state) => {
+              const target = state?.terminals.find((t) => t.id === TERMINAL_ID);
+              if (!state || !target) return null;
+              target.agentSessionId = SESSION_ID;
+              return state;
+            }),
+          ]);
+
+        const results =
+          first === "passive"
+            ? await (async () => {
+                const p = passive();
+                const g = graceful();
+                // An unrelated capture queued behind both must still land.
+                await vi.waitFor(() => expect(persistAgentSession).toHaveBeenCalledTimes(1));
+                const n = persistCapturedAgentSession(
+                  capture(neighbour, { terminalId: "pane-2", record: { sessionId: "other" } })
+                );
+                hold.release();
+                return { passive: await p, graceful: await g, neighbour: await n };
+              })()
+            : await (async () => {
+                const g = graceful();
+                const p = passive();
+                await vi.waitFor(() => expect(persistAgentSession).toHaveBeenCalledTimes(1));
+                const n = persistCapturedAgentSession(
+                  capture(neighbour, { terminalId: "pane-2", record: { sessionId: "other" } })
+                );
+                hold.release();
+                return { passive: await p, graceful: await g, neighbour: await n };
+              })();
+
+        // Exactly one of the two journals the exit; the pane agrees either way.
+        expect([results.passive.journal === "written", results.graceful[0]]).toEqual(
+          first === "passive" ? [true, false] : [false, true]
+        );
+        expect(results.passive.pane).toBe(first === "passive" ? "filled" : "unchanged");
+        expect(results.neighbour).toEqual({ journal: "written", pane: "filled" });
+        const state = await stateRef.manager!.getProjectState(PROJECT_ID);
+        expect(state?.terminals.map((t) => t.agentSessionId)).toEqual([SESSION_ID, "other"]);
+        const history = await readSessionHistory(userDataDir);
+        expect(history.map((r) => r.sessionId).sort()).toEqual(["other", SESSION_ID].sort());
+      }
+    );
+
     it("leaves a graceful journal write free to land after the passive one", async () => {
       const generation = launch();
       await seed([pane()]);
@@ -485,16 +600,26 @@ describe("captured agent session persistence (#12433)", () => {
       expect((await readSessionHistory(userDataDir)).map((r) => r.sessionId)).toEqual([SESSION_ID]);
     });
 
-    it("never logs the session id", async () => {
+    it("never logs the session id, even from a failure that quotes it", async () => {
       const generation = launch();
       await seed([pane({ agentSessionId: "someone-elses-session" })]);
       await persistCapturedAgentSession(capture(generation));
       await seed([pane()]);
-      vi.spyOn(stateRef.manager!, "saveProjectState").mockRejectedValueOnce(new Error("disk full"));
-      await persistCapturedAgentSession(capture(launch()));
+      vi.spyOn(stateRef.manager!, "saveProjectState").mockRejectedValueOnce(
+        new Error(`could not save ${SESSION_ID}`)
+      );
+      vi.mocked(persistAgentSession).mockRejectedValueOnce(
+        new Error(`journal refused ${SESSION_ID}`)
+      );
+      await expect(persistCapturedAgentSession(capture(launch()))).resolves.toEqual({
+        journal: "failed",
+        pane: "failed",
+      });
 
-      expect(logCalls.length).toBeGreaterThan(0);
       const logged = JSON.stringify(logCalls);
+      // Both failures were reported, just without the credential in them.
+      expect(logged).toContain("could not save [session]");
+      expect(logged).toContain("journal refused [session]");
       expect(logged).not.toContain(SESSION_ID);
       expect(logged).not.toContain("someone-elses-session");
     });
@@ -550,11 +675,11 @@ describe("captured agent session persistence (#12433)", () => {
       // imports of "electron" (the journal's route to `app`) can resolve the
       // second without the mock. Both writes are still in flight — the pane
       // side waits behind the held queue — when the drain starts.
-      await new Promise((resolve) => setImmediate(resolve));
+      await vi.waitFor(() => expect(persistAgentSession).toHaveBeenCalledTimes(1));
       acceptCapturedAgentSession(
         capture(1, { terminalId: "pane-2", record: { sessionId: "second-session" } })
       );
-      await new Promise((resolve) => setImmediate(resolve));
+      await vi.waitFor(() => expect(persistAgentSession).toHaveBeenCalledTimes(2));
 
       const drain = sealAndDrainCapturedSessionPersistence(5_000);
       hold.release();
@@ -583,7 +708,101 @@ describe("captured agent session persistence (#12433)", () => {
       vi.useRealTimers();
       hold.release();
       await hold.settled;
-      await sealAndDrainCapturedSessionPersistence(5_000);
+      await expect(sealAndDrainCapturedSessionPersistence(5_000)).resolves.toEqual({
+        drained: true,
+        pending: 0,
+      });
+    });
+  });
+
+  describe("release on a fresh relaunch", () => {
+    async function filledByFirstExit(): Promise<number> {
+      const generation = launch();
+      await seed([pane()]);
+      await expect(writeBackCapturedSessionId(capture(generation))).resolves.toBe("filled");
+      return generation;
+    }
+
+    /** The release is queued work; the drain is how a caller waits for it. */
+    async function settle(): Promise<void> {
+      await expect(sealAndDrainCapturedSessionPersistence(5_000)).resolves.toEqual({
+        drained: true,
+        pending: 0,
+      });
+    }
+
+    it("clears the id a natural exit left once the pane starts over", async () => {
+      await filledByFirstExit();
+      const second = launch();
+
+      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
+      // Nothing of the old claim survives: the successor's exit simply fills.
+      await expect(
+        writeBackCapturedSessionId(capture(second, { record: { sessionId: "second-session" } }))
+      ).resolves.toBe("filled");
+    });
+
+    it.each([
+      ["resumes it by argument", { command: `codex resume ${SESSION_ID}` }],
+      ["runs under it by assignment", { command: "codex", agentSessionId: SESSION_ID }],
+    ])("keeps the id when the relaunch %s", async (_label, relaunch) => {
+      await filledByFirstExit();
+      launch();
+
+      releaseSupersededCapturedSession(TERMINAL_ID, relaunch);
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("waits for an actual relaunch", async () => {
+      await filledByFirstExit();
+
+      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("never clears an id it did not write", async () => {
+      launch();
+      await seed([pane({ agentSessionId: SESSION_ID })]);
+      launch();
+
+      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("defers to a renderer that has since claimed the field", async () => {
+      await filledByFirstExit();
+      noteRendererSessionIdentityEdits([TERMINAL_ID]);
+      launch();
+
+      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("leaves a different id alone if the pane no longer holds its own", async () => {
+      await filledByFirstExit();
+      await stateRef.manager!.enqueueProjectStateUpdate(PROJECT_ID, (state) => {
+        const target = state?.terminals.find((t) => t.id === TERMINAL_ID);
+        if (!state || !target) return null;
+        target.agentSessionId = "graceful-session";
+        return state;
+      });
+      launch();
+
+      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBe("graceful-session");
     });
   });
 });

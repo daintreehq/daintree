@@ -1114,6 +1114,10 @@ describe("PtyClient fabric", () => {
         requestId: defaultReq.requestId,
         result: { complete: true, pending: 0 },
       });
+      // One shard answering is not the barrier: the other still owes captures.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(seen).toEqual([]);
+
       // The host sends its last capture, then its acknowledgement, on one port.
       shardA.child.emit("message", {
         type: "agent-session-captured",
@@ -1140,7 +1144,7 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
-    it("reports incomplete when a shard runs out of budget or cannot be asked", async () => {
+    it("reports incomplete for a shard it cannot ask, even when the rest finished", async () => {
       const client = createFabricClient();
       client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
       const shardA = projectShard("project-a");
@@ -1151,10 +1155,25 @@ describe("PtyClient fabric", () => {
       defaultShard().child.emit("message", {
         type: "session-captures-finished",
         requestId: defaultReq.requestId,
-        result: { complete: false, pending: 2 },
+        result: { complete: true, pending: 0 },
       });
 
       expect(messagesOfType(shardA.child, "finish-session-captures")).toHaveLength(0);
+      expect(await promise).toEqual({ complete: false, pending: 0 });
+      client.dispose();
+    });
+
+    it("carries a shard's own shortfall through", async () => {
+      const client = createFabricClient();
+
+      const promise = client.finishAgentSessionCaptures(750);
+      const defaultReq = messagesOfType(defaultShard().child, "finish-session-captures")[0];
+      defaultShard().child.emit("message", {
+        type: "session-captures-finished",
+        requestId: defaultReq.requestId,
+        result: { complete: false, pending: 2 },
+      });
+
       expect(await promise).toEqual({ complete: false, pending: 2 });
       client.dispose();
     });

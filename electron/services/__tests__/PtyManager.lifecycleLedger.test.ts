@@ -210,6 +210,8 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 const { PtyManager } = await import("../PtyManager.js");
+const { finishAgentSessionCaptures, resetAgentSessionCaptureDeliveryForTests } =
+  await import("../pty/agentSessionCaptureDelivery.js");
 
 function createPtyProcess(): MockPtyProcess {
   return {
@@ -415,6 +417,46 @@ describe("PtyManager lifecycle ledger", () => {
     });
 
     expect(shared.eventsEmit).not.toHaveBeenCalledWith("agent-session:captured", expect.anything());
+  });
+
+  it("holds the quit barrier while a trash expiry is still capturing (#12433)", async () => {
+    const manager = new PtyManager();
+    manager.spawn("t1", spawnOptions({ launchAgentId: "claude", launchGeneration: 3 }));
+    const terminal = shared.created[0]!;
+    let settleShutdown!: (sessionId: string | null) => void;
+    terminal.gracefulShutdown = () => {
+      terminal.gracefulShutdownCalled = true;
+      return new Promise((resolve) => {
+        settleShutdown = resolve;
+      });
+    };
+
+    try {
+      manager.trash("t1");
+      shared.trashCallbacks.get("t1")!("t1");
+      await vi.waitFor(() => expect(terminal.gracefulShutdownCalled).toBe(true));
+
+      // The id isn't known yet, so nothing can have been emitted — the barrier
+      // has to wait on the expiry itself.
+      let finished = false;
+      const finish = finishAgentSessionCaptures(5_000).then((result) => {
+        finished = true;
+        return result;
+      });
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(finished).toBe(false);
+
+      settleShutdown("sess-1");
+      await expect(finish).resolves.toEqual({ complete: true, pending: 0 });
+      expect(shared.eventsEmit).toHaveBeenCalledWith(
+        "agent-session:captured",
+        expect.objectContaining({ terminalId: "t1", boundary: "trash-expiry" })
+      );
+      // Past the barrier, the branch stamp is not worth waiting for.
+      expect(shared.getGitBranch).not.toHaveBeenCalled();
+    } finally {
+      resetAgentSessionCaptureDeliveryForTests();
+    }
   });
 
   it("stamps terminalId and launchGeneration on trash-expiry session captures", async () => {

@@ -1337,6 +1337,35 @@ describe("registerShutdownHandler", () => {
         expect(capturePersistenceMock.sealAndDrainCapturedSessionPersistence).toHaveBeenCalled();
       });
 
+      it("holds disposal until accepted writes have drained", async () => {
+        let finishDrain!: () => void;
+        capturePersistenceMock.sealAndDrainCapturedSessionPersistence.mockImplementation(
+          () =>
+            new Promise((resolve) => {
+              finishDrain = () => resolve({ drained: true, pending: 0 });
+            })
+        );
+        const ptyClient = makePtyClient();
+        const cleanupIpc = vi.fn();
+        const { beforeQuitCb } = await setup({
+          getPtyClient: () => ptyClient,
+          getCleanupIpcHandlers: () => cleanupIpc,
+        });
+
+        await beforeQuitCb(makeEvent());
+        await vi.waitFor(() => expect(finishDrain).toBeTypeOf("function"));
+        await new Promise((resolve) => setImmediate(resolve));
+        expect((ptyClient as { dispose: ReturnType<typeof vi.fn> }).dispose).not.toHaveBeenCalled();
+        expect(cleanupIpc).not.toHaveBeenCalled();
+        expect(closeSharedDbMock.closeSharedDb).not.toHaveBeenCalled();
+        expect(appMock.exit).not.toHaveBeenCalled();
+
+        finishDrain();
+        await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+        expect((ptyClient as { dispose: ReturnType<typeof vi.fn> }).dispose).toHaveBeenCalled();
+        expect(cleanupIpc).toHaveBeenCalled();
+      });
+
       it("still drains and exits clean when delivery fails or stays incomplete", async () => {
         const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
         capturePersistenceMock.sealAndDrainCapturedSessionPersistence.mockResolvedValue({

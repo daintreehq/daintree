@@ -77,6 +77,33 @@ export function sanitizeFieldEdits(value: unknown): IdArrayFieldEdit[] | undefin
 }
 
 /**
+ * Panes whose `agentSessionId` claim a delta merge will actually apply: changed,
+ * not removed, and present in the incoming snapshot. Only those are the
+ * renderer's word on a pane's identity (#12433) — a claim `mergeIdArray`
+ * ignores must not fence off a captured session either.
+ */
+export function appliedSessionIdentityClaims(
+  incoming: readonly TerminalSnapshot[],
+  changedIds: readonly string[],
+  removedIds: readonly string[],
+  fieldEdits: readonly IdArrayFieldEdit[] | undefined
+): string[] {
+  if (!fieldEdits) return [];
+  const changed = new Set(changedIds);
+  const removed = new Set(removedIds);
+  const present = new Set(incoming.map((terminal) => terminal.id));
+  return fieldEdits
+    .filter(
+      (edit) =>
+        edit.fields.includes("agentSessionId") &&
+        changed.has(edit.id) &&
+        !removed.has(edit.id) &&
+        present.has(edit.id)
+    )
+    .map((edit) => edit.id);
+}
+
+/**
  * Validate and sanitize terminal size records.
  * Entries whose geometry a terminal could not actually have been captured at
  * are dropped.
@@ -157,13 +184,11 @@ export const terminalLayoutNamespace = defineIpcNamespace({
         const changedIds = sanitizeIdList(payload.changedIds);
         const removedIds = sanitizeIdList(payload.removedIds);
         const fieldEdits = sanitizeFieldEdits(payload.fieldEdits);
-        if (changedIds !== undefined && fieldEdits) {
+        if (changedIds !== undefined) {
           // Taken when the save is accepted, ahead of any capture writeback the
           // queue has yet to run, so that writeback can't undo the edit (#12433).
           noteRendererSessionIdentityEdits(
-            fieldEdits
-              .filter((edit) => edit.fields.includes("agentSessionId"))
-              .map((edit) => edit.id)
+            appliedSessionIdentityClaims(validTerminals, changedIds, removedIds ?? [], fieldEdits)
           );
         }
 

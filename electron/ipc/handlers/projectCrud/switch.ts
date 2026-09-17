@@ -26,12 +26,14 @@ import { logInfo } from "../../../utils/logger.js";
 import { isPerformanceCaptureEnabled, markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import {
+  appliedSessionIdentityClaims,
   sanitizeTerminals,
   sanitizeTerminalSizes,
   sanitizeDraftInputs,
   sanitizeFieldEdits,
   TERMINAL_FIELD_LEVEL_MERGE,
 } from "../terminalLayout.js";
+import { noteRendererSessionIdentityEdits } from "../../../services/pty/agentSessionCapturePersistence.js";
 import { sanitizeTabGroups } from "../../../schemas/index.js";
 import {
   decodeIdArrayDelta,
@@ -444,15 +446,30 @@ async function persistOutgoingProjectState(
           `${logLabel}/pre-apply(${previousProjectId})`
         ) as TabGroup[])
       : undefined;
+  const terminalDelta = outgoingState.terminalDelta;
+  const decodedTerminalDelta =
+    terminalDelta && outgoingState.terminals
+      ? decodeIdArrayDelta(terminalDelta, outgoingState.terminals)
+      : undefined;
+  const terminalFieldEdits = decodedTerminalDelta
+    ? sanitizeFieldEdits(decodedTerminalDelta.fieldEdits)
+    : undefined;
+  if (decodedTerminalDelta && validTerminals) {
+    // Same identity authority as an ordinary save, taken before the queue for
+    // the same reason (#12433).
+    noteRendererSessionIdentityEdits(
+      appliedSessionIdentityClaims(
+        validTerminals,
+        decodedTerminalDelta.changedIds,
+        decodedTerminalDelta.removedIds,
+        terminalFieldEdits
+      )
+    );
+  }
   // Queued so the read-merge-write can't clobber concurrent queued writers
   // (terminalLayout handlers) now that the persist runs alongside the swap.
   await projectStore.enqueueProjectStateUpdate(previousProjectId, (existing) => {
-    const terminalDelta = outgoingState.terminalDelta;
     const tabGroupDelta = outgoingState.tabGroupDelta;
-    const decodedTerminalDelta =
-      terminalDelta && outgoingState.terminals
-        ? decodeIdArrayDelta(terminalDelta, outgoingState.terminals)
-        : undefined;
     const decodedTabGroupDelta =
       tabGroupDelta && outgoingState.tabGroups
         ? decodeIdArrayDelta(tabGroupDelta, outgoingState.tabGroups)
@@ -475,7 +492,7 @@ async function persistOutgoingProjectState(
                 // stale outgoing snapshot must not erase a session id Main
                 // captured on shutdown (#11461).
                 fieldLevelMerge: TERMINAL_FIELD_LEVEL_MERGE,
-                fieldEdits: sanitizeFieldEdits(decodedTerminalDelta.fieldEdits),
+                fieldEdits: terminalFieldEdits,
               }
             )
           : validTerminals;

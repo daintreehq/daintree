@@ -49,15 +49,25 @@ const WRITING_OUTCOMES: ReadonlySet<PaneWritebackOutcome> = new Set([
 
 const MAX_TRACKED_TERMINALS = 512;
 
+/** Persistence a quit must wait for; see `sealAndDrainCapturedSessionPersistence`. */
+const inFlight = new Set<Promise<void>>();
+let sealed = false;
+
+interface AuthoredId {
+  generation: number;
+  sessionId: string;
+  projectId: string;
+}
+
 /**
  * Ids this module wrote, per pane, with the generation that owned them. The
  * renderer never learns a scraped id during the session, so a restart's
- * "start over" has nothing to clear and the id would otherwise outlive the
- * incarnation that produced it — locking the pane's later exits out as
- * conflicts. An id recorded here may be replaced by a newer generation of the
- * same pane; any renderer edit to the field hands authority back.
+ * "start over" has nothing to clear: left alone, the id would outlive the
+ * incarnation that produced it. An id recorded here is released when the pane
+ * relaunches without resuming it, and may be replaced by a newer generation's
+ * capture; any renderer edit to the field hands authority back.
  */
-const authoredIds = new Map<string, { generation: number; sessionId: string }>();
+const authoredIds = new Map<string, AuthoredId>();
 
 /**
  * Generations whose writeback a renderer identity edit revoked. Only a
@@ -92,6 +102,16 @@ export function noteRendererSessionIdentityEdits(terminalIds: Iterable<string>):
       rememberBounded(revokedGenerations, terminalId, entry.generation);
     }
   }
+}
+
+/**
+ * Error text for a log line, with the capture's own id taken out: upstream
+ * failures may quote the record they were handed, and the id resumes a
+ * conversation.
+ */
+function describeError(error: unknown, fallback: string, sessionId: string): string {
+  const message = formatErrorMessage(error, fallback);
+  return sessionId ? message.split(sessionId).join("[session]") : message;
 }
 
 function decidePaneWriteback(
@@ -163,26 +183,92 @@ export async function writeBackCapturedSessionId(
 
   // Assigned by the updater; the cast keeps TS from narrowing it to the seed.
   let outcome = "missing-project" as PaneWritebackOutcome;
+  let claimed: { mine: AuthoredId; previous: AuthoredId | undefined } | undefined;
   try {
     await projectStore.enqueueProjectStateUpdate(projectId, (state) => {
       outcome = decidePaneWriteback(state, capture, generation, projectId);
+      if (outcome === "filled" || outcome === "superseded") {
+        // Claimed at decision time, not after the save: a renderer edit that
+        // lands while the save is pending drops this claim, and must stay the
+        // last word.
+        const mine = { generation, sessionId: record.sessionId, projectId };
+        claimed = { mine, previous: authoredIds.get(terminalId) };
+        rememberBounded(authoredIds, terminalId, mine);
+      }
       // Returning the state for an identical id lets the answer share the
       // batch's save, rather than claiming durability this updater can't see.
       return WRITING_OUTCOMES.has(outcome) ? state : null;
     });
   } catch (error) {
+    // Nothing reached disk, so the claim this write took is void — unless a
+    // renderer edit already replaced it.
+    if (claimed && authoredIds.get(terminalId) === claimed.mine) {
+      if (claimed.previous) rememberBounded(authoredIds, terminalId, claimed.previous);
+      else authoredIds.delete(terminalId);
+    }
     logger.warn("Saved-pane writeback of a captured session failed", {
       terminalId,
       projectId,
-      error: formatErrorMessage(error, "project state update failed"),
+      error: describeError(error, "project state update failed", record.sessionId),
     });
     return "failed";
   }
-
-  if (outcome === "filled" || outcome === "superseded") {
-    rememberBounded(authoredIds, terminalId, { generation, sessionId: record.sessionId });
-  }
   return outcome;
+}
+
+/**
+ * Release an id this module wrote once its pane relaunches without resuming
+ * it (#12433). A fresh restart of a pane whose scraped id the renderer never
+ * learned has no way to say "start over"; without this, cold restore would
+ * resume the abandoned conversation until the new incarnation's own exit
+ * replaced it. A launch that carries the id — resuming it by argument or by
+ * assignment — keeps it.
+ *
+ * Only ever removes the exact id recorded here, through the project's queue,
+ * and only while that record is still this module's claim.
+ */
+export function releaseSupersededCapturedSession(
+  terminalId: string,
+  launch: { command?: string; agentSessionId?: string }
+): void {
+  const authored = authoredIds.get(terminalId);
+  if (!authored) return;
+  const generation = getLifecycleLedger().currentGeneration(terminalId);
+  if (generation === undefined || generation <= authored.generation) return;
+  if (
+    launch.agentSessionId === authored.sessionId ||
+    (launch.command?.includes(authored.sessionId) ?? false)
+  ) {
+    return;
+  }
+
+  track(
+    projectStore
+      .enqueueProjectStateUpdate(authored.projectId, (state) => {
+        if (authoredIds.get(terminalId) !== authored) return null;
+        authoredIds.delete(terminalId);
+        const pane = state?.terminals?.find((t) => t.id === terminalId);
+        if (!state || pane?.agentSessionId !== authored.sessionId) return null;
+        delete pane.agentSessionId;
+        return state;
+      })
+      .then(
+        () => {
+          logger.info("Released a captured session superseded by a fresh launch", {
+            terminalId,
+            projectId: authored.projectId,
+            generation,
+          });
+        },
+        (error: unknown) => {
+          logger.warn("Releasing a superseded captured session failed", {
+            terminalId,
+            projectId: authored.projectId,
+            error: describeError(error, "project state update failed", authored.sessionId),
+          });
+        }
+      )
+  );
 }
 
 async function journalCapture(capture: CapturedAgentSession): Promise<JournalOutcome> {
@@ -195,7 +281,7 @@ async function journalCapture(capture: CapturedAgentSession): Promise<JournalOut
   } catch (error) {
     logger.warn("Journaling a captured session failed", {
       terminalId: capture.terminalId,
-      error: formatErrorMessage(error, "journal write failed"),
+      error: describeError(error, "journal write failed", capture.record.sessionId),
     });
     return "failed";
   }
@@ -225,9 +311,6 @@ export async function persistCapturedAgentSession(
   return { journal, pane };
 }
 
-const inFlight = new Set<Promise<unknown>>();
-let sealed = false;
-
 /**
  * Entry point for `agent-session:captured`. Starts persistence synchronously —
  * the journal reservation and the project-state queue entry both exist before
@@ -241,14 +324,23 @@ export function acceptCapturedAgentSession(capture: CapturedAgentSession): void 
     });
     return;
   }
-  const work = persistCapturedAgentSession(capture).catch((error: unknown) => {
-    logger.warn("Captured agent session persistence threw", {
-      terminalId: capture.terminalId,
-      error: formatErrorMessage(error, "capture persistence threw"),
-    });
-  });
+  track(
+    persistCapturedAgentSession(capture).then(
+      () => {},
+      (error: unknown) => {
+        logger.warn("Captured agent session persistence threw", {
+          terminalId: capture.terminalId,
+          error: describeError(error, "capture persistence threw", capture.record.sessionId),
+        });
+      }
+    )
+  );
+}
+
+/** Register settled-safe work so a quit's drain waits for it. */
+function track(work: Promise<void>): void {
   inFlight.add(work);
-  void work.finally(() => inFlight.delete(work));
+  void work.then(() => inFlight.delete(work));
 }
 
 /**
