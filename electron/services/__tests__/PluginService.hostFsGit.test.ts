@@ -1221,12 +1221,13 @@ describe("a built-in's workspace-scoped host.fs (fsForWorkspace)", () => {
     setProjects({ [PROJECT_A]: [mine] }, []);
     const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
     const scope = { projectId: PROJECT_A, worktreeId: mine.id };
-    expect(await host.fsForWorkspace(scope).readFile(join(mine.path, "a.txt"))).toBe("closing");
+    // One handle throughout: a fresh handle after the close would not notice
+    // an old one keeping the roots it was minted with.
+    const scoped = host.fsForWorkspace(scope);
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("closing");
 
     projectStoreMock.closed.add(PROJECT_A);
-    await expect(host.fsForWorkspace(scope).readFile(join(mine.path, "a.txt"))).rejects.toThrow(
-      /PATH_NOT_ALLOWED/
-    );
+    await expect(scoped.readFile(join(mine.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
   });
 
   it("pins the handle to the scope it was minted with, not to the caller's object", async () => {

@@ -10,6 +10,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { getAvailableDevPreviewTool } from "@/registry/devPreviewToolRegistry";
+import { startDevPreviewToolSessions } from "@/services/devPreviewTools/sessionManager";
 import { actionService } from "@/services/ActionService";
 
 /**
@@ -145,6 +146,10 @@ export function registerDevServerActions(
     }),
     resultSchema: z.object({ panelId: z.string().nullable(), active: z.boolean() }),
     run: async (args: { toolId: string; panelId?: string }, ctx: ActionContext) => {
+      // A command can switch a tool on before any preview pane has mounted —
+      // the pane is what normally starts the session manager — and the tool
+      // would then sit switched on with no session behind it until one did.
+      startDevPreviewToolSessions();
       // Registration is unconditional for built-ins; only an enabled plugin's
       // tool may start or focus anything.
       if (!getAvailableDevPreviewTool(args.toolId)) {
