@@ -178,7 +178,7 @@ Custom elements are the strict case because registration is irreversible. Other 
 | Call | What it does |
 | --- | --- |
 | `listCandidates()` | The dev-preview panels this project could bind to, with any existing binding |
-| `bind({ panelId, runtimeSource, mode })` | Installs your runtime into the page and returns a binding with a host-issued session id |
+| `bind({ panelId, adapterId, mode })` | Installs the named host-registered guest runtime into the page and returns a binding with a host-issued session id |
 | `setMode({ sessionId, mode })` | Switches between `browse` (the page behaves normally) and `select` |
 | `getState({ sessionId })`, `detach({ sessionId })` | Read or release the binding |
 | `onEvent(cb)` | Validated guest events, epoch advances, and detaches |
@@ -186,7 +186,8 @@ Custom elements are the strict case because registration is irreversible. Other 
 Things that shape how you use it:
 
 - **It is renderer IPC.** A plugin's main side cannot reach it. The view owns the binding and forwards what it learns to main over its own channels.
-- **There is no "evaluate in the page" call, on purpose.** The runtime is supplied once, at bind time, and the host wraps it in a prelude that addresses and numbers each message. A general evaluate method would hand every renderer-side caller a standing arbitrary-execution channel into whatever site the user is previewing.
+- **You name a runtime; you do not supply one.** `adapterId` selects a guest adapter main registered at startup, and main loads that adapter's asset itself. Nothing a view sends becomes script in the page. Adapters are host-owned today: a plugin that wants its own runtime needs one registered in main, not a body on the wire.
+- **There is no "evaluate in the page" call, on purpose.** The runtime is installed once, at bind time, and the host wraps it in a prelude that addresses and numbers each message. A general evaluate method would hand every renderer-side caller a standing arbitrary-execution channel into whatever site the user is previewing.
 - **Everything from the page is an observation, never an instruction.** The page is an application under development, and it shares the main world with your runtime, so it can forge messages for its own binding. That reaches nothing beyond that binding's observations — the host validates session, epoch, sequence and size — but never act on a file path, range or revision a page supplied without resolving it yourself.
 - **Key state on each event's `documentEpoch`, not on arrival order.** The new runtime's own ready event for a document can arrive before the host's epoch-advance notice for it. A hot-module update that does not navigate does not advance the epoch at all, so "the page reloaded" and "the page shows your latest source" are different claims.
 

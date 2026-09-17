@@ -28,6 +28,7 @@ import { usePanelStore } from "@/store/panelStore";
 import {
   CHANNELS,
   ComponentDefinitionsResultSchema,
+  GUEST_ADAPTER_ID,
   SourceRevisionsResultSchema,
   ProjectModelResultSchema,
   IssuePushSchema,
@@ -54,7 +55,8 @@ export interface SitePreviewApi {
   listCandidates(): Promise<SitePreviewCandidate[]>;
   bind(request: {
     panelId: string;
-    runtimeSource: string;
+    /** Names a host-registered guest runtime; the host loads its body. */
+    adapterId: string;
     mode?: SitePreviewMode;
   }): Promise<SitePreviewBindingState>;
   detach(request: { sessionId: string }): Promise<void>;
@@ -80,7 +82,6 @@ export interface InspectorDeps {
   sitePreview: SitePreviewApi;
   invoke(channel: string, args: unknown): Promise<unknown>;
   on(channel: string, callback: (payload: unknown) => void): () => void;
-  runtimeSource(): Promise<string>;
   now(): number;
 }
 
@@ -218,13 +219,6 @@ const REATTACH_DELAY_MS = 300;
 /** About two minutes in all: long enough for a cold dev server to serve its first page. */
 const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000, 30000, 60000];
 
-// Loaded on first bind, not at module evaluation: the runtime is only needed
-// once a preview is attached, and it serialises its own factory to source text.
-export async function loadGuestRuntimeBody(): Promise<string> {
-  const { buildGuestRuntimeBody } = await import("./guest/source.js");
-  return buildGuestRuntimeBody();
-}
-
 const RUNTIME_ISSUE_COPY: Record<string, string> = {
   "no-svelte-meta":
     "This page carries no Svelte source locations. Run the app with the Vite dev server to select elements.",
@@ -244,7 +238,6 @@ export function defaultInspectorDeps(previewPanelId: string): InspectorDeps {
     invoke: (channel, args) => window.electron.plugin.invoke(PLUGIN_ID, channel, args),
     on: (channel, callback) =>
       window.electron.plugin.onPanel(PLUGIN_ID, channel, previewPanelId, callback),
-    runtimeSource: loadGuestRuntimeBody,
     now: () => Date.now(),
   };
 }
@@ -584,11 +577,9 @@ export class InspectorController implements DevPreviewToolSession {
     // candidate isn't proof it was this panel's.
     let state: SitePreviewBindingState;
     try {
-      const runtimeSource = await this.deps.runtimeSource();
-      if (request !== this.bindRequest) return;
       state = await this.deps.sitePreview.bind({
         panelId: previewPanelId,
-        runtimeSource,
+        adapterId: GUEST_ADAPTER_ID,
         mode: this.state.mode,
       });
     } catch (error) {

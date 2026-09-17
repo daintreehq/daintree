@@ -73,7 +73,6 @@ async function setUp() {
     },
     invoke: (channel, args) => test.invoke(channel, args),
     on: () => () => {},
-    runtimeSource: async () => "",
     now: () => Date.now(),
   };
 

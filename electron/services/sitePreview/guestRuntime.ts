@@ -1,22 +1,20 @@
 /**
  * Builds the script the host installs into a dev-preview guest.
  *
- * What the boundary here is, precisely: the caller hands over one body, once,
- * at bind time, and the host never evaluates caller-supplied script again. The
- * only other expressions evaluated are the fixed mode poke and disposer below,
- * whose interpolated values are a validated enum member and a host-generated
- * number. The host does NOT vet the body — it cannot, it is code — so this is a
- * bound on *when and how often* renderer-supplied script reaches the page, not a
- * claim that the script is safe. A general "evaluate in the guest" IPC method
- * would remove even that bound and hand any renderer-side caller a standing
- * arbitrary-execution channel into whatever site the user is previewing.
+ * What the boundary here is, precisely: the body comes from a guest adapter
+ * main registered at startup (`guestAdapters.ts`), never from the renderer —
+ * the caller names an adapter and the host reads its asset. The only other
+ * expressions evaluated are the fixed mode poke and disposer below, whose
+ * interpolated values are a validated enum member and a host-generated number.
+ * The host does NOT vet the body — it cannot, it is code — so this is a bound on
+ * *who chooses* what reaches the page, not a claim that the script is safe. A
+ * general "evaluate in the guest" IPC method would remove that bound and hand
+ * any renderer-side caller a standing arbitrary-execution channel into whatever
+ * site the user is previewing.
  */
 
 import type { SitePreviewMode } from "../../../shared/types/ipc/sitePreview.js";
 import { GUEST_PROTOCOL_VERSION } from "./guestProtocol.js";
-
-/** Ceiling on a caller-supplied runtime, so a bind cannot pin megabytes per session. */
-export const MAX_RUNTIME_SOURCE_BYTES = 512 * 1024;
 
 export const GUEST_RUNTIME_GLOBAL = "__daintreeSitePreview";
 
@@ -31,6 +29,7 @@ export interface GuestRuntimeParams {
   documentEpoch: number;
   bindingName: string;
   mode: SitePreviewMode;
+  /** The adapter body, already resolved host-side. */
   runtimeSource: string;
 }
 

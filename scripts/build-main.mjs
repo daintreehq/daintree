@@ -105,6 +105,46 @@ function discoverBuiltInPluginMainEntries() {
 }
 
 /**
+ * Guest runtimes a built-in plugin ships as a standalone browser asset: code
+ * the host reads back as text and installs into a previewed page through a
+ * registered guest adapter (`electron/services/sitePreview/guestAdapters.ts`).
+ * It is neither a main entry (it never runs in the host) nor part of the
+ * renderer bundle (nothing imports it), and the asset copy skips `renderer/`,
+ * so each one is emitted straight to its path under the plugin's dist dir.
+ */
+export const GUEST_RUNTIME_ASSETS = [
+  {
+    entry: "plugins/builtin/sveltekit-builder/renderer/guest/entry.ts",
+    outfile: "dist-electron/plugins/builtin/sveltekit-builder/guest/runtime.js",
+  },
+];
+
+/**
+ * Pure so it is unit testable. The wrapping banner is what keeps the emitted
+ * IIFE strict: esbuild puts its own `"use strict"` at file scope, and the host
+ * splices the asset inside a `try` block, where a directive prologue no longer
+ * applies. `keepNames` is deliberately absent — it is the class of transform
+ * that broke the serialised runtime this asset replaced.
+ */
+export function guestRuntimeBuildConfig(asset, options = {}) {
+  return {
+    entryPoints: [asset.entry],
+    outfile: asset.outfile,
+    bundle: true,
+    format: "iife",
+    platform: "browser",
+    // The asset only ever runs in a Chromium 148 guest.
+    target: "es2022",
+    minify: options.minify === true,
+    sourcemap: false,
+    logLevel: "info",
+    banner: { js: "(() => {" },
+    footer: { js: "})();" },
+    ...(options.absWorkingDir ? { absWorkingDir: options.absWorkingDir } : {}),
+  };
+}
+
+/**
  * Discover each sample plugin's main entry (`plugins/sample/<name>/main/index.ts`)
  * so adding a new sample plugin needs no build-config edit. Mirrors
  * `discoverBuiltInPluginMainEntries` and `copySamplePluginManifests`. A
@@ -566,19 +606,24 @@ async function run() {
     plugins: isWatch ? [createReadyMarkerPlugin()] : [],
   };
 
+  const guestConfigs = GUEST_RUNTIME_ASSETS.map((asset) =>
+    guestRuntimeBuildConfig(asset, { minify: isProd, absWorkingDir: root })
+  );
+
   try {
     if (isWatch) {
       const ctxEsm = await context(esmConfig);
       const ctxCjs = await context(cjsConfig);
+      const ctxGuests = await Promise.all(guestConfigs.map((config) => context(config)));
 
-      await Promise.all([ctxEsm.watch(), ctxCjs.watch()]);
+      await Promise.all([ctxEsm.watch(), ctxCjs.watch(), ...ctxGuests.map((c) => c.watch())]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();
       validateCopiedPluginAssets();
       console.log("[Build] Watching for changes...");
     } else {
-      await Promise.all([build(esmConfig), build(cjsConfig)]);
+      await Promise.all([build(esmConfig), build(cjsConfig), ...guestConfigs.map(build)]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();

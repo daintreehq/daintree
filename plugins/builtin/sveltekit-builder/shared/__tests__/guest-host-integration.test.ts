@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
-import { buildGuestRuntimeBody } from "../../renderer/guest/source.js";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { buildGuestAsset } from "./buildGuestAsset.js";
 import {
   GUEST_RUNTIME_GLOBAL,
   buildDisposeSource,
@@ -17,9 +17,10 @@ import type { GuestEnvelope } from "../protocol.js";
  * runtime, which draws the overlay and reads Svelte's metadata. Each was tested
  * against its own idea of the other.
  *
- * These tests run the real composition — the host's prelude wrapping the
- * runtime body — and push every message through the host's own validator.
- * A message the host would drop is a failure here, not a silent dead inspector.
+ * These tests run the real composition — the host's prelude wrapping the built
+ * guest asset, the same text the host's adapter loads from disk — and push
+ * every message through the host's own validator. A message the host would drop
+ * is a failure here, not a silent dead inspector.
  */
 
 const scope = globalThis as unknown as Record<string, unknown>;
@@ -29,6 +30,11 @@ const EPOCH = 3;
 const INSTALL = 41;
 
 let raw: string[] = [];
+let body = "";
+
+beforeAll(() => {
+  body = buildGuestAsset();
+}, 60_000);
 
 function install(mode: "browse" | "select" = "select"): void {
   scope[BINDING] = (payload: string) => {
@@ -40,7 +46,7 @@ function install(mode: "browse" | "select" = "select"): void {
     documentEpoch: EPOCH,
     bindingName: BINDING,
     mode,
-    runtimeSource: buildGuestRuntimeBody(),
+    runtimeSource: body,
   });
   // Evaluated as source text with no module scope, exactly as CDP delivers it.
   new Function(source)();
@@ -196,7 +202,7 @@ describe("host prelude + page runtime", () => {
         documentEpoch: EPOCH + 1,
         bindingName: BINDING,
         mode: "select",
-        runtimeSource: buildGuestRuntimeBody(),
+        runtimeSource: body,
       })
     );
     expect((scope[GUEST_RUNTIME_GLOBAL] as { installId: number }).installId).toBe(INSTALL + 1);

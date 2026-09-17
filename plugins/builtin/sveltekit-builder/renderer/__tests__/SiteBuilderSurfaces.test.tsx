@@ -7,11 +7,7 @@ const context = vi.hoisted(() => ({
 }));
 
 import { SiteBuilderDrawer, SiteBuilderToolbar } from "../SiteBuilderSurfaces";
-import {
-  createBuilderSession,
-  loadGuestRuntimeBody,
-  type InspectorController,
-} from "../inspectorController";
+import { createBuilderSession, type InspectorController } from "../inspectorController";
 import {
   __resetDevPreviewToolSessionsForTests,
   peekDevPreviewToolSession,
@@ -22,7 +18,13 @@ import {
   __resetDevPreviewToolsForTests,
   registerDevPreviewTool,
 } from "@/registry/devPreviewToolRegistry";
-import { BUILDER_TOOL_ID, CHANNELS, PLUGIN_ID, PUSH_CHANNELS } from "../../shared/protocol";
+import {
+  BUILDER_TOOL_ID,
+  CHANNELS,
+  GUEST_ADAPTER_ID,
+  PLUGIN_ID,
+  PUSH_CHANNELS,
+} from "../../shared/protocol";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import {
@@ -182,15 +184,13 @@ describe("page verdicts", () => {
 });
 
 describe("preview binding", () => {
-  it("binds its own preview in Select mode with the guest runtime body", async () => {
+  it("binds its own preview in Select mode, naming the host's guest adapter", async () => {
     mount();
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1));
-    const body = await loadGuestRuntimeBody();
-    // The prelude-wrapped body, not the standalone script: it speaks through `api`.
-    expect(body).toContain("api.post(event)");
+    // An id, never a body: the host owns the runtime it installs.
     expect(host.sitePreview.bind.mock.calls[0]![0]).toEqual({
       panelId: "preview-1",
-      runtimeSource: body,
+      adapterId: GUEST_ADAPTER_ID,
       mode: "select",
     });
     await screen.findByRole("button", { name: "Browse" });

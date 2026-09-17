@@ -20,6 +20,7 @@ const WEB_CONTENTS_ID = 42;
 const MAIN_FRAME_ID = "frame-main";
 const MAIN_CONTEXT_ID = 7;
 const PANEL_ID = "panel-1";
+const ADAPTER_ID = "test.guest";
 const PROJECT_ID = "project-1";
 
 class FakeDebugger extends EventEmitter {
@@ -139,6 +140,9 @@ function makeBridge(pushed: SitePreviewPushPayload[]): SitePreviewBridge {
     resolveGuestProject: () => PROJECT_ID,
     newSessionId: () => "session-1",
     newBindingName: () => "__binding",
+    // The host resolves the runtime; this stands in for its adapter registry.
+    resolveGuestAdapter: (adapterId) => ({ id: adapterId, pluginId: "test.plugin" }),
+    loadGuestAdapterSource: async () => "",
   });
 }
 
@@ -195,7 +199,7 @@ describe("console capture and the site preview bridge on one guest", () => {
     await bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     emit("Runtime.executionContextCreated", {
@@ -230,7 +234,7 @@ describe("console capture and the site preview bridge on one guest", () => {
     await bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -253,7 +257,7 @@ describe("console capture and the site preview bridge on one guest", () => {
     await bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -281,7 +285,7 @@ describe("console capture and the site preview bridge on one guest", () => {
     await bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 

@@ -1672,9 +1672,7 @@ export interface GeneratedIpcInvokeMap {
     result: void;
   };
   "site-preview:bind": {
-    args: [
-      payload: { panelId: string; runtimeSource: string; mode?: "browse" | "select" | undefined },
-    ];
+    args: [payload: { panelId: string; adapterId: string; mode?: "browse" | "select" | undefined }];
     result: import("./sitePreview.js").SitePreviewBindingState;
   };
   "site-preview:clear-selection": {

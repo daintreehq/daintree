@@ -49,6 +49,13 @@ export const TOGGLE_BUILDER_ACTION_ID = "toggle-builder";
  */
 export const GUEST_PROTOCOL_VERSION = 1;
 
+/**
+ * The host-registered guest adapter this plugin binds to. The host owns the
+ * runtime asset and resolves this id to it — the plugin sends the id and never
+ * the body. Mirrored in `electron/services/sitePreview/svelteKitGuestAdapter.ts`.
+ */
+export const GUEST_ADAPTER_ID = "daintree.sveltekit-builder.guest";
+
 export const CHANNELS = {
   /** Resolve the SvelteKit app for a worktree and open a source workspace on it. */
   workspaceOpen: "workspace-open",

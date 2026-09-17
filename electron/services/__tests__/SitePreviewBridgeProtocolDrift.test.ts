@@ -11,8 +11,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
+// The adapter module resolves its asset under `app.getAppPath()`; this test
+// only reads its id.
+vi.mock("electron", () => ({ app: { getAppPath: () => "/app" } }));
+
+import { SVELTEKIT_GUEST_ADAPTER_ID } from "../sitePreview/svelteKitGuestAdapter.js";
 import {
   GUEST_PROTOCOL_VERSION,
   GuestEnvelopeSchema,
@@ -31,9 +36,10 @@ function readPluginProtocol(): string {
 }
 
 /**
- * The page runtime carries its own copy of the ceiling: it is serialised with
- * `toString()` and injected into the page, so it cannot import one. A runtime
- * that believed the ceiling was larger would send envelopes the host drops whole.
+ * The page runtime carries its own copy of the ceiling: it is bundled into a
+ * standalone asset the host injects, so nothing links it to the host's value. A
+ * runtime that believed the ceiling was larger would send envelopes the host
+ * drops whole.
  */
 const GUEST_RUNTIME = path.resolve(
   HERE,
@@ -77,6 +83,13 @@ describe("site preview guest protocol", () => {
   it("agrees with the page runtime's own copy of the message ceiling", () => {
     const runtime = fs.readFileSync(GUEST_RUNTIME, "utf8");
     expect(readNumericConstant(runtime, "MAX_MESSAGE_BYTES")).toBe(MAX_GUEST_MESSAGE_BYTES);
+  });
+
+  it("agrees with the plugin on the id of the guest runtime it binds to", () => {
+    // The plugin sends this id and the host resolves it to the asset it ships.
+    // A rename on one side alone would surface as an unbindable preview.
+    const match = /export const GUEST_ADAPTER_ID = "([^"]+)";/.exec(readPluginProtocol());
+    expect(match?.[1]).toBe(SVELTEKIT_GUEST_ADAPTER_ID);
   });
 
   it("agrees with the plugin on the set of guest event types", () => {

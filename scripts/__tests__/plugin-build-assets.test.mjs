@@ -2,13 +2,18 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
+  GUEST_RUNTIME_ASSETS,
   PLUGIN_EXTRA_ASSET_SKIP_DIRS,
   copyPluginExtraAssets,
   findMissingPluginAssets,
   findTypeScriptCommandHandlers,
+  guestRuntimeBuildConfig,
 } from "../build-main.mjs";
+
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 let workDir;
 
@@ -350,5 +355,45 @@ describe("findTypeScriptCommandHandlers", () => {
     writeFile(path.join(pluginDir, "src", "greet.ts"), "x\n");
 
     expect(findTypeScriptCommandHandlers(workDir)).toEqual([]);
+  });
+});
+
+describe("guest runtime assets", () => {
+  it("names entries that exist and land inside their plugin's dist directory", () => {
+    expect(GUEST_RUNTIME_ASSETS.length).toBeGreaterThan(0);
+    for (const asset of GUEST_RUNTIME_ASSETS) {
+      expect(fs.existsSync(path.join(repoRoot, asset.entry))).toBe(true);
+      const plugin = asset.entry.split("/")[2];
+      expect(asset.outfile.startsWith(`dist-electron/plugins/builtin/${plugin}/`)).toBe(true);
+    }
+  });
+
+  it("emits a browser IIFE, never a module or a named-function transform", () => {
+    const config = guestRuntimeBuildConfig(GUEST_RUNTIME_ASSETS[0]);
+
+    expect(config.format).toBe("iife");
+    expect(config.platform).toBe("browser");
+    expect(config.bundle).toBe(true);
+    // The host reads the file as text and splices it; a sourcemap comment or a
+    // `keepNames` helper would travel into the page with it.
+    expect(config.sourcemap).toBe(false);
+    expect(config.keepNames).toBeUndefined();
+    // Strict, because the prelude splices the asset where a directive prologue
+    // of its own would no longer apply.
+    expect(config.banner.js).toBe("(() => {");
+    expect(config.footer.js).toBe("})();");
+  });
+
+  it("minifies only when the caller asks, so a dev build stays readable", () => {
+    expect(guestRuntimeBuildConfig(GUEST_RUNTIME_ASSETS[0]).minify).toBe(false);
+    expect(guestRuntimeBuildConfig(GUEST_RUNTIME_ASSETS[0], { minify: true }).minify).toBe(true);
+  });
+
+  it("is not a directory the plugin asset copy would also mirror", () => {
+    // The entry lives under `renderer/`, which the copy step skips — otherwise
+    // the TypeScript source would ship beside the built asset.
+    for (const asset of GUEST_RUNTIME_ASSETS) {
+      expect(PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(asset.entry.split("/")[3])).toBe(true);
+    }
   });
 });

@@ -145,9 +145,10 @@ export type SitePreviewPushPayload =
 export interface SitePreviewBindRequest {
   panelId: string;
   /**
-   * The guest runtime the caller wants installed. Supplied once, at bind time —
-   * there is no "evaluate this in the guest" operation, by design.
+   * Which host-registered guest runtime to install. The caller names it; main
+   * loads the body. A caller never supplies script — there is no "evaluate this
+   * in the guest" operation either, by design.
    */
-  runtimeSource: string;
+  adapterId: string;
   mode?: SitePreviewMode;
 }

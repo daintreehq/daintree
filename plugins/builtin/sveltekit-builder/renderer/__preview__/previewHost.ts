@@ -155,7 +155,7 @@ export function createPreviewHost() {
 
   const sitePreview = {
     listCandidates: async () => candidates,
-    bind: async (request: { panelId: string; mode?: SitePreviewMode }) => {
+    bind: async (request: { panelId: string; adapterId: string; mode?: SitePreviewMode }) => {
       if (control.stallBind) await new Promise<never>(() => {});
       return state(request.panelId, request.mode ?? "browse");
     },
