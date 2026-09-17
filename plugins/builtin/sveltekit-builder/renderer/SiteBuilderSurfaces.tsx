@@ -388,7 +388,10 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
           </InspectorDisclosure>
         ) : null}
 
-        {state.workspace.status === "ready" ? (
+        {state.workspace.status === "ready" &&
+        (selection.status === "ready" ||
+          composer.draft.trim() !== "" ||
+          composer.delivery !== null) ? (
           <InspectorDisclosure
             title="Ask an agent"
             icon={Sparkles}
@@ -556,8 +559,11 @@ function SiteSourceBody({
             reasons={editing}
             note="You can still select elements and ask an agent to change them."
           />
+          {/* "Classes", not "Suggestions": the label column is 64px and the
+              longer word truncated to "Suggesti…". The reason beneath names
+              suggestions explicitly. */}
           <CapabilityRow
-            label="Suggestions"
+            label="Classes"
             available={suggestions.length === 0}
             reasons={suggestions}
             note={
