@@ -65,6 +65,96 @@ describe("activate", () => {
     expect(loaded).toEqual({ compiler: true, sourceModel: true });
   });
 
+  it("binds the workspace filesystem to the project and worktree it was opened for", async () => {
+    sandbox = await createSandbox();
+    const test = createTestHost(sandbox.worktree);
+    await activate(test.host);
+
+    await test.invoke(CHANNELS.workspaceOpen, {
+      projectId: "p1",
+      worktreeId: "w1",
+      worktreePath: sandbox.worktree,
+      previewPanelId: "preview-1",
+    });
+
+    // Exactly the scope the view named — not the focused window's, and asked
+    // for once so the workspace holds one handle for its lifetime.
+    expect(test.scopes).toEqual([{ projectId: "p1", worktreeId: "w1" }]);
+    // And the workspace genuinely reads through that handle: a scan still
+    // going through the ambient `host.fs` would follow the focused window.
+    expect(test.readsVia.some((read) => read.via === "scoped")).toBe(true);
+    expect(test.readsVia.filter((read) => read.via === "ambient")).toEqual([]);
+  });
+
+  it("keeps later workspace reads on the workspace's own handle", async () => {
+    sandbox = await createSandbox();
+    const test = createTestHost(sandbox.worktree);
+    await activate(test.host);
+
+    const open = await test.invoke<{ workspaceSessionId: string }>(CHANNELS.workspaceOpen, {
+      projectId: "p1",
+      worktreeId: "w1",
+      worktreePath: sandbox.worktree,
+      previewPanelId: "preview-1",
+    });
+    test.readsVia.length = 0;
+    await test.invoke(CHANNELS.projectModel, { workspaceSessionId: open.workspaceSessionId });
+
+    expect(test.readsVia.length).toBeGreaterThan(0);
+    expect(test.readsVia.filter((read) => read.via === "ambient")).toEqual([]);
+  });
+
+  it("refuses a session id held by a view of another project", async () => {
+    sandbox = await createSandbox();
+    const test = createTestHost(sandbox.worktree);
+    await activate(test.host);
+
+    const open = await test.invoke<{ workspaceSessionId: string }>(CHANNELS.workspaceOpen, {
+      projectId: "p1",
+      worktreeId: "w1",
+      worktreePath: sandbox.worktree,
+      previewPanelId: "preview-1",
+    });
+
+    // A session id travels in pushes; holding one must not let another
+    // project's view read through this workspace's pinned filesystem.
+    await expect(
+      test.invoke(
+        CHANNELS.projectModel,
+        { workspaceSessionId: open.workspaceSessionId },
+        { projectId: "p2" }
+      )
+    ).rejects.toThrow(/WORKSPACE_FORBIDDEN/);
+    await expect(
+      test.invoke(
+        CHANNELS.workspaceClose,
+        { workspaceSessionId: open.workspaceSessionId },
+        { projectId: "p2" }
+      )
+    ).rejects.toThrow(/WORKSPACE_FORBIDDEN/);
+  });
+
+  it("refuses a workspace on a project other than the invoking view's", async () => {
+    sandbox = await createSandbox();
+    const test = createTestHost(sandbox.worktree);
+    await activate(test.host);
+
+    await expect(
+      test.invoke(
+        CHANNELS.workspaceOpen,
+        {
+          projectId: "p2",
+          worktreeId: "w1",
+          worktreePath: sandbox.worktree,
+          previewPanelId: "preview-1",
+        },
+        { projectId: "p1" }
+      )
+    ).rejects.toThrow(/WORKSPACE_FORBIDDEN/);
+    // No scope was requested, so no filesystem authority was minted.
+    expect(test.scopes).toEqual([]);
+  });
+
   it("implements every command the manifest declares, and the inspector command opens the panel", async () => {
     sandbox = await createSandbox();
     const test = createTestHost(sandbox.worktree);

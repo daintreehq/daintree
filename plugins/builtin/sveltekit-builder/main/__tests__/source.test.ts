@@ -369,7 +369,8 @@ describe("sourceChanged for a directory already watched", () => {
     const cardSource = await fs.readFile(sandbox.file(card), "utf8");
     const external = `${cardSource}\n<!-- agent -->\n`;
     await fs.writeFile(sandbox.file(card), external);
-    const hostFs = test.host.fs;
+    // The workspace reads through its own scoped handle, not the ambient one.
+    const hostFs = test.scopedFs.at(-1)!;
     const readBytes = hostFs.readFileBytes.bind(hostFs);
     let staleReads = 1;
     hostFs.readFileBytes = async (target, options) => {

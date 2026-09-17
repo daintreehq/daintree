@@ -4,10 +4,12 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { createMockHost } from "../../../../../shared/testing/createMockHost.js";
 import type {
+  BuiltinPluginHostApi,
   PluginChannelSchema,
   PluginFsApi,
   PluginHostApi,
   PluginIpcContext,
+  PluginWorkspaceScope,
   PluginIpcHandler,
 } from "../../../../../shared/types/plugin.js";
 import { PLUGIN_ID } from "../../shared/protocol.js";
@@ -107,13 +109,26 @@ export async function createSandbox(): Promise<Sandbox> {
   };
 }
 
+/** Which of the host's two filesystem handles an operation went through. */
+export type FsVia = "ambient" | "scoped";
+
 export interface TestHost {
-  host: PluginHostApi;
-  invoke<T = unknown>(channel: string, args: unknown): Promise<T>;
+  host: BuiltinPluginHostApi;
+  /** Every scope `fsForWorkspace` was asked for, in order. */
+  scopes: PluginWorkspaceScope[];
+  /** The handle handed back for each of those scopes, for a test that needs to patch one. */
+  scopedFs: PluginFsApi[];
+  invoke<T = unknown>(
+    channel: string,
+    args: unknown,
+    ctxOverride?: Partial<PluginIpcContext>
+  ): Promise<T>;
   channels(): string[];
   reads: string[];
   writes: Array<{ path: string; contents: string }>;
-  watchers: Array<{ paths: string[]; callback: (changed: string) => void }>;
+  watchers: Array<{ paths: string[]; callback: (changed: string) => void; via: FsVia }>;
+  /** Which handle each read went through, so a workspace read through the ambient fs is visible. */
+  readsVia: Array<{ via: FsVia; path: string }>;
   pushes(): Array<{ channel: string; payload: unknown; panelId: string | null }>;
 }
 
@@ -123,7 +138,15 @@ export function createTestHost(allowedRoot: string): TestHost {
   const handlers = new Map<string, PluginIpcHandler>();
   const reads: string[] = [];
   const writes: Array<{ path: string; contents: string }> = [];
-  const watchers: Array<{ paths: string[]; callback: (changed: string) => void }> = [];
+  const watchers: Array<{ paths: string[]; callback: (changed: string) => void; via: FsVia }> = [];
+  const readsVia: Array<{ via: FsVia; path: string }> = [];
+  const scopes: PluginWorkspaceScope[] = [];
+  const scopedFs: PluginFsApi[] = [];
+
+  const read = (via: FsVia, target: string): void => {
+    reads.push(target);
+    readsVia.push({ via, path: target });
+  };
 
   const contain = (target: string): string => {
     const resolved = path.resolve(target);
@@ -134,13 +157,16 @@ export function createTestHost(allowedRoot: string): TestHost {
     return resolved;
   };
 
-  const diskFs: PluginFsApi = {
+  // Two handles over the same disk, distinguishable by what they record: a
+  // workspace that keeps reading through the ambient `host.fs` is the bug this
+  // plugin's tests exist to catch, and identical handles would hide it.
+  const makeDiskFs = (via: FsVia): PluginFsApi => ({
     readFile: async (target) => {
-      reads.push(target);
+      read(via, target);
       return fs.readFile(contain(target), "utf8");
     },
     readFileBytes: async (target) => {
-      reads.push(target);
+      read(via, target);
       return new Uint8Array(await fs.readFile(contain(target)));
     },
     writeFile: async (target, contents, options) => {
@@ -163,7 +189,7 @@ export function createTestHost(allowedRoot: string): TestHost {
       return { revision: sha(contents) };
     },
     readdir: async (target) => {
-      reads.push(target);
+      read(via, target);
       const entries = await fs.readdir(contain(target), { withFileTypes: true });
       return entries.map((entry) => ({
         name: entry.name,
@@ -173,7 +199,7 @@ export function createTestHost(allowedRoot: string): TestHost {
       }));
     },
     stat: async (target) => {
-      reads.push(target);
+      read(via, target);
       const stat = await fs.stat(contain(target));
       return {
         isDirectory: stat.isDirectory(),
@@ -185,14 +211,14 @@ export function createTestHost(allowedRoot: string): TestHost {
     },
     watch: async (paths, callback) => {
       paths.forEach(contain);
-      const record = { paths, callback };
+      const record = { paths, callback, via };
       watchers.push(record);
       return () => {
         const index = watchers.indexOf(record);
         if (index !== -1) watchers.splice(index, 1);
       };
     },
-  };
+  });
 
   const registerHandler = ((
     channel: string,
@@ -205,9 +231,15 @@ export function createTestHost(allowedRoot: string): TestHost {
   }) as PluginHostApi["registerHandler"];
 
   const host = Object.assign(Object.create(mock) as PluginHostApi, {
-    fs: diskFs,
+    fs: makeDiskFs("ambient"),
+    fsForWorkspace: (scope: PluginWorkspaceScope): PluginFsApi => {
+      scopes.push(scope);
+      const scoped = makeDiskFs("scoped");
+      scopedFs.push(scoped);
+      return scoped;
+    },
     registerHandler,
-  });
+  }) as BuiltinPluginHostApi;
 
   const ctx: PluginIpcContext = {
     projectId: "p1",
@@ -218,17 +250,24 @@ export function createTestHost(allowedRoot: string): TestHost {
 
   return {
     host,
+    scopes,
+    scopedFs,
     reads,
+    readsVia,
     writes,
     watchers,
     channels: () => [...handlers.keys()],
     pushes: () =>
       mock.postToPanelCalls.map(({ channel, payload, panelId }) => ({ channel, payload, panelId })),
-    async invoke<T>(channel: string, args: unknown): Promise<T> {
+    async invoke<T>(
+      channel: string,
+      args: unknown,
+      ctxOverride?: Partial<PluginIpcContext>
+    ): Promise<T> {
       const schema = schemas.get(channel);
       const handler = handlers.get(channel);
       if (!schema || !handler) throw new Error(`no handler for ${channel}`);
-      const result = await handler(ctx, schema.args.parse(args));
+      const result = await handler({ ...ctx, ...ctxOverride }, schema.args.parse(args));
       return schema.result.parse(result) as T;
     },
   };
