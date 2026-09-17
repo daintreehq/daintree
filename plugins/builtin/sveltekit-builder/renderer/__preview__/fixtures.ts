@@ -262,7 +262,7 @@ export const FIXTURES = {
 
   unsupported: {
     title: "Direct editing and class suggestions are unavailable, separately",
-    settled: "text=Direct editing unavailable",
+    settled: "text=Site source",
     arrange: (host) => {
       host.handlers.set(CHANNELS.workspaceOpen, () => ({
         status: "ready",
@@ -282,7 +282,7 @@ export const FIXTURES = {
 
   ambiguous: {
     title: "Several SvelteKit apps in the worktree — which one is this?",
-    settled: "text=Which app is this preview showing?",
+    settled: "text=More than one SvelteKit app lives in this worktree",
     arrange: (host) => {
       host.handlers.set(CHANNELS.workspaceOpen, () => ({
         status: "ambiguous",

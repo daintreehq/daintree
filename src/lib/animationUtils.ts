@@ -123,6 +123,12 @@ export const UI_SKELETON_FLOOR_MS = DURATION_250;
  *  threshold, same family as the Doherty and skeleton gates. */
 export const UI_SKELETON_TAKEOVER_MS = 1000;
 
+/** When a wait has gone on long enough to say so in words. The loading contract
+ *  ends "over 5s add Still working…": past this a skeleton or spinner alone
+ *  reads as stuck, and the copy is what tells the user the app has not. Not an
+ *  animation token — a perceptual threshold, same family as the gates. */
+export const UI_STILL_WORKING_MS = 5000;
+
 /** One full rotation of Tailwind's built-in `.animate-spin` utility, which runs
  *  `spin 1s linear infinite` (`--animate-spin` in tailwindcss/theme.css, not
  *  overridden in this repo). `SpinningIcon` uses this as the backstop timer that

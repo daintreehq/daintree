@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
+  AlertTriangle,
+  ChevronRight,
   PanelRightClose,
   PanelRightOpen,
   Sparkles,
@@ -23,7 +25,7 @@ import {
   type InspectorState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
-import { InspectorDisclosure } from "./InspectorSection.js";
+import { InspectorDisclosure, PropertyRow, SectionHeader } from "./InspectorSection.js";
 import { SelectionEdits, SelectionIdentity, type SelectionActions } from "./SelectionCard.js";
 import { ReceiptView } from "./ReceiptView.js";
 import { AgentComposer } from "./AgentComposer.js";
@@ -35,8 +37,8 @@ import {
 } from "./composerMemory.js";
 import { WaitingRow } from "./WaitingRow.js";
 import { IdentitySkeleton } from "./IdentitySkeleton.js";
-import { useDeferredLoading } from "@/hooks/useDeferredLoading";
-import { UI_SKELETON_TAKEOVER_MS } from "@/lib/animationUtils";
+import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
+import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { scopesFor } from "./agentTask.js";
 import { DETACH_COPY, relativeTo } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
@@ -354,6 +356,8 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
         <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3">
           <SelectionIdentity selection={selection} worktreePath={props.worktreePath} />
         </div>
+      ) : selection.status === "resolving" ? (
+        <ResolvingHeader />
       ) : null}
 
       <ScrollShadow className="min-h-0 flex-1" scrollClassName="flex flex-col gap-3 p-3">
@@ -390,8 +394,12 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
             icon={Sparkles}
             open={agentOpen}
             onOpenChange={setAgentOpen}
+            // Full-bleed like the header's rule: an inset hairline beside a
+            // full-width one was two divider treatments in one panel.
             className={
-              selection.status === "ready" ? "border-t border-border-subtle pt-1" : undefined
+              selection.status === "ready"
+                ? "-mx-3 border-t border-border-subtle px-3 pt-1"
+                : undefined
             }
           >
             <AgentComposer
@@ -435,48 +443,82 @@ function WorkspaceStatus({
   worktreePath: string | null;
 }) {
   const workspace = state.workspace;
+  if (workspace.status === "idle" || workspace.status === "opening") return null;
+  if (workspace.status === "ready" && workspace.support.level === "full") return null;
+  // One surface for everything about the project rather than the element, so
+  // a setup problem and an element-level limitation never look like the same
+  // kind of notice sat in the same column.
+  return (
+    <section aria-label="Site source" className="flex flex-col gap-1">
+      <SectionHeader title="Site source" />
+      <SiteSourceBody state={state} controller={controller} worktreePath={worktreePath} />
+    </section>
+  );
+}
+
+function SiteSourceBody({
+  state,
+  controller,
+  worktreePath,
+}: {
+  state: InspectorState;
+  controller: InspectorController;
+  worktreePath: string | null;
+}) {
+  const workspace = state.workspace;
   switch (workspace.status) {
     case "idle":
     case "opening":
       return null;
     case "no-worktree":
       return (
-        <InspectorNotice tone="info" title="Preview only — no worktree">
+        <InspectorNotice tone="info" title="Preview only — no worktree" density="compact">
           This preview isn't attached to a worktree, so elements can't be traced to source.
         </InspectorNotice>
       );
     case "no-app":
       return (
-        <InspectorNotice tone="info" title="Preview only — no SvelteKit app found">
+        <InspectorNotice
+          tone="info"
+          title="Preview only — no SvelteKit app found"
+          density="compact"
+        >
           You can select in the preview, but there's no SvelteKit source in this worktree to trace
           it to.
         </InspectorNotice>
       );
     case "ambiguous":
       return (
-        <section aria-labelledby="site-builder-apps" className="flex flex-col gap-2">
-          <h2 id="site-builder-apps" className="text-xs font-medium text-text-secondary">
-            Which app is this preview showing?
-          </h2>
-          <ul className="flex flex-col gap-1">
-            {workspace.appRoots.map((appRoot) => (
-              <li key={appRoot}>
-                <Button
-                  variant="subtle"
-                  size="sm"
-                  className="w-full justify-start"
-                  onClick={() => void controller.openWorkspace(appRoot)}
-                >
-                  {relativeTo(worktreePath, appRoot) === "." ? (
-                    "Worktree root"
-                  ) : (
-                    <span className="font-mono">{relativeTo(worktreePath, appRoot)}</span>
-                  )}
-                </Button>
-              </li>
-            ))}
+        <div className="flex flex-col gap-1.5">
+          <p className="text-xs text-text-secondary">
+            More than one SvelteKit app lives in this worktree. Choose the one this preview is
+            showing.
+          </p>
+          {/* 28px path rows with a chevron: a choice list, not three bordered
+              boxes that read as empty inputs. Every path in the same face. */}
+          <ul className="flex flex-col" aria-label="Choose site source">
+            {workspace.appRoots.map((appRoot) => {
+              const relative = relativeTo(worktreePath, appRoot);
+              return (
+                <li key={appRoot}>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="h-7 w-full justify-between gap-2 px-2 font-mono text-xs font-normal"
+                    title={appRoot}
+                    onClick={() => void controller.openWorkspace(appRoot)}
+                  >
+                    <span className="min-w-0 truncate">{relative === "." ? "./" : relative}</span>
+                    <ChevronRight
+                      className="h-3.5 w-3.5 shrink-0 text-text-secondary"
+                      aria-hidden="true"
+                    />
+                  </Button>
+                </li>
+              );
+            })}
           </ul>
-        </section>
+        </div>
       );
     case "failed":
       return (
@@ -484,73 +526,108 @@ function WorkspaceStatus({
           tone="error"
           role="alert"
           title="Couldn't open the site source"
+          density="compact"
           action={
             <Button variant="subtle" size="xs" onClick={() => void controller.openWorkspace()}>
               Retry
             </Button>
           }
         >
-          {workspace.message}
+          {/* The message is a runtime diagnostic — EACCES, ENOENT — and it is
+              the one thing the user can act on, so it stays. In its own face,
+              so it reads as a diagnostic rather than as prose that ran on. */}
+          <span className="block break-all font-mono text-3xs">{workspace.message}</span>
         </InspectorNotice>
       );
     case "ready": {
       if (workspace.support.level === "full") return null;
-      // Every non-full reason used to sit under one "Editing isn't supported"
-      // heading, so "no Tailwind config" read as a reason the whole editing
-      // surface was gone. Suggestions and direct editing are independent
-      // capabilities and are reported as such; whatever still works is still
-      // offered.
+      // Suggestions and direct editing are independent capabilities. Each is
+      // a row that says whether it works here and why not, and whatever still
+      // works is still offered.
       const suggestions = workspace.support.reasons.filter((reason) =>
         /tailwind|suggestion|completion/i.test(reason)
       );
       const editing = workspace.support.reasons.filter((reason) => !suggestions.includes(reason));
       return (
-        <>
-          {editing.length > 0 ? (
-            <InspectorNotice tone="warning" title="Direct editing unavailable" density="compact">
-              {editing.length === 1 ? (
-                sentence(editing[0]!)
-              ) : (
-                <ul className="flex list-disc flex-col gap-0.5 pl-4">
-                  {editing.map((reason) => (
-                    <li key={reason}>{reason}</li>
-                  ))}
-                </ul>
-              )}{" "}
-              {"You can still select elements and ask an agent to change them."}
-            </InspectorNotice>
-          ) : null}
-          {suggestions.length > 0 ? (
-            <InspectorNotice tone="info" title="Class suggestions unavailable" density="compact">
-              {suggestions.length === 1 ? (
-                sentence(suggestions[0]!)
-              ) : (
-                <ul className="flex list-disc flex-col gap-0.5 pl-4">
-                  {suggestions.map((reason) => (
-                    <li key={reason}>{reason}</li>
-                  ))}
-                </ul>
-              )}{" "}
-              {editing.length === 0
+        <div className="flex flex-col gap-1">
+          <CapabilityRow
+            label="Editing"
+            available={editing.length === 0}
+            reasons={editing}
+            note="You can still select elements and ask an agent to change them."
+          />
+          <CapabilityRow
+            label="Suggestions"
+            available={suggestions.length === 0}
+            reasons={suggestions}
+            note={
+              editing.length === 0
                 ? "Classes you type are still written exactly as typed."
-                : "Class names can't be checked for this project."}
-            </InspectorNotice>
-          ) : null}
-        </>
+                : "Class names can't be checked for this project."
+            }
+          />
+        </div>
       );
     }
   }
 }
 
+function CapabilityRow({
+  label,
+  available,
+  reasons,
+  note,
+}: {
+  label: string;
+  available: boolean;
+  reasons: string[];
+  note: string;
+}) {
+  return (
+    <PropertyRow label={label} align="start">
+      {available ? (
+        <p className="text-xs leading-7 text-text-secondary">Available</p>
+      ) : (
+        <div className="flex flex-col gap-0.5 py-1.5 text-xs">
+          <p className="flex items-center gap-1.5 text-text-primary">
+            <AlertTriangle
+              className="h-3.5 w-3.5 shrink-0 text-status-warning"
+              aria-hidden="true"
+            />
+            Unavailable
+          </p>
+          {reasons.map((reason) => (
+            <p key={reason} className="text-text-secondary">
+              {sentence(reason)}
+            </p>
+          ))}
+          <p className="text-text-secondary">{note}</p>
+        </div>
+      )}
+    </PropertyRow>
+  );
+}
+
 /**
- * Nothing under 400ms, the inline wait between 400ms and a second, then the
- * identity's own shape — so a slow resolve settles into the panel it was always
- * going to become instead of replacing it with a status line.
+ * The identity's own geometry, in the identity's own slot, while main finds
+ * the source. Under the Doherty gate nothing; past it the skeleton of the block
+ * that is coming, so a slow resolve settles into the panel it was always going
+ * to become rather than swapping a status line for it. The row heights match
+ * `SelectionIdentity` exactly (28/24/20), which is what keeps the sections
+ * below from moving when the answer lands.
  */
-function ResolvingIdentity() {
-  const past = useDeferredLoading(true, UI_SKELETON_TAKEOVER_MS);
-  if (past) return <IdentitySkeleton />;
-  return <WaitingRow label="Finding the source for this element" />;
+function ResolvingHeader() {
+  const visible = useDohertyGate(true);
+  const slow = useDeferredLoading(true, UI_STILL_WORKING_MS);
+  return (
+    <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3" aria-busy="true">
+      {visible ? (
+        <IdentitySkeleton label={slow ? "Finding the source — still working…" : undefined} />
+      ) : (
+        <div className="h-[76px]" aria-hidden="true" />
+      )}
+    </div>
+  );
 }
 
 function SelectionBody({ state }: { state: InspectorState }) {
@@ -559,10 +636,8 @@ function SelectionBody({ state }: { state: InspectorState }) {
     case "none":
       return null;
     case "resolving":
-      // Under the Doherty gate `WaitingRow` shows nothing at all; past a second
-      // the contract asks for a skeleton of the shape that is coming, and this
-      // block has a very predictable one.
-      return <ResolvingIdentity />;
+      // The pinned header holds the skeleton; the body has nothing to add.
+      return null;
     case "observed":
       return (
         <section aria-label="Selected element" className="flex flex-col gap-1">

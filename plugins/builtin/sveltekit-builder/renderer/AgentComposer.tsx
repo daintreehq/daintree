@@ -414,20 +414,24 @@ export function AgentComposer({
         <PropertyRow label="About" align="start">
           {/* The same segmented control the strip uses for Browse/Select: one
               choice among peers, with the chosen one carried by a thumb rather
-              than by the others going bare. */}
-          <SegmentedToggle
-            density="compact"
-            options={scopes.map((scope, index) => ({
-              value: String(index),
-              label: scope.kind === "element" ? "Element" : scope.label,
-              // The file main resolved for the component, once it has: a scope
-              // is a promise about where the request will land.
-              ...(scope.kind === "component" && scope.file ? { title: scope.file } : {}),
-            }))}
-            value={String(subject.scope)}
-            onChange={(value) => chooseScope(Number(value))}
-            className="max-w-full"
-          />
+              than by the others going bare. Its thumb needs stable geometry so
+              the control does not shrink; the wrapper keeps any overflow
+              inside the column instead of past the drawer's edge. */}
+          <div className="min-w-0 max-w-full overflow-hidden">
+            <SegmentedToggle
+              density="compact"
+              options={scopes.map((scope, index) => ({
+                value: String(index),
+                label: scope.kind === "element" ? "Element" : scope.label,
+                // The file main resolved for the component, once it has: a scope
+                // is a promise about where the request will land.
+                ...(scope.kind === "component" && scope.file ? { title: scope.file } : {}),
+              }))}
+              value={String(subject.scope)}
+              onChange={(value) => chooseScope(Number(value))}
+              className="max-w-full"
+            />
+          </div>
         </PropertyRow>
       ) : null}
 
@@ -449,7 +453,7 @@ export function AgentComposer({
           disabled={destinations.length === 0}
           onChange={(event) => onDraftChange(event.target.value)}
           onKeyDown={onKeyDown}
-          className="pr-10"
+          className="pr-12"
         />
         {/* `contrast`, not `default`: the house rule reserves accent for a single
             load-bearing signal per focus region, and the class input's focus ring
@@ -465,7 +469,7 @@ export function AgentComposer({
           title="Send to agent (Enter)"
           disabled={!canSend}
           onClick={send}
-          className="absolute bottom-2 right-2 disabled:opacity-40"
+          className="absolute bottom-3 right-3 disabled:opacity-40"
         >
           <ArrowUp aria-hidden="true" />
         </Button>
@@ -482,7 +486,10 @@ export function AgentComposer({
         />
       ) : null}
 
-      {!draft.trim() ? (
+      {/* Not beside a delivery notice: an "Ideas" prompt under "Sent to claude"
+          read as a leftover, and the row appearing and vanishing as the draft
+          filled made the panel's height jump. */}
+      {!draft.trim() && !(delivery && !deliveryDismissed) ? (
         <button
           type="button"
           aria-expanded={ideasOpen}
@@ -500,7 +507,7 @@ export function AgentComposer({
           />
         </button>
       ) : null}
-      {!draft.trim() && ideasOpen ? (
+      {!draft.trim() && ideasOpen && !(delivery && !deliveryDismissed) ? (
         <div role="group" aria-label="Suggestions" className="grid grid-cols-2 gap-1">
           {/* The shared pill variant, not a hand-rolled one: these sat beside the
               scope chips and the class tokens as a third geometry for the same
@@ -569,7 +576,7 @@ function DeliveryNotice({
         </Button>
       ) : null}
       {settled ? (
-        <Button variant="ghost" size="xs" onClick={onDismiss}>
+        <Button variant="subtle" size="xs" onClick={onDismiss}>
           Dismiss
         </Button>
       ) : null}
@@ -592,7 +599,7 @@ function DeliveryNotice({
                 Send anyway
               </Button>
               {terminalId ? (
-                <Button variant="ghost" size="xs" onClick={() => onOpenTerminal(terminalId)}>
+                <Button variant="subtle" size="xs" onClick={() => onOpenTerminal(terminalId)}>
                   Open terminal
                 </Button>
               ) : null}
@@ -649,10 +656,10 @@ function DeliveryNotice({
                     Open terminal
                   </Button>
                 ) : null}
-                <Button variant="ghost" size="xs" onClick={onSendAnyway}>
+                <Button variant="subtle" size="xs" onClick={onSendAnyway}>
                   Send it again
                 </Button>
-                <Button variant="ghost" size="xs" onClick={onDismiss}>
+                <Button variant="subtle" size="xs" onClick={onDismiss}>
                   Dismiss
                 </Button>
               </div>

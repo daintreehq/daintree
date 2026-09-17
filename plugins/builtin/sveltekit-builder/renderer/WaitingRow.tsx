@@ -1,7 +1,6 @@
 import { Spinner } from "@/components/ui/Spinner";
 import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
-
-const STILL_WORKING_MS = 5000;
+import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 
 /**
  * An inline wait of unknown length. Nothing under the Doherty gate, then a
@@ -10,7 +9,7 @@ const STILL_WORKING_MS = 5000;
  */
 export function WaitingRow({ label }: { label: string }) {
   const visible = useDohertyGate(true);
-  const slow = useDeferredLoading(true, STILL_WORKING_MS);
+  const slow = useDeferredLoading(true, UI_STILL_WORKING_MS);
   if (!visible) return null;
   return (
     <p role="status" className="flex items-center gap-2 text-xs text-text-secondary">

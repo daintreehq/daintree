@@ -3,7 +3,8 @@ import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { WaitingRow } from "./WaitingRow.js";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { splitClassTokens, type ClassCompletion } from "./inspectorController.js";
 
@@ -43,7 +44,7 @@ export function ClassEditor({
       {tokens.length === 0 ? (
         <p className="text-xs text-text-secondary">No classes yet</p>
       ) : (
-        <ClassChips tokens={tokens} editable={editable} onRemove={onRemove} />
+        <ClassChips tokens={tokens} editable={editable} onRemove={onRemove} complete={complete} />
       )}
       <ClassAddField
         tokens={tokens}
@@ -60,10 +61,12 @@ function ClassChips({
   tokens,
   editable,
   onRemove,
+  complete,
 }: {
   tokens: string[];
   editable: boolean;
   onRemove: (token: string) => void;
+  complete: (query: string) => Promise<ClassCompletion>;
 }) {
   return (
     <ul className="flex flex-wrap gap-1" aria-label="Classes">
@@ -74,8 +77,8 @@ function ClassChips({
               near-identical chips built three ways is how a panel stops looking
               like one system. The remove control stays a real button with its
               own name and focus ring. */}
-          <Badge size="sm" tone="neutral" className="max-w-full pr-0.5 text-text-primary">
-            <span className="truncate font-mono">{token}</span>
+          <Badge size="sm" tone="neutral" className="max-w-full pl-0 pr-0.5 text-text-primary">
+            <ClassInspector token={token} complete={complete} />
             <button
               type="button"
               aria-label={`Remove ${token}`}
@@ -90,6 +93,83 @@ function ClassChips({
         </li>
       ))}
     </ul>
+  );
+}
+
+type Inspection =
+  | { status: "loading" }
+  | { status: "declared"; css: string }
+  | { status: "none" }
+  | { status: "unavailable"; reason: string };
+
+/**
+ * What a class does, on request. A token like `bg-indigo-600` carried nothing
+ * but its name and a remove control; the reference class lets you look at a
+ * style before you decide about it. The declaration comes from main — the
+ * project's own Tailwind compiling this exact token — never from a guess at
+ * what a Tailwind-looking name usually means, and a token the project
+ * generates nothing for says so, which is itself worth knowing before an edit.
+ * Fetched once per token, on first open.
+ */
+function ClassInspector({
+  token,
+  complete,
+}: {
+  token: string;
+  complete: (query: string) => Promise<ClassCompletion>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [inspection, setInspection] = useState<Inspection | null>(null);
+
+  useEffect(() => {
+    if (!open || inspection !== null) return;
+    let cancelled = false;
+    setInspection({ status: "loading" });
+    void complete(token).then((result) => {
+      if (cancelled) return;
+      if (result.status !== "ok") {
+        setInspection({ status: "unavailable", reason: result.reason });
+        return;
+      }
+      const exact = result.candidates.find((candidate) => candidate.candidate === token);
+      setInspection(exact ? { status: "declared", css: exact.css } : { status: "none" });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, inspection, token, complete]);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          aria-label={`Inspect ${token}`}
+          className="min-w-0 truncate rounded-xs px-1.5 py-px font-mono text-left transition-colors duration-150 ease-out hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+        >
+          {token}
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={4} className="w-[300px] p-2.5">
+        <p className="mb-1.5 truncate font-mono text-xs text-text-primary" title={token}>
+          {token}
+        </p>
+        {inspection === null || inspection.status === "loading" ? (
+          <WaitingRow label="Looking up its declaration" />
+        ) : inspection.status === "declared" ? (
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-3xs leading-relaxed text-text-secondary">
+            {inspection.css}
+          </pre>
+        ) : inspection.status === "none" ? (
+          <p className="text-xs text-text-secondary">
+            This project's Tailwind generates no CSS for it. It is still written to the source as
+            typed.
+          </p>
+        ) : (
+          <p className="text-xs text-text-secondary">{inspection.reason}</p>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
@@ -340,6 +420,16 @@ function CandidateList({
           </span>
         </li>
       ))}
+      {active >= 0 && candidates[active] ? (
+        <li
+          aria-hidden="true"
+          className="mt-1 border-t border-border-subtle px-2 pb-1 pt-1.5 font-mono text-3xs leading-relaxed text-text-secondary"
+        >
+          <span className="line-clamp-3 whitespace-pre-wrap break-all">
+            {candidates[active].css}
+          </span>
+        </li>
+      ) : null}
     </ul>
   );
 }

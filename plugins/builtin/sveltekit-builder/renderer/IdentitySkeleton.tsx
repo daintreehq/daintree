@@ -12,15 +12,24 @@ import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
  * The shape is exactly `SelectionIdentity`'s: a badge and label row, a path
  * line, a trail line.
  */
-export function IdentitySkeleton() {
+export function IdentitySkeleton({ label }: { label?: string }) {
   return (
-    <Skeleton label="Finding the source for this element" className="flex flex-col gap-2">
-      <div className="flex items-center gap-2">
+    <Skeleton
+      label={label ?? "Finding the source for this element"}
+      className="flex flex-col gap-1"
+    >
+      {/* 28 / 24 / 20: the identity's three rows, so the sections below land
+          in the same place when the answer arrives. */}
+      <div className="flex h-7 items-center gap-2">
         <SkeletonBone heightPx={18} className="w-14 rounded-[var(--radius-sm)]" />
         <SkeletonBone heightPx={14} className="w-32 rounded-[var(--radius-sm)]" />
       </div>
-      <SkeletonBone heightPx={11} className="w-48 rounded-[var(--radius-sm)]" />
-      <SkeletonBone heightPx={11} className="w-28 rounded-[var(--radius-sm)]" />
+      <div className="flex h-6 items-center">
+        <SkeletonBone heightPx={11} className="w-48 rounded-[var(--radius-sm)]" />
+      </div>
+      <div className="flex h-5 items-center">
+        <SkeletonBone heightPx={11} className="w-28 rounded-[var(--radius-sm)]" />
+      </div>
     </Skeleton>
   );
 }
