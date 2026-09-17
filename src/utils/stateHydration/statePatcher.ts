@@ -531,6 +531,8 @@ export interface BuildArgsForRespawnOptions {
     conversationCwd?: string;
     /** No verified directory to run in — hold even an uncontested exact id. */
     awaitingDestination?: boolean;
+    /** The worktree list's own spelling of the filing, when it differs from the snapshot's. */
+    worktreeId?: string;
   };
 }
 
@@ -856,7 +858,7 @@ export function buildArgsForRespawn(
     // (unless the user locked the title, which the strip above exempts).
     titleMode: presetWasStale && !userLockedTitle ? undefined : saved.titleMode,
     cwd: coldLaunch?.cwd || saved.cwd || projectRoot || "",
-    worktreeId: saved.worktreeId,
+    worktreeId: coldLaunch?.worktreeId ?? saved.worktreeId,
     location,
     requestedId: mintFreshTerminalId ? undefined : saved.id,
     command: isAgentPanel ? command : saved.command?.trim() || undefined,

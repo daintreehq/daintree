@@ -777,7 +777,9 @@ function TerminalPaneComponent({
 
   useEffect(() => {
     const handleFindInPanel = () => {
-      if (!isFocused) return;
+      // A held pane has no terminal to search (#12434), and its query would
+      // land in whichever search bar the document happens to hold.
+      if (!isFocused || isHeldForRecovery) return;
       setIsSearchOpen(true);
       requestAnimationFrame(() => {
         document.querySelector<HTMLInputElement>("[data-terminal-search-input]")?.focus();
@@ -786,7 +788,7 @@ function TerminalPaneComponent({
 
     window.addEventListener("daintree:find-in-panel", handleFindInPanel);
     return () => window.removeEventListener("daintree:find-in-panel", handleFindInPanel);
-  }, [isFocused]);
+  }, [isFocused, isHeldForRecovery]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     // Handle Cmd+C to copy xterm selection regardless of which child has focus.

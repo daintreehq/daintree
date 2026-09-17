@@ -12,6 +12,7 @@ import {
   type RestoreRecoveryLaunchResult,
 } from "@/services/terminal/restoreRecoveryLaunch";
 import { isPtyPanel, type RestoreRecoveryReason } from "@shared/types/panel";
+import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
 
 interface RecoveryCopy {
   title: string;
@@ -86,7 +87,7 @@ export interface RestoreRecoveryGateProps {
  * pane now runs.
  */
 export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGateProps) {
-  const { recovery, agentId, cwd, conversationCwd } = usePanelStore(
+  const { recovery, agentId, cwd, originCwd } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[panelId];
       const pty = panel && isPtyPanel(panel) ? panel : undefined;
@@ -94,7 +95,7 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
         recovery: pty?.restoreRecovery,
         agentId: pty?.launchAgentId,
         cwd: pty?.cwd ?? "",
-        conversationCwd: pty?.conversationCwd,
+        originCwd: pty ? resolveConversationSearchCwd(pty) : "",
       };
     })
   );
@@ -107,19 +108,17 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
   const agentName = (agentId && getAgentConfig(agentId)?.name) || agentId || "Agent";
   const awaitingDestination = recovery.awaitingDestination === true;
   const copy = awaitingDestination ? AWAITING_DESTINATION_COPY : REASON_COPY[recovery.reason];
-  const originCwd = conversationCwd || cwd;
   const outcomeMessage = outcome ? OUTCOME_MESSAGES[outcome] : undefined;
 
-  const launch = async (choice: RestoreRecoveryChoice): Promise<RestoreRecoveryLaunchResult> => {
+  const launch = (choice: RestoreRecoveryChoice): Promise<RestoreRecoveryLaunchResult> => {
     setIsLaunching(true);
     setOutcome(null);
-    try {
-      const result = await launchFromRestoreRecovery(panelId, choice);
-      if (result !== "launched") setOutcome(result);
-      return result;
-    } finally {
-      setIsLaunching(false);
-    }
+    return launchFromRestoreRecovery(panelId, choice)
+      .then((result) => {
+        if (result !== "launched") setOutcome(result);
+        return result;
+      })
+      .finally(() => setIsLaunching(false));
   };
 
   return (
@@ -159,7 +158,11 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
 
         <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
           {awaitingDestination ? (
-            <Button size="sm" variant="outline" onClick={() => confirmDestination(panelId)}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => confirmDestination(panelId, originCwd)}
+            >
               Keep original folder
             </Button>
           ) : (

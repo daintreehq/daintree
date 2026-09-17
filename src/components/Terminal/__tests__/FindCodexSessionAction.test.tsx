@@ -306,7 +306,10 @@ describe("FindCodexSessionAction", () => {
 
     expect(findSessions).toHaveBeenCalledWith({ cwd: "/repo", codexHome: undefined });
     await waitFor(() => expect(addPanel).toHaveBeenCalledOnce());
-    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({ cwd: "/worktrees/task-a" });
+    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({
+      cwd: "/worktrees/task-a",
+      conversationCwd: "/repo",
+    });
   });
 
   it("hands the pick to the caller's own launch instead of opening a new pane (#12434)", async () => {

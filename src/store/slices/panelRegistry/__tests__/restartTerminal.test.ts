@@ -726,6 +726,41 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     expect(after.conversationCwd).toBeUndefined();
   });
 
+  it("forgets the conversation's folder when a fallback preset starts a new conversation", async () => {
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    const pane = { ...movedPane, agentPresetId: "blue-provider" };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(mockSpawn).toHaveBeenCalled();
+    expect(ptyAfterRestart().conversationCwd).toBeUndefined();
+  });
+
+  it("refuses a fallback hop for a pane held for recovery", async () => {
+    const held: PtyPanelData = {
+      ...movedPane,
+      agentState: undefined,
+      hasPty: false,
+      restoreRecovery: { reason: "session-unresolved" },
+    };
+    usePanelStore.setState({ panelsById: { [held.id]: held }, panelIds: [held.id] });
+
+    const result = await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(result.success).toBe(false);
+    expect(mockSpawn).not.toHaveBeenCalled();
+  });
+
   it("keeps pointing at the conversation's folder when it resumes that conversation", async () => {
     const { buildResumeCommand } = await import("@shared/types");
     vi.mocked(buildResumeCommand).mockReturnValue("codex resume sess-a -C '.'");

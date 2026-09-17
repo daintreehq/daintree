@@ -42,6 +42,9 @@ export interface WorktreeTerminalRestoreSnapshot {
   agentPresetColor?: string;
   originalPresetId?: string;
   agentSessionId?: string;
+  conversationCwd?: string;
+  /** Held for recovery (#12434): comes back held, never launched by a rollback. */
+  restoreRecovery?: PtyPanelData["restoreRecovery"];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -100,6 +103,8 @@ function snapshotTerminal(panel: PtyPanelData): WorktreeTerminalRestoreSnapshot 
     agentPresetColor: panel.agentPresetColor,
     originalPresetId: panel.originalPresetId,
     agentSessionId: panel.agentSessionId,
+    conversationCwd: panel.conversationCwd,
+    restoreRecovery: panel.restoreRecovery,
   };
 }
 
@@ -188,7 +193,7 @@ export async function restoreClosedTerminals(
     // flags were captured at launch and can carry a stale bypass, screen-mode
     // or decorations token by now.
     const resumeCommand =
-      snap.launchAgentId && snap.agentSessionId
+      snap.launchAgentId && snap.agentSessionId && !snap.restoreRecovery
         ? buildResumeCommand(
             snap.launchAgentId,
             snap.agentSessionId,
@@ -224,6 +229,8 @@ export async function restoreClosedTerminals(
         agentPresetColor: snap.agentPresetColor,
         originalPresetId: snap.originalPresetId,
         agentSessionId: snap.agentSessionId,
+        conversationCwd: snap.conversationCwd,
+        restoreRecovery: snap.restoreRecovery,
         bypassLimits: true,
         focusPolicy: "preserve",
       });

@@ -566,6 +566,16 @@ export const createAddPanelActions = (
       logWarn("[TerminalStore] Dropped a launch for a pane no longer held for recovery", { id });
       return null;
     }
+    // The reverse: a saved hold replayed after the user already launched that
+    // pane would hide a running agent behind a gate. Only another hold may be
+    // re-committed over.
+    if (isRecoveryHold) {
+      const existing = get().panelsById[id];
+      if (existing !== undefined && !isHeldForRecovery(existing)) {
+        logWarn("[TerminalStore] Kept a launched pane over a stale recovery hold", { id });
+        return id;
+      }
+    }
 
     // For reconnects, use the backend's state directly - don't default to "working".
     // For new spawns, start with "working" in UI to show spinner immediately during boot.
@@ -747,7 +757,9 @@ export const createAddPanelActions = (
     // PtyPanelData shape at runtime so the re-assertion is safe here.
     const ptyTerminal = terminal as PtyPanelData;
 
-    if (isHydrationBatchActive()) {
+    // A launch over a held pane adds no id, so a batch's deferred flush — which
+    // only persists when ids were added — would never write the new record.
+    if (isHydrationBatchActive() && !options.replacesRestoreRecovery) {
       // Batched path: commit `panelsById` immediately; defer `panelIds` append.
       set((state) => {
         const existing = state.panelsById[id];

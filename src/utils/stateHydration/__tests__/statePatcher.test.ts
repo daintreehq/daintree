@@ -3882,7 +3882,7 @@ describe("buildArgsForRespawn — cold launch for an agent that resumes across d
     );
 
     expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
-    expect(result.command).toMatch(/^codex --model 'gpt-5'/);
+    expect(result.command).toMatch(/^codex --model ['"]gpt-5['"]/);
     expect(result.command).not.toContain("resume");
   });
 

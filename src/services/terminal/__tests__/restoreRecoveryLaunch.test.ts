@@ -18,8 +18,20 @@ vi.mock("@/services/agentResume", () => ({
 
 vi.mock("@/utils/logger", () => ({ logError: vi.fn() }));
 
+const resolvedCli = vi.hoisted((): { path: string | undefined } => ({ path: undefined }));
+
+vi.mock("@/utils/agentLaunchCommand", () => ({
+  getCurrentLaunchCliDetail: async () => undefined,
+  resolveAgentLaunchBaseCommand: (registryCommand: string) => resolvedCli.path ?? registryCommand,
+}));
+
+vi.mock("@/config/agents", () => ({
+  getAgentConfig: (id: string) => ({ command: id }),
+}));
+
 const { buildRestoreRecoveryLaunchOptions, launchFromRestoreRecovery, siblingHeldSessionIds } =
   await import("../restoreRecoveryLaunch");
+const { escapeShellArg } = await import("@shared/utils/shellEscape");
 
 function heldPane(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
@@ -44,6 +56,8 @@ function heldPane(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   };
 }
 
+const NO_INPUTS = { flags: undefined, baseCommand: undefined };
+
 function livePane(id: string, sessionId: string, agentId = "codex"): PtyPanelData {
   return {
     id,
@@ -59,6 +73,7 @@ function livePane(id: string, sessionId: string, agentId = "codex"): PtyPanelDat
 }
 
 beforeEach(() => {
+  resolvedCli.path = undefined;
   storeState.panelsById = {};
   storeState.addPanel.mockReset();
   storeState.addPanel.mockImplementation(async (options) => options.requestedId ?? null);
@@ -69,7 +84,7 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
     const options = buildRestoreRecoveryLaunchOptions(
       heldPane(),
       { kind: "resume", sessionId: "sess-1" },
-      ["--model", "gpt-5"]
+      { flags: ["--model", "gpt-5"], baseCommand: "/opt/bin/codex" }
     );
 
     expect(options).toMatchObject({
@@ -87,24 +102,57 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
       env: { CODEX_HOME: "/profiles/work" },
       preserveMaximize: true,
     });
-    expect(options?.command).toBe("codex --model 'gpt-5' resume sess-1 -C '.'");
+    // The probed executable, not the bare registry name the CLI may not be on PATH as.
+    expect(options?.command).toBe(
+      `/opt/bin/codex --model ${escapeShellArg("gpt-5")} resume sess-1 -C ${escapeShellArg(".")}`
+    );
     expect(options).not.toHaveProperty("restoreRecovery");
   });
 
   it("starts a new conversation where the pane runs, and forgets the old folder", () => {
-    const options = buildRestoreRecoveryLaunchOptions(heldPane(), { kind: "fresh" }, undefined);
+    const options = buildRestoreRecoveryLaunchOptions(
+      heldPane(),
+      { kind: "fresh" },
+      { flags: ["--model", "gpt-5"], baseCommand: "/opt/bin/codex" }
+    );
 
-    expect(options?.command).toBe("codex --model gpt-5");
+    expect(options?.command).toMatch(/^\/opt\/bin\/codex --model /);
+    expect(options?.command).not.toContain("resume");
     expect(options?.cwd).toBe("/worktrees/task-a");
     expect(options?.agentSessionId).toBeUndefined();
     expect(options?.conversationCwd).toBeUndefined();
+  });
+
+  it("starts new with today's flags, not the ones the pane was held with", () => {
+    const options = buildRestoreRecoveryLaunchOptions(
+      heldPane({
+        command: "codex --dangerously-bypass-approvals-and-sandbox --model gpt-5",
+        agentLaunchFlags: ["--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5"],
+      }),
+      { kind: "fresh" },
+      // The bypass was switched off after restore held the pane.
+      { flags: ["--model", "gpt-5"], baseCommand: undefined }
+    );
+
+    expect(options?.command).not.toContain("--dangerously-bypass-approvals-and-sandbox");
+    expect(options?.command).toMatch(/^codex --model /);
+  });
+
+  it("falls back to the command restore held the pane with when no flags were captured", () => {
+    const options = buildRestoreRecoveryLaunchOptions(
+      heldPane({ agentLaunchFlags: undefined, command: "codex --generated" }),
+      { kind: "fresh" },
+      { flags: ["--no-alt-screen"], baseCommand: undefined }
+    );
+
+    expect(options?.command).toBe("codex --generated");
   });
 
   it("launches nothing while the pane still has no destination", () => {
     const pane = heldPane({
       restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
     });
-    expect(buildRestoreRecoveryLaunchOptions(pane, { kind: "fresh" }, undefined)).toBeNull();
+    expect(buildRestoreRecoveryLaunchOptions(pane, { kind: "fresh" }, NO_INPUTS)).toBeNull();
   });
 
   it("launches nothing for a pane that isn't held, or has nowhere to render", () => {
@@ -112,14 +160,14 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
       buildRestoreRecoveryLaunchOptions(
         heldPane({ restoreRecovery: undefined }),
         { kind: "fresh" },
-        undefined
+        NO_INPUTS
       )
     ).toBeNull();
     expect(
       buildRestoreRecoveryLaunchOptions(
         heldPane({ location: "trash" }),
         { kind: "fresh" },
-        undefined
+        NO_INPUTS
       )
     ).toBeNull();
   });
@@ -150,6 +198,15 @@ describe("launchFromRestoreRecovery (#12434)", () => {
       requestedId: "pane-a",
       replacesRestoreRecovery: true,
     });
+  });
+
+  it("launches the probed executable", async () => {
+    resolvedCli.path = "/opt/bin/codex";
+    storeState.panelsById = { "pane-a": heldPane() };
+
+    await launchFromRestoreRecovery("pane-a", { kind: "resume", sessionId: "sess-1" });
+
+    expect(storeState.addPanel.mock.calls[0]?.[0].command).toMatch(/^\/opt\/bin\/codex /);
   });
 
   it("refuses a conversation a sibling picked up while the list sat open", async () => {

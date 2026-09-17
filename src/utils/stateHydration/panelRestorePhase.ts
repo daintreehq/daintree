@@ -36,7 +36,12 @@ import {
   buildResumeLatestCommand,
   supportsCrossDirectoryResume,
 } from "@shared/types/agentSettings";
-import { isSameDirectory, resolveColdLaunchTarget } from "./coldLaunchTarget";
+import {
+  findLaunchRoot,
+  isSameDirectory,
+  resolveColdLaunchTarget,
+  type ColdLaunchTarget,
+} from "./coldLaunchTarget";
 import { sanitizeConversationCwd, sanitizeRestoreRecovery } from "@/utils/restoreRecovery";
 import { normalize as normalizePath } from "@shared/utils/path";
 import type { HydrationOptions } from "./";
@@ -811,15 +816,21 @@ export async function restorePanelsPhase(
       if (sanitizeRestoreRecovery(saved.restoreRecovery) !== undefined) {
         return { cwd: launchCwd, conversationCwd };
       }
-      const target = workspaceHasWorktrees
-        ? resolveColdLaunchTarget(saved, await worktreesPromise)
-        : ({ kind: "unchanged" } as const);
-      const cwd = target.kind === "moved" ? target.cwd : launchCwd;
+      const target: ColdLaunchTarget = workspaceHasWorktrees
+        ? resolveColdLaunchTarget({ ...saved, conversationCwd }, await worktreesPromise)
+        : { kind: "unchanged" };
       const origin = conversationCwd || saved.cwd;
+      if (target.kind === "destination-unavailable") {
+        // Nothing runs until the user picks, and the folder the conversation
+        // began in is the one choice that is always theirs to keep — not a
+        // directory an earlier move landed in, which may be the one that's gone.
+        return { cwd: origin || launchCwd, awaitingDestination: true };
+      }
+      const cwd = target.kind === "moved" ? target.cwd : launchCwd;
       return {
         cwd,
         conversationCwd: origin && cwd && !isSameDirectory(origin, cwd) ? origin : undefined,
-        ...(target.kind === "destination-unavailable" && { awaitingDestination: true }),
+        ...(target.worktreeId !== undefined && { worktreeId: target.worktreeId }),
       };
     };
 
@@ -1065,6 +1076,20 @@ export async function restorePanelsPhase(
                 // worktreeId, or names a deleted one — which also keeps the
                 // respawn's cwd pointing at a directory that still exists.
                 respawnArgs.worktreeId = await resolveRestoredWorktreeId(respawnArgs.worktreeId);
+                if (coldLaunch?.awaitingDestination) {
+                  // A pane waiting to be told where to run still has to be seen
+                  // to be told. With no live selection to re-home onto, the
+                  // filing would keep naming a worktree the grid never shows —
+                  // or be swept up as an orphan — so place it under the worktree
+                  // its folder is in. Placement only: where it runs is still
+                  // the user's call.
+                  const known = await getKnownWorktreeIds();
+                  const filing = respawnArgs.worktreeId;
+                  if (known !== null && (filing === undefined || !known.has(filing))) {
+                    const visible = findLaunchRoot(respawnArgs.cwd, (await worktreesPromise) ?? []);
+                    if (visible !== undefined) respawnArgs.worktreeId = visible;
+                  }
+                }
 
                 // A respawn boots a NEW PTY, so this also pairs the spawn: the
                 // renderer and the PTY start on one grid instead of the pane

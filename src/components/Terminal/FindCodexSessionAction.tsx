@@ -19,6 +19,7 @@ import type {
   CodexFolderSessionsResult,
 } from "@shared/types/ipc/agentSubagents";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
 import { Button } from "@/components/ui/button";
 import {
   siblingHeldSessionIds,
@@ -118,7 +119,7 @@ export function FindCodexSessionAction({
         cwd: pty?.cwd,
         // Where the conversation began, which a moved pane no longer runs in —
         // Codex files it under that folder (#12434).
-        searchCwd: pty?.conversationCwd || pty?.cwd,
+        searchCwd: pty ? resolveConversationSearchCwd(pty) : undefined,
         codexHome: codexHomeKey ? env?.[codexHomeKey] : undefined,
         // The reopened pane inherits this pane's launch shape: `worktreeId`
         // because the grid only renders the active worktree's bucket, so a
@@ -220,6 +221,9 @@ export function FindCodexSessionAction({
         worktreeId,
         launchAgentId: "codex",
         agentSessionId: session.id,
+        // The picked conversation was filed under the folder it was listed
+        // from; keep pointing there if it runs somewhere else (#12434).
+        conversationCwd: searchCwd && searchCwd !== cwd ? searchCwd : undefined,
         command,
         agentLaunchFlags,
         agentModelId,

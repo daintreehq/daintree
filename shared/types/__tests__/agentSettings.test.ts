@@ -25,6 +25,7 @@ import {
   DEFAULT_DANGEROUS_ARGS,
 } from "../agentSettings.js";
 import { setUserRegistry } from "../../config/agentRegistry.js";
+import { escapeShellArg } from "../../utils/shellEscape.js";
 import type { AgentConfig } from "../../config/agentRegistry.js";
 
 // Force POSIX shell-escape semantics so the hardcoded single-quote assertions
@@ -53,7 +54,7 @@ describe("buildResumeCommand", () => {
     const cmd = buildResumeCommand("codex", "abc-123");
     // Pinned to the launch directory (#12434), and still readable by the
     // `codex resume <id>` scrape when the shell echoes it.
-    expect(cmd).toBe("codex resume abc-123 -C '.'");
+    expect(cmd).toBe(`codex resume abc-123 -C ${escapeShellArg(".")}`);
     expect(cmd).toContain("codex resume abc-123");
     expect(cmd).not.toContain("--resume");
   });
@@ -103,7 +104,7 @@ describe("buildResumeCommand", () => {
       "--dangerously-bypass-approvals-and-sandbox",
     ]);
     expect(cmd).toBe(
-      "codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume sess-456 -C '.'"
+      `codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume sess-456 -C ${escapeShellArg(".")}`
     );
   });
 

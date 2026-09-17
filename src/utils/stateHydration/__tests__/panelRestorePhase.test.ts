@@ -94,13 +94,19 @@ vi.mock("../statePatcher", async () => {
         allowResumeLatest?: boolean;
         allowSessionIdResume?: boolean;
         resolvedResumeLatestSessionId?: string;
-        coldLaunch?: { cwd: string; conversationCwd?: string; awaitingDestination?: boolean };
+        coldLaunch?: {
+          cwd: string;
+          conversationCwd?: string;
+          awaitingDestination?: boolean;
+          worktreeId?: string;
+        };
       }
     ) => ({
       cwd: s.cwd ?? "/cwd",
       kind,
       location: s.location === "dock" ? "dock" : "grid",
-      worktreeId: s.worktreeId,
+      // The real builder takes the list's spelling of the filing (#12434).
+      worktreeId: options?.coldLaunch?.worktreeId ?? s.worktreeId,
       // Mirror the real buildArgsForRespawn: a timed-out reconnect drops the
       // requested id so the store generates a fresh one (#10440).
       requestedId: reconnectTimedOut ? undefined : s.id,
@@ -2297,7 +2303,12 @@ describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () =>
     allowResumeLatest?: boolean;
     allowSessionIdResume?: boolean;
     resolvedResumeLatestSessionId?: string;
-    coldLaunch?: { cwd: string; conversationCwd?: string; awaitingDestination?: boolean };
+    coldLaunch?: {
+      cwd: string;
+      conversationCwd?: string;
+      awaitingDestination?: boolean;
+      worktreeId?: string;
+    };
   }
 
   function argsById(ctx: MockedContext): Map<string, RespawnArgs> {
@@ -2377,6 +2388,7 @@ describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () =>
       expect(byId.get(t)?.coldLaunch).toEqual({
         cwd: `/worktrees/task-${t}`,
         conversationCwd: "/repo",
+        worktreeId: `/worktrees/task-${t}`,
       });
     }
   });
@@ -2561,7 +2573,61 @@ describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () =>
     expect(byId.get("b")?.coldLaunch).toEqual({
       cwd: "/worktrees/task-b",
       conversationCwd: "/repo",
+      worktreeId: "/worktrees/task-b",
     });
+  });
+
+  it("asks where to run a pane whose earlier destination has since gone", async () => {
+    // Relaunched in task-a on a previous restore, then task-a was deleted.
+    const ctx = makeContext({
+      worktreesPromise: Promise.resolve([worktree("/repo")]),
+      activeWorktreeId: "/repo",
+    });
+
+    await restorePanelsPhase(
+      [
+        movedPane("a", {
+          cwd: "/worktrees/task-a",
+          conversationCwd: "/repo",
+          agentSessionId: "sess-a",
+        }),
+      ],
+      ctx
+    );
+
+    // It waits in the folder its conversation began in, not the vanished one.
+    expect(argsById(ctx).get("a")?.coldLaunch).toEqual({ cwd: "/repo", awaitingDestination: true });
+  });
+
+  it("files a pane waiting for a destination somewhere visible when nothing else is", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees(), activeWorktreeId: null });
+
+    await restorePanelsPhase(
+      [movedPane("gone", { cwd: "/worktrees/task-c/src", worktreeId: "/worktrees/deleted" })],
+      ctx
+    );
+
+    const gone = argsById(ctx).get("gone");
+    expect(gone?.coldLaunch).toEqual({ cwd: "/worktrees/task-c/src", awaitingDestination: true });
+    expect(gone?.worktreeId).toBe("/worktrees/task-c");
+  });
+
+  it("keeps a filing saved under another spelling of a live worktree", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees(), activeWorktreeId: "/repo" });
+
+    await restorePanelsPhase(
+      [movedPane("a", { agentSessionId: "sess-a", worktreeId: "/worktrees/task-a/" })],
+      ctx
+    );
+
+    const a = argsById(ctx).get("a");
+    expect(a?.coldLaunch).toEqual({
+      cwd: "/worktrees/task-a",
+      conversationCwd: "/repo",
+      worktreeId: "/worktrees/task-a",
+    });
+    // Not mistaken for a dead worktree and re-homed onto the active one.
+    expect(a?.worktreeId).toBe("/worktrees/task-a");
   });
 
   it("leaves an agent whose resume is tied to its folder exactly as it was", async () => {

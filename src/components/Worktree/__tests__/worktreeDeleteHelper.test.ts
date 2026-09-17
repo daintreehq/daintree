@@ -219,6 +219,32 @@ describe("restoreClosedTerminals", () => {
     expect(addPanelMock).toHaveBeenCalledWith(expect.objectContaining({ command: "codex" }));
   });
 
+  it("brings a pane held for recovery back held, with its conversation folder (#12434)", async () => {
+    seed([
+      ptyPanel({
+        id: "held",
+        cwd: "/worktrees/task-a",
+        conversationCwd: "/repo",
+        command: "codex",
+        launchAgentId: "codex",
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      }),
+    ]);
+    const [snapshot] = captureWorktreeTerminalSnapshot("wt-1");
+
+    await restoreClosedTerminals(snapshot ? [snapshot] : []);
+
+    expect(buildResumeCommandMock).not.toHaveBeenCalled();
+    expect(addPanelMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requestedId: "held",
+        cwd: "/worktrees/task-a",
+        conversationCwd: "/repo",
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      })
+    );
+  });
+
   it("relaunches a plain terminal with its stored command and never builds a resume command", async () => {
     await restoreClosedTerminals([{ id: "plain", location: "grid", command: undefined }]);
     expect(buildResumeCommandMock).not.toHaveBeenCalled();

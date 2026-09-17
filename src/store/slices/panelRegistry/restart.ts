@@ -1253,6 +1253,10 @@ export const createRestartActions = (
     if (!effectiveAgentId) {
       return { success: false, error: "panel is not an agent" };
     }
+    // Held for recovery (#12434): nothing ran, so nothing failed over.
+    if (terminal.restoreRecovery) {
+      return { success: false, error: "panel is held for recovery" };
+    }
 
     markTerminalRestarting(id);
     set((state) =>
@@ -1276,6 +1280,7 @@ export const createRestartActions = (
       isUsingFallback: terminal.isUsingFallback,
       fallbackChainIndex: terminal.fallbackChainIndex,
       agentLaunchFlags: terminal.agentLaunchFlags,
+      conversationCwd: terminal.conversationCwd,
     };
 
     try {
@@ -1366,6 +1371,8 @@ export const createRestartActions = (
           fallbackChainIndex: nextChainIndex,
           agentLaunchFlags: nextLaunchFlags,
           agentSessionId: undefined,
+          // The fallback starts a new conversation where the pane runs.
+          conversationCwd: undefined,
           isRestarting: true,
           restartError: undefined,
           exitCode: undefined,

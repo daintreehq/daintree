@@ -223,6 +223,26 @@ describe("RestoreRecoveryGate (#12434)", () => {
     expect(launchFromRestoreRecovery).not.toHaveBeenCalled();
   });
 
+  it("keeps the folder it shows, even when the pane last ran somewhere else", () => {
+    seed(
+      heldPanel("p-1", {
+        cwd: "/worktrees/task-a",
+        conversationCwd: "/repo",
+        restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
+      })
+    );
+
+    render(<RestoreRecoveryGate panelId="p-1" />);
+    expect(screen.getByText("/repo")).toBeTruthy();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Keep original folder" }));
+    });
+
+    expect(held("p-1").cwd).toBe("/repo");
+    expect(held("p-1").conversationCwd).toBeUndefined();
+    expect(held("p-1").restoreRecovery).toEqual({ reason: "destination-unavailable" });
+  });
+
   it("opens nothing and takes no focus when several held panes appear at once", () => {
     seed(heldPanel("p-1"), heldPanel("p-2"), heldPanel("p-3"));
 

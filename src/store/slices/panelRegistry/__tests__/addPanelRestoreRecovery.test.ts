@@ -87,6 +87,8 @@ const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedg
 const { terminalClient } = await import("@/clients");
 const spawn = vi.mocked(terminalClient.spawn);
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
+const { saveNormalized } = await import("../persistence");
+const { beginBatch, consumeBatch } = await import("../hydrationBatch");
 
 async function drainMicrotasks(iterations = 100): Promise<void> {
   for (let i = 0; i < iterations; i++) {
@@ -255,5 +257,33 @@ describe("addPanel — recovery holds (#12434)", () => {
       usePanelStore.getState().addPanel({ kind: "terminal", requestedId: "extra", cwd: "/repo" })
     ).resolves.toBeNull();
     await expect(launchOver("held-1")).resolves.toBe("held-1");
+  });
+
+  it("never hides a launched pane behind a saved hold replayed over it", async () => {
+    await holdPane("held-1");
+    await launchOver("held-1");
+    await drainMicrotasks();
+
+    await holdPane("held-1");
+    await drainMicrotasks();
+
+    expect(ptyPanel("held-1")?.restoreRecovery).toBeUndefined();
+    expect(ptyPanel("held-1")?.agentSessionId).toBe("sess-1");
+  });
+
+  it("writes a launch made while a restore batch is still open", async () => {
+    await holdPane("held-1");
+    vi.mocked(saveNormalized).mockClear();
+    const token = beginBatch();
+    try {
+      await launchOver("held-1");
+      // Written with the launch itself, not left for a batch flush that adds no ids.
+      const lastWrite = vi.mocked(saveNormalized).mock.calls.at(-1)?.[0];
+      const written = lastWrite?.["held-1"];
+      expect(written && isPtyPanel(written) ? written.restoreRecovery : "missing").toBeUndefined();
+      expect(usePanelStore.getState().panelIds).toContain("held-1");
+    } finally {
+      consumeBatch(token);
+    }
   });
 });

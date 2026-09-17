@@ -1,5 +1,3 @@
-import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
-
 /**
  * Where a cold-restored agent pane should start, given the worktree it is filed
  * under (#12434).
@@ -15,22 +13,51 @@ import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
  *   directory the user chose and not ours to relocate.
  * - `moved`: filed under a live worktree other than the one it runs in.
  * - `destination-unavailable`: filed under a worktree this project's list
- *   doesn't have, while running in one it does. Absence is not proof of
- *   deletion, which is exactly why the answer is to ask rather than to fall
- *   back to the directory it was launched in.
+ *   doesn't have, while something shows it was moved — it runs in a worktree
+ *   the list does have, or restore already relaunched it away from the folder
+ *   its conversation began in. Absence is not proof of deletion, which is
+ *   exactly why the answer is to ask rather than to fall back.
+ *
+ * `worktreeId` is the list's own spelling of the filing whenever one matched,
+ * so a filing saved under another spelling of the same path isn't mistaken for
+ * a dead worktree later on.
  */
 export type ColdLaunchTarget =
-  { kind: "unchanged" } | { kind: "moved"; cwd: string } | { kind: "destination-unavailable" };
+  | { kind: "unchanged"; worktreeId?: string }
+  | { kind: "moved"; cwd: string; worktreeId: string }
+  | { kind: "destination-unavailable" };
 
 const UNCHANGED: ColdLaunchTarget = { kind: "unchanged" };
 
-function normalizePath(p: string): string {
-  return p.replace(/\\/g, "/").replace(/\/+$/, "");
+/**
+ * Separators unified and trailing slashes dropped; drive-letter and UNC paths
+ * case-folded, since Windows compares them that way. Lexical only — restore
+ * can't wait on the filesystem, so symlinked spellings stay distinct.
+ */
+function comparablePath(p: string): string {
+  const normalized = p.replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^([A-Za-z]:\/|\/\/)/.test(normalized) ? normalized.toLowerCase() : normalized;
+}
+
+/** The worktree `cwd` runs in: the longest listed path containing it. */
+export function findLaunchRoot(
+  cwd: string,
+  worktrees: readonly { id: string; path: string }[]
+): string | undefined {
+  const target = comparablePath(cwd);
+  let best: { id: string; length: number } | undefined;
+  for (const worktree of worktrees) {
+    if (!worktree.path) continue;
+    const root = comparablePath(worktree.path);
+    if (target !== root && !target.startsWith(`${root}/`)) continue;
+    if (!best || root.length > best.length) best = { id: worktree.id, length: root.length };
+  }
+  return best?.id;
 }
 
 /**
  * A worktree id IS a path, but creation and enumeration spell it differently
- * (realpath vs resolve), so a lexical match on either spelling still names it.
+ * (realpath vs resolve), so a match on either spelling still names it.
  */
 function findWorktree<T extends { id: string; path: string }>(
   worktrees: readonly T[],
@@ -38,30 +65,34 @@ function findWorktree<T extends { id: string; path: string }>(
 ): T | undefined {
   const exact = worktrees.find((w) => w.id === worktreeId);
   if (exact) return exact;
-  const wanted = normalizePath(worktreeId);
+  const wanted = comparablePath(worktreeId);
   return worktrees.find(
-    (w) => normalizePath(w.id) === wanted || (w.path !== "" && normalizePath(w.path) === wanted)
+    (w) => comparablePath(w.id) === wanted || (w.path !== "" && comparablePath(w.path) === wanted)
   );
 }
 
 export function resolveColdLaunchTarget(
-  saved: { cwd?: string; worktreeId?: string },
+  saved: { cwd?: string; worktreeId?: string; conversationCwd?: string },
   worktrees: readonly { id: string; path: string }[] | null | undefined
 ): ColdLaunchTarget {
   if (!worktrees || worktrees.length === 0) return UNCHANGED;
   const { cwd, worktreeId } = saved;
   if (!cwd || !worktreeId) return UNCHANGED;
 
-  const launchRootId = inferWorktreeIdFromCwd(cwd, worktrees);
-  if (launchRootId === undefined) return UNCHANGED;
-
+  const launchRootId = findLaunchRoot(cwd, worktrees);
   const destination = findWorktree(worktrees, worktreeId);
-  if (!destination) return { kind: "destination-unavailable" };
-  if (destination.id === launchRootId || !destination.path) return UNCHANGED;
-  return { kind: "moved", cwd: destination.path };
+  if (!destination) {
+    return launchRootId !== undefined || saved.conversationCwd
+      ? { kind: "destination-unavailable" }
+      : UNCHANGED;
+  }
+  if (launchRootId === undefined || destination.id === launchRootId || !destination.path) {
+    return { kind: "unchanged", worktreeId: destination.id };
+  }
+  return { kind: "moved", cwd: destination.path, worktreeId: destination.id };
 }
 
-/** Lexical equality under the same normalization the resolver uses. */
+/** Equality under the same comparison the resolver uses. */
 export function isSameDirectory(a: string, b: string): boolean {
-  return normalizePath(a) === normalizePath(b);
+  return comparablePath(a) === comparablePath(b);
 }
