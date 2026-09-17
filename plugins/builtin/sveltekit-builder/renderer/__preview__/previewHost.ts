@@ -7,12 +7,7 @@ import type {
   SitePreviewPushPayload,
 } from "@shared/types/ipc/sitePreview";
 import { CHANNELS, PLUGIN_ID } from "../../shared/protocol.js";
-import type {
-  EditCapability,
-  EditReceipt,
-  SelectedNode,
-  SiteSelection,
-} from "../../shared/model.js";
+import type { SelectedNode, SiteSelection } from "../../shared/model.js";
 
 /**
  * The host half of the visual-review harness: stand-ins for the site-preview
@@ -55,17 +50,10 @@ export const OBSERVATION: SiteGuestNodeObservation = {
   unmapped: false,
 };
 
-export const DIRECT: EditCapability[] = [
-  { surface: "text", support: "direct" },
-  { surface: "classes", support: "direct" },
-];
-
 export function makeSelection(
   overrides: {
     documentEpoch?: number;
     renderedOccurrences?: number;
-    capabilities?: EditCapability[];
-    surfaces?: SelectedNode["surfaces"];
     selectionId?: string;
     node?: Partial<SelectedNode>;
   } = {}
@@ -117,30 +105,9 @@ export function makeSelection(
         mapping: "exact",
         label: 'button "Start Pro"',
         bounds: [],
-        capabilities: overrides.capabilities ?? DIRECT,
-        surfaces: overrides.surfaces ?? {
-          classes: { tokens: ["px-6", "py-3", "rounded-lg", "bg-indigo-600", "text-white"] },
-          text: { text: "Start Pro" },
-        },
         ...overrides.node,
       },
     ],
-  };
-}
-
-export function makeReceipt(overrides: Partial<EditReceipt> = {}): EditReceipt {
-  return {
-    transactionId: "tx-1",
-    file: FILE,
-    beforeRevision: REVISION,
-    afterRevision: `${REVISION.slice(0, 60)}beef`,
-    appliedRange: { start: BUTTON_START, end: BUTTON_END },
-    sourceSaved: true,
-    previewRefreshed: null,
-    stylesGenerated: null,
-    affectedOccurrences: 1,
-    appliedAt: "2026-09-16T00:00:01.000Z",
-    ...overrides,
   };
 }
 
@@ -220,59 +187,10 @@ export function createPreviewHost() {
     appRoot: WORKTREE,
     support: { level: "full" },
   }));
-  // Main remembers what it wrote: a re-proof after a class edit returns the
-  // tokens as they are on disk now, not the fixture's original list. Without
-  // this the continued state photographs a class the user just removed. Undo
-  // puts back what the write replaced, as the journal does.
-  const DEFAULT_TOKENS = ["px-6", "py-3", "rounded-lg", "bg-indigo-600", "text-white"];
-  let tokens = [...DEFAULT_TOKENS];
-  const history: Array<{ tokens: string[]; revision: string }> = [];
-  let diskRevision = REVISION;
-  handlers.set(CHANNELS.selectionResolve, (args) => {
-    const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
-    const node = selection.nodes[0]!;
-    if (node.definition) node.definition.revision = diskRevision;
-    if (node.surfaces.classes) node.surfaces.classes.tokens = [...tokens];
-    return { status: "ok", selection };
-  });
-  // One vocabulary for suggestions and inspection, covering every class the
-  // default selection carries — a harness that knows only shadows photographs
-  // "generates no CSS" for `px-6` and passes it off as product behaviour.
-  const CATALOG: Array<{ candidate: string; css: string }> = [
-    { candidate: "px-6", css: ".px-6 {\n  padding-inline: calc(var(--spacing) * 6);\n}" },
-    { candidate: "px-8", css: ".px-8 {\n  padding-inline: calc(var(--spacing) * 8);\n}" },
-    { candidate: "py-3", css: ".py-3 {\n  padding-block: calc(var(--spacing) * 3);\n}" },
-    { candidate: "rounded-lg", css: ".rounded-lg {\n  border-radius: var(--radius-lg);\n}" },
-    {
-      candidate: "bg-indigo-600",
-      css: ".bg-indigo-600 {\n  background-color: var(--color-indigo-600);\n}",
-    },
-    { candidate: "text-white", css: ".text-white {\n  color: var(--color-white);\n}" },
-    { candidate: "shadow-md", css: "box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1)" },
-    { candidate: "shadow-lg", css: "box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1)" },
-    { candidate: "shadow-xl", css: "box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1)" },
-    { candidate: "shadow-inner", css: "box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.05)" },
-  ];
-  handlers.set(CHANNELS.classComplete, (args) => {
-    const query = String(args.query ?? "");
-    return {
-      status: "ok",
-      candidates: CATALOG.filter((entry) => entry.candidate.startsWith(query)),
-    };
-  });
-  // Padding along the inline axis is the one rivalry these fakes know: enough
-  // to exercise the replace-or-keep choice without pretending to be Tailwind.
-  handlers.set(CHANNELS.classConflicts, (args) => {
-    const existing = args.existing as string[];
-    const conflicts = (args.candidates as string[]).flatMap((candidate) =>
-      /^px-\d+$/.test(candidate)
-        ? existing
-            .filter((token) => /^px-\d+$/.test(token) && token !== candidate)
-            .map((token) => ({ candidate, token, properties: ["padding-left", "padding-right"] }))
-        : []
-    );
-    return { status: "ok", conflicts };
-  });
+  handlers.set(CHANNELS.selectionResolve, (args) => ({
+    status: "ok",
+    selection: makeSelection({ documentEpoch: args.documentEpoch as number }),
+  }));
   handlers.set(CHANNELS.projectModel, () => ({
     appRoot: WORKTREE,
     packageManager: "pnpm",
@@ -290,40 +208,6 @@ export function createPreviewHost() {
       },
     ],
   }));
-  handlers.set(CHANNELS.tailwindStatus, () => ({ status: "available", skippedModules: [] }));
-  handlers.set(CHANNELS.classDescribe, (args) => {
-    const token = String(args.token ?? "");
-    const variant = /^(?:hover|focus|md|lg):(.+)$/.exec(token);
-    const base = CATALOG.find((entry) => entry.candidate === (variant?.[1] ?? token));
-    return { status: "ok", css: base ? base.css : null, partial: false };
-  });
-  handlers.set(CHANNELS.editApply, (args) => {
-    history.push({ tokens: [...tokens], revision: diskRevision });
-    for (const op of (args.operations as Array<Record<string, unknown>> | undefined) ?? []) {
-      const remove = new Set((op.remove as string[] | undefined) ?? []);
-      tokens = tokens.filter((token) => !remove.has(token));
-      for (const token of (op.add as string[] | undefined) ?? []) {
-        if (!tokens.includes(token)) tokens.push(token);
-      }
-    }
-    const receipt = makeReceipt({ beforeRevision: diskRevision });
-    diskRevision = receipt.afterRevision;
-    return { status: "applied", receipt };
-  });
-  handlers.set(CHANNELS.editUndo, () => {
-    const previous = history.pop();
-    const beforeRevision = diskRevision;
-    if (previous) {
-      tokens = previous.tokens;
-      diskRevision = previous.revision;
-    }
-    // A reversal receipt goes from the edited bytes back to the ones restored,
-    // so the next resolve agrees with it.
-    return {
-      status: "reversed",
-      receipt: makeReceipt({ transactionId: "tx-2", beforeRevision, afterRevision: diskRevision }),
-    };
-  });
   handlers.set(CHANNELS.workspaceClose, () => ({ closed: true }));
   handlers.set(CHANNELS.componentDefinitions, (args) => ({
     definitions: (args.callSites as Array<{ file: string; line: number; column: number }>).map(

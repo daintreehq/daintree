@@ -8,7 +8,7 @@ import type {
   SitePreviewPushPayload,
 } from "@shared/types/ipc/sitePreview";
 import { CHANNELS, PLUGIN_ID } from "../../shared/protocol";
-import type { EditCapability, EditReceipt, SelectedNode, SiteSelection } from "../../shared/model";
+import type { SelectedNode, SiteSelection } from "../../shared/model";
 
 export const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -41,17 +41,10 @@ export const OBSERVATION: SiteGuestNodeObservation = {
   unmapped: false,
 };
 
-export const DIRECT: EditCapability[] = [
-  { surface: "text", support: "direct" },
-  { surface: "classes", support: "direct" },
-];
-
 export function makeSelection(
   overrides: {
     documentEpoch?: number;
     renderedOccurrences?: number;
-    capabilities?: EditCapability[];
-    surfaces?: SelectedNode["surfaces"];
     selectionId?: string;
     node?: Partial<SelectedNode>;
   } = {}
@@ -100,30 +93,9 @@ export function makeSelection(
         mapping: "exact",
         label: 'button "Start Pro"',
         bounds: [],
-        capabilities: overrides.capabilities ?? DIRECT,
-        surfaces: overrides.surfaces ?? {
-          classes: { tokens: ["px-6", "py-3", "rounded-lg"] },
-          text: { text: "Start Pro" },
-        },
         ...overrides.node,
       },
     ],
-  };
-}
-
-export function makeReceipt(overrides: Partial<EditReceipt> = {}): EditReceipt {
-  return {
-    transactionId: "tx-1",
-    file: FILE,
-    beforeRevision: REVISION,
-    afterRevision: sha(SOURCE + "changed"),
-    appliedRange: BUTTON_RANGE,
-    sourceSaved: true,
-    previewRefreshed: null,
-    stylesGenerated: null,
-    affectedOccurrences: 1,
-    appliedAt: "2026-09-16T00:00:01.000Z",
-    ...overrides,
   };
 }
 
@@ -203,59 +175,12 @@ export function createFakeHost() {
     appRoot: WORKTREE,
     support: { level: "full" },
   }));
-  // As real main does, a resolve reports the revision now on disk — which a
-  // write moved. Without this a re-proof after an edit could never match the
-  // revision the write produced, and continuity could never be exercised.
-  handlers.set(CHANNELS.selectionResolve, (args) => {
-    const selection = makeSelection({
+  handlers.set(CHANNELS.selectionResolve, (args) => ({
+    status: "ok",
+    selection: makeSelection({
       documentEpoch: args.documentEpoch as number,
       ...(host.ancestry ? { node: { ancestry: host.ancestry } } : {}),
-    });
-    const node = selection.nodes[0]!;
-    if (node.definition) node.definition.revision = host.diskRevision;
-    return { status: "ok", selection };
-  });
-  handlers.set(CHANNELS.classComplete, (args) => {
-    const query = String(args.query);
-    const known = ["shadow-md", "shadow-lg", "px-8"];
-    return {
-      status: "ok",
-      candidates: known
-        .filter((candidate) => candidate.startsWith(query))
-        .map((candidate) => ({ candidate, css: `/* ${candidate} */` })),
-    };
-  });
-  // Padding along the inline axis is the one rivalry these fakes know: enough
-  // to exercise the replace-or-keep choice without pretending to be Tailwind.
-  handlers.set(CHANNELS.classConflicts, (args) => {
-    const existing = args.existing as string[];
-    const conflicts = (args.candidates as string[]).flatMap((candidate) =>
-      /^px-\d+$/.test(candidate)
-        ? existing
-            .filter((token) => /^px-\d+$/.test(token) && token !== candidate)
-            .map((token) => ({ candidate, token, properties: ["padding-left", "padding-right"] }))
-        : []
-    );
-    return { status: "ok", conflicts };
-  });
-  handlers.set(CHANNELS.tailwindStatus, () => ({ status: "available", skippedModules: [] }));
-  handlers.set(CHANNELS.classDescribe, (args) => ({
-    status: "ok",
-    css: ["px-6", "px-8", "py-3", "rounded-lg", "shadow-md", "hover:px-8"].includes(
-      String(args.token)
-    )
-      ? `/* ${String(args.token)} */`
-      : null,
-    partial: false,
-  }));
-  handlers.set(CHANNELS.editApply, () => {
-    const receipt = makeReceipt({ beforeRevision: host.diskRevision });
-    host.diskRevision = receipt.afterRevision;
-    return { status: "applied", receipt };
-  });
-  handlers.set(CHANNELS.editUndo, () => ({
-    status: "reversed",
-    receipt: makeReceipt({ transactionId: "tx-2" }),
+    }),
   }));
   handlers.set(CHANNELS.workspaceClose, () => ({ closed: true }));
   handlers.set(CHANNELS.componentDefinitions, (args) => ({
@@ -309,8 +234,6 @@ export function createFakeHost() {
     /** The chain main resolves for the fixture element, innermost first; null for the fixture's own. */
     ancestry: null as SelectedNode["ancestry"] | null,
     currentEpoch: 0,
-    /** What main would hash on disk now; each applied write moves it. */
-    diskRevision: REVISION,
     invoke,
     on,
     onPanel,

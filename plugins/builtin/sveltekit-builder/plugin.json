@@ -9,12 +9,7 @@
   "engines": {
     "daintree": ">=0.36.0"
   },
-  "capabilities": [
-    "fs:project-read",
-    "fs:project-write",
-    "fs:user-data-read",
-    "fs:user-data-write"
-  ],
+  "capabilities": ["fs:project-read"],
   "scopes": {
     "fs": {
       "allowedPaths": ["${project}", "${worktree}"]
@@ -29,7 +24,7 @@
         "category": "panels",
         "kind": "command",
         "danger": "safe",
-        "keywords": ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "tailwind"],
+        "keywords": ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "agent"],
         "requires": []
       }
     ],

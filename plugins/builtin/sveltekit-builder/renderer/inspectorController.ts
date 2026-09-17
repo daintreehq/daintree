@@ -26,17 +26,9 @@ import { usePanelStore } from "@/store/panelStore";
 import {
   BUILDER_TOOL_ID,
   CHANNELS,
-  ClassCompleteResultSchema,
-  ClassDescribeResultSchema,
-  ClassConflictsResultSchema,
-  type ClassConflicts,
-  TailwindStatusResultSchema,
-  type ClassDescription,
   ComponentDefinitionsResultSchema,
   SourceRevisionsResultSchema,
   ProjectModelResultSchema,
-  EditApplyResultSchema,
-  EditUndoResultSchema,
   IssuePushSchema,
   PLUGIN_ID,
   PUSH_CHANNELS,
@@ -45,19 +37,12 @@ import {
   WorkspaceOpenResultSchema,
   type SupportVerdict,
 } from "../shared/protocol.js";
-import type {
-  EditOperation,
-  EditReceipt,
-  SelectedNode,
-  SiteEditErrorCode,
-  SiteSelection,
-  Viewport,
-} from "../shared/model.js";
+import type { SiteSelection, Viewport } from "../shared/model.js";
 
 /**
  * One controller per dev preview with the Site Builder switched on. It holds
- * the preview binding, the source workspace, the selection and the last receipt
- * (with its Undo), and ends shortly after the builder's UI is gone.
+ * the preview binding, the source workspace and the selection, and ends
+ * shortly after the builder's UI is gone.
  *
  * Every piece of preview state is keyed on the document epoch an observation
  * carries, never on arrival order: a reinstalled runtime's `documentReady` can
@@ -79,7 +64,7 @@ export interface SitePreviewApi {
     loc: { file: string; line: number; column: number };
     /** Which of the elements sharing `loc`, in document order. */
     index?: number;
-    /** The component call site to keep selected, when the user had widened to one. */
+    /** The component call site to select the element as a member of. */
     component?: { file: string; line: number; column: number };
     /** The id the page reported the element under, to ask for it by identity while it is still that node. */
     occurrence?: string;
@@ -95,7 +80,6 @@ export interface InspectorDeps {
   invoke(channel: string, args: unknown): Promise<unknown>;
   on(channel: string, callback: (payload: unknown) => void): () => void;
   runtimeSource(): Promise<string>;
-  newId(): string;
   now(): number;
   /** Calls back when this plugin is disabled; main has already closed every workspace. */
   onPluginDisabled(callback: () => void): () => void;
@@ -123,21 +107,14 @@ export type WorkspaceState =
       status: "ready";
       workspaceSessionId: string;
       appRoot: string;
-      /** Direct editing: decided by the Svelte and Kit versions alone. */
+      /** Whether this app's Svelte and Kit versions are ones we parse. */
       support: SupportVerdict;
-      /** Class suggestions and inspection: decided by the Tailwind loader, separately. */
-      tailwind: TailwindAwareness;
       /** Every app the worktree holds, when there is more than one to switch between. */
       appRoots: string[];
     }
   | { status: "ambiguous"; appRoots: string[] }
   | { status: "no-app" }
   | { status: "failed"; message: string };
-
-export type TailwindAwareness =
-  | { status: "checking" }
-  | { status: "available"; skippedModules: string[] }
-  | { status: "unavailable"; reason: string; unused: boolean };
 
 export interface PageState {
   epoch: number;
@@ -146,10 +123,7 @@ export interface PageState {
   viewport: Viewport;
 }
 
-export type StaleReason = "document-changed" | "source-changed" | "edited" | "preview-detached";
-
-/** Who moved the page's selection; what recovery after a write is allowed to answer. */
-export type SelectionCause = "user" | "document" | "reselect";
+export type StaleReason = "document-changed" | "source-changed" | "preview-detached";
 
 export type SelectionState =
   | { status: "none" }
@@ -180,64 +154,19 @@ export type SelectionState =
   | { status: "settling" }
   | { status: "failed"; message: string };
 
-export type EditSurface = "text" | "classes";
-
 /**
- * What a re-proof after this panel's own write has to match to count as a
- * continuation of the selection rather than a new one: the same file, the
- * same tag, and the revision the write produced. `prior` is what to put back
- * if it does not, or if the page never answers.
+ * The last proven element, in the terms the page can be asked for it again:
+ * what {@link InspectorController.selectComponent} names when the user picks a
+ * component out of the trail. Refreshed by every proven resolution, and null
+ * for a copy the page could not place — "the first one" would be a guess, and
+ * past the page's scan bound even a count of one is only a floor.
  */
 interface Continuity {
-  /** Worktree-relative, as the write receipt and `ReadySelection.file` are. */
-  file: string;
-  afterRevision: string;
-  tagName: string;
   loc: { file: string; line: number; column: number };
   locIndex: number;
   /** What the page reported the element as; the reselect names it first. */
   occurrence: string;
-  prior: Extract<SelectionState, { status: "ready" }> | null;
-  attempts: number;
-  /** When the write landed; empty observations inside the window are HMR, not the user. */
-  at: number;
 }
-
-export type EditState =
-  | { status: "idle" }
-  | { status: "applying"; surface: EditSurface }
-  | { status: "no-op"; surface: EditSurface }
-  | { status: "failed"; surface: EditSurface; title: string; detail: string };
-
-export type UndoState =
-  | { status: "available" }
-  | { status: "pending" }
-  | { status: "superseded" }
-  | { status: "failed"; message: string };
-
-export interface ReceiptState {
-  kind: "edit" | "undo";
-  surface: EditSurface;
-  receipt: EditReceipt;
-  workspaceSessionId: string;
-  /** The preview binding current at write time; only its later documents prove a refresh. */
-  previewSessionId: string | null;
-  /** The epoch that was current when the write returned. */
-  epochAtWrite: number | null;
-  /** Proven only by a `documentReady` from a later epoch. */
-  previewRefreshed: boolean;
-  undo: UndoState | null;
-  /**
-   * What the write asked for and main applied, from the value the panel was
-   * showing: removed and added class tokens, or the text before and after.
-   * Null when the panel didn't hold the previous value.
-   */
-  change: ReceiptChange | null;
-}
-
-export type ReceiptChange =
-  | { surface: "classes"; removed: string[]; added: string[] }
-  | { surface: "text"; before: string; after: string };
 
 export interface InspectorIssue {
   severity: "warning" | "error";
@@ -248,9 +177,6 @@ export interface InspectorIssue {
 
 /** How long an agent request waits for the route files before going without them. */
 const PAGE_PLACE_TIMEOUT_MS = 3_000;
-
-/** Matches `ClassDescribeArgsSchema`. */
-const MAX_DESCRIBED_TOKEN = 2048;
 
 /** Page verdicts that a traced element disproves. */
 const MAPPING_ISSUES = new Set(["no-svelte-meta", "not-dev-build"]);
@@ -264,30 +190,10 @@ export interface InspectorState {
   page: PageState | null;
   workspace: WorkspaceState;
   selection: SelectionState;
-  edit: EditState;
-  receipt: ReceiptState | null;
   issue: InspectorIssue | null;
-  /** A write or undo is in flight. Independent of selection, which can change under it. */
-  mutating: boolean;
-  /**
-   * The page is being asked to select the edited element again, so a fresh
-   * observation can re-prove it. The selection is stale meanwhile — its ranges
-   * are spent — but the panel need not say so for the hundred milliseconds it
-   * takes the page to answer.
-   */
-  reselecting: boolean;
-  /**
-   * Advances on every selection that is NOT a continuation of the previous
-   * one. Editors key on it, so a re-proof after a write keeps them mounted —
-   * and the class input keeps focus — while a genuinely new selection starts
-   * them clean.
-   */
+  /** Advances on every new selection, so a surface can start clean on one. */
   selectionGeneration: number;
 }
-
-export type ClassCompletion =
-  | { status: "ok"; candidates: Array<{ candidate: string; css: string }> }
-  | { status: "unavailable"; reason: string };
 
 export const INITIAL_INSPECTOR_STATE: InspectorState = {
   binding: { status: "idle" },
@@ -298,11 +204,7 @@ export const INITIAL_INSPECTOR_STATE: InspectorState = {
   page: null,
   workspace: { status: "idle" },
   selection: { status: "none" },
-  edit: { status: "idle" },
-  receipt: null,
   issue: null,
-  mutating: false,
-  reselecting: false,
   selectionGeneration: 0,
 };
 
@@ -314,13 +216,6 @@ const REATTACH_REASONS: ReadonlySet<SitePreviewDetachReason> = new Set([
   "debugger-detached",
 ]);
 const REATTACH_DELAY_MS = 300;
-/** How long the page gets to answer a reselect before the stale notice shows after all. */
-const RESELECT_SETTLE_MS = 1500;
-/** An empty observation this soon after our write is HMR replacing the node, not the user. */
-const CONTINUITY_WINDOW_MS = 10_000;
-/** HMR patches the DOM a beat after the write lands; asking again immediately finds nothing. */
-const CONTINUITY_RETRY_DELAY_MS = 150;
-const CONTINUITY_MAX_RETRIES = 2;
 /** About two minutes in all: long enough for a cold dev server to serve its first page. */
 const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000, 30000, 60000];
 
@@ -339,20 +234,6 @@ const RUNTIME_ISSUE_COPY: Record<string, string> = {
   internal: "The inspector hit a problem inside the page",
 };
 
-const EDIT_ERROR_TITLES: Record<SiteEditErrorCode, string> = {
-  STALE_SOURCE: "Not saved — the file changed",
-  UNSUPPORTED_EXPRESSION: "Not saved — this value is an expression",
-  AMBIGUOUS_INVOCATION: "Not saved — more than one source could own this",
-  NODE_NOT_FOUND: "Not saved — the element wasn't found in source",
-  INVALID_CANDIDATE: "Not saved — that class isn't valid here",
-  UNSUPPORTED_ATTRIBUTE: "Not saved — this attribute can't be edited",
-  GENERATED_FILE: "Not saved — the source is a generated file",
-  OUT_OF_SCOPE: "Not saved — the file is outside this worktree",
-  WRITER_BUSY: "Not saved — another write is in progress",
-  PERMISSION_REQUIRED: "Not saved — permission is required",
-  PARSE_FAILED: "Not saved — the file couldn't be parsed",
-};
-
 /**
  * The host services for the builder of one dev preview. Pushes are subscribed
  * per panel: main addresses each one to the preview whose workspace it is
@@ -365,7 +246,6 @@ export function defaultInspectorDeps(previewPanelId: string): InspectorDeps {
     on: (channel, callback) =>
       window.electron.plugin.onPanel(PLUGIN_ID, channel, previewPanelId, callback),
     runtimeSource: loadGuestRuntimeBody,
-    newId: () => crypto.randomUUID(),
     now: () => Date.now(),
     onPluginDisabled: (callback) => {
       const store = usePluginRuntimeStore;
@@ -445,22 +325,6 @@ export function isWorkspaceClosed(value: unknown): boolean {
 
 function trimSlash(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/, "");
-}
-
-/**
- * Only what can't be a single token at all. Whether a token is a class the
- * project can use is main's call — the renderer's guess rejected valid
- * variants like `[&>*]:p-2`.
- */
-export function isClassTokenShape(token: string): boolean {
-  return token.length > 0 && !ASCII_WHITESPACE.test(token);
-}
-
-/** Main's token separators: ASCII whitespace only, so U+00A0 stays inside a token. */
-const ASCII_WHITESPACE = /[ \t\n\f\r]/;
-
-export function splitClassTokens(value: string): string[] {
-  return value.split(/[ \t\n\f\r]+/).filter((token) => token.length > 0);
 }
 
 /** How long after a source change a click may still land on the pre-HMR DOM. */
@@ -557,21 +421,10 @@ export class InspectorController {
     void this.openWorkspace();
   }
 
-  /**
-   * Where the selection is written, for keeping it through this panel's own
-   * writes and the reload they cause. Updated from every proven resolution;
-   * consulted only when a write is pending a refresh.
-   */
+  /** The last proven element, for asking the page for it again. */
   private continuity: Continuity | null = null;
   /** The apps a worktree offered when it held more than one. */
   private knownAppRoots: string[] = [];
-  /** The document class awareness was last asked about; a different one asks again. */
-  private tailwindCheckedDocument: string | null = null;
-  private tailwindRequest = 0;
-  private reselectOnReady = false;
-  private reselectTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Identity of the reselect in flight; a user action moves it on and orphans late replies. */
-  private reselectAttempt = 0;
 
   async openWorkspace(appRoot: string | undefined = this.chosenAppRoot): Promise<void> {
     this.chosenAppRoot = appRoot;
@@ -579,7 +432,7 @@ export class InspectorController {
     if (!projectId || !worktreeId || !worktreePath) return;
     const request = ++this.workspaceRequest;
     // A preview moved between worktrees keeps running its server from the old
-    // one: the page would show one checkout while edits and agents go to another.
+    // one: the page would show one checkout while the agent works in another.
     const cwd = (usePanelStore.getState().panelsById[this.panelId] as { cwd?: unknown } | undefined)
       ?.cwd;
     if (typeof cwd === "string" && cwd.length > 0 && !isWithin(worktreePath, cwd)) {
@@ -614,11 +467,9 @@ export class InspectorController {
               workspaceSessionId: result.workspaceSessionId,
               appRoot: result.appRoot,
               support: result.support,
-              tailwind: { status: "checking" },
               appRoots: this.knownAppRoots.includes(result.appRoot) ? this.knownAppRoots : [],
             },
           });
-          void this.checkTailwind(result.workspaceSessionId);
           return;
         case "ambiguous": {
           this.knownAppRoots = result.appRoots;
@@ -654,8 +505,8 @@ export class InspectorController {
   }
 
   /**
-   * Point the builder at another app in the same worktree. Everything proven
-   * against the old one — selection, receipt, Undo — belongs to it and goes.
+   * Point the builder at another app in the same worktree. The selection was
+   * proven against the old one, so it belongs to it and goes.
    */
   switchApp(appRoot: string): void {
     const workspace = this.state.workspace;
@@ -669,19 +520,12 @@ export class InspectorController {
   private closeWorkspace(): void {
     this.workspaceRequest++;
     this.continuity = null;
-    this.reselectOnReady = false;
-    this.clearReselectTimer();
     const workspace = this.state.workspace;
     if (workspace.status === "ready") this.releaseWorkspace(workspace.workspaceSessionId);
-    // Source identity and undo both belong to the workspace that minted them.
+    // Source identity belongs to the workspace that minted it.
     this.update({
       workspace: { status: "idle" },
       selection: this.state.selection.status === "none" ? this.state.selection : { status: "none" },
-      edit: { status: "idle" },
-      receipt: null,
-      // A write still out belongs to the workspace being left; its reply is
-      // discarded on arrival, so it mustn't hold the next workspace's edits.
-      mutating: false,
     });
   }
 
@@ -692,21 +536,15 @@ export class InspectorController {
 
   /**
    * Main no longer holds our workspace (plugin disabled and re-enabled, or its
-   * worker restarted), so its selection and undo journal are gone too. Reopen
-   * once per lost session; a second failure is reported, not looped on.
+   * worker restarted), so the selection it proved is gone too. Reopen once per
+   * lost session; a second failure is reported, not looped on.
    */
   private recoverClosedWorkspace(workspaceSessionId: string): void {
     if (this.currentWorkspaceId() !== workspaceSessionId) return;
     if (this.recoveringWorkspace === workspaceSessionId) return;
     this.recoveringWorkspace = workspaceSessionId;
     this.selectionRequest++;
-    this.update({
-      workspace: { status: "idle" },
-      selection: { status: "none" },
-      edit: { status: "idle" },
-      receipt: null,
-      mutating: false,
-    });
+    this.update({ workspace: { status: "idle" }, selection: { status: "none" } });
     void this.openWorkspace();
   }
 
@@ -936,13 +774,6 @@ export class InspectorController {
     const patch: Partial<InspectorState> = { epoch };
     if (this.state.page && this.state.page.epoch < epoch) patch.page = null;
     const selection = this.state.selection;
-    const receipt = this.state.receipt;
-    const ourReload =
-      receipt !== null &&
-      !receipt.previewRefreshed &&
-      receipt.epochAtWrite !== null &&
-      epoch > receipt.epochAtWrite &&
-      this.continuity !== null;
     if (
       (selection.status === "ready" &&
         selection.selection.documentEpoch < epoch &&
@@ -952,13 +783,6 @@ export class InspectorController {
       Object.assign(patch, this.staleSelectionPatch("document-changed"));
     } else if (selection.status === "resolving" && selection.epoch < epoch) {
       patch.selection = { status: "lost" };
-    }
-    // The reload this panel's own write caused. The ranges are spent, so the
-    // selection is stale — but the element is still there in the new
-    // document, and the page can be asked for it as soon as it has one.
-    if (ourReload && (selection.status === "ready" || selection.status === "observed")) {
-      patch.reselecting = true;
-      this.reselectOnReady = true;
     }
     if (this.state.issue) patch.issue = null;
     this.update(patch);
@@ -979,32 +803,7 @@ export class InspectorController {
         };
         const binding = this.state.binding;
         if (binding.status === "bound") patch.binding = { ...binding, url: event.url };
-        const receipt = this.state.receipt;
-        if (
-          receipt &&
-          !receipt.previewRefreshed &&
-          receipt.epochAtWrite !== null &&
-          receipt.previewSessionId === payload.sessionId &&
-          epoch > receipt.epochAtWrite
-        ) {
-          patch.receipt = { ...receipt, previewRefreshed: true };
-        }
         this.update(patch);
-        // An install or a new stylesheet usually arrives with a dev-server
-        // restart, which is a new document. Class awareness that failed is asked
-        // again then, rather than reported unavailable for the whole session.
-        const workspace = this.state.workspace;
-        if (
-          workspace.status === "ready" &&
-          workspace.tailwind.status === "unavailable" &&
-          this.tailwindCheckedDocument !== this.documentKey()
-        ) {
-          void this.checkTailwind(workspace.workspaceSessionId);
-        }
-        if (this.reselectOnReady) {
-          this.reselectOnReady = false;
-          void this.reselectNow();
-        }
         return;
       }
       case "selectionChanged":
@@ -1013,8 +812,7 @@ export class InspectorController {
           epoch,
           event.nodes,
           event.scope ?? "element",
-          event.component ?? null,
-          event.cause ?? "user"
+          event.component ?? null
         );
         return;
       case "runtimeIssue":
@@ -1053,108 +851,50 @@ export class InspectorController {
     epoch: number,
     nodes: SiteGuestNodeObservation[],
     scope: "element" | "component" = "element",
-    component: PickedComponent | null = null,
-    cause: SelectionCause = "user"
+    component: PickedComponent | null = null
   ): Promise<void> {
     const request = ++this.selectionRequest;
     this.changedDuringResolve.clear();
-    const base: Partial<InspectorState> = {
-      edit: this.state.edit.status === "applying" ? this.state.edit : { status: "idle" },
-    };
     if (nodes.length === 0) {
-      const continuity = this.continuity;
-      if (
-        cause !== "user" &&
-        continuity !== null &&
-        Date.now() - continuity.at < CONTINUITY_WINDOW_MS &&
-        this.state.selection.status === "ready"
-      ) {
-        if (continuity.attempts < CONTINUITY_MAX_RETRIES) {
-          // Same-document HMR replaced the selected node a beat after the write
-          // landed and the page dropped its disconnected selection. The element
-          // is back under the same location; ask again after the patch settles.
-          // The retry belongs to this attempt: a user action in the meantime
-          // retires it before it fires.
-          continuity.attempts += 1;
-          const attempt = this.reselectAttempt;
-          this.update({ ...base, ...this.staleSelectionPatch("edited"), reselecting: true });
-          setTimeout(() => {
-            if (attempt === this.reselectAttempt) void this.reselectNow();
-          }, CONTINUITY_RETRY_DELAY_MS);
-          return;
-        }
-        // Out of retries: the element is not coming back. The page has nothing
-        // selected; the drawer keeps the stale selection and says so.
-        this.retireReselect();
-        this.update({ ...base, ...this.staleSelectionPatch("edited"), reselecting: false });
-        return;
-      }
-      // The user cleared it (Escape, a click on nothing): that is the answer,
-      // whatever recovery was in flight.
-      this.retireReselect();
+      // The page has nothing selected — the user cleared it (Escape, a click on
+      // nothing), or the node it was showing left the document.
       this.continuity = null;
-      this.update({ ...base, selection: { status: "none" } });
+      this.update({ selection: { status: "none" } });
       return;
     }
     const workspace = this.state.workspace;
     const page = this.state.page;
     const binding = this.state.binding;
-    // A preview-only app is still traced: main marks every surface inspect-only,
-    // and the selection can still go to an agent. Only direct edits are gated.
+    // A preview-only app is still traced, and its selection can still go to an
+    // agent: the verdict is about which compiler proved the range, not about
+    // what the drawer offers.
     if (workspace.status !== "ready" || binding.status !== "bound") {
       this.update({
-        ...base,
         selection: { status: "observed", epoch, node: nodes[0]!, nodeCount: nodes.length },
       });
       return;
     }
     if (!page || page.epoch !== epoch) {
       this.update({
-        ...base,
         selection: { status: "failed", message: "The page is still loading — select again" },
       });
       return;
     }
 
-    // HMR doesn't advance the epoch, so right after a write the page can still
-    // show the old markup while main resolves the click against the new bytes —
-    // and lands on a different element of the same tag.
+    // HMR doesn't advance the epoch, so right after an agent's write the page
+    // can still show the old markup while main resolves the click against the
+    // new bytes — and lands on a different element of the same tag.
     const clickedFiles = nodes.flatMap((node) =>
       node.loc
         ? [worktreeRelative(workspace.appRoot, this.context.worktreePath, node.loc.file)]
         : []
     );
-    // A reselect this controller asked for is exempt: it names the exact
-    // location of the last proof, main re-proves it against the new bytes, and
-    // the answer is checked below to still be the same element.
-    if (
-      !this.state.reselecting &&
-      clickedFiles.some((file) => file !== null && this.changedRecently(file))
-    ) {
-      this.update({ ...base, selection: { status: "settling" } });
+    if (clickedFiles.some((file) => file !== null && this.changedRecently(file))) {
+      this.update({ selection: { status: "settling" } });
       return;
     }
 
-    // What a reselect would be continuing. Read before the resolving state
-    // replaces it, and put back if the re-proof turns out to name something else.
-    const continuing = cause === "reselect" && this.state.reselecting && this.continuity !== null;
-    // Only the page's answer to OUR reselect continues the edited selection. A
-    // click of the user's own while it is out is theirs: it ends the recovery
-    // and resolves as any fresh pick would.
-    if (!continuing && this.state.reselecting) {
-      this.retireReselect();
-      this.continuity = null;
-    }
-    // A re-proof keeps the stale selection on screen — its controls are already
-    // disabled — rather than swapping the editors out for a skeleton and back,
-    // which unmounted the class input mid-loop and dropped its focus.
-    if (!continuing) {
-      this.update({
-        ...base,
-        selection: { status: "resolving", epoch, requestId: request },
-        reselecting: false,
-      });
-    }
+    this.update({ selection: { status: "resolving", epoch, requestId: request } });
     let raw: unknown;
     try {
       raw = await this.deps.invoke(CHANNELS.selectionResolve, {
@@ -1227,78 +967,22 @@ export class InspectorController {
     // The observation predates the change, but main resolved it against the
     // newer bytes; the pairing can't be trusted, so the user selects again.
     if (file !== null && this.changedDuringResolve.has(file)) {
-      // For a continuation the file moved under the re-proof itself: main's
-      // answer is at the expected revision and already wrong.
-      if (continuing && this.continuity !== null) {
-        this.refuseContinuation(this.continuity, "source-changed");
-        return;
-      }
       this.update({ selection: { status: "lost" } });
       return;
     }
-    // Same exemption as before the resolve: a reselect this controller asked
-    // for is answered against the new bytes by main, and checked below.
-    if (file !== null && this.changedRecently(file) && !this.state.reselecting) {
+    if (file !== null && this.changedRecently(file)) {
       this.update({ selection: { status: "settling" } });
       return;
     }
-    // A re-proof must be of the same element: an edit that inserted lines
-    // above it can make the old location name a different node in the new
-    // source. A different tag, or a different file, is not a continuation —
-    // the stale state stands and the user selects again.
     const after = selection.nodes[0]?.definition ?? null;
-    if (continuing && this.continuity !== null) {
-      const record = this.continuity;
-      // Repeated markup shares file, tag and revision; only the occurrence
-      // tells the cards apart, so a runtime that reports it has to agree too.
-      const occurrence = nodes[0]?.locIndex;
-      const continues =
-        after !== null &&
-        // Both worktree-relative: the record takes the write's receipt path,
-        // and the page reports locations relative to the app.
-        file === record.file &&
-        after.tagName === record.tagName &&
-        after.revision === record.afterRevision &&
-        (occurrence === undefined || occurrence === record.locIndex);
-      if (!continues) {
-        // A fresh proof of SOME element is not a continuation of the one that
-        // was edited. Refuse it, and take the page's highlight down with it so
-        // page and drawer agree on what is selected: nothing new.
-        this.refuseContinuation(record, this.staleReasonNow("edited"));
-        return;
-      }
-    }
-    this.clearReselectTimer();
-    // The page reselects an element; what the user picked may have been the
-    // component it roots. A continuation keeps that scope rather than quietly
-    // narrowing the identity, and the agent's subject, to the element.
-    const prior = this.state.selection;
-    const keepsComponent = continuing && prior.status === "ready" && prior.scope === "component";
-    const pickedScope = keepsComponent ? "component" : scope;
-    const pickedComponent =
-      keepsComponent && prior.status === "ready" ? prior.component : component;
     const location = after?.location ?? null;
-    const generation = continuing
-      ? this.state.selectionGeneration
-      : this.state.selectionGeneration + 1;
-    // Every proven selection can be continued through this panel's own writes
-    // and the reload they cause; the record is refreshed by each write.
-    // A copy the page couldn't place can't be asked for again: "the first one"
-    // would be a guess, and past the page's scan bound even a count of one is
-    // only a floor.
     const pickedOccurrence = nodes[0]?.locIndex;
     this.continuity =
-      after !== null && location !== null && pickedOccurrence !== undefined
+      location !== null && pickedOccurrence !== undefined
         ? {
-            file: file ?? location.file,
-            afterRevision: after.revision,
-            tagName: after.tagName,
             loc: { ...location },
             locIndex: pickedOccurrence,
             occurrence: nodes[0]!.runtimeOccurrenceId,
-            prior: null,
-            attempts: 0,
-            at: this.continuity?.at ?? 0,
           }
         : null;
     this.update({
@@ -1307,18 +991,14 @@ export class InspectorController {
         selection,
         file,
         stale: null,
-        scope: pickedScope,
-        component: pickedComponent,
+        scope,
+        component,
         definitions: null,
         revisions: null,
       },
-      reselecting: false,
-      selectionGeneration: generation,
+      selectionGeneration: this.state.selectionGeneration + 1,
     });
-    if (this.continuity !== null) {
-      this.continuity.prior = this.state.selection.status === "ready" ? this.state.selection : null;
-    }
-    void this.resolveDefinitions(selection, pickedComponent);
+    void this.resolveDefinitions(selection, component);
   }
 
   private async resolveDefinitions(
@@ -1460,139 +1140,18 @@ export class InspectorController {
 
   private noteChanged(file: string): void {
     this.recentChanges.set(file, this.deps.now());
-    // Our own writes aren't pushed back as sourceChanged, so a resolve that is
-    // out when one lands must be invalidated here, however long it then takes.
-    // A re-proof never shows as `resolving`; it is out while `reselecting`.
-    if (this.state.selection.status === "resolving" || this.state.reselecting) {
-      this.changedDuringResolve.add(file);
-    }
-  }
-
-  /**
-   * A user action ends whatever recovery is in flight: its guard timer, a
-   * scheduled retry, and any reply still on the way, which will find the
-   * attempt it belonged to is over.
-   */
-  private retireReselect(): void {
-    this.reselectAttempt++;
-    this.clearReselectTimer();
-  }
-
-  /**
-   * What a refused or abandoned re-proof leaves on screen: the selection from
-   * before the attempt, always stale. The prior captured after a successful
-   * continuation was editable, and restoring it as it was would show live
-   * controls for ranges the page no longer has selected.
-   */
-  private staleRollback(record: Continuity, reason: StaleReason): SelectionState {
-    const current = this.state.selection;
-    const prior = record.prior ?? (current.status === "ready" ? current : null);
-    if (prior === null) return { status: "none" };
-    return { ...prior, stale: reason };
-  }
-
-  /** The notice already showing, when there is one; otherwise the caller's. */
-  private staleReasonNow(fallback: StaleReason): StaleReason {
-    const current = this.state.selection;
-    return current.status === "ready" && current.stale !== null ? current.stale : fallback;
-  }
-
-  private refuseContinuation(record: Continuity, reason: StaleReason): void {
-    this.clearReselectTimer();
-    const binding = this.state.binding;
-    if (binding.status === "bound") {
-      void this.deps.sitePreview
-        .clearSelection({ sessionId: binding.sessionId })
-        .catch(() => undefined);
-    }
-    this.update({ selection: this.staleRollback(record, reason), reselecting: false });
-    this.continuity = null;
+    // A resolve that is out when a change lands must be invalidated here,
+    // however long it then takes.
+    if (this.state.selection.status === "resolving") this.changedDuringResolve.add(file);
   }
 
   private isCurrentResolve(request: number): boolean {
-    if (request !== this.selectionRequest) return false;
-    // A re-proof this controller asked for never entered `resolving`: the
-    // stale selection stayed on screen so its editors stayed mounted.
-    if (this.state.reselecting && this.continuity !== null) return true;
     const selection = this.state.selection;
     return (
       request === this.selectionRequest &&
       selection.status === "resolving" &&
       selection.requestId === request
     );
-  }
-
-  private selectionFile(): string | null {
-    const selection = this.state.selection;
-    return selection.status === "ready" ? selection.file : null;
-  }
-
-  private boundSessionId(): string | null {
-    const binding = this.state.binding;
-    return binding.status === "bound" ? binding.sessionId : null;
-  }
-
-  private isSelection(selectionId: string): boolean {
-    const selection = this.state.selection;
-    return selection.status === "ready" && selection.selection.selectionId === selectionId;
-  }
-
-  /**
-   * Ask the page for the element at the last proven location. A true answer
-   * means a fresh `selectionChanged` is on its way and `handleSelection` will
-   * re-prove it; anything else leaves the stale state — and its notice — as it
-   * is. A guard timer does the same if the page goes quiet.
-   */
-  private async reselectNow(): Promise<void> {
-    const record = this.continuity;
-    const binding = this.state.binding;
-    if (record === null || binding.status !== "bound") {
-      this.update({ reselecting: false });
-      return;
-    }
-    const attempt = ++this.reselectAttempt;
-    this.clearReselectTimer();
-    this.reselectTimer = setTimeout(() => {
-      this.reselectTimer = null;
-      if (attempt !== this.reselectAttempt || !this.state.reselecting) return;
-      // The page went quiet. The attempt is over: any late resolve is
-      // rejected, the stale selection is what stands, and it says so.
-      this.selectionRequest++;
-      this.update({
-        selection: this.staleRollback(record, this.staleReasonNow("edited")),
-        reselecting: false,
-      });
-    }, RESELECT_SETTLE_MS);
-    let found: boolean;
-    try {
-      const picked = record.prior?.scope === "component" ? record.prior.component : null;
-      found = await this.deps.sitePreview.reselect({
-        sessionId: binding.sessionId,
-        loc: record.loc,
-        index: record.locIndex,
-        occurrence: record.occurrence,
-        ...(picked
-          ? { component: { file: picked.file, line: picked.line, column: picked.column } }
-          : {}),
-      });
-    } catch {
-      found = false;
-    }
-    // A late answer to an attempt the user has since ended changes nothing.
-    if (!found && attempt === this.reselectAttempt) {
-      this.clearReselectTimer();
-      this.update({
-        selection: this.staleRollback(record, this.staleReasonNow("edited")),
-        reselecting: false,
-      });
-    }
-  }
-
-  private clearReselectTimer(): void {
-    if (this.reselectTimer !== null) {
-      clearTimeout(this.reselectTimer);
-      this.reselectTimer = null;
-    }
   }
 
   private staleSelectionPatch(reason: StaleReason): Partial<InspectorState> {
@@ -1606,8 +1165,6 @@ export class InspectorController {
     } else if (selection.status === "observed") {
       patch.selection = { status: "none" };
     }
-    const edit = this.state.edit;
-    if (edit.status === "no-op") patch.edit = { status: "idle" };
     return patch;
   }
 
@@ -1636,8 +1193,7 @@ export class InspectorController {
    * Whether a component on the trail can be selected right now — the one rule
    * the crumbs and {@link selectComponent} share, so a crumb is never a button
    * that does nothing. The page only answers a selection request in Select
-   * mode; a stale trail describes an element the page no longer shows; a
-   * re-proof out for an edit would claim the answer as its own; and a
+   * mode; a stale trail describes an element the page no longer shows; and a
    * selection the page could not place (no proven location, or an occurrence
    * it could not count) cannot be asked for again.
    */
@@ -1648,7 +1204,6 @@ export class InspectorController {
       state.mode === "select" &&
       state.selection.status === "ready" &&
       state.selection.stale === null &&
-      !state.reselecting &&
       this.continuity !== null
     );
   }
@@ -1661,12 +1216,9 @@ export class InspectorController {
    * innermost thing under the pointer, and the component a request should be
    * about is usually a step or two up; the trail names those steps.
    *
-   * The page answers with `cause: "reselect"`, which only reads as the
-   * continuation of an edited selection while a re-proof is out; the pick is
-   * refused while one is, and any timer of the last one is retired, so the
-   * answer is taken for what it is: the user's choice. False when the pick
-   * can't be made ({@link canSelectComponent}) or the page no longer has the
-   * element.
+   * The page's answer is taken for what it is — the user's choice — and
+   * resolves as any fresh pick does. False when the pick can't be made
+   * ({@link canSelectComponent}) or the page no longer has the element.
    */
   async selectComponent(usedAt: CallSite): Promise<boolean> {
     const record = this.continuity;
@@ -1674,7 +1226,6 @@ export class InspectorController {
     if (record === null || binding.status !== "bound" || !this.canSelectComponent()) {
       return false;
     }
-    this.retireReselect();
     try {
       return await this.deps.sitePreview.reselect({
         sessionId: binding.sessionId,
@@ -1690,432 +1241,6 @@ export class InspectorController {
 
   dismissIssue(): void {
     this.update({ issue: null });
-  }
-
-  /* ------------------------------------------------------------------------ */
-  /* Editing                                                                  */
-  /* ------------------------------------------------------------------------ */
-
-  addClasses(selectionId: string, tokens: string[]): Promise<boolean> {
-    return this.replaceClasses(selectionId, [], tokens);
-  }
-
-  removeClass(selectionId: string, token: string): Promise<boolean> {
-    return this.replaceClasses(selectionId, [token], []);
-  }
-
-  /**
-   * One intention, one write: `px-6` becomes `px-8` as a single transaction
-   * and a single Undo, never a removal and an addition with a moment between
-   * them where the element has neither.
-   */
-  replaceClasses(selectionId: string, remove: string[], add: string[]): Promise<boolean> {
-    const target = editTargetOf(this.state, "classes", selectionId);
-    const classes = target?.node.surfaces.classes;
-    if (!target || !classes) return Promise.resolve(false);
-    const existing = new Set(classes.tokens);
-    const removing = [...new Set(remove)].filter((token) => existing.has(token));
-    const adding = [...new Set(add)].filter(
-      (token) => isClassTokenShape(token) && (!existing.has(token) || removing.includes(token))
-    );
-    const net = adding.filter((token) => !removing.includes(token));
-    const dropped = removing.filter((token) => !adding.includes(token));
-    if (net.length === 0 && dropped.length === 0) return Promise.resolve(false);
-    return this.apply(
-      "classes",
-      selectionId,
-      [
-        {
-          kind: "set_class_tokens",
-          range: target.node.definition!.range,
-          add: net,
-          remove: dropped,
-          responsive: { kind: "base" },
-        },
-      ],
-      { surface: "classes", removed: dropped, added: net }
-    );
-  }
-
-  setText(selectionId: string, text: string): Promise<boolean> {
-    const target = editTargetOf(this.state, "text", selectionId);
-    const current = target?.node.surfaces.text;
-    if (!target || !current) return Promise.resolve(false);
-    if (text.trim().length === 0 || text === current.text) return Promise.resolve(false);
-    return this.apply(
-      "text",
-      selectionId,
-      [{ kind: "set_literal_text", range: target.node.definition!.range, text }],
-      { surface: "text", before: current.text, after: text }
-    );
-  }
-
-  private async apply(
-    surface: EditSurface,
-    selectionId: string,
-    operations: EditOperation[],
-    change: ReceiptChange
-  ): Promise<boolean> {
-    const target = editTargetOf(this.state, surface, selectionId);
-    if (!target) return false;
-    const definition = target.node.definition!;
-    // Witness and workspace are fixed now, not when the reply lands: by then the
-    // panel may show another worktree and another preview.
-    const previewSessionId = this.boundSessionId();
-    this.update({ edit: { status: "applying", surface }, mutating: true });
-    const done = await this.write(target, definition, operations);
-    return this.settle(surface, selectionId, target, previewSessionId, done, change);
-  }
-
-  private async write(
-    target: EditTarget,
-    definition: NonNullable<SelectedNode["definition"]>,
-    operations: EditOperation[]
-  ): Promise<{ raw: unknown } | { error: unknown }> {
-    try {
-      return {
-        raw: await this.deps.invoke(CHANNELS.editApply, {
-          workspaceSessionId: target.workspaceSessionId,
-          file: target.file,
-          expectedRevision: definition.revision,
-          operations,
-          affectedOccurrences: definition.renderedOccurrences,
-          idempotencyKey: this.deps.newId(),
-        }),
-      };
-    } catch (error) {
-      return { error };
-    }
-  }
-
-  private settle(
-    surface: EditSurface,
-    selectionId: string,
-    target: EditTarget,
-    previewSessionId: string | null,
-    done: { raw: unknown } | { error: unknown },
-    change: ReceiptChange
-  ): boolean {
-    if (this.currentWorkspaceId() !== target.workspaceSessionId) {
-      // The reply belongs to a workspace this panel has left; its receipt and
-      // Undo would point at a journal the current workspace doesn't hold.
-      return false;
-    }
-    this.update({ mutating: false });
-    if ("error" in done && isWorkspaceClosed(done.error)) {
-      this.recoverClosedWorkspace(target.workspaceSessionId);
-      return false;
-    }
-    if ("error" in done) {
-      this.update({
-        edit: this.isSelection(selectionId)
-          ? {
-              status: "failed",
-              surface,
-              title: "Not saved",
-              detail: formatErrorMessage(done.error, "The change couldn't be written"),
-            }
-          : { status: "idle" },
-      });
-      return false;
-    }
-    const raw = done.raw;
-    const parsed = EditApplyResultSchema.safeParse(raw);
-    if (!parsed.success) {
-      this.update({
-        edit: this.isSelection(selectionId)
-          ? {
-              status: "failed",
-              surface,
-              title: "Not saved",
-              detail: "The source didn't confirm the change",
-            }
-          : { status: "idle" },
-      });
-      return false;
-    }
-    const result = parsed.data;
-    if (result.status === "error" && isWorkspaceClosed(result)) {
-      this.recoverClosedWorkspace(target.workspaceSessionId);
-      return false;
-    }
-    const stillSelected = this.isSelection(selectionId);
-    switch (result.status) {
-      case "applied":
-        this.noteChanged(result.receipt.file);
-        this.update({
-          edit: { status: "idle" },
-          receipt: {
-            kind: "edit",
-            surface,
-            receipt: result.receipt,
-            workspaceSessionId: target.workspaceSessionId,
-            previewSessionId,
-            epochAtWrite: this.state.epoch,
-            previewRefreshed: false,
-            undo: { status: "available" },
-            change,
-          },
-          // The file's bytes moved, so every range held against it is spent —
-          // including a newer selection that resolved while the write was out.
-          ...(stillSelected || this.selectionFile() === result.receipt.file
-            ? this.staleSelectionPatch("edited")
-            : {}),
-          // …and the page is asked for the element again, so main can re-prove
-          // it. The stale patch above stands until that proof arrives.
-          reselecting: stillSelected && this.continuity !== null,
-        });
-        if (stillSelected && this.continuity !== null) {
-          // The record is bound to THIS write: a re-proof continues the
-          // selection only if it comes back at the revision main just wrote.
-          const prior = this.state.selection;
-          this.continuity = {
-            ...this.continuity,
-            file: result.receipt.file,
-            afterRevision: result.receipt.afterRevision,
-            prior: prior.status === "ready" ? prior : this.continuity.prior,
-            attempts: 0,
-            at: Date.now(),
-          };
-          void this.reselectNow();
-        }
-        return true;
-      case "no-op":
-        this.update({ edit: stillSelected ? { status: "no-op", surface } : { status: "idle" } });
-        return true;
-      case "conflict":
-        this.update({
-          edit: stillSelected
-            ? {
-                status: "failed",
-                surface,
-                title: EDIT_ERROR_TITLES.STALE_SOURCE,
-                detail: `${target.file} changed after you selected this element. Select it again to edit the current source.`,
-              }
-            : { status: "idle" },
-          ...(stillSelected ? this.staleSelectionPatch("source-changed") : {}),
-        });
-        return false;
-      case "error":
-        this.update({
-          edit: stillSelected
-            ? {
-                status: "failed",
-                surface,
-                title: EDIT_ERROR_TITLES[result.code],
-                detail: result.message,
-              }
-            : { status: "idle" },
-          ...(stillSelected && result.code === "STALE_SOURCE"
-            ? this.staleSelectionPatch("source-changed")
-            : {}),
-        });
-        return false;
-    }
-  }
-
-  async undo(): Promise<void> {
-    const receipt = this.state.receipt;
-    const workspace = this.state.workspace;
-    if (!receipt || receipt.kind !== "edit" || !receipt.undo) return;
-    if (receipt.undo.status === "pending" || receipt.undo.status === "superseded") return;
-    if (this.state.mutating) return;
-    if (
-      workspace.status !== "ready" ||
-      workspace.workspaceSessionId !== receipt.workspaceSessionId
-    ) {
-      return;
-    }
-    const transactionId = receipt.receipt.transactionId;
-    const workspaceSessionId = receipt.workspaceSessionId;
-    const previewSessionId = this.boundSessionId();
-    this.update({ receipt: { ...receipt, undo: { status: "pending" } }, mutating: true });
-
-    let raw: unknown;
-    try {
-      raw = await this.deps.invoke(CHANNELS.editUndo, {
-        workspaceSessionId: receipt.workspaceSessionId,
-        transactionId,
-      });
-    } catch (error) {
-      if (this.currentWorkspaceId() !== workspaceSessionId) return;
-      this.update({ mutating: false });
-      if (isWorkspaceClosed(error)) return this.recoverClosedWorkspace(workspaceSessionId);
-      this.patchUndo(transactionId, {
-        status: "failed",
-        message: formatErrorMessage(error, "The edit couldn't be undone"),
-      });
-      return;
-    }
-    if (this.currentWorkspaceId() !== workspaceSessionId) return;
-    this.update({ mutating: false });
-    const parsed = EditUndoResultSchema.safeParse(raw);
-    if (!parsed.success) {
-      this.patchUndo(transactionId, {
-        status: "failed",
-        message: "The source didn't confirm the undo",
-      });
-      return;
-    }
-    const result = parsed.data;
-    if (result.status === "superseded") {
-      this.patchUndo(transactionId, { status: "superseded" });
-      return;
-    }
-    if (result.status === "error" && isWorkspaceClosed(result)) {
-      return this.recoverClosedWorkspace(workspaceSessionId);
-    }
-    if (result.status === "error") {
-      this.patchUndo(transactionId, { status: "failed", message: result.message });
-      return;
-    }
-    const current = this.state.receipt;
-    if (current?.receipt.transactionId !== transactionId) return;
-    this.noteChanged(result.receipt.file);
-    this.update({
-      receipt: {
-        kind: "undo",
-        surface: current.surface,
-        receipt: result.receipt,
-        workspaceSessionId: current.workspaceSessionId,
-        previewSessionId,
-        epochAtWrite: this.state.epoch,
-        previewRefreshed: false,
-        undo: null,
-        change: current.change,
-      },
-      ...(this.selectionFile() === result.receipt.file
-        ? this.staleSelectionPatch("source-changed")
-        : {}),
-    });
-  }
-
-  private patchUndo(transactionId: string, undo: UndoState): void {
-    const current = this.state.receipt;
-    if (current?.receipt.transactionId !== transactionId) return;
-    this.update({ receipt: { ...current, undo } });
-  }
-
-  async completeClasses(query: string): Promise<ClassCompletion> {
-    const workspace = this.state.workspace;
-    if (workspace.status !== "ready") {
-      return { status: "unavailable", reason: "The site source isn't open" };
-    }
-    try {
-      const raw = await this.deps.invoke(CHANNELS.classComplete, {
-        workspaceSessionId: workspace.workspaceSessionId,
-        query: query.slice(0, 128),
-        limit: 50,
-      });
-      const parsed = ClassCompleteResultSchema.safeParse(raw);
-      if (!parsed.success) return { status: "unavailable", reason: "Class list unavailable" };
-      if (parsed.data.status === "unavailable" && isWorkspaceClosed(parsed.data)) {
-        this.recoverClosedWorkspace(workspace.workspaceSessionId);
-      }
-      return parsed.data;
-    } catch (error) {
-      return {
-        status: "unavailable",
-        reason: formatErrorMessage(error, "Class list unavailable"),
-      };
-    }
-  }
-
-  /** Asks main whether class awareness works here; answers only the workspace that asked. */
-  /** Which document of which preview binding the page state describes. */
-  private documentKey(): string {
-    return `${this.boundSessionId() ?? ""}:${this.state.page?.epoch ?? ""}`;
-  }
-
-  private async checkTailwind(workspaceSessionId: string): Promise<void> {
-    const request = ++this.tailwindRequest;
-    const askedFor = this.documentKey();
-    this.tailwindCheckedDocument = askedFor;
-    let tailwind: TailwindAwareness;
-    try {
-      const raw = await this.deps.invoke(CHANNELS.tailwindStatus, { workspaceSessionId });
-      const parsed = TailwindStatusResultSchema.safeParse(raw);
-      tailwind = parsed.success
-        ? parsed.data
-        : { status: "unavailable", reason: "Class awareness didn't answer", unused: false };
-    } catch (error) {
-      tailwind = {
-        status: "unavailable",
-        reason: formatErrorMessage(error, "Class awareness didn't answer"),
-        unused: false,
-      };
-    }
-    const workspace = this.state.workspace;
-    if (request !== this.tailwindRequest) return;
-    if (workspace.status !== "ready" || workspace.workspaceSessionId !== workspaceSessionId) return;
-    this.update({ workspace: { ...workspace, tailwind } });
-    // A new document arrived while this was out — often the restart after an
-    // install. Its answer predates that document, so a failure is asked again.
-    if (tailwind.status === "unavailable" && this.documentKey() !== askedFor) {
-      void this.checkTailwind(workspaceSessionId);
-    }
-  }
-
-  /** Existing tokens the candidates would override; unavailable means "don't know", not "none". */
-  async classConflicts(existing: string[], candidates: string[]): Promise<ClassConflicts> {
-    const workspace = this.state.workspace;
-    if (workspace.status !== "ready") {
-      return { status: "unavailable", reason: "The site source isn't open" };
-    }
-    const bounded = (tokens: string[]) => tokens.filter((token) => token.length <= 2048);
-    try {
-      const raw = await this.deps.invoke(CHANNELS.classConflicts, {
-        workspaceSessionId: workspace.workspaceSessionId,
-        existing: bounded(existing).slice(0, 256),
-        candidates: bounded(candidates).slice(0, 32),
-      });
-      const parsed = ClassConflictsResultSchema.safeParse(raw);
-      return parsed.success
-        ? parsed.data
-        : { status: "unavailable", reason: "Class analysis unavailable" };
-    } catch (error) {
-      return {
-        status: "unavailable",
-        reason: formatErrorMessage(error, "Class analysis unavailable"),
-      };
-    }
-  }
-
-  /** What one class token generates in this project, asked exactly rather than searched for. */
-  async describeClass(token: string): Promise<ClassDescription> {
-    const workspace = this.state.workspace;
-    if (workspace.status !== "ready") {
-      return { status: "unavailable", reason: "The site source isn't open", unused: false };
-    }
-    // Never a shortened token: a cut arbitrary value is a different class, and
-    // "generates nothing" about it would be a claim about something else.
-    if (token.length > MAX_DESCRIBED_TOKEN) {
-      return {
-        status: "unavailable",
-        reason: "This class is too long to inspect here",
-        unused: false,
-      };
-    }
-    try {
-      const raw = await this.deps.invoke(CHANNELS.classDescribe, {
-        workspaceSessionId: workspace.workspaceSessionId,
-        token,
-      });
-      const parsed = ClassDescribeResultSchema.safeParse(raw);
-      if (!parsed.success) {
-        return { status: "unavailable", reason: "Class details unavailable", unused: false };
-      }
-      if (parsed.data.status === "unavailable" && isWorkspaceClosed(parsed.data)) {
-        this.recoverClosedWorkspace(workspace.workspaceSessionId);
-      }
-      return parsed.data;
-    } catch (error) {
-      return {
-        status: "unavailable",
-        reason: formatErrorMessage(error, "Class details unavailable"),
-        unused: false,
-      };
-    }
   }
 
   /**
@@ -2163,7 +1288,6 @@ export class InspectorController {
   }
 
   dispose(): void {
-    this.clearReselectTimer();
     if (this.disposed) return;
     this.clearReattach();
     this.clearConnectRetry();
@@ -2178,54 +1302,6 @@ export class InspectorController {
     this.unsubscribers.length = 0;
     this.listeners.clear();
   }
-}
-
-export interface EditTarget {
-  workspaceSessionId: string;
-  file: string;
-  selection: SiteSelection;
-  node: SelectedNode;
-}
-
-/**
- * Everything an edit needs, or null. The view disables its controls from this
- * same function, but the controller calls it again before every write — a click
- * that raced a stale transition still cannot reach `editApply`.
- */
-export function editTargetOf(
-  state: InspectorState,
-  surface: EditSurface,
-  /** The selection the user was looking at when they acted; a newer one never inherits the edit. */
-  selectionId?: string
-): EditTarget | null {
-  const { workspace, selection, binding, edit, epoch } = state;
-  if (binding.status !== "bound" || workspace.status !== "ready") return null;
-  if (workspace.support.level !== "full") return null;
-  if (selection.status !== "ready" || selection.stale !== null || !selection.file) return null;
-  if (selectionId !== undefined && selection.selection.selectionId !== selectionId) return null;
-  if (selection.selection.documentEpoch !== epoch) return null;
-  if (selection.selection.nodes.length !== 1) return null;
-  if (state.mutating || edit.status === "applying") return null;
-  const node = selection.selection.nodes[0]!;
-  if (!node.definition || !isEditableMapping(node)) return null;
-  if (capabilityFor(node, surface)?.support !== "direct") return null;
-  // Main decodes the value from the real AST; without it there is nothing to show
-  // as the current value, so nothing to edit against.
-  if (node.surfaces[surface] === null) return null;
-  return {
-    workspaceSessionId: workspace.workspaceSessionId,
-    file: selection.file,
-    selection: selection.selection,
-    node,
-  };
-}
-
-export function capabilityFor(node: SelectedNode, surface: EditSurface) {
-  return node.capabilities.find((capability) => capability.surface === surface);
-}
-
-export function isEditableMapping(node: SelectedNode): boolean {
-  return node.mapping === "exact" || node.mapping === "definition-only";
 }
 
 const controllers = new Map<string, ControllerEntry>();
@@ -2294,8 +1370,8 @@ interface ControllerEntry {
 
 /**
  * The builder's UI unmounts whenever its preview is hidden — another dock tab,
- * a maximised sibling — and that must not cost the user their Undo or an
- * in-flight request. So an unheld controller lives on while the builder is
+ * a maximised sibling — and that must not cost the user an in-flight request
+ * or a draft. So an unheld controller lives on while the builder is
  * still switched on for a preview that still exists, and goes when either
  * stops being true.
  */

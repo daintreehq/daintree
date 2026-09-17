@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   SiteGuestEvent,
@@ -73,7 +74,6 @@ async function setUp() {
     invoke: (channel, args) => test.invoke(channel, args),
     on: () => () => {},
     runtimeSource: async () => "",
-    newId: () => `id-${++id}`,
     now: () => Date.now(),
     onPluginDisabled: () => () => {},
   };
@@ -140,71 +140,48 @@ async function selectInPage(
 }
 
 describe("Site Builder end to end: view controller → plugin main → disk", () => {
-  it("adds a class the user asked for and writes exactly that to the component", async () => {
+  it("resolves a clicked element to the exact markup that defines it", async () => {
     const env = await setUp();
-    const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<section");
+    const { source } = await selectInPage(env, "src/lib/native.svelte", "<section");
 
-    await expect(env.controller.addClasses(selectionId, ["gap-8"])).resolves.toBe(true);
-
-    const after = await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8");
-    expect(after).toBe(
-      source.replace('class="flex flex-col gap-4 p-6"', 'class="flex flex-col gap-4 p-6 gap-8"')
+    const selection = env.controller.getSnapshot().selection;
+    if (selection.status !== "ready") throw new Error("selection did not resolve");
+    expect(selection.file).toBe("apps/site/src/lib/native.svelte");
+    const definition = selection.selection.nodes[0]!.definition!;
+    expect(source.slice(definition.range.start, definition.range.end)).toBe(
+      source.slice(source.indexOf("<section"), source.lastIndexOf("</section>") + 10)
     );
-    const receipt = env.controller.getSnapshot().receipt;
-    expect(receipt?.receipt.sourceSaved).toBe(true);
-    expect(receipt?.receipt.stylesGenerated).toBeNull();
+    expect(definition.revision).toBe(createHash("sha256").update(source, "utf8").digest("hex"));
   });
 
-  it("removes a class and leaves every other byte alone", async () => {
+  it("holds the selection to the bytes it was resolved against", async () => {
     const env = await setUp();
-    const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<section");
+    await selectInPage(env, "src/lib/native.svelte", "<section");
+    const selection = env.controller.getSnapshot().selection;
+    if (selection.status !== "ready") throw new Error("selection did not resolve");
+    await vi.waitFor(() => {
+      const current = env.controller.getSnapshot().selection;
+      expect(current.status === "ready" && current.revisions).not.toBeNull();
+    });
+    const ready = env.controller.getSnapshot().selection;
+    if (ready.status !== "ready" || ready.revisions === null) throw new Error("no revisions");
 
-    await expect(env.controller.removeClass(selectionId, "p-6")).resolves.toBe(true);
-
-    const after = await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8");
-    expect(after).toBe(
-      source.replace('class="flex flex-col gap-4 p-6"', 'class="flex flex-col gap-4"')
-    );
-  });
-
-  it("edits literal text in place", async () => {
-    const env = await setUp();
-    const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<h1");
-
-    await expect(env.controller.setText(selectionId, "A new heading")).resolves.toBe(true);
-
-    const after = await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8");
-    expect(after).toBe(source.replace("Plain literal heading", "A new heading"));
-  });
-
-  it("undoes the edit, restoring the original bytes", async () => {
-    const env = await setUp();
-    const { selectionId, source } = await selectInPage(env, "src/lib/native.svelte", "<section");
-    await expect(env.controller.addClasses(selectionId, ["gap-8"])).resolves.toBe(true);
-    expect(await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8")).not.toBe(source);
-
-    await env.controller.undo();
-
-    expect(env.controller.getSnapshot().receipt?.kind).toBe("undo");
-    expect(await fs.readFile(env.sandbox.file("src/lib/native.svelte"), "utf8")).toBe(source);
-  });
-
-  it("refuses a class edit on an expression-driven class and never touches the file", async () => {
-    const env = await setUp();
-    const { selectionId, source } = await selectInPage(
-      env,
-      "src/lib/dynamic-classes.svelte",
-      "<button class={["
+    await expect(env.controller.sourcesUnchanged(ready.selection, ready.revisions)).resolves.toBe(
+      true
     );
 
-    await expect(env.controller.addClasses(selectionId, ["p-8"])).resolves.toBe(false);
-
-    expect(await fs.readFile(env.sandbox.file("src/lib/dynamic-classes.svelte"), "utf8")).toBe(
-      source
+    // What an agent writing to the file looks like from here: main reads the
+    // bytes again and the claims the request would make no longer hold.
+    await fs.writeFile(
+      env.sandbox.file("src/lib/native.svelte"),
+      '<section class="flex">changed</section>\n'
+    );
+    await expect(env.controller.sourcesUnchanged(ready.selection, ready.revisions)).resolves.toBe(
+      false
     );
   });
 
-  it("reopens its workspace after main closed it, and edits again", async () => {
+  it("reopens its workspace after main closed it, and resolves again", async () => {
     const env = await setUp();
     await selectInPage(env, "src/lib/native.svelte", "<section");
     const before = env.controller.getSnapshot().workspace;
@@ -224,7 +201,7 @@ describe("Site Builder end to end: view controller → plugin main → disk", ()
       }
     });
 
-    const { selectionId } = await selectInPage(env, "src/lib/native.svelte", "<section");
-    await expect(env.controller.addClasses(selectionId, ["gap-8"])).resolves.toBe(true);
+    await selectInPage(env, "src/lib/native.svelte", "<section");
+    expect(env.controller.getSnapshot().selection.status).toBe("ready");
   });
 });

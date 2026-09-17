@@ -400,7 +400,7 @@ function StripStatus({
       );
     }
     // One sentence, whatever the project's Svelte version: what the builder
-    // offers no longer depends on whether the source can be written to here.
+    // offers is the same for every app it can trace.
     return (
       <StripMessage icon={SquareDashedMousePointer}>
         Click an element to ask an agent about it
@@ -515,7 +515,6 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
           <SelectionIdentity
             selection={selection}
             worktreePath={props.worktreePath}
-            reselecting={state.reselecting}
             onSelectComponent={selectCrumb}
           />
         </div>
@@ -573,9 +572,9 @@ function workspaceNeedsAttention(state: InspectorState): boolean {
   // must stay fixable before anything is selected, and after a switch clears it.
   //
   // A ready workspace has nothing else to report. It used to also raise whether
-  // direct editing and class completion were available here — capabilities the
-  // panel no longer offers, so their absence is no longer a gap the user can do
-  // anything about, and saying so was a warning about a road that isn't there.
+  // direct editing and class completion were available here — neither of which
+  // the builder does, so their absence is not a gap the user can do anything
+  // about, and saying so was a warning about a road that isn't there.
   if (workspace.status === "ready") return workspace.appRoots.length > 1;
   return workspace.status !== "idle" && workspace.status !== "opening";
 }

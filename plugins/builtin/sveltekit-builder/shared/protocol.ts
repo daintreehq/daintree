@@ -1,9 +1,6 @@
 import { z } from "zod";
 import {
-  EditOperationSchema,
-  EditReceiptSchema,
   RectSchema,
-  SiteEditErrorCodeSchema,
   SiteSelectionSchema,
   SourceLocationSchema,
   SourceRangeSchema,
@@ -33,9 +30,10 @@ import {
  *   runtime, and receives guest events. Nothing about the preview binding
  *   crosses `CHANNELS`.
  * - **Plugin main owns source truth.** It resolves the app, reads and parses
- *   files through the scope-contained `host.fs`, turns guest observations into
- *   source identity, applies edits and keeps the undo journal. It never touches
- *   the preview.
+ *   files through the scope-contained `host.fs` and turns guest observations
+ *   into source identity. It reads only: the agent the user sends a selection
+ *   to is what writes, and main's job is to notice when it has. It never
+ *   touches the preview.
  */
 
 export const PLUGIN_ID = "daintree.sveltekit-builder";
@@ -54,26 +52,12 @@ export const GUEST_PROTOCOL_VERSION = 1;
 export const CHANNELS = {
   /** Resolve the SvelteKit app for a worktree and open a source workspace on it. */
   workspaceOpen: "workspace-open",
-  /** Release a source workspace and the undo journal it holds. */
+  /** Release a source workspace and the file watches it holds. */
   workspaceClose: "workspace-close",
   /** Turn guest observations into source identity against current file bytes. */
   selectionResolve: "selection-resolve",
   /** Read a bounded source excerpt for the identity card / source peek. */
   sourceExcerpt: "source-excerpt",
-  /** Apply deterministic operations to one file. */
-  editApply: "edit-apply",
-  /** Reverse one applied transaction, revision-checked. */
-  editUndo: "edit-undo",
-  /** Tailwind completion catalog + resolved responsive ranges for this project. */
-  tailwindCatalog: "tailwind-catalog",
-  /** Search the project's valid Tailwind candidates for the class input. */
-  classComplete: "tailwind-complete",
-  /** Whether class awareness works for this app, and whether its model is partial. */
-  tailwindStatus: "tailwind-status",
-  /** The CSS one exact class token generates here — never a search. */
-  classDescribe: "tailwind-describe",
-  /** Existing tokens a class being added would fight with, in the same scope. */
-  classConflicts: "tailwind-conflicts",
   /** Detected app roots, versions, package manager and route tree. */
   projectModel: "project-model",
   /** Whether a worktree holds a SvelteKit app at all, without opening a workspace. */
@@ -130,9 +114,9 @@ export const GuestNodeObservationSchema = z
     /** The page stopped counting at its scan bound: `sameLocCount` is a floor. */
     sameLocCountPartial: z.literal(true).optional(),
     /**
-     * Which of those this node is, in document order. Lets the host ask for
-     * the same rendered occurrence again after its own write. Optional: an
-     * older runtime does not report it, and the host then asks for the first.
+     * Which of those this node is, in document order. Lets the host ask the
+     * page for the same rendered occurrence again. Optional: an older runtime
+     * does not report it, and the host then asks for the first.
      */
     locIndex: z.number().int().nonnegative().max(100_000).optional(),
     /**
@@ -185,8 +169,7 @@ export const GuestEventSchema = z.discriminatedUnion("type", [
       /**
        * Who moved the selection: the user (a click, a key, Escape), the
        * document (a node the page was showing left it), or the host's own
-       * `reselect`. Recovery after a write listens to the last two only — a
-       * user's Escape is an answer, not a symptom.
+       * `reselect` — which is how a component named in the trail is picked.
        */
       cause: z.enum(["user", "document", "reselect"]).optional(),
       /** Present when the nodes are one component invocation's rendered roots. */
@@ -253,17 +236,6 @@ export const MAX_GUEST_MESSAGE_BYTES = 256 * 1024;
 /* -------------------------------------------------------------------------- */
 /* View → main                                                                */
 /* -------------------------------------------------------------------------- */
-
-export const WorkspaceIdentitySchema = z
-  .object({
-    workspaceSessionId: z.string().min(1),
-    projectId: z.string().min(1),
-    worktreeId: z.string().min(1),
-    appRoot: z.string().min(1),
-    previewPanelId: z.string().min(1),
-  })
-  .strict();
-export type WorkspaceIdentity = z.infer<typeof WorkspaceIdentitySchema>;
 
 export const SupportVerdictSchema = z.discriminatedUnion("level", [
   z.object({ level: z.literal("full") }).strict(),
@@ -397,7 +369,6 @@ export const WorkspaceScopedArgsSchema = z
   .object({ workspaceSessionId: z.string().min(1) })
   .strict();
 export const ProjectModelArgsSchema = WorkspaceScopedArgsSchema;
-export const TailwindCatalogArgsSchema = WorkspaceScopedArgsSchema;
 
 export const SelectionResolveArgsSchema = z
   .object({
@@ -465,195 +436,6 @@ export const SourceExcerptResultSchema = z.discriminatedUnion("status", [
     })
     .strict(),
   z.object({ status: z.literal("unavailable") }).strict(),
-]);
-
-export const EditApplyArgsSchema = z
-  .object({
-    workspaceSessionId: z.string().min(1),
-    /** Worktree-relative POSIX path, re-contained by the host before any I/O. */
-    file: z.string().min(1),
-    expectedRevision: z.string().regex(/^[0-9a-f]{64}$/),
-    operations: z.array(EditOperationSchema).min(1).max(16),
-    /** Echoed into the receipt so the UI can state the blast radius truthfully. */
-    affectedOccurrences: z.number().int().positive(),
-    idempotencyKey: z.string().min(1).max(128),
-  })
-  .strict();
-export type EditApplyArgs = z.infer<typeof EditApplyArgsSchema>;
-
-export const EditApplyResultSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("applied"), receipt: EditReceiptSchema }).strict(),
-  /** Nothing to do — no write, no history entry. */
-  z.object({ status: z.literal("no-op") }).strict(),
-  z
-    .object({
-      status: z.literal("conflict"),
-      currentRevision: z.string().regex(/^[0-9a-f]{64}$/),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("error"),
-      code: SiteEditErrorCodeSchema,
-      message: z.string().min(1),
-    })
-    .strict(),
-]);
-export type EditApplyResult = z.infer<typeof EditApplyResultSchema>;
-
-export const EditUndoArgsSchema = z
-  .object({
-    workspaceSessionId: z.string().min(1),
-    transactionId: z.string().min(1),
-  })
-  .strict();
-
-export const EditUndoResultSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("reversed"), receipt: EditReceiptSchema }).strict(),
-  /** The file moved on since the edit; reversing it needs review, not a blind write. */
-  z
-    .object({
-      status: z.literal("superseded"),
-      currentRevision: z.string().regex(/^[0-9a-f]{64}$/),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("error"),
-      code: SiteEditErrorCodeSchema,
-      message: z.string().min(1),
-    })
-    .strict(),
-]);
-
-/** One entry of the Tailwind completion catalog. */
-export const ClassCandidateSchema = z
-  .object({
-    candidate: z.string().min(1),
-    /** Generated CSS declarations, for the completion preview. */
-    css: z.string(),
-  })
-  .strict();
-
-export const ResponsiveRangeSchema = z
-  .object({
-    /** `base`, or the variant chain that expresses this interval. */
-    variant: z.string().min(1),
-    label: z.string().min(1),
-    minWidth: z.number().int().nonnegative().optional(),
-    maxWidthExclusive: z.number().int().positive().optional(),
-  })
-  .strict();
-export type ResponsiveRange = z.infer<typeof ResponsiveRangeSchema>;
-
-export const TailwindCatalogResultSchema = z.discriminatedUnion("status", [
-  z
-    .object({
-      status: z.literal("ok"),
-      /** Revision of the resolved CSS entry, so a stale catalog is detectable. */
-      catalogRevision: z.string().min(1),
-      ranges: z.array(ResponsiveRangeSchema),
-      /** Theme colour/spacing/font tokens the project actually defines. */
-      themeTokens: z.record(z.string(), z.string()),
-    })
-    .strict(),
-  z.object({ status: z.literal("unavailable"), reason: z.string().min(1) }).strict(),
-]);
-
-export const ClassCompleteArgsSchema = z
-  .object({
-    workspaceSessionId: z.string().min(1),
-    query: z.string().max(128),
-    limit: z.number().int().min(1).max(200).default(50),
-  })
-  .strict();
-
-export const TailwindStatusArgsSchema = WorkspaceScopedArgsSchema;
-
-export const TailwindStatusResultSchema = z.discriminatedUnion("status", [
-  z
-    .object({
-      status: z.literal("available"),
-      /**
-       * `@plugin` / `@config` modules that were not run, so their utilities are
-       * missing from the model. Non-empty means an unknown class proves nothing.
-       */
-      skippedModules: z.array(z.string().min(1).max(1024)).max(64),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("unavailable"),
-      reason: z.string().min(1),
-      /** No stylesheet imports Tailwind: nothing is missing, there is nothing to offer. */
-      unused: z.boolean(),
-    })
-    .strict(),
-]);
-export type TailwindStatus = z.infer<typeof TailwindStatusResultSchema>;
-
-export const ClassDescribeArgsSchema = z
-  .object({
-    workspaceSessionId: z.string().min(1),
-    token: z.string().min(1).max(2048),
-  })
-  .strict();
-
-export const ClassDescribeResultSchema = z.discriminatedUnion("status", [
-  z
-    .object({
-      status: z.literal("ok"),
-      /** Generated CSS, or null when this project's Tailwind generates nothing for it. */
-      css: z.string().max(4000).nullable(),
-      /** Modules were skipped, so a null `css` is not a verdict about the token. */
-      partial: z.boolean(),
-    })
-    .strict(),
-  z
-    .object({
-      status: z.literal("unavailable"),
-      reason: z.string().min(1),
-      unused: z.boolean(),
-    })
-    .strict(),
-]);
-export type ClassDescription = z.infer<typeof ClassDescribeResultSchema>;
-
-export const ClassConflictsArgsSchema = z
-  .object({
-    workspaceSessionId: z.string().min(1),
-    /** The element's tokens now. */
-    existing: z.array(z.string().min(1).max(2048)).max(256),
-    /** The tokens about to be added. */
-    candidates: z.array(z.string().min(1).max(2048)).min(1).max(32),
-  })
-  .strict();
-
-export const ClassConflictsResultSchema = z.discriminatedUnion("status", [
-  z
-    .object({
-      status: z.literal("ok"),
-      conflicts: z
-        .array(
-          z
-            .object({
-              candidate: z.string().min(1),
-              token: z.string().min(1),
-              /** Box slots both write in the same scope, e.g. `padding-left`. */
-              properties: z.array(z.string().min(1)).max(64),
-            })
-            .strict()
-        )
-        .max(256),
-    })
-    .strict(),
-  z.object({ status: z.literal("unavailable"), reason: z.string().min(1) }).strict(),
-]);
-export type ClassConflicts = z.infer<typeof ClassConflictsResultSchema>;
-
-export const ClassCompleteResultSchema = z.discriminatedUnion("status", [
-  z.object({ status: z.literal("ok"), candidates: z.array(ClassCandidateSchema) }).strict(),
-  z.object({ status: z.literal("unavailable"), reason: z.string().min(1) }).strict(),
 ]);
 
 export const RouteNodeSchema = z

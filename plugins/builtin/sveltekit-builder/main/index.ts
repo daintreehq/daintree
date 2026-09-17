@@ -3,18 +3,6 @@ import { randomUUID } from "node:crypto";
 import type { PluginFsApi, PluginHostApi } from "../../../../shared/types/plugin.js";
 import {
   CHANNELS,
-  ClassCompleteArgsSchema,
-  ClassCompleteResultSchema,
-  ClassConflictsArgsSchema,
-  ClassConflictsResultSchema,
-  ClassDescribeArgsSchema,
-  ClassDescribeResultSchema,
-  TailwindStatusArgsSchema,
-  TailwindStatusResultSchema,
-  EditApplyArgsSchema,
-  EditApplyResultSchema,
-  EditUndoArgsSchema,
-  EditUndoResultSchema,
   IssuePushSchema,
   ProjectModelResultSchema,
   PUSH_CHANNELS,
@@ -23,9 +11,7 @@ import {
   SourceChangedPushSchema,
   SourceExcerptArgsSchema,
   SourceExcerptResultSchema,
-  TailwindCatalogResultSchema,
   ProjectModelArgsSchema,
-  TailwindCatalogArgsSchema,
   WorkspaceCloseArgsSchema,
   WorkspaceCloseResultSchema,
   WorkspaceOpenArgsSchema,
@@ -40,8 +26,6 @@ import {
   TOGGLE_BUILDER_ACTION_ID,
 } from "../shared/protocol.js";
 import type { ProjectFileReader } from "../shared/project/fs.js";
-import { applyEdit, undoEdit } from "./edits.js";
-import { EditJournal, KeyedLock } from "./journal.js";
 import { loadParse, loadSourceModel } from "./engine.js";
 import { resolveSelection } from "./selection.js";
 import {
@@ -53,25 +37,19 @@ import {
   resolveReportedPath,
   resolveWorktreePath,
 } from "./source.js";
-import {
-  classConflicts,
-  completeClasses,
-  describeClass,
-  tailwindCatalog,
-  tailwindStatus,
-} from "./tailwind.js";
 import { SourceTracker } from "./tracker.js";
 import { WorkspaceRegistry, type Workspace } from "./workspace.js";
 
 /**
  * Main-side half of the SvelteKit Site Builder: source truth. It resolves the
- * app, turns guest observations into source identity against current bytes,
- * applies deterministic edits and keeps the undo journal. The live preview is
- * the renderer view's; nothing here touches it.
+ * app and turns guest observations into source identity against current bytes.
+ * It never writes — the agent the selection is handed to does that, and the
+ * source tracker is how the view learns of it. The live preview is the
+ * renderer view's; nothing here touches it.
  *
  * Activation registers channels and nothing else. The project scan, the Svelte
- * compiler, the source model and Tailwind all load on first use inside a
- * handler, so activation stays well inside its five-second window.
+ * compiler and the source model all load on first use inside a handler, so
+ * activation stays well inside its five-second window.
  */
 
 const MAX_EXCERPT_LINES = 200;
@@ -94,7 +72,6 @@ function projectReader(fs: PluginFsApi): ProjectFileReader {
 
 export async function activate(host: PluginHostApi): Promise<() => void> {
   const registry = new WorkspaceRegistry();
-  const lock = new KeyedLock();
   const reader = projectReader(host.fs);
 
   // Every push names the preview panel it is about: the workspace's owner
@@ -125,10 +102,10 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       category: "panels",
       kind: "command",
       danger: "safe",
-      keywords: ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "tailwind"],
-      // Toggling a preview tool exercises none of the plugin's capabilities. Without
-      // this the host elevates the command to a confirm prompt because the
-      // manifest holds fs write — a dialog on every toolbar click.
+      keywords: ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "agent"],
+      // Toggling a preview tool exercises none of the plugin's capabilities, so
+      // it asks for none: the host elevates a command to a confirm prompt from
+      // what it requires, and a dialog on every toolbar click is not that.
       requires: [],
     },
     async () => host.dispatch("devPreview.toggleTool", { toolId: BUILDER_TOOL_ID })
@@ -176,7 +153,6 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
         appRoot,
         support,
         fs: host.fs,
-        journal: new EditJournal(),
         tracker: new SourceTracker({
           fs: host.fs,
           workspaceSessionId: id,
@@ -188,9 +164,6 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
             ),
           warn: (message, detail) => host.logger.warn(message, detail),
         }),
-        edits: new Map(),
-        reversals: new Map(),
-        tailwind: null,
       };
       registry.add(workspace);
       return { status: "ready" as const, workspaceSessionId: id, appRoot, support };
@@ -325,129 +298,6 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
         .join("\n")
         .slice(0, MAX_EXCERPT_CHARS);
       return { status: "ok" as const, text, firstLine, revision: read.revision };
-    }
-  );
-
-  await host.registerHandler(
-    CHANNELS.editApply,
-    {
-      args: EditApplyArgsSchema,
-      result: EditApplyResultSchema,
-      requires: ["fs:project-read", "fs:project-write"],
-    },
-    async (_ctx, args) => {
-      const workspace = registry.get(args.workspaceSessionId);
-      if (!workspace) {
-        return {
-          status: "error" as const,
-          code: "OUT_OF_SCOPE" as const,
-          message: "that source workspace is not open",
-        };
-      }
-      return applyEdit(workspace, args, lock);
-    }
-  );
-
-  await host.registerHandler(
-    CHANNELS.editUndo,
-    {
-      args: EditUndoArgsSchema,
-      result: EditUndoResultSchema,
-      requires: ["fs:project-read", "fs:project-write"],
-    },
-    async (_ctx, { workspaceSessionId, transactionId }) => {
-      const workspace = registry.get(workspaceSessionId);
-      if (!workspace) {
-        return {
-          status: "error" as const,
-          code: "OUT_OF_SCOPE" as const,
-          message: "that source workspace is not open",
-        };
-      }
-      return undoEdit(workspace, transactionId, lock);
-    }
-  );
-
-  await host.registerHandler(
-    CHANNELS.tailwindCatalog,
-    {
-      args: TailwindCatalogArgsSchema,
-      result: TailwindCatalogResultSchema,
-      requires: ["fs:project-read"],
-    },
-    async (_ctx, { workspaceSessionId }) => {
-      const workspace = registry.get(workspaceSessionId);
-      if (!workspace)
-        return { status: "unavailable" as const, reason: "that source workspace is not open" };
-      return tailwindCatalog(workspace);
-    }
-  );
-
-  await host.registerHandler(
-    CHANNELS.classComplete,
-    {
-      args: ClassCompleteArgsSchema,
-      result: ClassCompleteResultSchema,
-      requires: ["fs:project-read"],
-    },
-    async (_ctx, { workspaceSessionId, query, limit }) => {
-      const workspace = registry.get(workspaceSessionId);
-      if (!workspace)
-        return { status: "unavailable" as const, reason: "that source workspace is not open" };
-      return completeClasses(workspace, query, limit);
-    }
-  );
-
-  await host.registerHandler(
-    CHANNELS.tailwindStatus,
-    {
-      args: TailwindStatusArgsSchema,
-      result: TailwindStatusResultSchema,
-      requires: ["fs:project-read"],
-    },
-    async (_ctx, { workspaceSessionId }) => {
-      const workspace = registry.get(workspaceSessionId);
-      if (!workspace)
-        return {
-          status: "unavailable" as const,
-          reason: "that source workspace is not open",
-          unused: false,
-        };
-      return tailwindStatus(workspace);
-    }
-  );
-
-  await host.registerHandler(
-    CHANNELS.classDescribe,
-    {
-      args: ClassDescribeArgsSchema,
-      result: ClassDescribeResultSchema,
-      requires: ["fs:project-read"],
-    },
-    async (_ctx, { workspaceSessionId, token }) => {
-      const workspace = registry.get(workspaceSessionId);
-      if (!workspace)
-        return {
-          status: "unavailable" as const,
-          reason: "that source workspace is not open",
-          unused: false,
-        };
-      return describeClass(workspace, token);
-    }
-  );
-
-  await host.registerHandler(
-    CHANNELS.classConflicts,
-    {
-      args: ClassConflictsArgsSchema,
-      result: ClassConflictsResultSchema,
-      requires: ["fs:project-read"],
-    },
-    async (_ctx, { workspaceSessionId, existing, candidates }) => {
-      const workspace = registry.get(workspaceSessionId);
-      if (!workspace)
-        return { status: "unavailable" as const, reason: "that source workspace is not open" };
-      return classConflicts(workspace, existing, candidates);
     }
   );
 

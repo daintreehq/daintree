@@ -22,17 +22,6 @@ export function loadSourceModel(): Promise<SourceModel> {
   return sourceModel;
 }
 
-/**
- * The source model's own class-token and entity semantics: a second tokenizer
- * here is exactly how the view once removed a different token than the one the
- * user clicked.
- */
-export type TokenModel = Pick<SourceModel, "splitClassValue" | "decodeEntities" | "validateToken">;
-
-export async function loadTokenModel(): Promise<TokenModel> {
-  return loadSourceModel();
-}
-
 export function loadParse(): Promise<SvelteParse> {
   compiler ??= import("svelte/compiler").then(
     // The package declares its own structural AST subset; the compiler's
@@ -44,9 +33,9 @@ export function loadParse(): Promise<SvelteParse> {
       // with a sacrificial one to keep offsets aligned with the text.
       const aligned: SvelteParse = (source, options) =>
         parse(source.charCodeAt(0) === 0xfeff ? `\uFEFF${source}` : source, options);
-      // Resolving one node parses its file up to three times (location, text
-      // decoding, how an uneditable surface is written); a selection of many
-      // nodes in one file repeats that. The last answer is kept per source text.
+      // Resolving one node can parse its file more than once (its location,
+      // then its shape), and a selection of many nodes in one file repeats
+      // that. The last answer is kept per source text.
       let last: { source: string; options: string; ast: ReturnType<SvelteParse> } | null = null;
       const remembered: SvelteParse = (source, options) => {
         const key = JSON.stringify(options ?? null);

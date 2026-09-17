@@ -83,7 +83,7 @@ export function SiteBuilderButton({
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {active ? "Close Site Builder" : "Inspect source, edit text and classes, or ask an agent"}
+        {active ? "Close Site Builder" : "Trace an element to its source, or ask an agent about it"}
       </TooltipContent>
     </Tooltip>
   );
