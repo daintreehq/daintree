@@ -58,7 +58,8 @@ export interface GuestRuntimeHandle {
    * when no such element is in the document. The host uses this to keep a
    * selection through its own write and the reload that follows.
    */
-  reselect(loc: GuestSourceLoc, index?: number): boolean;
+  /** `component`: the call site of the component the selection was widened to, if any. */
+  reselect(loc: GuestSourceLoc, index?: number, component?: GuestSourceLoc | null): boolean;
   /**
    * Drop the selection and its overlay without observing anything. The host
    * uses this when a re-proof turned out to name a different element, so the

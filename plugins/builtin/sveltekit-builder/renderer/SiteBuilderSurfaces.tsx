@@ -106,6 +106,7 @@ function actionsFor(controller: InspectorController): SelectionActions {
     addClasses: (selectionId, tokens) => controller.addClasses(selectionId, tokens),
     removeClass: (selectionId, token) => void controller.removeClass(selectionId, token),
     completeClasses: (query) => controller.completeClasses(query),
+    describeClass: (token) => controller.describeClass(token),
   };
 }
 
@@ -237,7 +238,9 @@ function StripStatus({
     return (
       <>
         <StripMessage icon={AlertTriangle} tone="warning" title={binding.message}>
-          Waiting for the page to load
+          {binding.retrying
+            ? "Waiting for the page to load"
+            : `Couldn't connect to the page — ${binding.message}`}
         </StripMessage>
         <Button variant="secondary" size="xs" onClick={() => void controller.retryConnect()}>
           Retry
@@ -543,8 +546,21 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
 
 function workspaceNeedsAttention(state: InspectorState): boolean {
   const workspace = state.workspace;
-  if (workspace.status === "ready") return workspace.support.level !== "full";
+  if (workspace.status === "ready") return capabilityGaps(workspace) !== null;
   return workspace.status !== "idle" && workspace.status !== "opening";
+}
+
+/**
+ * What a ready workspace can't do, as main reported it: direct editing from the
+ * version verdict, class awareness from the Tailwind loader. A site that
+ * doesn't use Tailwind is missing nothing, so it has no gap to show.
+ */
+function capabilityGaps(workspace: Extract<InspectorState["workspace"], { status: "ready" }>) {
+  const editing = workspace.support.level === "full" ? null : workspace.support.reasons;
+  const tailwind = workspace.tailwind;
+  const suggestions =
+    tailwind.status === "unavailable" && !tailwind.unused ? [tailwind.reason] : null;
+  return editing === null && suggestions === null ? null : { editing, suggestions };
 }
 
 function WorkspaceStatus({
@@ -558,7 +574,7 @@ function WorkspaceStatus({
 }) {
   const workspace = state.workspace;
   if (workspace.status === "idle" || workspace.status === "opening") return null;
-  if (workspace.status === "ready" && workspace.support.level === "full") return null;
+  if (workspace.status === "ready" && capabilityGaps(workspace) === null) return null;
   // One surface for everything about the project rather than the element, so
   // a setup problem and an element-level limitation never look like the same
   // kind of notice sat in the same column.
@@ -660,32 +676,31 @@ function SiteSourceBody({
         </InspectorNotice>
       );
     case "ready": {
-      if (workspace.support.level === "full") return null;
-      // Suggestions and direct editing are independent capabilities. Each is
-      // a row that says whether it works here and why not, and whatever still
-      // works is still offered.
-      const suggestions = workspace.support.reasons.filter((reason) =>
-        /tailwind|suggestion|completion/i.test(reason)
-      );
-      const editing = workspace.support.reasons.filter((reason) => !suggestions.includes(reason));
+      const gaps = capabilityGaps(workspace);
+      if (gaps === null) return null;
+      // Suggestions and direct editing are independent capabilities, reported
+      // separately by main. Each row says whether it works here and why not,
+      // and whatever still works is still offered.
       return (
         <div className="flex flex-col gap-1">
           <CapabilityRow
             label="Direct editing"
-            available={editing.length === 0}
-            reasons={editing}
+            available={gaps.editing === null}
+            reasons={gaps.editing ?? []}
             note="You can still select elements and ask an agent to change them."
           />
-          <CapabilityRow
-            label="Class suggestions"
-            available={suggestions.length === 0}
-            reasons={suggestions}
-            note={
-              editing.length === 0
-                ? "Classes you type are still written exactly as typed."
-                : "Class names can't be checked for this project."
-            }
-          />
+          {gaps.suggestions ? (
+            <CapabilityRow
+              label="Class suggestions"
+              available={false}
+              reasons={gaps.suggestions}
+              note={
+                gaps.editing === null
+                  ? "Classes you type are still written exactly as typed."
+                  : "Class names can't be checked for this project."
+              }
+            />
+          ) : null}
         </div>
       );
     }

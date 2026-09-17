@@ -132,11 +132,12 @@ export function buildModeUpdateSource(mode: SitePreviewMode): string {
  */
 export function buildReselectSource(
   loc: { file: string; line: number; column: number },
-  index: number
+  index: number,
+  component: { file: string; line: number; column: number } | null = null
 ): string {
   return `(() => {
   const api = globalThis[${JSON.stringify(GUEST_RUNTIME_GLOBAL)}];
-  return api && typeof api.reselect === "function" ? api.reselect(${JSON.stringify(loc)}, ${JSON.stringify(index)}) === true : false;
+  return api && typeof api.reselect === "function" ? api.reselect(${JSON.stringify(loc)}, ${JSON.stringify(index)}, ${JSON.stringify(component)}) === true : false;
 })();`;
 }
 

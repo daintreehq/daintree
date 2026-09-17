@@ -5,6 +5,10 @@ import {
   CHANNELS,
   ClassCompleteArgsSchema,
   ClassCompleteResultSchema,
+  ClassDescribeArgsSchema,
+  ClassDescribeResultSchema,
+  TailwindStatusArgsSchema,
+  TailwindStatusResultSchema,
   EditApplyArgsSchema,
   EditApplyResultSchema,
   EditUndoArgsSchema,
@@ -47,7 +51,7 @@ import {
   resolveReportedPath,
   resolveWorktreePath,
 } from "./source.js";
-import { completeClasses, tailwindCatalog } from "./tailwind.js";
+import { completeClasses, describeClass, tailwindCatalog, tailwindStatus } from "./tailwind.js";
 import { SourceTracker } from "./tracker.js";
 import { WorkspaceRegistry, type Workspace } from "./workspace.js";
 
@@ -370,6 +374,44 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       if (!workspace)
         return { status: "unavailable" as const, reason: "that source workspace is not open" };
       return completeClasses(workspace, query, limit);
+    }
+  );
+
+  await host.registerHandler(
+    CHANNELS.tailwindStatus,
+    {
+      args: TailwindStatusArgsSchema,
+      result: TailwindStatusResultSchema,
+      requires: ["fs:project-read"],
+    },
+    async (_ctx, { workspaceSessionId }) => {
+      const workspace = registry.get(workspaceSessionId);
+      if (!workspace)
+        return {
+          status: "unavailable" as const,
+          reason: "that source workspace is not open",
+          unused: false,
+        };
+      return tailwindStatus(workspace);
+    }
+  );
+
+  await host.registerHandler(
+    CHANNELS.classDescribe,
+    {
+      args: ClassDescribeArgsSchema,
+      result: ClassDescribeResultSchema,
+      requires: ["fs:project-read"],
+    },
+    async (_ctx, { workspaceSessionId, token }) => {
+      const workspace = registry.get(workspaceSessionId);
+      if (!workspace)
+        return {
+          status: "unavailable" as const,
+          reason: "that source workspace is not open",
+          unused: false,
+        };
+      return describeClass(workspace, token);
     }
   );
 

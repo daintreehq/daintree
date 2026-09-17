@@ -265,7 +265,9 @@ export const FIXTURES = {
 
   unsupported: {
     title: "Direct editing and class suggestions are unavailable, separately",
-    settled: "text=Site source",
+    // Both rows, not just the heading: the capture must show each capability
+    // with its own verdict, as main reports them — separately.
+    settled: "text=Class suggestions",
     arrange: (host) => {
       host.handlers.set(CHANNELS.workspaceOpen, () => ({
         status: "ready",
@@ -273,11 +275,14 @@ export const FIXTURES = {
         appRoot: "/Users/you/code/orchid-studio",
         support: {
           level: "preview-only",
-          reasons: [
-            "Svelte 4.2.19 found — direct editing needs Svelte 5",
-            "No Tailwind config found under the app root, so class suggestions are unavailable",
-          ],
+          reasons: ["svelte 4.2.19 is installed; direct editing needs svelte 5"],
         },
+      }));
+      host.handlers.set(CHANNELS.tailwindStatus, () => ({
+        status: "unavailable",
+        reason:
+          "class awareness is built on tailwindcss 4.3.3, and this project uses 4.0.9; its utilities could differ, so completion is off rather than misleading",
+        unused: false,
       }));
     },
     act: bind,

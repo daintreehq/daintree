@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSiteBuilderGuest } from "../../renderer/guest/runtime.js";
 import type { GuestMode, GuestRuntimeHandle } from "../../renderer/guest/types.js";
 import {
@@ -84,6 +84,28 @@ describe("guest envelope", () => {
     expect(envelopes[0].event.type).toBe("documentReady");
     expect(envelopes.every((envelope) => envelope.documentEpoch === 3)).toBe(true);
     expect(envelopes.every((envelope) => envelope.sessionId === "session-1")).toBe(true);
+  });
+
+  it("reports the page again before a selection made after client-side navigation", () => {
+    document.body.innerHTML = '<p id="a">hi</p>';
+    setMeta(document.body.querySelector("#a")!, loc(4));
+    install("select");
+    click(document.body.querySelector("#a")!);
+    expect(events("documentReady")).toHaveLength(1);
+
+    // SvelteKit navigates with pushState: same document, no load event.
+    const original = { url: location.href, state: history.state as unknown };
+    try {
+      history.replaceState({}, "", "/pricing");
+      click(document.body.querySelector("#a")!);
+      const ready = events("documentReady");
+      expect(ready).toHaveLength(2);
+      expect(ready[1]).toMatchObject({ url: expect.stringContaining("/pricing") });
+      const types = envelopes.map((envelope) => envelope.event.type);
+      expect(types.slice(-2)).toEqual(["documentReady", "selectionChanged"]);
+    } finally {
+      history.replaceState(original.state, "", original.url);
+    }
   });
 });
 
@@ -513,27 +535,93 @@ describe("overlay", () => {
 });
 
 describe("runtime issues", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("names a production build when nothing on the page carries dev metadata", () => {
+    vi.useFakeTimers();
     document.body.innerHTML = "<main><p>static</p></main>";
     install("browse");
+    expect(events("runtimeIssue")).toEqual([]);
 
+    vi.advanceTimersByTime(2_500);
     expect(events("runtimeIssue")).toEqual([expect.objectContaining({ code: "not-dev-build" })]);
   });
 
   it("distinguishes a dev server that simply has no Svelte metadata", () => {
+    vi.useFakeTimers();
     document.head.innerHTML = '<script src="/@vite/client" type="module"></script>';
     document.body.innerHTML = "<main><p>static</p></main>";
     install("browse");
 
+    vi.advanceTimersByTime(12_500);
+    expect(events("runtimeIssue")).toEqual([]);
+    vi.advanceTimersByTime(5_000);
     expect(events("runtimeIssue")).toEqual([expect.objectContaining({ code: "no-svelte-meta" })]);
   });
 
+  it("recognises SvelteKit's dev page, which has no vite client script tag", () => {
+    vi.useFakeTimers();
+    document.body.innerHTML =
+      '<main><p>static</p></main><script>import("/@fs/app/node_modules/@sveltejs/kit/src/runtime/client/entry.js")</script>';
+    install("browse");
+
+    vi.advanceTimersByTime(20_000);
+    expect(events("runtimeIssue")).toEqual([expect.objectContaining({ code: "no-svelte-meta" })]);
+  });
+
+  it("says nothing about a page whose metadata arrives with hydration after load", () => {
+    vi.useFakeTimers();
+    document.body.innerHTML =
+      '<main><p>server rendered</p></main><script>import("/.svelte-kit/generated/client/app.js")</script>';
+    install("select");
+    vi.advanceTimersByTime(4_000);
+
+    setMeta(document.body.querySelector("p")!, loc(3));
+    vi.advanceTimersByTime(20_000);
+    expect(events("runtimeIssue")).toEqual([]);
+  });
+
   it("stays quiet when the page is a Svelte dev build", () => {
+    vi.useFakeTimers();
     document.body.innerHTML = "<main><p>live</p></main>";
     setMeta(document.body.querySelector("p")!, loc(3));
     install("select");
 
+    vi.advanceTimersByTime(20_000);
     expect(events("runtimeIssue")).toEqual([]);
+  });
+
+  it("cancels a pending verdict when it is disposed", () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = "<main><p>static</p></main>";
+    const runtime = install("browse");
+    const armed = vi.getTimerCount();
+    expect(armed).toBeGreaterThan(0);
+    runtime.dispose();
+    expect(vi.getTimerCount()).toBeLessThan(armed);
+
+    vi.advanceTimersByTime(20_000);
+    expect(events("runtimeIssue")).toEqual([]);
+  });
+
+  it("judges a page that finishes loading with nothing else happening", () => {
+    vi.useFakeTimers();
+    document.body.innerHTML = "<main><p>static</p></main>";
+    Object.defineProperty(document, "readyState", { value: "interactive", configurable: true });
+    try {
+      install("browse");
+      vi.advanceTimersByTime(20_000);
+      expect(events("runtimeIssue")).toEqual([]);
+
+      Object.defineProperty(document, "readyState", { value: "complete", configurable: true });
+      window.dispatchEvent(new Event("load"));
+      vi.advanceTimersByTime(2_500);
+      expect(events("runtimeIssue")).toEqual([expect.objectContaining({ code: "not-dev-build" })]);
+    } finally {
+      Object.defineProperty(document, "readyState", { value: "complete", configurable: true });
+    }
   });
 });
 
@@ -557,15 +645,22 @@ describe("disposal", () => {
 
 describe("hardening the observation", () => {
   it("keeps quiet about a page that has not finished rendering", () => {
-    document.body.innerHTML = "<main></main>";
-    Object.defineProperty(document, "readyState", { value: "interactive", configurable: true });
-    const runtime = install("browse");
-    expect(events("runtimeIssue")).toEqual([]);
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = "<main></main>";
+      Object.defineProperty(document, "readyState", { value: "interactive", configurable: true });
+      const runtime = install("browse");
+      vi.advanceTimersByTime(20_000);
+      expect(events("runtimeIssue")).toEqual([]);
 
-    Object.defineProperty(document, "readyState", { value: "complete", configurable: true });
-    runtime.setMode("select");
+      Object.defineProperty(document, "readyState", { value: "complete", configurable: true });
+      runtime.setMode("select");
+      vi.advanceTimersByTime(2_500);
 
-    expect(events("runtimeIssue")).toEqual([expect.objectContaining({ code: "not-dev-build" })]);
+      expect(events("runtimeIssue")).toEqual([expect.objectContaining({ code: "not-dev-build" })]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("refuses a source path it would have to truncate, and an unsafe line number", () => {
@@ -734,6 +829,20 @@ describe("keyboard traversal and component selection", () => {
     expect(lastSelection()[0].loc).toEqual(loc(5, 0, "src/lib/Card.svelte"));
     key({ key: "ArrowDown" });
     expect(lastSelection()[0].loc).toEqual(loc(6, 2, "src/lib/Card.svelte"));
+    expect(lastScope()).toBeUndefined();
+  });
+
+  it("keeps a widened component through a reselect, for the invocation that was edited", () => {
+    renderCards();
+    const runtime = install("select");
+    const callSite = { file: "src/routes/+page.svelte", line: 6, column: 6 };
+    expect(runtime.reselect(loc(5, 0, "src/lib/Card.svelte"), 1, callSite)).toBe(true);
+    expect(lastScope()).toBe("component");
+    expect(lastSelection().map((node) => node.runtimeOccurrenceId)).toHaveLength(1);
+    expect(lastSelection()[0].locIndex).toBe(1);
+
+    // A call site the element isn't inside is not a component to keep.
+    runtime.reselect(loc(5, 0, "src/lib/Card.svelte"), 1, { ...callSite, line: 99 });
     expect(lastScope()).toBeUndefined();
   });
 

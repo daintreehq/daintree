@@ -68,6 +68,10 @@ export const CHANNELS = {
   tailwindCatalog: "tailwind-catalog",
   /** Search the project's valid Tailwind candidates for the class input. */
   classComplete: "tailwind-complete",
+  /** Whether class awareness works for this app, and whether its model is partial. */
+  tailwindStatus: "tailwind-status",
+  /** The CSS one exact class token generates here — never a search. */
+  classDescribe: "tailwind-describe",
   /** Detected app roots, versions, package manager and route tree. */
   projectModel: "project-model",
   /** Whether a worktree holds a SvelteKit app at all, without opening a workspace. */
@@ -502,6 +506,57 @@ export const ClassCompleteArgsSchema = z
     limit: z.number().int().min(1).max(200).default(50),
   })
   .strict();
+
+export const TailwindStatusArgsSchema = WorkspaceScopedArgsSchema;
+
+export const TailwindStatusResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("available"),
+      /**
+       * `@plugin` / `@config` modules that were not run, so their utilities are
+       * missing from the model. Non-empty means an unknown class proves nothing.
+       */
+      skippedModules: z.array(z.string().min(1).max(1024)).max(64),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("unavailable"),
+      reason: z.string().min(1),
+      /** No stylesheet imports Tailwind: nothing is missing, there is nothing to offer. */
+      unused: z.boolean(),
+    })
+    .strict(),
+]);
+export type TailwindStatus = z.infer<typeof TailwindStatusResultSchema>;
+
+export const ClassDescribeArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    token: z.string().min(1).max(2048),
+  })
+  .strict();
+
+export const ClassDescribeResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("ok"),
+      /** Generated CSS, or null when this project's Tailwind generates nothing for it. */
+      css: z.string().max(4000).nullable(),
+      /** Modules were skipped, so a null `css` is not a verdict about the token. */
+      partial: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      status: z.literal("unavailable"),
+      reason: z.string().min(1),
+      unused: z.boolean(),
+    })
+    .strict(),
+]);
+export type ClassDescription = z.infer<typeof ClassDescribeResultSchema>;
 
 export const ClassCompleteResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ok"), candidates: z.array(ClassCandidateSchema) }).strict(),

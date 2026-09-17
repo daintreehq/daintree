@@ -1,4 +1,5 @@
 import { useId, useRef, useState, type KeyboardEvent } from "react";
+import { isMac } from "@/lib/platform";
 import { Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -149,7 +150,7 @@ export function TextEditor({
           Cancel
         </Button>
         <span className="text-3xs text-text-secondary">
-          {multiline ? "⌘⏎ save · Esc cancel" : "⏎ save · Esc cancel"}
+          {multiline ? `${isMac() ? "⌘⏎" : "Ctrl+Enter"} save · Esc cancel` : "⏎ save · Esc cancel"}
         </span>
       </div>
     </div>

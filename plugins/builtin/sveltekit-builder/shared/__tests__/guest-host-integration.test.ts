@@ -6,6 +6,7 @@ import {
   buildDisposeSource,
   buildGuestRuntimeSource,
   buildModeUpdateSource,
+  buildReselectSource,
 } from "../../../../../electron/services/sitePreview/guestRuntime.js";
 import { validateGuestEnvelope } from "../../../../../electron/services/sitePreview/guestProtocol.js";
 import type { GuestEnvelope } from "../protocol.js";
@@ -214,5 +215,20 @@ describe("host prelude + page runtime", () => {
         throw new Error(`host rejected the new install's message: ${verdict.reason}`);
       lastSequence = verdict.envelope.sequence;
     }
+  });
+
+  it("keeps a widened component through the host's own reselect source", () => {
+    svelteButton();
+    install("select");
+    const callSite = { file: "src/routes/pricing/+page.svelte", line: 8, column: 2 };
+    const result = new Function(
+      `return ${buildReselectSource({ file: "src/lib/PricingCard.svelte", line: 12, column: 4 }, 0, callSite)}`
+    )();
+    expect(result).toBe(true);
+    const selections = acceptedEnvelopes().filter(
+      (envelope) => envelope.event.type === "selectionChanged"
+    );
+    const last = selections[selections.length - 1]?.event;
+    expect(last).toMatchObject({ scope: "component", cause: "reselect" });
   });
 });

@@ -217,6 +217,16 @@ export function createFakeHost() {
         .map((candidate) => ({ candidate, css: `/* ${candidate} */` })),
     };
   });
+  handlers.set(CHANNELS.tailwindStatus, () => ({ status: "available", skippedModules: [] }));
+  handlers.set(CHANNELS.classDescribe, (args) => ({
+    status: "ok",
+    css: ["px-6", "px-8", "py-3", "rounded-lg", "shadow-md", "hover:px-8"].includes(
+      String(args.token)
+    )
+      ? `/* ${String(args.token)} */`
+      : null,
+    partial: false,
+  }));
   handlers.set(CHANNELS.editApply, () => {
     const receipt = makeReceipt({ beforeRevision: host.diskRevision });
     host.diskRevision = receipt.afterRevision;

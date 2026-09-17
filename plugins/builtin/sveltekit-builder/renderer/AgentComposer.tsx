@@ -218,7 +218,11 @@ export function AgentComposer({
   // agent's input, and the notice says to check the terminal before sending
   // again. Leaving Enter armed contradicts that in the one state where sending
   // twice is genuinely harmful, so the second send has to be asked for.
-  const blockedByPartial = delivery?.state.status === "failed" && delivery.state.partial === true;
+  // An unconfirmed delivery is the same risk from the other side: the host
+  // couldn't prove the request went in, which is not proof that it didn't.
+  const blockedByPartial =
+    (delivery?.state.status === "failed" && delivery.state.partial === true) ||
+    delivery?.state.status === "unconfirmed";
   // A selection the page or its source has moved past can't vouch for the
   // locations a request would name.
   const subjectStale =
@@ -226,7 +230,7 @@ export function AgentComposer({
     selection.status === "ready" &&
     selection.stale !== null &&
     selection.selection.selectionId === subject.selection.selectionId;
-  const canSend = Boolean(
+  const canSendAgain = Boolean(
     subject &&
     activeScope &&
     destination &&
@@ -235,9 +239,9 @@ export function AgentComposer({
     !sending &&
     !scopeUnproven &&
     !subjectStale &&
-    !blockedByPartial &&
     revisions !== null
   );
+  const canSend = canSendAgain && !blockedByPartial;
 
   const onDraftChange = (next: string) => {
     // Editing the request after a partial delivery is the acknowledgement: the
@@ -256,8 +260,9 @@ export function AgentComposer({
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  const send = () => {
-    if (!subject || !destination || !canSend) return;
+  /** `again`: the user looked at the terminal and chose to repeat an uncertain request. */
+  const send = (again = false) => {
+    if (!subject || !destination || !(again ? canSendAgain : canSend)) return;
     const request = subject;
     const scope = activeScope;
     const cited = revisions;
@@ -308,12 +313,21 @@ export function AgentComposer({
     }
   };
 
-  const sendAnyway = () => forceAgentRequest(memoryKey);
+  // "Send anyway" answers a run still waiting for readiness. "Send again"
+  // answers one that has finished uncertain: that run is over, so forcing it
+  // did nothing, and the only way to send again is a new run.
+  const sendAnyway = () => {
+    if (blockedByPartial) {
+      send(true);
+      return;
+    }
+    forceAgentRequest(memoryKey);
+  };
   // Dismiss hides the notice; it does not decide that the half-delivered request
   // is safe to send again. Those were the same act, so closing the warning
   // rearmed Enter on the unchanged draft — the guard's own escape hatch.
   const dismissDelivery = () => {
-    if (delivery?.state.status === "failed" && delivery.state.partial === true) {
+    if (blockedByPartial) {
       updateComposerMemory(memoryKey, { deliveryDismissed: true });
       return;
     }
@@ -349,7 +363,8 @@ export function AgentComposer({
         liveTarget={liveTarget}
         onOpenTerminal={openTerminal}
         onReviewChanges={reviewChanges}
-        onSendAnyway={sendAnyway}
+        // Nothing is selected to send again; only a waiting run can be pushed on.
+        onSendAnyway={blockedByPartial ? undefined : sendAnyway}
         onDismiss={dismissDelivery}
       />
     ) : null;
@@ -498,7 +513,7 @@ export function AgentComposer({
           variant="contrast"
           size="xs"
           disabled={!canSend}
-          onClick={send}
+          onClick={() => send()}
           aria-label="Send to agent"
           title="Send to agent (Enter)"
           // Disabled is quiet, not faded: a faded contrast fill is still the
@@ -516,7 +531,9 @@ export function AgentComposer({
           liveTarget={liveTarget}
           onOpenTerminal={openTerminal}
           onReviewChanges={reviewChanges}
-          onSendAnyway={sendAnyway}
+          // Offered only when it can actually send: a busy agent, a stale
+          // subject or an empty draft would make it a button that does nothing.
+          onSendAnyway={!blockedByPartial || canSendAgain ? sendAnyway : undefined}
           onDismiss={dismissDelivery}
         />
       ) : null}
@@ -579,10 +596,15 @@ function DeliveryNotice({
   liveTarget: AgentTarget | undefined;
   onOpenTerminal: (terminalId: string) => void;
   onReviewChanges: () => void;
-  onSendAnyway: () => void;
+  onSendAnyway: (() => void) | undefined;
   onDismiss: () => void;
 }) {
   const { state, title, terminalId } = delivery;
+  const sendAgain = onSendAnyway ? (
+    <Button variant="subtle" size="xs" onClick={onSendAnyway}>
+      Send it again
+    </Button>
+  ) : null;
   const settled =
     state.status === "sent" || state.status === "unconfirmed" || state.status === "failed";
   // Dismiss is the notice's own corner control rather than a third button in
@@ -615,9 +637,11 @@ function DeliveryNotice({
           title={`No sign yet whether ${title} can take input`}
           action={
             <div className="flex flex-wrap gap-1">
-              <Button variant="subtle" size="xs" onClick={onSendAnyway}>
-                Send anyway
-              </Button>
+              {onSendAnyway ? (
+                <Button variant="subtle" size="xs" onClick={onSendAnyway}>
+                  Send anyway
+                </Button>
+              ) : null}
               {terminalId ? (
                 <Button variant="subtle" size="xs" onClick={() => onOpenTerminal(terminalId)}>
                   Open terminal
@@ -664,7 +688,16 @@ function DeliveryNotice({
           tone="warning"
           role="status"
           title="Delivery unconfirmed"
-          action={open}
+          action={
+            <div className="flex flex-wrap gap-1">
+              {terminalId ? (
+                <Button variant="subtle" size="xs" onClick={() => onOpenTerminal(terminalId)}>
+                  Open terminal
+                </Button>
+              ) : null}
+              {sendAgain}
+            </div>
+          }
         >
           Check the terminal before sending again, so the agent doesn't get the request twice.
         </InspectorNotice>
@@ -684,9 +717,7 @@ function DeliveryNotice({
                     Open terminal
                   </Button>
                 ) : null}
-                <Button variant="subtle" size="xs" onClick={onSendAnyway}>
-                  Send it again
-                </Button>
+                {sendAgain}
               </div>
             ) : (
               open
