@@ -26,6 +26,7 @@ export function ClassEditor({
   tokens,
   editable,
   saving,
+  pending = false,
   onAdd,
   onRemove,
   complete,
@@ -33,6 +34,12 @@ export function ClassEditor({
   tokens: string[];
   editable: boolean;
   saving: boolean;
+  /**
+   * A re-proof is out after a write. Nothing commits until it lands, but the
+   * field stays focusable: a natively disabled input loses focus at the next
+   * rendering opportunity, and with it the "add two classes in a row" loop.
+   */
+  pending?: boolean;
   onAdd: (tokens: string[]) => Promise<boolean>;
   onRemove: (token: string) => void;
   complete: (query: string) => Promise<ClassCompletion>;
@@ -47,6 +54,7 @@ export function ClassEditor({
         <ClassChips tokens={tokens} editable={editable} onRemove={onRemove} complete={complete} />
       )}
       <ClassAddField
+        pending={pending}
         tokens={tokens}
         editable={editable}
         saving={saving}
@@ -185,12 +193,14 @@ function ClassAddField({
   tokens,
   editable,
   saving,
+  pending = false,
   onAdd,
   complete,
 }: {
   tokens: string[];
   editable: boolean;
   saving: boolean;
+  pending?: boolean;
   onAdd: (tokens: string[]) => Promise<boolean>;
   complete: (query: string) => Promise<ClassCompletion>;
 }) {
@@ -346,8 +356,8 @@ function ClassAddField({
             autoComplete="off"
             value={query}
             invalid={error !== null}
-            disabled={!editable && !saving}
-            readOnly={saving}
+            disabled={!editable && !saving && !pending}
+            readOnly={saving || pending}
             onChange={(event) => {
               setQuery(event.target.value);
               setActive(-1);
@@ -427,13 +437,13 @@ function CandidateList({
           onClick={() => onPick(candidate.candidate)}
           className={cn(
             PALETTE_ROW_CLASS,
-            "flex cursor-pointer items-baseline gap-2 rounded-sm px-2 py-1 text-xs text-text-primary hover:bg-overlay-subtle"
+            "flex cursor-pointer items-center rounded-sm px-2 py-1 text-xs text-text-primary hover:bg-overlay-subtle"
           )}
         >
-          <span className="shrink-0 font-mono">{candidate.candidate}</span>
-          <span className="min-w-0 truncate font-mono text-3xs text-text-secondary">
-            {candidate.css}
-          </span>
+          {/* The token alone. A declaration beside it truncated mid-number at
+              this width ("0 4px 6px -1p…") and said nothing; the active
+              candidate's declaration is shown whole below the list. */}
+          <span className="min-w-0 truncate font-mono">{candidate.candidate}</span>
         </li>
       ))}
       {active >= 0 && candidates[active] ? (

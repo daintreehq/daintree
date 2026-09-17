@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 export type NoticeTone = "info" | "warning" | "error";
 
 const TONE_CLASS: Record<NoticeTone, string> = {
-  info: "border-border-subtle bg-surface-inset",
+  info: "border-border-subtle bg-surface-elevated",
   warning: "border-status-warning/40 bg-status-warning/10",
   error: "border-status-error/40 bg-status-error/10",
 };

@@ -757,7 +757,7 @@ describe("editing continuity", () => {
     fireEvent.click(removeButton());
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(removeButton().disabled).toBe(false));
-    await act(async () => host.select(0, []));
+    await act(async () => host.select(0, [], "document"));
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(removeButton().disabled).toBe(false));
     expect(screen.queryByText(/select again/i)).toBeNull();
@@ -769,6 +769,124 @@ describe("editing continuity", () => {
     host.reselectFinds = false;
     fireEvent.click(removeButton());
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await screen.findByText("Saved — select again to keep editing");
+    expect(removeButton().disabled).toBe(true);
+  });
+
+  it("keeps the class input focusable, not disabled, while the re-proof is out", async () => {
+    // A natively disabled input loses focus at the browser's next rendering
+    // opportunity; jsdom does not model that, so the rule itself is pinned:
+    // pending is read-only, never disabled.
+    await mountSelected();
+    host.sitePreview.reselect.mockImplementationOnce(async () => true); // the page never answers
+    const input = screen.getByRole("combobox", { name: "Add a class" }) as HTMLInputElement;
+    input.focus();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(input.readOnly).toBe(true));
+    expect(input.disabled).toBe(false);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("refuses a re-proof after a successful continuation as stale, never as editable", async () => {
+    // The prior captured after a continuation is an editable selection.
+    // Restored as it was, it would show live controls for ranges the page no
+    // longer has selected.
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
+      selection.nodes[0]!.definition!.revision = REVISION; // not the write's revision
+      return { status: "ok", selection };
+    });
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1));
+    await screen.findByText("Saved — select again to keep editing");
+    expect(removeButton().disabled).toBe(true);
+  });
+
+  it("leaves a refused retry stale, not the editable selection the last continuation made", async () => {
+    // After a continuation the stored prior is an editable selection. An HMR
+    // drop then marks the screen stale and retries; if that re-proof names
+    // something else, the rollback must not put the editable prior back.
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
+      selection.nodes[0]!.definition!.revision = REVISION; // not the write's revision
+      return { status: "ok", selection };
+    });
+    await act(async () => host.select(0, [], "document"));
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1));
+    await screen.findByText("Saved — select again to keep editing");
+    expect(removeButton().disabled).toBe(true);
+  });
+
+  it("refuses a continuation when the file changed while main was proving it", async () => {
+    // Main read the file at the write's revision; the change landed before its
+    // answer did. A re-proof never shows as `resolving`, so the invalidation
+    // has to watch `reselecting` too.
+    await mountSelected();
+    const resolve = host.handlers.get(CHANNELS.selectionResolve)!;
+    let release: (() => void) | null = null;
+    host.handlers.set(
+      CHANNELS.selectionResolve,
+      (args) =>
+        new Promise((done) => {
+          release = () => done(resolve(args));
+        })
+    );
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(release).not.toBeNull());
+    await act(async () =>
+      host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
+        workspaceSessionId: "ws-1",
+        file: FILE,
+        revision: null,
+      })
+    );
+    await act(async () => release!());
+    await waitFor(() => expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1));
+    await screen.findByText("Select again — the file changed");
+    expect(removeButton().disabled).toBe(true);
+  });
+
+  it("takes Escape inside the recovery window as the answer, not as HMR", async () => {
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    await act(async () => host.select(0, [], "user"));
+    await screen.findByText("Click an element to edit it or ask an agent");
+    await act(() => new Promise((done) => setTimeout(done, 250)));
+    expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a re-proof that comes back at another rendered occurrence", async () => {
+    // Repeated markup: same file, tag and revision. Only the occurrence tells
+    // the cards apart, so a runtime that reports it has to agree.
+    await mountSelected();
+    host.sitePreview.reselect.mockImplementationOnce(async (request) => {
+      setTimeout(
+        () =>
+          host.select(
+            host.currentEpoch,
+            [{ ...OBSERVATION, loc: request.loc, locIndex: 0 }],
+            "reselect"
+          ),
+        0
+      );
+      return true;
+    });
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1));
     await screen.findByText("Saved — select again to keep editing");
     expect(removeButton().disabled).toBe(true);
   });

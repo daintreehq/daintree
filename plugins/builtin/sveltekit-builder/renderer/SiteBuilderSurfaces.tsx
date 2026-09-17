@@ -1,13 +1,24 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ComponentType,
+  type ReactNode,
+} from "react";
 import {
   AlertTriangle,
   ChevronRight,
   FolderCode,
+  FolderTree,
+  FolderX,
+  MousePointer2,
   PanelRightClose,
-  Pencil,
   PanelRightOpen,
+  Pencil,
   Sparkles,
   SquareDashedMousePointer,
+  Unplug,
   X,
 } from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
@@ -15,6 +26,7 @@ import type { SelectedNode } from "../shared/model.js";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { cn } from "@/lib/utils";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
@@ -212,8 +224,10 @@ function StripStatus({
   if (binding.status === "detached") {
     return (
       <>
-        <span className="truncate">{DETACH_COPY[binding.reason]}</span>
-        <Button variant="subtle" size="xs" onClick={() => void controller.connect()}>
+        <StripMessage icon={Unplug}>{DETACH_COPY[binding.reason]}</StripMessage>
+        {/* The strip's only action: `secondary` has a fill and a ring, where
+            `subtle` sat in the same grey as the sentence before it. */}
+        <Button variant="secondary" size="xs" onClick={() => void controller.connect()}>
           Reconnect
         </Button>
       </>
@@ -222,10 +236,10 @@ function StripStatus({
   if (binding.status === "failed") {
     return (
       <>
-        <span className="truncate" title={binding.message}>
+        <StripMessage icon={AlertTriangle} tone="warning" title={binding.message}>
           Waiting for the page to load
-        </span>
-        <Button variant="subtle" size="xs" onClick={() => void controller.retryConnect()}>
+        </StripMessage>
+        <Button variant="secondary" size="xs" onClick={() => void controller.retryConnect()}>
           Retry
         </Button>
       </>
@@ -289,16 +303,62 @@ function StripStatus({
   }
   if (selection.status === "resolving") return <WaitingRow label="Finding the source" />;
   if (state.mode === "select") {
-    // The armed state has a glyph: without one, "click any element" read as
-    // placeholder text in a disabled field, and nothing said picking was live.
+    // The strip must not contradict the drawer: an invitation to click while
+    // the drawer says the source could not be opened is two surfaces telling
+    // two stories. The workspace's state is the strip's state too.
+    const workspace = state.workspace;
+    if (workspace.status === "ambiguous") {
+      return <StripMessage icon={FolderTree}>Choose which app this preview shows</StripMessage>;
+    }
+    if (workspace.status === "no-app") {
+      return <StripMessage icon={FolderX}>No SvelteKit app in this worktree</StripMessage>;
+    }
+    if (workspace.status === "failed") {
+      return (
+        <StripMessage icon={AlertTriangle} tone="warning" title={workspace.message}>
+          Couldn't open the site source
+        </StripMessage>
+      );
+    }
+    const previewOnly = workspace.status === "ready" && workspace.support.level === "preview-only";
     return (
-      <span className="flex min-w-0 items-center gap-1.5">
-        <SquareDashedMousePointer className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="truncate">Click an element to edit it or ask an agent</span>
-      </span>
+      <StripMessage icon={SquareDashedMousePointer}>
+        {previewOnly
+          ? "Click an element to ask an agent about it"
+          : "Click an element to edit it or ask an agent"}
+      </StripMessage>
     );
   }
-  return <span className="truncate">Browsing — switch to Select to pick an element</span>;
+  return (
+    <StripMessage icon={MousePointer2}>Browsing — switch to Select to pick an element</StripMessage>
+  );
+}
+
+/**
+ * Every strip sentence leads with a glyph in the same slot, so the text starts
+ * at one x whatever the state; states without one made the sentence jump as
+ * the page connected, armed and detached.
+ */
+function StripMessage({
+  icon: Icon,
+  tone,
+  title,
+  children,
+}: {
+  icon: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
+  tone?: "warning";
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <span className="flex min-w-0 items-center gap-1.5" title={title}>
+      <Icon
+        className={cn("h-3.5 w-3.5 shrink-0", tone === "warning" && "text-status-warning")}
+        aria-hidden="true"
+      />
+      <span className="truncate">{children}</span>
+    </span>
+  );
 }
 
 /**
@@ -397,7 +457,16 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
         <ResolvingHeader />
       ) : null}
 
-      <ScrollShadow className="min-h-0 flex-1" scrollClassName="flex flex-col gap-3 p-3">
+      {/* Under the pinned identity the first section's header sits 4px below
+          the rule, as "Ask an agent" does below its own; the notices that lead
+          the other states keep the full inset. */}
+      <ScrollShadow
+        className="min-h-0 flex-1"
+        scrollClassName={cn(
+          "flex flex-col gap-3 px-3 pb-3",
+          selection.status === "ready" ? "pt-1" : "pt-3"
+        )}
+      >
         {state.issue ? (
           <InspectorNotice
             tone={state.issue.severity}
@@ -542,7 +611,9 @@ function SiteSourceBody({
           {/* 28px path rows with a chevron: a choice list, not three bordered
               boxes that read as empty inputs. Every path in the same face. */}
           <ul
-            className="flex flex-col divide-y divide-border-subtle"
+            // Bled to the rows' own padding so their text lines up with the
+            // sentence above; the dividers run the row's full width.
+            className="-mx-2 flex flex-col divide-y divide-border-subtle"
             aria-label="Choose site source"
           >
             {workspace.appRoots.map((appRoot) => {
@@ -648,11 +719,11 @@ function CapabilityRow({
       {available
         ? null
         : reasons.map((reason) => (
-            <p key={reason} className="text-text-secondary">
+            <p key={reason} className="pl-5 text-text-secondary">
               {sentence(reason)}
             </p>
           ))}
-      {available ? null : <p className="text-text-secondary">{note}</p>}
+      {available ? null : <p className="pl-5 text-text-secondary">{note}</p>}
     </div>
   );
 }

@@ -91,6 +91,13 @@ export const GuestEventSchema = z.discriminatedUnion("type", [
     .object({
       type: z.literal("selectionChanged"),
       nodes: z.array(GuestNodeObservationSchema).max(32),
+      /**
+       * Who moved the selection: the user (a click, a key, Escape), the
+       * document (a node the page was showing left it), or the host's own
+       * `reselect`. Recovery after a write listens to the last two only — a
+       * user's Escape is an answer, not a symptom.
+       */
+      cause: z.enum(["user", "document", "reselect"]).optional(),
       /** Present when the nodes are one component invocation's rendered roots. */
       scope: z.literal("component").optional(),
       /**

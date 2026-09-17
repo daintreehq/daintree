@@ -6,7 +6,6 @@ import {
   FILE,
   OBSERVATION,
   REVISION,
-  makeReceipt,
   makeSelection,
   type PreviewHostHandle,
 } from "./previewHost.js";
@@ -188,10 +187,14 @@ export const FIXTURES = {
     // something a reviewer can see in the capture.
     settled: '[aria-label="Last change"]',
     arrange: (host) => {
-      host.handlers.set(CHANNELS.editApply, () => ({
-        status: "applied",
-        receipt: makeReceipt({ affectedOccurrences: 3 }),
-      }));
+      // On top of the host's own apply, which remembers the revision it wrote:
+      // a receipt minted here alone sent the re-proof back at the old revision
+      // and photographed the fallback banner instead of the continued state.
+      const apply = host.handlers.get(CHANNELS.editApply)!;
+      host.handlers.set(CHANNELS.editApply, (args) => {
+        const result = apply(args) as { status: "applied"; receipt: Record<string, unknown> };
+        return { ...result, receipt: { ...result.receipt, affectedOccurrences: 3 } };
+      });
     },
     act: async (host) => {
       await selectElement(host);

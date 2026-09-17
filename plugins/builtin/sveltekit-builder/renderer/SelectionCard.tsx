@@ -134,6 +134,9 @@ export function SelectionIdentity({
               <Button
                 variant="ghost"
                 size="icon-xs"
+                // The glyph, not the hit box, sits on the column edge the
+                // fields below end at.
+                className="-mr-1"
                 aria-label="Open in editor"
                 title="Open in editor"
                 onClick={() =>
@@ -448,6 +451,7 @@ function TextSurface({
           text={text.text}
           editable={editable}
           saving={saving}
+          pending={state.reselecting}
           onSave={(next) => actions.setText(selectionId, next)}
         />
       ) : (
@@ -480,6 +484,7 @@ function ClassSurface({
           tokens={classes.tokens}
           editable={editable}
           saving={saving}
+          pending={state.reselecting}
           onAdd={(tokens) => actions.addClasses(selectionId, tokens)}
           onRemove={(token) => actions.removeClass(selectionId, token)}
           complete={actions.completeClasses}

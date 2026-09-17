@@ -121,6 +121,9 @@ export interface PageState {
 
 export type StaleReason = "document-changed" | "source-changed" | "edited" | "preview-detached";
 
+/** Who moved the page's selection; what recovery after a write is allowed to answer. */
+export type SelectionCause = "user" | "document" | "reselect";
+
 export type SelectionState =
   | { status: "none" }
   | { status: "resolving"; epoch: number; requestId: number }
@@ -504,6 +507,8 @@ export class InspectorController {
   private continuity: Continuity | null = null;
   private reselectOnReady = false;
   private reselectTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Identity of the reselect in flight; a user action moves it on and orphans late replies. */
+  private reselectAttempt = 0;
 
   async openWorkspace(appRoot: string | undefined = this.chosenAppRoot): Promise<void> {
     this.chosenAppRoot = appRoot;
@@ -913,7 +918,8 @@ export class InspectorController {
           epoch,
           event.nodes,
           event.scope ?? "element",
-          event.component ?? null
+          event.component ?? null,
+          event.cause ?? "user"
         );
         return;
       case "runtimeIssue":
@@ -938,7 +944,8 @@ export class InspectorController {
     epoch: number,
     nodes: SiteGuestNodeObservation[],
     scope: "element" | "component" = "element",
-    component: PickedComponent | null = null
+    component: PickedComponent | null = null,
+    cause: SelectionCause = "user"
   ): Promise<void> {
     const request = ++this.selectionRequest;
     this.changedDuringResolve.clear();
@@ -948,19 +955,35 @@ export class InspectorController {
     if (nodes.length === 0) {
       const continuity = this.continuity;
       if (
+        cause !== "user" &&
         continuity !== null &&
         Date.now() - continuity.at < CONTINUITY_WINDOW_MS &&
-        continuity.attempts < CONTINUITY_MAX_RETRIES &&
         this.state.selection.status === "ready"
       ) {
-        // Same-document HMR replaced the selected node a beat after the write
-        // landed and the page dropped its disconnected selection. The element
-        // is back under the same location; ask again after the patch settles.
-        continuity.attempts += 1;
-        this.update({ ...base, ...this.staleSelectionPatch("edited"), reselecting: true });
-        setTimeout(() => void this.reselectNow(), CONTINUITY_RETRY_DELAY_MS);
+        if (continuity.attempts < CONTINUITY_MAX_RETRIES) {
+          // Same-document HMR replaced the selected node a beat after the write
+          // landed and the page dropped its disconnected selection. The element
+          // is back under the same location; ask again after the patch settles.
+          // The retry belongs to this attempt: a user action in the meantime
+          // retires it before it fires.
+          continuity.attempts += 1;
+          const attempt = this.reselectAttempt;
+          this.update({ ...base, ...this.staleSelectionPatch("edited"), reselecting: true });
+          setTimeout(() => {
+            if (attempt === this.reselectAttempt) void this.reselectNow();
+          }, CONTINUITY_RETRY_DELAY_MS);
+          return;
+        }
+        // Out of retries: the element is not coming back. The page has nothing
+        // selected; the drawer keeps the stale selection and says so.
+        this.retireReselect();
+        this.update({ ...base, ...this.staleSelectionPatch("edited"), reselecting: false });
         return;
       }
+      // The user cleared it (Escape, a click on nothing): that is the answer,
+      // whatever recovery was in flight.
+      this.retireReselect();
+      this.continuity = null;
       this.update({ ...base, selection: { status: "none" } });
       return;
     }
@@ -1005,12 +1028,23 @@ export class InspectorController {
 
     // What a reselect would be continuing. Read before the resolving state
     // replaces it, and put back if the re-proof turns out to name something else.
-    const continuing = this.state.reselecting && this.continuity !== null;
+    const continuing = cause === "reselect" && this.state.reselecting && this.continuity !== null;
+    // Only the page's answer to OUR reselect continues the edited selection. A
+    // click of the user's own while it is out is theirs: it ends the recovery
+    // and resolves as any fresh pick would.
+    if (!continuing && this.state.reselecting) {
+      this.retireReselect();
+      this.continuity = null;
+    }
     // A re-proof keeps the stale selection on screen — its controls are already
     // disabled — rather than swapping the editors out for a skeleton and back,
     // which unmounted the class input mid-loop and dropped its focus.
     if (!continuing) {
-      this.update({ ...base, selection: { status: "resolving", epoch, requestId: request } });
+      this.update({
+        ...base,
+        selection: { status: "resolving", epoch, requestId: request },
+        reselecting: false,
+      });
     }
     let raw: unknown;
     try {
@@ -1060,6 +1094,12 @@ export class InspectorController {
     // The observation predates the change, but main resolved it against the
     // newer bytes; the pairing can't be trusted, so the user selects again.
     if (file !== null && this.changedDuringResolve.has(file)) {
+      // For a continuation the file moved under the re-proof itself: main's
+      // answer is at the expected revision and already wrong.
+      if (continuing && this.continuity !== null) {
+        this.refuseContinuation(this.continuity, "source-changed");
+        return;
+      }
       this.update({ selection: { status: "lost" } });
       return;
     }
@@ -1076,24 +1116,20 @@ export class InspectorController {
     const after = selection.nodes[0]?.definition ?? null;
     if (continuing && this.continuity !== null) {
       const record = this.continuity;
+      // Repeated markup shares file, tag and revision; only the occurrence
+      // tells the cards apart, so a runtime that reports it has to agree too.
+      const occurrence = nodes[0]?.locIndex;
       const continues =
         after !== null &&
         after.location.file === record.file &&
         after.tagName === record.tagName &&
-        after.revision === record.afterRevision;
+        after.revision === record.afterRevision &&
+        (occurrence === undefined || occurrence === record.locIndex);
       if (!continues) {
         // A fresh proof of SOME element is not a continuation of the one that
         // was edited. Refuse it, and take the page's highlight down with it so
         // page and drawer agree on what is selected: nothing new.
-        this.clearReselectTimer();
-        const binding = this.state.binding;
-        if (binding.status === "bound") {
-          void this.deps.sitePreview
-            .clearSelection({ sessionId: binding.sessionId })
-            .catch(() => undefined);
-        }
-        this.update({ selection: record.prior ?? { status: "none" }, reselecting: false });
-        this.continuity = null;
+        this.refuseContinuation(record, this.staleReasonNow("edited"));
         return;
       }
     }
@@ -1272,7 +1308,51 @@ export class InspectorController {
     this.recentChanges.set(file, this.deps.now());
     // Our own writes aren't pushed back as sourceChanged, so a resolve that is
     // out when one lands must be invalidated here, however long it then takes.
-    if (this.state.selection.status === "resolving") this.changedDuringResolve.add(file);
+    // A re-proof never shows as `resolving`; it is out while `reselecting`.
+    if (this.state.selection.status === "resolving" || this.state.reselecting) {
+      this.changedDuringResolve.add(file);
+    }
+  }
+
+  /**
+   * A user action ends whatever recovery is in flight: its guard timer, a
+   * scheduled retry, and any reply still on the way, which will find the
+   * attempt it belonged to is over.
+   */
+  private retireReselect(): void {
+    this.reselectAttempt++;
+    this.clearReselectTimer();
+  }
+
+  /**
+   * What a refused or abandoned re-proof leaves on screen: the selection from
+   * before the attempt, always stale. The prior captured after a successful
+   * continuation was editable, and restoring it as it was would show live
+   * controls for ranges the page no longer has selected.
+   */
+  private staleRollback(record: Continuity, reason: StaleReason): SelectionState {
+    const current = this.state.selection;
+    const prior = record.prior ?? (current.status === "ready" ? current : null);
+    if (prior === null) return { status: "none" };
+    return { ...prior, stale: reason };
+  }
+
+  /** The notice already showing, when there is one; otherwise the caller's. */
+  private staleReasonNow(fallback: StaleReason): StaleReason {
+    const current = this.state.selection;
+    return current.status === "ready" && current.stale !== null ? current.stale : fallback;
+  }
+
+  private refuseContinuation(record: Continuity, reason: StaleReason): void {
+    this.clearReselectTimer();
+    const binding = this.state.binding;
+    if (binding.status === "bound") {
+      void this.deps.sitePreview
+        .clearSelection({ sessionId: binding.sessionId })
+        .catch(() => undefined);
+    }
+    this.update({ selection: this.staleRollback(record, reason), reselecting: false });
+    this.continuity = null;
   }
 
   private isCurrentResolve(request: number): boolean {
@@ -1316,17 +1396,16 @@ export class InspectorController {
       this.update({ reselecting: false });
       return;
     }
+    const attempt = ++this.reselectAttempt;
     this.clearReselectTimer();
     this.reselectTimer = setTimeout(() => {
       this.reselectTimer = null;
-      if (!this.state.reselecting) return;
+      if (attempt !== this.reselectAttempt || !this.state.reselecting) return;
       // The page went quiet. The attempt is over: any late resolve is
       // rejected, the stale selection is what stands, and it says so.
       this.selectionRequest++;
       this.update({
-        ...(record.prior && this.state.selection.status !== "ready"
-          ? { selection: record.prior }
-          : {}),
+        selection: this.staleRollback(record, this.staleReasonNow("edited")),
         reselecting: false,
       });
     }, RESELECT_SETTLE_MS);
@@ -1340,9 +1419,13 @@ export class InspectorController {
     } catch {
       found = false;
     }
-    if (!found) {
+    // A late answer to an attempt the user has since ended changes nothing.
+    if (!found && attempt === this.reselectAttempt) {
       this.clearReselectTimer();
-      this.update({ reselecting: false });
+      this.update({
+        selection: this.staleRollback(record, this.staleReasonNow("edited")),
+        reselecting: false,
+      });
     }
   }
 
