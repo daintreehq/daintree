@@ -434,7 +434,11 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     expect(received).toContain("- Target: the FeatureCard component");
     expect(received).toContain(`Source: <article> at ${CARD_FILE}:5:1`);
     // Line breaks survive: the request went in as typed input, not a shell argument.
-    expect(received).toContain("```svelte\n");
+    expect(received).toContain(
+      "\n- Route files, outermost layout first:\n  - layout: src/routes/+layout.svelte\n  - page: src/routes/+page.svelte\n"
+    );
+    // References, not contents: the agent reads the files itself.
+    expect(received).not.toContain("```");
     await expect(panel.getByRole("status").filter({ hasText: /Sent to/ })).toBeVisible({
       timeout: PLUGIN_TIMEOUT,
     });

@@ -851,6 +851,163 @@ describe("class inspection", () => {
   });
 });
 
+describe("replacing a class", () => {
+  function lastOperation() {
+    const call = host.calls(CHANNELS.editApply).at(-1)!;
+    return (call.operations as Array<Record<string, unknown>>)[0]!;
+  }
+
+  it("swaps a chip for a new class in one write, and the receipt says what changed", async () => {
+    await mountSelected();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect px-6" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Replace…" }));
+    const field = await screen.findByRole("combobox", { name: "Replace px-6 with" });
+    fireEvent.change(field, { target: { value: "px-8" } });
+    fireEvent.keyDown(field, { key: "Enter" });
+
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    expect(lastOperation()).toMatchObject({ add: ["px-8"], remove: ["px-6"] });
+    const receipt = await screen.findByRole("region", { name: "Last change" });
+    await waitFor(() => expect(receipt.textContent).toContain("px-6 → px-8"));
+    // Back to adding once the replacement landed.
+    await screen.findByRole("combobox", { name: "Add a class" });
+  });
+
+  it("asks before adding a class that overrides one already there, and replaces on request", async () => {
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(input, { target: { value: "px-8" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const choice = await screen.findByRole("group", { name: "Class conflict" });
+    expect(choice.textContent).toContain("px-8 conflicts with px-6");
+    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
+
+    fireEvent.click(within(choice).getByRole("button", { name: "Replace px-6" }));
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    expect(lastOperation()).toMatchObject({ add: ["px-8"], remove: ["px-6"] });
+  });
+
+  it("keeps both when asked, and adds without asking when nothing is overridden", async () => {
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(input, { target: { value: "px-8" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    fireEvent.click(await screen.findByRole("button", { name: "Keep both" }));
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    expect(lastOperation()).toMatchObject({ add: ["px-8"], remove: [] });
+    const receipt = await screen.findByRole("region", { name: "Last change" });
+    await waitFor(() => expect(receipt.textContent).toContain("+ px-8"));
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("combobox", { name: "Add a class" }) as HTMLInputElement).readOnly
+      ).toBe(false)
+    );
+    const again = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(again, { target: { value: "shadow-md" } });
+    fireEvent.keyDown(again, { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(2));
+    expect(screen.queryByRole("group", { name: "Class conflict" })).toBeNull();
+  });
+
+  it("says what a class removal changed, and reads the other way after Undo", async () => {
+    await mountSelected();
+    fireEvent.click(removeButton());
+    const receipt = await screen.findByRole("region", { name: "Last change" });
+    await waitFor(() => expect(receipt.textContent).toContain("− px-6"));
+    fireEvent.click(within(receipt).getByRole("button", { name: "Undo" }));
+    await waitFor(() => expect(receipt.textContent).toContain("Reverted"));
+    expect(receipt.textContent).toContain("+ px-6");
+  });
+
+  it("drops a conflict answer that arrives after the draft changed", async () => {
+    let answer: (value: unknown) => void = () => {};
+    host.handlers.set(
+      CHANNELS.classConflicts,
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+        })
+    );
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(input, { target: { value: "px-8" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.classConflicts)).toHaveLength(1));
+    // The user keeps typing while the question is out.
+    fireEvent.change(input, { target: { value: "px-10" } });
+    await act(async () =>
+      answer({
+        status: "ok",
+        conflicts: [{ candidate: "px-8", token: "px-6", properties: ["padding-left"] }],
+      })
+    );
+    expect(screen.queryByRole("group", { name: "Class conflict" })).toBeNull();
+    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
+  });
+
+  it("answers the conflict from the keyboard: Enter replaces, Escape goes back to editing", async () => {
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(input, { target: { value: "px-8" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("group", { name: "Class conflict" });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("group", { name: "Class conflict" })).toBeNull();
+    expect((input as HTMLInputElement).value).toBe("px-8");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    await screen.findByRole("group", { name: "Class conflict" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    const operation = (
+      host.calls(CHANNELS.editApply)[0]!.operations as Array<Record<string, unknown>>
+    )[0]!;
+    expect(operation).toMatchObject({ add: ["px-8"], remove: ["px-6"] });
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Add a class" }))
+    );
+  });
+
+  it("answers a conflict about a picked suggestion with Enter, not the typed prefix", async () => {
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    fireEvent.change(input, { target: { value: "px-" } });
+    fireEvent.click(await screen.findByRole("option", { name: "px-8" }));
+    await screen.findByRole("group", { name: "Class conflict" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    const operation = (
+      host.calls(CHANNELS.editApply)[0]!.operations as Array<Record<string, unknown>>
+    )[0]!;
+    expect(operation).toMatchObject({ add: ["px-8"], remove: ["px-6"] });
+  });
+
+  it("leaves replace mode on Cancel without writing", async () => {
+    await mountSelected();
+    fireEvent.click(screen.getByRole("button", { name: "Inspect px-6" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Replace…" }));
+    await screen.findByText("Replacing");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await screen.findByRole("combobox", { name: "Add a class" });
+    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
+  });
+
+  it("says what a text edit changed, keeping line breaks visible", async () => {
+    await mountSelected();
+    const controller = peekBuilderController("preview-1")!;
+    const selectionId = (
+      controller.getSnapshot().selection as { selection: { selectionId: string } }
+    ).selection.selectionId;
+    await act(async () => {
+      await controller.setText(selectionId, "Start\nPro");
+    });
+    const receipt = await screen.findByRole("region", { name: "Last change" });
+    await waitFor(() => expect(receipt.textContent).toContain("“Start Pro” → “Start⏎Pro”"));
+  });
+});
+
 describe("an app inside a monorepo", () => {
   const APP = "/repo/apps/site";
 
@@ -1045,6 +1202,18 @@ describe("editing continuity", () => {
     expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
       "Component"
     );
+  });
+
+  it("doesn't reselect a copy of repeated markup the page couldn't place", async () => {
+    await mountBound();
+    const observation = { ...OBSERVATION };
+    delete observation.locIndex;
+    // Past the page's scan bound the count is a floor: one is not "unique".
+    await act(async () => host.select(0, [{ ...observation, sameLocCount: 1 }]));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    fireEvent.click(removeButton());
+    await screen.findByText("Saved — select again to keep editing");
+    expect(host.sitePreview.reselect).not.toHaveBeenCalled();
   });
 
   it("asks for the same rendered occurrence, not the first one", async () => {
@@ -1551,30 +1720,72 @@ describe("stale selections", () => {
     expect(state.revisions![FILE]).toBeNull();
   });
 
-  it("refuses to send source text read from other bytes than the selection", async () => {
-    host.handlers.set(CHANNELS.sourceExcerpt, () => ({
-      status: "ok",
-      text: "<button>Changed</button>",
-      firstLine: 6,
-      revision: "b".repeat(64),
+  it("sends file references and the route around the page, never source text", async () => {
+    host.handlers.set(CHANNELS.projectModel, () => ({
+      appRoot: "/repo",
+      packageManager: "npm",
+      versions: { svelte: "5.2.0", kit: "2.15.0", tailwind: "4.1.0", vite: "7.0.0" },
+      support: { level: "full" },
+      routes: [
+        {
+          routeId: "/pricing",
+          pageFile: FILE,
+          layoutFiles: ["src/routes/+layout.svelte"],
+          dataFiles: ["src/routes/pricing/+page.server.ts"],
+          dynamic: false,
+          endpointOnly: false,
+        },
+      ],
     }));
-    // The request belongs to a live preview with the builder on.
     usePanelStore.setState({
       panelsById: {
         "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
       } as never,
     });
-    useDevPreviewToolStore.setState({
-      activeByPanel: { "preview-1": "daintree.sveltekit-builder.builder" },
-    });
+    useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": BUILDER_TOOL_ID } });
+    const { actionService } = await import("@/services/ActionService");
+    const sent: string[] = [];
+    vi.spyOn(actionService, "dispatch").mockImplementation((async (
+      id: string,
+      args: Record<string, unknown>
+    ) => {
+      if (id === "agent.launch") return { ok: true, result: { launched: true, terminalId: "t" } };
+      if (id === "terminal.getStatus") {
+        return {
+          ok: true,
+          result: {
+            terminals: [
+              {
+                terminalId: "t",
+                agentState: "waiting",
+                ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
+              },
+            ],
+          },
+        };
+      }
+      if (id === "terminal.sendCommand") {
+        sent.push(String(args.command));
+        return { ok: true, result: { submissionToken: "tok" } };
+      }
+      return { ok: false, error: { message: `unexpected ${id}` } };
+    }) as never);
+
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
     fireEvent.change(request, { target: { value: "Say Upgrade" } });
     const sendButton = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
     await waitFor(() => expect(sendButton.disabled).toBe(false));
     fireEvent.click(sendButton);
-    await screen.findByText(/The source changed since you picked this/);
-    expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
+
+    expect(sent[0]).toContain("- Route files, outermost layout first:");
+    expect(sent[0]).toContain("  - layout: src/routes/+layout.svelte");
+    expect(sent[0]).toContain("  - data: src/routes/pricing/+page.server.ts");
+    expect(sent[0]).toContain(`  - page: ${FILE}`);
+    expect(sent[0]).toContain("(SvelteKit 2.15.0, Svelte 5.2.0, Tailwind 4.1.0)");
+    expect(sent[0]).not.toContain("```");
+    expect(host.calls(CHANNELS.sourceExcerpt)).toEqual([]);
   });
 
   it("goes stale when main reports the selected file changed, and only that file", async () => {

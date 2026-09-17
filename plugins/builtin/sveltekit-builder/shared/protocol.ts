@@ -72,6 +72,8 @@ export const CHANNELS = {
   tailwindStatus: "tailwind-status",
   /** The CSS one exact class token generates here — never a search. */
   classDescribe: "tailwind-describe",
+  /** Existing tokens a class being added would fight with, in the same scope. */
+  classConflicts: "tailwind-conflicts",
   /** Detected app roots, versions, package manager and route tree. */
   projectModel: "project-model",
   /** Whether a worktree holds a SvelteKit app at all, without opening a workspace. */
@@ -125,6 +127,8 @@ export const GuestNodeObservationSchema = z
     tagName: z.string().min(1).max(64),
     /** Count of live nodes sharing this node's `loc`, computed in the guest. */
     sameLocCount: z.number().int().positive().max(100_000),
+    /** The page stopped counting at its scan bound: `sameLocCount` is a floor. */
+    sameLocCountPartial: z.literal(true).optional(),
     /**
      * Which of those this node is, in document order. Lets the host ask for
      * the same rendered occurrence again after its own write. Optional: an
@@ -558,6 +562,38 @@ export const ClassDescribeResultSchema = z.discriminatedUnion("status", [
 ]);
 export type ClassDescription = z.infer<typeof ClassDescribeResultSchema>;
 
+export const ClassConflictsArgsSchema = z
+  .object({
+    workspaceSessionId: z.string().min(1),
+    /** The element's tokens now. */
+    existing: z.array(z.string().min(1).max(2048)).max(256),
+    /** The tokens about to be added. */
+    candidates: z.array(z.string().min(1).max(2048)).min(1).max(32),
+  })
+  .strict();
+
+export const ClassConflictsResultSchema = z.discriminatedUnion("status", [
+  z
+    .object({
+      status: z.literal("ok"),
+      conflicts: z
+        .array(
+          z
+            .object({
+              candidate: z.string().min(1),
+              token: z.string().min(1),
+              /** Box slots both write in the same scope, e.g. `padding-left`. */
+              properties: z.array(z.string().min(1)).max(64),
+            })
+            .strict()
+        )
+        .max(256),
+    })
+    .strict(),
+  z.object({ status: z.literal("unavailable"), reason: z.string().min(1) }).strict(),
+]);
+export type ClassConflicts = z.infer<typeof ClassConflictsResultSchema>;
+
 export const ClassCompleteResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ok"), candidates: z.array(ClassCandidateSchema) }).strict(),
   z.object({ status: z.literal("unavailable"), reason: z.string().min(1) }).strict(),
@@ -570,6 +606,8 @@ export const RouteNodeSchema = z
     /** Worktree-relative path of the `+page.svelte`, when one exists. */
     pageFile: z.string().min(1).nullable(),
     layoutFiles: z.array(z.string().min(1)),
+    /** Worktree-relative load modules that feed the page, outermost layout first. */
+    dataFiles: z.array(z.string().min(1)).optional(),
     /** True when the route id carries at least one `[param]`. */
     dynamic: z.boolean(),
     /** Endpoint-only routes are not navigable pages. */
@@ -592,6 +630,8 @@ export const ProjectModelResultSchema = z
       .strict(),
     support: SupportVerdictSchema,
     routes: z.array(RouteNodeSchema),
+    /** `kit.paths.base`: "" when unset, null when the config computes it. */
+    basePath: z.string().nullable().optional(),
   })
   .strict();
 export type ProjectModel = z.infer<typeof ProjectModelResultSchema>;

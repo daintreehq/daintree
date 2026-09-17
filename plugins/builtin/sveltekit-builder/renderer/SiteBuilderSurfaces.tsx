@@ -107,6 +107,9 @@ function actionsFor(controller: InspectorController): SelectionActions {
     removeClass: (selectionId, token) => void controller.removeClass(selectionId, token),
     completeClasses: (query) => controller.completeClasses(query),
     describeClass: (token) => controller.describeClass(token),
+    replaceClasses: (selectionId, remove, add) =>
+      controller.replaceClasses(selectionId, remove, add),
+    classConflicts: (existing, candidates) => controller.classConflicts(existing, candidates),
   };
 }
 

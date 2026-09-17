@@ -48,6 +48,8 @@ export interface SiteGuestNodeObservation {
   ancestry: SiteGuestAncestryEntry[];
   tagName: string;
   sameLocCount: number;
+  /** The page stopped counting at its scan bound: `sameLocCount` is a floor. */
+  sameLocCountPartial?: true;
   /** Which of those this node is, in document order; absent from older runtimes. */
   locIndex?: number;
   label: string;

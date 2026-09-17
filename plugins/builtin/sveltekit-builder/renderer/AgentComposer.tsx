@@ -284,24 +284,15 @@ export function AgentComposer({
       // before the request goes in; the draft stays either way.
       verify: async () =>
         (await controller.sourcesUnchanged(request.selection, cited)) ? null : STALE_SOURCE,
-      buildPrompt: async () => {
-        const excerpt = request.file
-          ? await controller.sourceExcerpt(request.selection, request.file)
-          : null;
-        // Source text from other bytes than the locations were read from would
-        // contradict them, even if the file is back to the old bytes by send time.
-        if (excerpt && excerpt.revision !== request.selection.nodes[0]?.definition?.revision) {
-          throw new Error(STALE_SOURCE);
-        }
-        return buildAgentTaskPrompt({
+      buildPrompt: async () =>
+        buildAgentTaskPrompt({
           instruction,
           selection: request.selection,
           file: request.file,
           worktreePath,
-          excerpt,
+          place: await controller.pagePlace(request.selection),
           scope,
-        });
-      },
+        }),
     });
   };
 

@@ -217,6 +217,19 @@ export function createFakeHost() {
         .map((candidate) => ({ candidate, css: `/* ${candidate} */` })),
     };
   });
+  // Padding along the inline axis is the one rivalry these fakes know: enough
+  // to exercise the replace-or-keep choice without pretending to be Tailwind.
+  handlers.set(CHANNELS.classConflicts, (args) => {
+    const existing = args.existing as string[];
+    const conflicts = (args.candidates as string[]).flatMap((candidate) =>
+      /^px-\d+$/.test(candidate)
+        ? existing
+            .filter((token) => /^px-\d+$/.test(token) && token !== candidate)
+            .map((token) => ({ candidate, token, properties: ["padding-left", "padding-right"] }))
+        : []
+    );
+    return { status: "ok", conflicts };
+  });
   handlers.set(CHANNELS.tailwindStatus, () => ({ status: "available", skippedModules: [] }));
   handlers.set(CHANNELS.classDescribe, (args) => ({
     status: "ok",

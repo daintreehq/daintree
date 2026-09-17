@@ -18,14 +18,65 @@ describe("buildAgentTaskPrompt", () => {
       selection: makeSelection(),
       file: `apps/site/${FILE}`,
       worktreePath: "/repo",
-      excerpt: { text: '<button class="px-6">Start Pro</button>', firstLine: 5 },
+      place: null,
     });
 
     expect(prompt.split("\n")[0]).toBe("Make this button say Upgrade");
     expect(prompt).toContain(`- Source: <button> at apps/site/${FILE}:6:3`);
-    expect(prompt).toContain("- Current classes: px-6 py-3 rounded-lg");
-    expect(prompt).toContain('- Current text: "Start Pro"');
-    expect(prompt).toContain(`(apps/site/${FILE}, lines 5–5)`);
+  });
+
+  it("references files instead of pasting their contents", () => {
+    const prompt = buildAgentTaskPrompt({
+      instruction: "Make this button say Upgrade",
+      selection: makeSelection(),
+      file: FILE,
+      worktreePath: "/repo",
+      place: null,
+    });
+
+    expect(prompt).toContain("file references only; read the files for the code");
+    expect(prompt).not.toContain("```");
+    expect(prompt).not.toContain("Current classes");
+    expect(prompt).not.toContain("Current text");
+    expect(prompt).not.toContain("px-6 py-3");
+  });
+
+  it("names the app, its toolchain and the route files around the page, outermost first", () => {
+    const prompt = buildAgentTaskPrompt({
+      instruction: "Tighten the header",
+      selection: { ...makeSelection(), appRoot: "/repo/apps/site", displayedUrl: "/pricing" },
+      file: `apps/site/${FILE}`,
+      worktreePath: "/repo",
+      place: {
+        appPath: "apps/site",
+        versions: { svelte: "5.2.0", kit: "2.15.0", tailwind: null },
+        route: {
+          routeId: "/pricing",
+          pageFile: `apps/site/${FILE}`,
+          layoutFiles: [
+            "apps/site/src/routes/+layout.svelte",
+            "apps/site/src/routes/pricing/+layout.svelte",
+          ],
+          dataFiles: [
+            "apps/site/src/routes/+layout.server.ts",
+            "apps/site/src/routes/pricing/+page.ts",
+          ],
+          dynamic: false,
+          endpointOnly: false,
+        },
+      },
+    });
+
+    expect(prompt).toContain("- App: apps/site (SvelteKit 2.15.0, Svelte 5.2.0, no Tailwind)");
+    expect(prompt).toContain("- Page: /pricing (route /pricing)");
+    const files = prompt.slice(prompt.indexOf("- Route files, outermost layout first:"));
+    expect(files.split("\n").slice(1, 6)).toEqual([
+      "  - layout: apps/site/src/routes/+layout.svelte",
+      "  - layout: apps/site/src/routes/pricing/+layout.svelte",
+      "  - data: apps/site/src/routes/+layout.server.ts",
+      "  - data: apps/site/src/routes/pricing/+page.ts",
+      `  - page: apps/site/${FILE}`,
+    ]);
   });
 
   it("keeps generated frames out of the component chain", () => {
@@ -34,12 +85,11 @@ describe("buildAgentTaskPrompt", () => {
       selection: makeSelection(),
       file: FILE,
       worktreePath: null,
-      excerpt: null,
+      place: null,
     });
 
     expect(prompt).toContain("- Rendered inside: PricingCard (src/lib/PricingCard.svelte:3)");
     expect(prompt).not.toContain(".svelte-kit/generated");
-    expect(prompt).not.toContain("Source around it");
   });
 
   it("carries every selected element, not only the first", () => {
@@ -56,7 +106,7 @@ describe("buildAgentTaskPrompt", () => {
       selection: { ...base, nodes: [first, second] },
       file: FILE,
       worktreePath: null,
-      excerpt: null,
+      place: null,
     });
 
     expect(prompt).toContain(`- Also selected: button "Start Team" (${FILE}:9:5)`);
@@ -68,10 +118,23 @@ describe("buildAgentTaskPrompt", () => {
       selection: makeSelection({ renderedOccurrences: 3 }),
       file: FILE,
       worktreePath: null,
-      excerpt: null,
+      place: null,
     });
 
     expect(prompt).toContain("renders 3 copies on the page");
+  });
+
+  it("says a count is only a floor when the page was too large to count", () => {
+    const selection = makeSelection({ renderedOccurrences: 1 });
+    selection.nodes[0]!.definition!.renderedOccurrencesAtLeast = true;
+    const prompt = buildAgentTaskPrompt({
+      instruction: "Change the label",
+      selection,
+      file: FILE,
+      worktreePath: null,
+      place: null,
+    });
+    expect(prompt).toContain("renders at least 1 copy on the page (too large to count them all)");
   });
 
   it("says the source wasn't traced rather than inventing a location", () => {
@@ -81,11 +144,10 @@ describe("buildAgentTaskPrompt", () => {
       selection,
       file: null,
       worktreePath: null,
-      excerpt: { text: "ignored", firstLine: 1 },
+      place: null,
     });
 
     expect(prompt).toContain("- Source: not traced");
-    expect(prompt).not.toContain("Source around it");
   });
 });
 
@@ -215,7 +277,7 @@ describe("taskScopes", () => {
       selection,
       file: `apps/site/${CARD}`,
       worktreePath: null,
-      excerpt: null,
+      place: null,
       scope: taskScopes(selection, RESOLVED)[1],
     });
 
@@ -234,7 +296,7 @@ describe("taskScopes", () => {
       selection,
       file: null,
       worktreePath: "/repo",
-      excerpt: null,
+      place: null,
       scope: {
         kind: "component",
         label: "Chart",

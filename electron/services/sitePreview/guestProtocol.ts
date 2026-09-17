@@ -70,6 +70,8 @@ export const GuestNodeObservationSchema = z
       .max(64),
     tagName: z.string().min(1).max(64),
     sameLocCount: z.number().int().positive().max(100_000),
+    /** The page stopped counting at its scan bound: `sameLocCount` is a floor. */
+    sameLocCountPartial: z.literal(true).optional(),
     /** Which of those this node is, in document order; absent from older runtimes. */
     locIndex: z.number().int().nonnegative().max(100_000).optional(),
     label: z.string().max(200),
