@@ -177,6 +177,35 @@ describe("deliverAgentRequest", () => {
     expect(readComposerMemory(KEY).delivery?.state.status).toBe("failed");
   });
 
+  it("keeps the request text on a run cancelled while it was being typed in", async () => {
+    let release: () => void = () => {};
+    dispatch.mockImplementation(async (id: string, args: Record<string, unknown>) => {
+      if (id === "terminal.getStatus") {
+        return {
+          ok: true,
+          result: { terminals: [{ terminalId: "t1", agentState: "waiting" }] },
+        };
+      }
+      if (id === "terminal.sendCommand") {
+        await new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        return { ok: true, result: { submissionToken: String(args.command) } };
+      }
+      throw new Error(`unexpected ${id}`);
+    });
+    const run = send();
+    await vi.advanceTimersByTimeAsync(500);
+    cancelAgentRequests("preview-1");
+    release();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+    expect(readComposerMemory(KEY).delivery).toMatchObject({
+      state: { status: "unconfirmed" },
+      request: "Make it pop",
+    });
+  });
+
   it("settles a cancelled request instead of leaving it pending", async () => {
     terminal();
     const run = send();

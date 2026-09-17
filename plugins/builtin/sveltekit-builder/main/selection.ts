@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { MAX_WRITTEN_CHARS } from "../shared/model.js";
 import type {
   AncestryEntry as ModelAncestryEntry,
   EditCapability,
@@ -234,9 +235,97 @@ async function resolveNode(
         ...(observation.sameLocCountPartial ? { renderedOccurrencesAtLeast: true as const } : {}),
       },
       mapping: invocation === null ? "definition-only" : "exact",
-      ...(await surfacesOf(read.text, element, capabilities)),
+      ...(await withWritten(
+        read.text,
+        element,
+        await surfacesOf(read.text, element, capabilities)
+      )),
     },
   };
+}
+
+/**
+ * The source of each surface the inspector won't edit, so a dynamic class list
+ * or an expression in the text still says something useful. Read off the
+ * compiler's own AST for the element — the attribute and directive nodes, the
+ * child nodes — and never decoded or evaluated.
+ */
+async function withWritten(
+  source: string,
+  element: ResolvedElement,
+  resolved: { surfaces: SelectedNode["surfaces"]; capabilities: EditCapability[] }
+): Promise<{
+  surfaces: SelectedNode["surfaces"];
+  capabilities: EditCapability[];
+  written?: NonNullable<SelectedNode["written"]>;
+}> {
+  const direct = (surface: Surface) =>
+    resolved.capabilities.some((c) => c.surface === surface && c.support === "direct") &&
+    resolved.surfaces[surface as "classes" | "text"] !== null;
+  if (direct("classes") && direct("text")) return resolved;
+  const node = await elementNodeAt(source, element.range.start);
+  if (node === null) return resolved;
+  // Verbatim: whitespace inside a string, a regex or a comment is part of what
+  // the expression says. Only the ends are trimmed, and the length is bounded.
+  const bounded = (text: string) =>
+    text.length > MAX_WRITTEN_CHARS ? `${text.slice(0, MAX_WRITTEN_CHARS)}…` : text;
+  // Each class-bearing attribute on its own — never the span between them,
+  // which would pull in whatever unrelated attribute sits in the middle. HTML
+  // attribute names are case-insensitive on elements; component props are not.
+  const isElement = node.type !== "Component" && node.type !== "SvelteComponent";
+  const classParts = (node.attributes ?? []).filter(
+    (attribute) =>
+      (attribute.type === "Attribute" &&
+        (isElement ? attribute.name?.toLowerCase() : attribute.name) === "class") ||
+      attribute.type === "ClassDirective" ||
+      attribute.type === "SpreadAttribute"
+  );
+  const classes =
+    direct("classes") || classParts.length === 0
+      ? null
+      : bounded(classParts.map((part) => source.slice(part.start, part.end)).join(" "));
+  const children = node.fragment?.nodes ?? [];
+  const text =
+    direct("text") || children.length === 0
+      ? null
+      : bounded(source.slice(children[0]!.start, children[children.length - 1]!.end).trim()) ||
+        null;
+  if (classes === null && text === null) return resolved;
+  return { ...resolved, written: { classes, text } };
+}
+
+interface AstElement {
+  type: string;
+  start: number;
+  end: number;
+  attributes?: Array<{ type: string; name?: string; start: number; end: number }>;
+  fragment?: { nodes: Array<{ start: number; end: number }> };
+}
+
+const ELEMENT_TYPES = new Set(["RegularElement", "SvelteElement", "Component", "SvelteComponent"]);
+
+async function elementNodeAt(source: string, start: number): Promise<AstElement | null> {
+  const parse = await loadParse();
+  let ast: { fragment: unknown };
+  try {
+    ast = parse(source, { modern: true }) as { fragment: unknown };
+  } catch {
+    return null;
+  }
+  const seen = new Set<object>();
+  let found: AstElement | null = null;
+  const visit = (value: unknown): void => {
+    if (found !== null || value === null || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+    const node = value as Partial<AstElement>;
+    if (typeof node.type === "string" && ELEMENT_TYPES.has(node.type) && node.start === start) {
+      found = node as AstElement;
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) if (key !== "parent") visit(child);
+  };
+  visit(ast.fragment);
+  return found;
 }
 
 /**

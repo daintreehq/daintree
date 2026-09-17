@@ -43,6 +43,24 @@ const AGENT_TERMINALS = [
   { id: "term-2", launchAgentId: "codex", detectedAgentId: "codex", agentState: "idle" },
 ] as const;
 
+const SAMPLE_REQUEST = [
+  "Make the Pro plan stand out more",
+  "",
+  "Context from the Daintree Site Builder — file references only; read the files for the code:",
+  "- Worktree: /Users/you/code/orchid-studio",
+  "- App: the worktree root (SvelteKit 2.36.0, Svelte 5.38.1, Tailwind 4.1.12)",
+  "- Page: http://localhost:5173/pricing (route /pricing)",
+  "- Viewport: 1280×800",
+  "- Route files, outermost layout first:",
+  "  - layout: src/routes/+layout.svelte",
+  "  - data: src/routes/pricing/+page.server.ts",
+  "  - page: src/routes/pricing/+page.svelte",
+  '- Selected element: button "Start Pro"',
+  "- Source: <button> at src/routes/pricing/+page.svelte:6:3",
+  "",
+  "Keep the change to this element unless the request needs more. If it needs a wider change, say so and name what else you touched.",
+].join("\n");
+
 const tick = (ms = 0) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 /**
@@ -263,6 +281,129 @@ export const FIXTURES = {
     },
   },
 
+  readOnlyExpression: {
+    title: "A class list written as an expression: shown as written, left to an agent",
+    terminals: AGENT_TERMINALS,
+    settled: '[aria-label="Classes as written in the source"]',
+    arrange: (host) => {
+      host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+        status: "ok",
+        selection: makeSelection({
+          documentEpoch: args.documentEpoch as number,
+          capabilities: [
+            { surface: "text", support: "direct" },
+            { surface: "classes", support: "agent-assisted", reason: "dynamic-expression" },
+          ],
+          surfaces: { classes: null, text: { text: "Start Pro" } },
+          node: {
+            written: {
+              classes:
+                'class={["btn px-6", featured && "bg-indigo-600 text-white"]} class:ring={focused}',
+              text: null,
+            },
+          },
+        }),
+      }));
+    },
+    act: async (host) => {
+      await selectElement(host);
+      await until(
+        "the written expression",
+        () => document.querySelector('[aria-label="Classes as written in the source"]') !== null
+      );
+      await tick(160);
+    },
+  },
+
+  deepScope: {
+    title: "A deep component chain with repeated names, as a list",
+    terminals: AGENT_TERMINALS,
+    settled: "text=Ask an agent",
+    arrange: (host) => {
+      const chain = [
+        ["PriceTag", "src/lib/pricing/Card.svelte", 14],
+        ["Card", "src/lib/pricing/Grid.svelte", 9],
+        ["Grid", "src/routes/pricing/+page.svelte", 22],
+        ["Card", "src/routes/pricing/+page.svelte", 40],
+        ["Section", "src/routes/+layout.svelte", 12],
+      ] as const;
+      host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+        status: "ok",
+        selection: makeSelection({
+          documentEpoch: args.documentEpoch as number,
+          node: {
+            ancestry: chain.map(([name, file, line]) => ({
+              kind: "component" as const,
+              location: { file, line, column: 2 },
+              componentTag: name,
+              generated: false,
+            })),
+          },
+        }),
+      }));
+    },
+    act: async (host) => {
+      await selectElement(host);
+      await until(
+        "the scope list",
+        () => document.querySelector('[aria-label="What the request is about"]') !== null
+      );
+      await tick(160);
+    },
+  },
+
+  appSwitcher: {
+    title: "A worktree with several apps keeps a switcher once one is open",
+    settled: "text=Site source",
+    arrange: (host) => {
+      const roots = [
+        "/Users/you/code/orchid-studio/apps/marketing",
+        "/Users/you/code/orchid-studio/apps/docs",
+      ];
+      host.handlers.set(CHANNELS.workspaceOpen, (args) =>
+        args.appRoot
+          ? {
+              status: "ready",
+              workspaceSessionId: "ws-1",
+              appRoot: args.appRoot,
+              support: { level: "full" },
+            }
+          : { status: "ambiguous", appRoots: roots }
+      );
+    },
+    act: async (host) => {
+      await bind(host);
+      await until("the app choice", () => button("apps/marketing") !== undefined);
+      button("apps/marketing")!.click();
+      await until(
+        "the app switcher",
+        () => document.querySelector('[aria-label="Site source app"]') !== null
+      );
+      await tick(160);
+    },
+  },
+
+  requestRecord: {
+    title: "A sent request with the exact text it typed in, expanded",
+    terminals: AGENT_TERMINALS,
+    settled: '[aria-label="Request text"]',
+    act: async (host) => {
+      await selectElement(host);
+      updateComposerMemory(MEMORY_KEY, {
+        draft: "",
+        delivery: {
+          state: { status: "sent" },
+          title: "claude · pricing polish",
+          terminalId: "term-1",
+          request: SAMPLE_REQUEST,
+        },
+      });
+      await until("View request", () => button("View request") !== undefined);
+      button("View request")!.click();
+      await tick(160);
+    },
+  },
+
   unsupported: {
     title: "Direct editing and class suggestions are unavailable, separately",
     // Both rows, not just the heading: the capture must show each capability
@@ -330,6 +471,7 @@ export const FIXTURES = {
           state: { status: "sent" },
           title: "claude · pricing polish",
           terminalId: "term-1",
+          request: SAMPLE_REQUEST,
         },
       });
       await tick(140);

@@ -24,6 +24,11 @@ export interface ComposerDelivery {
   state: DeliveryState;
   title: string;
   terminalId: string | null;
+  /**
+   * The exact text typed into the agent, once built: what the agent was told is
+   * what the user reviews, not a reconstruction. Lives as long as the record.
+   */
+  request?: string;
 }
 
 export interface ComposerMemory {

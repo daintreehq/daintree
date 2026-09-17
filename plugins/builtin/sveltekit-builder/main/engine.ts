@@ -44,7 +44,18 @@ export function loadParse(): Promise<SvelteParse> {
       // with a sacrificial one to keep offsets aligned with the text.
       const aligned: SvelteParse = (source, options) =>
         parse(source.charCodeAt(0) === 0xfeff ? `\uFEFF${source}` : source, options);
-      return aligned;
+      // Resolving one node parses its file up to three times (location, text
+      // decoding, how an uneditable surface is written); a selection of many
+      // nodes in one file repeats that. The last answer is kept per source text.
+      let last: { source: string; options: string; ast: ReturnType<SvelteParse> } | null = null;
+      const remembered: SvelteParse = (source, options) => {
+        const key = JSON.stringify(options ?? null);
+        if (last !== null && last.source === source && last.options === key) return last.ast;
+        const ast = aligned(source, options);
+        last = { source, options: key, ast };
+        return ast;
+      };
+      return remembered;
     },
     (error: unknown) => {
       compiler = null;

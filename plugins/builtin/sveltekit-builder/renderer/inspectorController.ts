@@ -124,6 +124,8 @@ export type WorkspaceState =
       support: SupportVerdict;
       /** Class suggestions and inspection: decided by the Tailwind loader, separately. */
       tailwind: TailwindAwareness;
+      /** Every app the worktree holds, when there is more than one to switch between. */
+      appRoots: string[];
     }
   | { status: "ambiguous"; appRoots: string[] }
   | { status: "no-app" }
@@ -534,6 +536,7 @@ export class InspectorController {
       return;
     }
     this.chosenAppRoot = undefined;
+    this.knownAppRoots = [];
     this.closeWorkspace();
     this.workspaceKey = key;
     if (key === null) {
@@ -549,6 +552,8 @@ export class InspectorController {
    * consulted only when a write is pending a refresh.
    */
   private continuity: Continuity | null = null;
+  /** The apps a worktree offered when it held more than one. */
+  private knownAppRoots: string[] = [];
   /** The document class awareness was last asked about; a different one asks again. */
   private tailwindCheckedDocument: string | null = null;
   private tailwindRequest = 0;
@@ -598,11 +603,13 @@ export class InspectorController {
               appRoot: result.appRoot,
               support: result.support,
               tailwind: { status: "checking" },
+              appRoots: this.knownAppRoots.includes(result.appRoot) ? this.knownAppRoots : [],
             },
           });
           void this.checkTailwind(result.workspaceSessionId);
           return;
         case "ambiguous": {
+          this.knownAppRoots = result.appRoots;
           // The dev server runs in one of them: that is the app this preview shows.
           const running = appRunningIn(
             result.appRoots,
@@ -632,6 +639,19 @@ export class InspectorController {
 
   private releaseWorkspace(workspaceSessionId: string): void {
     void this.deps.invoke(CHANNELS.workspaceClose, { workspaceSessionId }).catch(() => undefined);
+  }
+
+  /**
+   * Point the builder at another app in the same worktree. Everything proven
+   * against the old one — selection, receipt, Undo — belongs to it and goes.
+   */
+  switchApp(appRoot: string): void {
+    const workspace = this.state.workspace;
+    if (workspace.status === "ready" && workspace.appRoot === appRoot) return;
+    // A request on its way cites the old app's files; it must not land after the switch.
+    cancelAgentRequests(this.panelId);
+    this.closeWorkspace();
+    void this.openWorkspace(appRoot);
   }
 
   private closeWorkspace(): void {
@@ -1359,6 +1379,12 @@ export class InspectorController {
     const files = Object.keys(revisions);
     if (files.length === 0) return true;
     const now = await this.readRevisions(files);
+    // The app may have been switched while the read was out: its answer is
+    // about files the builder no longer has open.
+    const after = this.state.workspace;
+    if (after.status !== "ready" || after.workspaceSessionId !== workspace.workspaceSessionId) {
+      return false;
+    }
     return (
       now !== null &&
       files.every((file) => revisions[file] !== null && now[file] === revisions[file])
