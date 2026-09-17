@@ -239,12 +239,18 @@ export function registerDevServerActions(
         );
         if (!started.ok || !started.result.panelId) return { panelId: null, active: false };
         panelId = started.result.panelId;
-        // The plugin may have been disabled while the preview was starting.
-        if (!getAvailableDevPreviewTool(args.toolId)) return { panelId, active: false };
         await refuseUnlessToolApplies(tool, panelId, ctx);
+        // Detection took a round trip: the plugin may have been disabled and
+        // the preview trashed in it, and the session manager clears an
+        // activation for either. Say what the store says, never what was asked.
+        const live = usePanelStore.getState().panelsById[panelId];
+        if (!getAvailableDevPreviewTool(args.toolId) || !live || live.location === "trash") {
+          return { panelId, active: false };
+        }
         store.setActive(panelId, args.toolId);
-        void actionService.dispatch("panel.focus", { panelId }, { source });
-        return { panelId, active: true };
+        const activated = useDevPreviewToolStore.getState().activeByPanel[panelId] === args.toolId;
+        if (activated) void actionService.dispatch("panel.focus", { panelId }, { source });
+        return { panelId, active: activated };
       }
       // Switching a tool off is always allowed: a preview that stopped applying
       // while the tool was on must still be switchable back to plain browsing.

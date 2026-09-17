@@ -96,12 +96,13 @@ const host = {
   isWebviewReady: true,
 };
 
-function Preview() {
+function Preview(overrides: Partial<typeof host> = {}) {
+  const props = { ...host, ...overrides };
   return (
     <>
-      <DevPreviewToolButtons {...host} />
-      <DevPreviewToolToolbar {...host} />
-      <DevPreviewToolDrawer {...host} />
+      <DevPreviewToolButtons {...props} />
+      <DevPreviewToolToolbar {...props} />
+      <DevPreviewToolDrawer {...props} />
     </>
   );
 }
@@ -340,6 +341,22 @@ describe("dev preview tool availability", () => {
     expect(screen.getByRole("button", { name: "Picker" })).toBeTruthy();
   });
 
+  it("hides a toggle it had shown once the predicate stops applying", async () => {
+    let applies = true;
+    registerWithAvailability(() => Promise.resolve(applies));
+    pluginLoaded(true);
+    const view = render(<Preview />);
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Picker" })).toBeTruthy();
+
+    // The preview moved to a worktree with nothing to pick: the answer earned
+    // on the old one must not carry over.
+    applies = false;
+    view.rerender(<Preview worktreeId="wt-2" />);
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "Picker" })).toBeNull();
+  });
+
   it("keeps an active tool reachable while the predicate has not answered", () => {
     registerWithAvailability(() => new Promise<boolean>(() => {}));
     pluginLoaded(true);
@@ -389,6 +406,32 @@ describe("dev preview tool drawer chrome", () => {
     const { container } = render(<Preview />);
     Object.defineProperty(container, "clientWidth", { value: 700, configurable: true });
     expect(open().getAttribute("data-floating")).toBe("true");
+  });
+
+  it("docks again once a floating drawer's pane grows enough to share", () => {
+    const observers: Array<() => void> = [];
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(callback: () => void) {
+        observers.push(callback);
+      }
+      observe() {}
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      const { container } = render(<Preview />);
+      Object.defineProperty(container, "clientWidth", { value: 700, configurable: true });
+      const chrome = open();
+      expect(chrome.getAttribute("data-floating")).toBe("true");
+
+      Object.defineProperty(container, "clientWidth", { value: 1200, configurable: true });
+      act(() => observers.forEach((notify) => notify()));
+      expect(chrome.getAttribute("data-floating")).toBeNull();
+      expect(chrome.style.width).toBe("360px");
+    } finally {
+      globalThis.ResizeObserver = original;
+    }
   });
 
   it("never covers the whole page, however narrow the preview is", () => {
