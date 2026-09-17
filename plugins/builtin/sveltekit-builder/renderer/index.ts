@@ -23,6 +23,10 @@ registerDevPreviewTool({
   pluginId: ENTRY_PLUGIN_ID,
   label: "Site Builder",
   Button: SiteBuilderButton,
+  // The session is the controller, and it lives in the same lazy chunk as the
+  // surfaces: switching the builder on is what pulls that chunk in.
+  createSession: (context) =>
+    import("./inspectorController.js").then((m) => m.createBuilderSession(context)),
   Toolbar: SiteBuilderToolbar,
   Drawer: SiteBuilderDrawer,
 });

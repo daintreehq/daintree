@@ -201,8 +201,20 @@ A built-in plugin's view is compiled into the host bundle, so some of this page 
 - **Styling is the host's Tailwind.** The per-plugin runtime stylesheet described above does not run for a built-in; you get the host's full design system and must follow its rules — `.claude/rules/design-system.md` in the repo.
 - **Registering a `lazy()` view is fine.** The host wraps every built-in view in its own `lazy()` for activation; it renders yours from a plain component so React never sees a lazy resolving to a lazy (error #306).
 - **Never alias a lowercase component binding to a capitalised name for JSX.** The React Compiler folds `const View = component; return <View />` back into `jsx("component")`, which renders an unknown `<component>` DOM element — no error, just an empty panel. Use `createElement(component, props)`.
-- **Extending the dev preview.** A built-in can add a toolbar toggle, a strip and a drawer to every dev preview with `registerDevPreviewTool` (`src/registry/devPreviewToolRegistry.ts`) instead of contributing a panel. The host mounts them with the preview's panel, project, worktree, URL and readiness; the tool decides whether its button applies to that preview.
+- **Extending the dev preview.** A built-in can add a toolbar toggle, a strip and a drawer to every dev preview with `registerDevPreviewTool` (`src/registry/devPreviewToolRegistry.ts`) instead of contributing a panel. The host mounts them with the preview's panel, project, worktree, URL and readiness; the tool decides whether its button applies to that preview. [Dev preview tools](#dev-preview-tools) below is the lifecycle.
 - **React Compiler applies to you.** A bailout is silent at runtime and reddens the compiler budget. Two traps specific to controller-style views: never call a method that reads mutable controller state during render — pass a `useSyncExternalStore` snapshot to a pure function instead — and do not write a `try`/`finally` without a `catch` in a component.
+
+## Dev preview tools
+
+A dev preview tool is one registration — `registerDevPreviewTool({ id, pluginId, label, Button, createSession?, Toolbar?, Drawer? })` — and one entry in `useDevPreviewToolStore.activeByPanel`, which holds the tool a preview has switched on, one at a time per panel.
+
+**The host owns the session.** Declare `createSession(context)` and the host calls it when the tool is switched on for a preview — before any surface mounts — and hands the result to the surfaces as `props.session`. It may return a promise, which is how a tool keeps its real implementation in a lazy chunk; the surfaces are not mounted until the session exists. Check `context.signal.aborted` before building anything expensive: a promise that resolves after the preview let go is disposed immediately, and a factory that throws switches the tool back off. The session is what holds the tool's state for that preview: a binding, a workspace, a selection, a draft.
+
+**What the session is told.** The context is live: `panelId`, `projectId`, `worktreeId`, `worktreePath`, `url`, `isWebviewReady`, `visible` (whether any of the tool's surfaces are mounted), and an `AbortSignal` aborted on disposal. Changes arrive through `update(context)` for as long as the session lives. The page and worktree half comes from the preview's pane, so a fully unmounted preview holds the last of it rather than fresh news; what a session sees while nothing is mounted is that snapshot plus `visible: false`.
+
+**What ends it.** `dispose()` runs when the tool is switched off, the preview is trashed or removed, or the owning plugin is disabled — the last two also clear the active entry, so a restored preview comes back plain. Nothing else does: a surface unmounting is not one of them, because a hidden dock tab, a maximised sibling and a grid remount all unmount surfaces without ending anything the user started. Put every teardown in `dispose()` and treat it as the only teardown.
+
+**What the surfaces are for.** Rendering the session and calling it. They may not own its lifetime, and they should not reconstruct host events from the panel store or the tool store — the session hears those from the host. `src/services/devPreviewTools/sessionManager.ts` is the implementation, and the SvelteKit Site Builder is the worked example.
 
 ## What doesn't work inline
 

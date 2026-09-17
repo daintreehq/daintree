@@ -37,9 +37,6 @@ import {
 } from "@/components/ui/select";
 import {
   INITIAL_INSPECTOR_STATE,
-  holdBuilderController,
-  peekBuilderController,
-  subscribeBuilderControllers,
   type InspectorController,
   type InspectorState,
 } from "./inspectorController.js";
@@ -68,36 +65,21 @@ const MODE_OPTIONS = [
 ];
 
 /**
- * The builder for the dev preview hosting it: one controller shared by the
- * strip and the drawer, held while either is mounted, told which worktree the
- * preview belongs to, and reconnected once the preview has a page to attach to.
+ * The builder for the dev preview hosting it: the host's session for this
+ * preview, shared by the strip and the drawer and outliving both. The host
+ * creates it when the builder is switched on, keeps it telling the controller
+ * which worktree and page the preview is on, and disposes it when the builder,
+ * the preview or the plugin ends — so a surface only reads it.
  */
-function useBuilder(props: DevPreviewToolSurfaceProps): {
+function useBuilder(props: DevPreviewToolSurfaceProps<InspectorController>): {
   controller: InspectorController | null;
   state: InspectorState;
 } {
-  const { panelId, projectId, worktreeId, worktreePath, isWebviewReady, url } = props;
-  const controller = useSyncExternalStore(subscribeBuilderControllers, () =>
-    peekBuilderController(panelId)
-  );
-  // Re-held whenever the controller changes, so one released underneath a
-  // mounted builder (a plugin disable/enable) is replaced rather than left dead.
-  useEffect(() => holdBuilderController(panelId), [panelId, controller]);
+  const controller = props.session;
   const state = useSyncExternalStore(
     controller?.subscribe ?? subscribeNothing,
     controller?.getSnapshot ?? initialSnapshot
   );
-
-  useEffect(() => {
-    controller?.updateContext({ projectId, worktreeId, worktreePath });
-  }, [controller, projectId, worktreeId, worktreePath]);
-
-  // A preview with no page yet refuses the bind; try again when one arrives.
-  useEffect(() => {
-    if (!controller || !isWebviewReady || !url) return;
-    if (controller.getSnapshot().binding.status === "failed") void controller.connect();
-  }, [controller, isWebviewReady, url]);
-
   return { controller, state };
 }
 
@@ -181,7 +163,7 @@ function drawerLanding(root: HTMLElement): HTMLElement | null {
 }
 
 /** The strip under the browser toolbar: mode, what is selected, and close. */
-export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
+export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorController>) {
   const { controller, state } = useBuilder(props);
   const bound = state.binding.status === "bound";
   // The APG toolbar contract: the whole row is one tab stop, Left/Right move
@@ -475,7 +457,7 @@ function StripTrail({
  * The drawer beside the page. Closed until there is something to show, so the
  * site keeps its full width while you browse and pick.
  */
-export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
+export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorController>) {
   const { controller, state } = useBuilder(props);
   const memoryKey = composerMemoryKey(props.panelId, props.worktreeId);
   // A draft or an agent request outlives the selection it was about; keep

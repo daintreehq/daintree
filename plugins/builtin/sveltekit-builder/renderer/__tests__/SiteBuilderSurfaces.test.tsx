@@ -8,11 +8,20 @@ const context = vi.hoisted(() => ({
 
 import { SiteBuilderDrawer, SiteBuilderToolbar } from "../SiteBuilderSurfaces";
 import {
-  __resetInspectorControllersForTests,
+  createBuilderSession,
   loadGuestRuntimeBody,
-  peekBuilderController,
-  releaseBuilderController,
+  type InspectorController,
 } from "../inspectorController";
+import {
+  __resetDevPreviewToolSessionsForTests,
+  peekDevPreviewToolSession,
+  publishDevPreviewToolContext,
+  startDevPreviewToolSessions,
+} from "@/services/devPreviewTools/sessionManager";
+import {
+  __resetDevPreviewToolsForTests,
+  registerDevPreviewTool,
+} from "@/registry/devPreviewToolRegistry";
 import { BUILDER_TOOL_ID, CHANNELS, PLUGIN_ID, PUSH_CHANNELS } from "../../shared/protocol";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
@@ -33,15 +42,36 @@ import {
 
 let host: FakeHost;
 let uninstall: () => void;
-/** What the dev preview mounts while the Site Builder is switched on. */
-function Builder() {
-  const props = {
+
+function hostContext() {
+  return {
     panelId: "preview-1",
     ...context.current,
     url: "http://localhost:5173/pricing",
     isWebviewReady: true,
-    onClose: () => {},
   };
+}
+
+/** The builder's session, which the host owns for as long as the tool is on. */
+function session(): InspectorController {
+  const live = peekDevPreviewToolSession("preview-1");
+  if (!live) throw new Error("no builder session for preview-1");
+  return live as InspectorController;
+}
+
+/**
+ * Switch the builder on the way the dev preview does — through the real host
+ * session manager, so the surfaces below are fed the session it built.
+ */
+function switchOn() {
+  startDevPreviewToolSessions();
+  publishDevPreviewToolContext(hostContext());
+  useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
+}
+
+/** What the dev preview mounts while the Site Builder is switched on. */
+function Builder() {
+  const props = { ...hostContext(), session: session(), onClose: () => {} };
   return (
     <>
       <SiteBuilderToolbar {...props} />
@@ -51,6 +81,7 @@ function Builder() {
 }
 
 function mount() {
+  switchOn();
   return render(<Builder />);
 }
 
@@ -85,6 +116,17 @@ beforeEach(() => {
   context.current = { projectId: "p1", worktreeId: "wt-1", worktreePath: "/repo" };
   host = createFakeHost();
   uninstall = host.install();
+  usePluginRuntimeStore.setState({
+    pluginMetaById: new Map([[PLUGIN_ID, { devMode: false, displayName: "Site Builder" }]]),
+    disabledPluginIds: new Set(),
+  });
+  registerDevPreviewTool({
+    id: BUILDER_TOOL_ID,
+    pluginId: PLUGIN_ID,
+    label: "Site Builder",
+    Button: () => null,
+    createSession: (toolContext) => createBuilderSession(toolContext),
+  });
 });
 
 afterEach(() => {
@@ -95,7 +137,8 @@ afterEach(() => {
   // those ids behind hands the next test a composer with phantom destinations.
   usePanelStore.setState({ panelIds: [], panelsById: {} } as never);
   cleanup();
-  __resetInspectorControllersForTests();
+  __resetDevPreviewToolSessionsForTests();
+  __resetDevPreviewToolsForTests();
   __resetComposerMemoryForTests();
   uninstall();
 });
@@ -262,7 +305,7 @@ describe("preview binding", () => {
     }));
     await act(async () => host.select(0));
     await screen.findByRole("combobox", { name: "Site source app" });
-    const controller = peekBuilderController("preview-1")!;
+    const controller = session();
     await act(async () => controller.switchApp("/repo/apps/docs"));
     await waitFor(() =>
       expect(host.calls(CHANNELS.workspaceOpen).at(-1)).toMatchObject({
@@ -1009,7 +1052,7 @@ describe("stale selections", () => {
 
   it("does not ask the page for a component while nothing is proven", async () => {
     await mountBound();
-    const controller = peekBuilderController("preview-1")!;
+    const controller = session();
     await expect(
       controller.selectComponent({ file: "src/lib/PricingCard.svelte", line: 3, column: 0 })
     ).resolves.toBe(false);
@@ -1102,12 +1145,12 @@ describe("stale selections", () => {
   it("leaves the selection alone when the page no longer has the element", async () => {
     await mountSelected();
     host.reselectFinds = false;
-    const before = peekBuilderController("preview-1")!.getSnapshot();
+    const before = session().getSnapshot();
     const strip = screen.getByRole("toolbar", { name: "Site Builder" });
     fireEvent.click(within(strip).getByRole("button", { name: "PricingCard" }));
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
     await act(async () => {});
-    const after = peekBuilderController("preview-1")!.getSnapshot();
+    const after = session().getSnapshot();
     expect(after.selection).toBe(before.selection);
     expect(after.selectionGeneration).toBe(before.selectionGeneration);
     expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
@@ -1119,9 +1162,7 @@ describe("stale selections", () => {
     // is a button in Browse mode is a button that does nothing.
     await mountSelected();
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
-    await waitFor(() =>
-      expect(peekBuilderController("preview-1")!.getSnapshot().mode).toBe("browse")
-    );
+    await waitFor(() => expect(session().getSnapshot().mode).toBe("browse"));
     const strip = screen.getByRole("toolbar", { name: "Site Builder" });
     expect(within(strip).getByRole("navigation", { name: "Breadcrumb" }).textContent).toContain(
       "PricingCard"
@@ -1163,7 +1204,7 @@ describe("stale selections", () => {
       };
     });
     await mountSelected();
-    const controller = peekBuilderController("preview-1")!;
+    const controller = session();
     let state = controller.getSnapshot().selection;
     await waitFor(() => {
       state = controller.getSnapshot().selection;
@@ -1192,7 +1233,7 @@ describe("stale selections", () => {
     // Main parsed PricingCard's call site at one revision; disk already holds another.
     host.diskRevisions.set("src/lib/PricingCard.svelte", "e".repeat(64));
     await mountSelected();
-    const controller = peekBuilderController("preview-1")!;
+    const controller = session();
     let state = controller.getSnapshot().selection;
     await waitFor(() => {
       state = controller.getSnapshot().selection;
@@ -1238,7 +1279,7 @@ describe("stale selections", () => {
       ),
     }));
     await mountSelected();
-    const controller = peekBuilderController("preview-1")!;
+    const controller = session();
     await waitFor(() => {
       const state = controller.getSnapshot().selection;
       expect(state.status === "ready" && state.revisions !== null).toBe(true);
@@ -1472,6 +1513,7 @@ describe("lifetime", () => {
       const disabled = usePluginRuntimeStore((state) => state.disabledPluginIds.has(PLUGIN_ID));
       return disabled ? null : <Builder />;
     }
+    switchOn();
     render(<Gated />);
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(1));
@@ -1498,7 +1540,12 @@ describe("lifetime", () => {
         workspaceSessionId: args.workspaceSessionId as string,
       },
     }));
-    await act(async () => usePluginRuntimeStore.setState({ disabledPluginIds: new Set() }));
+    // Disabling the plugin switched the tool off, so coming back is switching
+    // it on again — with a session that knows nothing of the closed one.
+    await act(async () => {
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set() });
+      switchOn();
+    });
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2));
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
     await screen.findByRole("button", { name: "Browse" });
@@ -1522,7 +1569,7 @@ describe("lifetime", () => {
   it("releases the preview and workspace once the builder is switched off", async () => {
     await mountSelected();
     cleanup();
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    await act(async () => useDevPreviewToolStore.getState().setActive("preview-1", null));
     expect(host.sitePreview.detach).toHaveBeenCalledWith({ sessionId: "session-1" });
     expect(host.calls(CHANNELS.workspaceClose)).toEqual([{ workspaceSessionId: "ws-1" }]);
   });
@@ -1531,6 +1578,7 @@ describe("lifetime", () => {
     await mountSelected();
     cleanup();
     context.current = { projectId: "p1", worktreeId: "wt-2", worktreePath: "/repo-2" };
+    await act(async () => publishDevPreviewToolContext(hostContext()));
     mount();
     await waitFor(() =>
       expect(host.sitePreview.detach).toHaveBeenCalledWith({ sessionId: "session-1" })
@@ -1578,30 +1626,13 @@ describe("preview reattach", () => {
   });
 });
 
-describe("builder lifetime", () => {
-  it("recovers when its controller is released while the builder is still on screen", async () => {
-    // A controller can be disposed under a mounted builder — an idle check that
-    // ran before a slow commit claimed it. Rendering the dead one leaves the
-    // strip on "Connecting" forever.
-    await mountBound();
-    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
-
-    await act(async () => releaseBuilderController("preview-1"));
-
-    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2));
-    await screen.findByRole("button", { name: "Browse" });
-  });
-});
-
 describe("builder lifetime while switched on", () => {
   function builderOn() {
     usePanelStore.setState({
+      panelIds: ["preview-1"],
       panelsById: {
         "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid" },
       } as never,
-    });
-    useDevPreviewToolStore.setState({
-      activeByPanel: { "preview-1": "daintree.sveltekit-builder.builder" },
     });
   }
 
@@ -1623,7 +1654,6 @@ describe("builder lifetime while switched on", () => {
     expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
 
     cleanup();
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
     await act(async () => useDevPreviewToolStore.getState().setActive("preview-1", null));
     expect(host.sitePreview.detach).toHaveBeenCalledWith({ sessionId: "session-1" });
     expect(host.calls(CHANNELS.workspaceClose)).toEqual([{ workspaceSessionId: "ws-1" }]);

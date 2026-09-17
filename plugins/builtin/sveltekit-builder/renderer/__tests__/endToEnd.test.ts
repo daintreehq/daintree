@@ -75,7 +75,6 @@ async function setUp() {
     on: () => () => {},
     runtimeSource: async () => "",
     now: () => Date.now(),
-    onPluginDisabled: () => () => {},
   };
 
   const controller = new InspectorController(PREVIEW_PANEL, deps);

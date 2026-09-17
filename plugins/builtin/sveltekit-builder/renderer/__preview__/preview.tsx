@@ -10,6 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { usePanelStore } from "@/store/panelStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { SiteBuilderDrawer, SiteBuilderToolbar } from "../SiteBuilderSurfaces.js";
+import { createBuilderSession } from "../inspectorController.js";
 import { __resetComposerMemoryForTests } from "../composerMemory.js";
 import { fixtureFor, PANEL_ID, WORKTREE_ID, isFixtureName, type FixtureName } from "./fixtures.js";
 import { getPreviewHost } from "./installShims";
@@ -167,18 +168,26 @@ function MockBrowserToolbar() {
   );
 }
 
+// In the app the host owns this; here the harness is the host, so it builds the
+// one session the surfaces read before either of them mounts.
+const hostContext = {
+  panelId: PANEL_ID,
+  projectId: "p1",
+  worktreeId: WORKTREE_ID,
+  worktreePath: "/Users/you/code/orchid-studio",
+  url: "http://localhost:5173/pricing",
+  isWebviewReady: true,
+};
+const session = createBuilderSession({
+  ...hostContext,
+  visible: true,
+  signal: new AbortController().signal,
+});
+
 function Harness() {
   const [ready, setReady] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const props = {
-    panelId: PANEL_ID,
-    projectId: "p1",
-    worktreeId: WORKTREE_ID,
-    worktreePath: "/Users/you/code/orchid-studio",
-    url: "http://localhost:5173/pricing",
-    isWebviewReady: true,
-    onClose: () => {},
-  };
+  const props = { ...hostContext, session, onClose: () => {} };
 
   useEffect(() => {
     let cancelled = false;

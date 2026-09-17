@@ -1,7 +1,13 @@
-import { Suspense, createElement, useCallback } from "react";
+import { Suspense, createElement, useCallback, useEffect, type ComponentType } from "react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
+import {
+  publishDevPreviewToolContext,
+  retainDevPreviewToolVisibility,
+  useDevPreviewToolSessionHandle,
+  type DevPreviewToolSessionHandle,
+} from "@/services/devPreviewTools/sessionManager";
 // createElement rather than JSX on `tool.Button` and friends: the React Compiler
 // can fold an alias of a registered component into an intrinsic element name,
 // which renders an empty unknown tag instead of the tool.
@@ -9,6 +15,7 @@ import {
   useDevPreviewTools,
   type DevPreviewTool,
   type DevPreviewToolContext,
+  type DevPreviewToolSurfaceProps,
 } from "@/registry/devPreviewToolRegistry";
 
 export interface DevPreviewToolHostProps {
@@ -19,6 +26,11 @@ export interface DevPreviewToolHostProps {
   isWebviewReady: boolean;
 }
 
+/**
+ * The context every surface and every session of this preview sees. Published
+ * to the session manager from here rather than from a surface: the sessions
+ * outlive their surfaces, and this runs wherever the pane is mounted.
+ */
 function useToolContext({
   panelId,
   projectId,
@@ -33,6 +45,16 @@ function useToolContext({
     ),
     null
   );
+  useEffect(() => {
+    publishDevPreviewToolContext({
+      panelId,
+      projectId: projectId ?? null,
+      worktreeId: worktreeId ?? null,
+      worktreePath,
+      url,
+      isWebviewReady,
+    });
+  }, [panelId, projectId, worktreeId, worktreePath, url, isWebviewReady]);
   return {
     panelId,
     projectId: projectId ?? null,
@@ -71,21 +93,71 @@ export function DevPreviewToolButtons(props: DevPreviewToolHostProps) {
   );
 }
 
+/**
+ * One of the active tool's surfaces, mounted only once its session exists.
+ *
+ * The boundary is keyed by tool and session: an error belongs to the tool that
+ * threw it, so switching straight to another tool — or getting a new session
+ * for this one — must not hand the newcomer the old failure.
+ */
+function DevPreviewToolSurface({
+  tool,
+  Surface,
+  role,
+  handle,
+  context,
+}: {
+  tool: DevPreviewTool;
+  Surface: ComponentType<DevPreviewToolSurfaceProps>;
+  role: string;
+  handle: DevPreviewToolSessionHandle | null;
+  context: DevPreviewToolContext;
+}) {
+  const panelId = context.panelId;
+  useEffect(() => retainDevPreviewToolVisibility(panelId), [panelId]);
+  const setActive = useDevPreviewToolStore((s) => s.setActive);
+  const key = `${tool.id}:${handle?.key ?? 0}`;
+  return (
+    <ErrorBoundary
+      key={key}
+      resetKeys={[key]}
+      variant="component"
+      componentName={`${tool.label} ${role}`}
+    >
+      <Suspense fallback={null}>
+        {createElement(Surface, {
+          ...context,
+          session: handle?.session ?? null,
+          onClose: () => setActive(panelId, null),
+        })}
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
+/**
+ * Whether the tool is ready to be shown: a tool that owns a session waits for
+ * it, so no surface ever renders against a session that does not exist yet.
+ */
+function ready(tool: DevPreviewTool, handle: DevPreviewToolSessionHandle | null): boolean {
+  return tool.createSession === undefined || handle?.session != null;
+}
+
 /** The active tool's strip under the browser toolbar. */
 export function DevPreviewToolToolbar(props: DevPreviewToolHostProps) {
   const tool = useActiveTool(props.panelId);
   const context = useToolContext(props);
-  const setActive = useDevPreviewToolStore((s) => s.setActive);
-  if (!tool?.Toolbar) return null;
+  const handle = useDevPreviewToolSessionHandle(props.panelId, tool?.id);
+  const Surface = tool?.Toolbar;
+  if (!tool || !Surface || !ready(tool, handle)) return null;
   return (
-    <ErrorBoundary variant="component" componentName={`${tool.label} toolbar`}>
-      <Suspense fallback={null}>
-        {createElement(tool.Toolbar, {
-          ...context,
-          onClose: () => setActive(props.panelId, null),
-        })}
-      </Suspense>
-    </ErrorBoundary>
+    <DevPreviewToolSurface
+      tool={tool}
+      Surface={Surface}
+      role="toolbar"
+      handle={handle}
+      context={context}
+    />
   );
 }
 
@@ -93,16 +165,16 @@ export function DevPreviewToolToolbar(props: DevPreviewToolHostProps) {
 export function DevPreviewToolDrawer(props: DevPreviewToolHostProps) {
   const tool = useActiveTool(props.panelId);
   const context = useToolContext(props);
-  const setActive = useDevPreviewToolStore((s) => s.setActive);
-  if (!tool?.Drawer) return null;
+  const handle = useDevPreviewToolSessionHandle(props.panelId, tool?.id);
+  const Surface = tool?.Drawer;
+  if (!tool || !Surface || !ready(tool, handle)) return null;
   return (
-    <ErrorBoundary variant="component" componentName={`${tool.label} panel`}>
-      <Suspense fallback={null}>
-        {createElement(tool.Drawer, {
-          ...context,
-          onClose: () => setActive(props.panelId, null),
-        })}
-      </Suspense>
-    </ErrorBoundary>
+    <DevPreviewToolSurface
+      tool={tool}
+      Surface={Surface}
+      role="panel"
+      handle={handle}
+      context={context}
+    />
   );
 }

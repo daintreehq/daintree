@@ -26,7 +26,38 @@ export interface DevPreviewToolContext {
   isWebviewReady: boolean;
 }
 
-export interface DevPreviewToolSurfaceProps extends DevPreviewToolContext {
+/**
+ * What a session sees of its preview, refreshed for the life of the session —
+ * including while no surface is mounted, which is why `visible` is part of it
+ * rather than something a surface has to report.
+ */
+export interface DevPreviewToolSessionContext extends DevPreviewToolContext {
+  /** Whether any of the tool's surfaces are mounted right now. */
+  visible: boolean;
+  /** Aborted when the session is disposed. */
+  signal: AbortSignal;
+}
+
+/**
+ * A tool's state for one preview, owned by the host: created when the tool is
+ * switched on, kept across surface unmounts, and disposed when the tool goes
+ * off, the preview is trashed or removed, or the owning plugin is disabled.
+ */
+export interface DevPreviewToolSession {
+  /** The context changed — a new page, a moved worktree, a surface mounting. */
+  update?: (context: DevPreviewToolSessionContext) => void;
+  dispose: () => void;
+}
+
+export interface DevPreviewToolSurfaceProps<
+  TSession extends DevPreviewToolSession = DevPreviewToolSession,
+> extends DevPreviewToolContext {
+  /**
+   * The host-owned session for this preview. Null only for a tool that
+   * declares no `createSession`; a tool that declares one is not given
+   * surfaces until its session exists.
+   */
+  session: TSession | null;
   /** Turn the tool off, as the toolbar toggle would. */
   onClose: () => void;
 }
@@ -36,7 +67,7 @@ export interface DevPreviewToolButtonProps extends DevPreviewToolContext {
   onToggle: () => void;
 }
 
-export interface DevPreviewTool {
+export interface DevPreviewTool<TSession extends DevPreviewToolSession = DevPreviewToolSession> {
   /** Namespaced by plugin, e.g. `daintree.sveltekit-builder.builder`. */
   id: string;
   /** Owning plugin (manifest name); the tool disappears while it is disabled. */
@@ -49,10 +80,17 @@ export interface DevPreviewTool {
    * it can do something.
    */
   Button: ComponentType<DevPreviewToolButtonProps>;
+  /**
+   * Builds the tool's session for one preview. Called by the host when the
+   * tool is switched on, before any surface mounts, and may load the tool's
+   * real implementation on the way (a promise is awaited; a session that
+   * resolves after its preview let go is disposed immediately).
+   */
+  createSession?: (context: DevPreviewToolSessionContext) => TSession | Promise<TSession>;
   /** A strip directly under the browser toolbar while the tool is on. */
-  Toolbar?: ComponentType<DevPreviewToolSurfaceProps>;
+  Toolbar?: ComponentType<DevPreviewToolSurfaceProps<TSession>>;
   /** A drawer docked beside the page while the tool is on. Returns null to stay closed. */
-  Drawer?: ComponentType<DevPreviewToolSurfaceProps>;
+  Drawer?: ComponentType<DevPreviewToolSurfaceProps<TSession>>;
 }
 
 const TOOLS = new Map<string, DevPreviewTool>();
@@ -71,8 +109,13 @@ function subscribe(listener: () => void): () => void {
 
 const getSnapshot = (): readonly DevPreviewTool[] => snapshot;
 
-export function registerDevPreviewTool(tool: DevPreviewTool): void {
-  TOOLS.set(tool.id, tool);
+export function registerDevPreviewTool<TSession extends DevPreviewToolSession>(
+  tool: DevPreviewTool<TSession>
+): void {
+  // The session type is the tool's own business: the host only ever hands a
+  // surface the session that the same tool's `createSession` produced, so the
+  // registry can hold them all under the base type.
+  TOOLS.set(tool.id, tool as DevPreviewTool);
   publish();
 }
 

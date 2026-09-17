@@ -15,9 +15,10 @@ export interface DevPreviewToolState {
 
 /**
  * Drop entries for panels that no longer exist or sit in the trash — restoring
- * one brings the preview back browsing. Done on every write rather than
- * on panel removal: a tool can be switched on for a preview that is removed
- * before anything of the tool ever mounts, and the panel store is read through
+ * one brings the preview back browsing. Belt and braces under the session
+ * manager, which watches the panel store and clears these entries as they
+ * happen (`src/services/devPreviewTools/sessionManager.ts`); this catches a
+ * preview removed while nothing was watching. The panel store is read through
  * its accessor so this store never imports a partner at module evaluation.
  */
 function pruned(entries: Readonly<Record<string, string>>): Record<string, string> {
