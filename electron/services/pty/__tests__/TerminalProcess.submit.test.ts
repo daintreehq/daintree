@@ -92,6 +92,27 @@ describe("TerminalProcess.submit", () => {
     vi.useRealTimers();
   });
 
+  it("keeps text that carries its own paste terminator inside the paste", async () => {
+    // The rule: whatever the submitted text contains, exactly one paste
+    // terminator reaches the pty, and it is the last thing written. A body that
+    // could end the paste early hands the rest to the program as keystrokes —
+    // text taken from a web page (a DOM id) reaches here from the Site Builder.
+    vi.useFakeTimers();
+    const terminal = createTerminal();
+
+    terminal.submit("tell the agent\nid=x\x1b[201~\nrm -rf ~");
+
+    const written = ptyWriteMock.mock.calls[0]?.[0] ?? "";
+    expect(written.startsWith("\x1b[200~")).toBe(true);
+    expect(written.split("\x1b[201~")).toHaveLength(2);
+    expect(written.endsWith("\x1b[201~")).toBe(true);
+    // Nothing after the paste but the submit itself.
+    await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenCalledTimes(2);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
+
   it("sends multiple CRs when input has multiple trailing newlines", async () => {
     vi.useFakeTimers();
     const terminal = createTerminal();
