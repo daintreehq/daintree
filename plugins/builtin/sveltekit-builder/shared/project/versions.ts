@@ -202,6 +202,9 @@ export function assessSupport(
     }
 
     if (installed === null) {
+      // Tailwind is optional: without it there are no class suggestions, but
+      // tracing and editing Svelte source don't depend on it.
+      if (key === "tailwind" && !isDeclared) continue;
       if (isDeclared) {
         missingInstall.push(key);
         reasons.push(
