@@ -25,7 +25,7 @@ import {
   type InspectorState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
-import { InspectorDisclosure, PropertyRow, SectionHeader } from "./InspectorSection.js";
+import { InspectorDisclosure, SectionHeader } from "./InspectorSection.js";
 import { SelectionEdits, SelectionIdentity, type SelectionActions } from "./SelectionCard.js";
 import { ReceiptView } from "./ReceiptView.js";
 import { AgentComposer } from "./AgentComposer.js";
@@ -249,7 +249,12 @@ function StripStatus({
               the component when a component was picked, the element otherwise.
               It used to always end at the element, so a component selection was
               presented as though an element were current. */}
-          <StripTrail node={node} picked={picked?.kind === "component" ? picked : null} />
+          <StripTrail
+            node={node}
+            picked={
+              picked?.kind === "component" ? { label: picked.label, usedAt: picked.usedAt } : null
+            }
+          />
           {pickedIndex > 0 ? (
             <Badge size="xs" tone="outline">
               Component
@@ -288,17 +293,31 @@ function StripStatus({
  * match would pick the first of two nested components sharing a name, so the
  * LAST crumb carrying the picked label is taken, which is the innermost.
  */
-function StripTrail({ node, picked }: { node: SelectedNode; picked: { label: string } | null }) {
-  const crumbs = trailFor(node, { includeSelf: picked === null });
-  let currentIndex = crumbs.length - 1;
-  if (picked) {
-    for (let index = crumbs.length - 1; index >= 0; index--) {
-      if (crumbs[index]!.label === picked.label) {
-        currentIndex = index;
-        break;
-      }
-    }
+function StripTrail({
+  node,
+  picked,
+}: {
+  node: SelectedNode;
+  picked: { label: string; usedAt: { file: string; line: number; column: number } | null } | null;
+}) {
+  // The trail ends at the selection: crumbs inside a picked component are the
+  // route the selection was reached THROUGH, not where it is. The picked
+  // component is matched by its call site, never by label — two nested
+  // components can share a name.
+  const all = trailFor(node, { includeSelf: picked === null });
+  let currentIndex = all.length - 1;
+  if (picked?.usedAt) {
+    const site = picked.usedAt;
+    const index = all.findIndex(
+      (crumb) =>
+        crumb.usedAt !== null &&
+        crumb.usedAt.file === site.file &&
+        crumb.usedAt.line === site.line &&
+        crumb.usedAt.column === site.column
+    );
+    if (index !== -1) currentIndex = index;
   }
+  const crumbs = all.slice(0, currentIndex + 1);
   return (
     <SelectionTrail
       crumbs={crumbs}
@@ -554,16 +573,13 @@ function SiteSourceBody({
       return (
         <div className="flex flex-col gap-1">
           <CapabilityRow
-            label="Editing"
+            label="Direct editing"
             available={editing.length === 0}
             reasons={editing}
             note="You can still select elements and ask an agent to change them."
           />
-          {/* "Classes", not "Suggestions": the label column is 64px and the
-              longer word truncated to "Suggesti…". The reason beneath names
-              suggestions explicitly. */}
           <CapabilityRow
-            label="Classes"
+            label="Class suggestions"
             available={suggestions.length === 0}
             reasons={suggestions}
             note={
@@ -589,28 +605,28 @@ function CapabilityRow({
   reasons: string[];
   note: string;
 }) {
+  // A flat block rather than a 64px-labelled row: two capabilities are not a
+  // property list, and the names that describe them accurately ("Class
+  // suggestions") do not fit a label column. The name and its verdict share a
+  // line; the reasons and what still works follow.
   return (
-    <PropertyRow label={label} align="start">
-      {available ? (
-        <p className="text-xs leading-7 text-text-secondary">Available</p>
-      ) : (
-        <div className="flex flex-col gap-0.5 py-1.5 text-xs">
-          <p className="flex items-center gap-1.5 text-text-primary">
-            <AlertTriangle
-              className="h-3.5 w-3.5 shrink-0 text-status-warning"
-              aria-hidden="true"
-            />
-            Unavailable
-          </p>
-          {reasons.map((reason) => (
+    <div className="flex flex-col gap-0.5 py-1 text-xs">
+      <p className="flex items-center gap-1.5 text-text-primary">
+        {available ? null : (
+          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" aria-hidden="true" />
+        )}
+        <span className="font-medium">{label}</span>
+        <span className="text-text-secondary">{available ? "available" : "unavailable"}</span>
+      </p>
+      {available
+        ? null
+        : reasons.map((reason) => (
             <p key={reason} className="text-text-secondary">
               {sentence(reason)}
             </p>
           ))}
-          <p className="text-text-secondary">{note}</p>
-        </div>
-      )}
-    </PropertyRow>
+      {available ? null : <p className="text-text-secondary">{note}</p>}
+    </div>
   );
 }
 
@@ -630,7 +646,7 @@ function ResolvingHeader() {
       {visible ? (
         <IdentitySkeleton label={slow ? "Finding the source — still working…" : undefined} />
       ) : (
-        <div className="h-[76px]" aria-hidden="true" />
+        <div className="h-20" aria-hidden="true" />
       )}
     </div>
   );

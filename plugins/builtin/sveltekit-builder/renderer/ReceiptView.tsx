@@ -1,4 +1,4 @@
-import { useState, type ComponentType } from "react";
+import { useId, useState, type ComponentType } from "react";
 import { ChevronRight, Clock, Copy, EyeOff, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -33,14 +33,19 @@ const SURFACE_NOUN: Record<ReceiptState["surface"], string> = {
 export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: () => void }) {
   const { receipt, previewRefreshed, undo } = state;
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const detailsId = useId();
   const verb = state.kind === "undo" ? "restored" : "saved";
   const headline = `${SURFACE_NOUN[state.surface]} ${verb} in ${basename(receipt.file)}`;
   const undoable = undo && undo.status !== "superseded";
   const copies = receipt.affectedOccurrences;
 
   return (
-    <section aria-label="Last change" className="flex flex-col gap-1.5">
-      <div role="status" aria-live="polite" className="flex h-7 items-center justify-between gap-2">
+    <section aria-label="Last change" className="flex max-h-[45vh] min-h-0 flex-col gap-1.5">
+      <div
+        role="status"
+        aria-live="polite"
+        className="flex h-7 shrink-0 items-center justify-between gap-2"
+      >
         <p className="min-w-0 truncate text-xs font-medium text-text-primary" title={headline}>
           {headline}
         </p>
@@ -57,69 +62,77 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
         ) : null}
       </div>
 
-      <ul className="flex flex-col gap-1 text-xs text-text-secondary">
-        <Fact icon={previewRefreshed ? RefreshCw : Clock}>
-          {previewRefreshed ? "Preview reloaded" : "Preview not yet refreshed"}
-        </Fact>
-        {state.surface === "classes" ? (
-          // Not observed: nothing here can read the page's computed styles
-          // back. A question mark read as a help button and a dashed circle
-          // as a stalled spinner; an eye that is off says what this is.
-          <Fact icon={EyeOff}>Styles unverified</Fact>
-        ) : null}
-        {copies > 1 ? (
-          <Fact icon={Copy}>{`Affects ${plural(copies, "rendered copy", "rendered copies")}`}</Fact>
-        ) : null}
-      </ul>
+      <div className="flex min-h-0 flex-col gap-1.5 overflow-y-auto">
+        <ul className="flex flex-col gap-1 text-xs text-text-secondary">
+          <Fact icon={previewRefreshed ? RefreshCw : Clock}>
+            {previewRefreshed ? "Preview reloaded" : "Preview not yet refreshed"}
+          </Fact>
+          {state.surface === "classes" ? (
+            // Not observed: nothing here can read the page's computed styles
+            // back. A question mark read as a help button and a dashed circle
+            // as a stalled spinner; an eye that is off says what this is.
+            <Fact icon={EyeOff}>Styles unverified</Fact>
+          ) : null}
+          {copies > 1 ? (
+            <Fact
+              icon={Copy}
+            >{`Affects ${plural(copies, "rendered copy", "rendered copies")}`}</Fact>
+          ) : null}
+        </ul>
 
-      <div className="flex flex-col gap-1.5">
-        <button
-          type="button"
-          aria-expanded={detailsOpen}
-          onClick={() => setDetailsOpen((open) => !open)}
-          className="-ml-1 flex w-fit items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
-        >
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              "h-3 w-3 transition-transform duration-150 ease-out",
-              detailsOpen && "rotate-90"
-            )}
-          />
-          Details
-        </button>
-        {detailsOpen ? (
-          <div className="flex flex-col gap-1 rounded-md border border-border-subtle bg-surface-inset px-2.5 py-2 text-3xs text-text-secondary">
-            <p className="break-all font-mono" title={receipt.file}>
-              {receipt.file}
-            </p>
-            {state.surface === "classes" ? (
-              <p>
-                A class can reach the page without generating any CSS, and nothing here can read the
-                page's computed styles back — so the write is proven, the effect is not.
+        <div className="flex flex-col gap-1.5">
+          <button
+            type="button"
+            aria-expanded={detailsOpen}
+            aria-controls={detailsId}
+            onClick={() => setDetailsOpen((open) => !open)}
+            className="-ml-1 flex w-fit items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+          >
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "h-3 w-3 transition-transform duration-150 ease-out",
+                detailsOpen && "rotate-90"
+              )}
+            />
+            Details
+          </button>
+          {detailsOpen ? (
+            <div
+              id={detailsId}
+              className="flex flex-col gap-1 rounded-md border border-border-subtle bg-surface-inset px-2.5 py-2 text-3xs text-text-secondary"
+            >
+              <p className="break-all font-mono" title={receipt.file}>
+                {receipt.file}
               </p>
-            ) : null}
-            {copies > 1 ? (
-              <p>{`The same markup draws ${copies} elements; the write changed all of them.`}</p>
-            ) : null}
-          </div>
+              {state.surface === "classes" ? (
+                <p>
+                  A class can reach the page without generating any CSS, and nothing here can read
+                  the page's computed styles back — so the write is proven, the effect is not.
+                </p>
+              ) : null}
+              {copies > 1 ? (
+                <p>{`The same markup draws ${copies} elements; the write changed all of them.`}</p>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+
+        {undo?.status === "superseded" ? (
+          <InspectorNotice
+            tone="warning"
+            title="Can't undo — the file changed since this edit"
+            density="compact"
+          >
+            Undoing now would overwrite newer changes. Review {basename(receipt.file)} instead.
+          </InspectorNotice>
+        ) : null}
+        {undo?.status === "failed" ? (
+          <InspectorNotice tone="error" title="Undo failed" role="alert" density="compact">
+            {undo.message}
+          </InspectorNotice>
         ) : null}
       </div>
-
-      {undo?.status === "superseded" ? (
-        <InspectorNotice
-          tone="warning"
-          title="Can't undo — the file changed since this edit"
-          density="compact"
-        >
-          Undoing now would overwrite newer changes. Review {basename(receipt.file)} instead.
-        </InspectorNotice>
-      ) : null}
-      {undo?.status === "failed" ? (
-        <InspectorNotice tone="error" title="Undo failed" role="alert" density="compact">
-          {undo.message}
-        </InspectorNotice>
-      ) : null}
     </section>
   );
 }

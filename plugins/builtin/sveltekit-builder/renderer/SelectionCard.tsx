@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { AlertTriangle, Check, ChevronRight, Copy, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
@@ -159,17 +159,21 @@ export function SelectionIdentity({
       {/* Row 3, 20px: how it was reached. The header names the selection, so
           the trail shows the route and carries the identity for assistive
           technology rather than repeating it visibly. */}
-      {crumbs.length > 0 ? (
-        <div className="flex h-5 min-w-0 items-center gap-1 text-2xs text-text-secondary">
-          <span className="shrink-0">in</span>
-          <SelectionTrail
-            crumbs={crumbs}
-            currentIndex={crumbs.length}
-            currentLabel={component ?? displayLabel(node)}
-            className="min-w-0"
-          />
-        </div>
-      ) : null}
+      <div className="flex h-5 min-w-0 items-center gap-1 text-2xs text-text-secondary">
+        {crumbs.length > 0 ? (
+          <>
+            <span className="shrink-0">in</span>
+            <SelectionTrail
+              crumbs={crumbs}
+              currentIndex={crumbs.length}
+              currentLabel={component ?? displayLabel(node)}
+              className="min-w-0"
+            />
+          </>
+        ) : (
+          <span>at the top level</span>
+        )}
+      </div>
 
       {stale ? (
         <InspectorNotice
@@ -274,11 +278,13 @@ export function SelectionEdits({
  */
 function SharedMarkupRow({ count }: { count: number }) {
   const [open, setOpen] = useState(false);
+  const bodyId = useId();
   return (
     <div className="flex flex-col gap-1">
       <button
         type="button"
         aria-expanded={open}
+        aria-controls={bodyId}
         onClick={() => setOpen((value) => !value)}
         className="-mx-1 flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-left text-xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle"
       >
@@ -295,7 +301,7 @@ function SharedMarkupRow({ count }: { count: number }) {
         />
       </button>
       {open ? (
-        <p className="px-1 text-xs text-text-secondary">
+        <p id={bodyId} className="px-1 text-xs text-text-secondary">
           {`This markup draws ${count} elements on the page. A change here changes all of them, not just the one you clicked.`}
         </p>
       ) : null}
@@ -354,28 +360,26 @@ function Surface({
   children: ReactNode;
 }) {
   const support = capability?.support;
+  // The capability badge sits with its explanation in the control column: in
+  // the 64px label column it took the label's room and could run into the
+  // control beside it.
   return (
-    <PropertyRow
-      label={title}
-      align={align}
-      hint={
-        support && support !== "direct" ? (
-          <Badge size="xs" tone="neutral">
-            {SUPPORT_LABEL[support]}
-          </Badge>
-        ) : null
-      }
-    >
+    <PropertyRow label={title} align={align}>
       {!capability ? (
         <p className="text-xs leading-7 text-text-secondary">Not available for this element</p>
-      ) : support !== "direct" ? (
-        <p className="text-xs leading-7 text-text-secondary">
-          {capability.reason
-            ? UNSUPPORTED_REASON_COPY[capability.reason]
-            : support === "agent-assisted"
-              ? "Changing this safely needs an agent"
-              : "This can be inspected but not edited here"}
-        </p>
+      ) : capability.support !== "direct" ? (
+        <div className="flex min-h-7 flex-wrap items-center gap-1.5 text-xs text-text-secondary">
+          <Badge size="xs" tone="neutral">
+            {SUPPORT_LABEL[capability.support]}
+          </Badge>
+          <span>
+            {capability.reason
+              ? UNSUPPORTED_REASON_COPY[capability.reason]
+              : support === "agent-assisted"
+                ? "Changing this safely needs an agent"
+                : "This can be inspected but not edited here"}
+          </span>
+        </div>
       ) : (
         children
       )}

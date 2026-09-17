@@ -209,7 +209,7 @@ describe("preview binding", () => {
     // heading, with the reason main gave scoped to the capability it affects.
     await screen.findByRole("region", { name: "Site source" });
     await screen.findByText(/Found svelte 4\.2\.1; editing needs Svelte 5/);
-    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/unavailable/i).length).toBeGreaterThan(0);
     // Still traced and still sendable to an agent; only direct edits are gated.
     host.handlers.set(CHANNELS.selectionResolve, (args) => ({
       status: "ok",
@@ -518,7 +518,7 @@ describe("editing", () => {
 
     await act(async () => finish({ status: "applied", receipt: makeReceipt() }));
     await screen.findByRole("region", { name: "Last change" });
-    expect(screen.getByText("Select again — the edit moved its source")).toBeTruthy();
+    expect(screen.getByText("Saved — select again to keep editing")).toBeTruthy();
     expect(removeButton().disabled).toBe(true);
     expect(host.calls(CHANNELS.editApply)).toHaveLength(1);
   });
