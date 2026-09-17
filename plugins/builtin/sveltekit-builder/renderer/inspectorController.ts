@@ -353,11 +353,17 @@ const EDIT_ERROR_TITLES: Record<SiteEditErrorCode, string> = {
   PARSE_FAILED: "Not saved — the file couldn't be parsed",
 };
 
-export function defaultInspectorDeps(): InspectorDeps {
+/**
+ * The host services for the builder of one dev preview. Pushes are subscribed
+ * per panel: main addresses each one to the preview whose workspace it is
+ * about, so nothing another preview's workspace reports arrives here.
+ */
+export function defaultInspectorDeps(previewPanelId: string): InspectorDeps {
   return {
     sitePreview: window.electron.sitePreview,
     invoke: (channel, args) => window.electron.plugin.invoke(PLUGIN_ID, channel, args),
-    on: (channel, callback) => window.electron.plugin.on(PLUGIN_ID, channel, callback),
+    on: (channel, callback) =>
+      window.electron.plugin.onPanel(PLUGIN_ID, channel, previewPanelId, callback),
     runtimeSource: loadGuestRuntimeBody,
     newId: () => crypto.randomUUID(),
     now: () => Date.now(),
@@ -592,6 +598,7 @@ export class InspectorController {
         projectId,
         worktreeId,
         worktreePath,
+        previewPanelId: this.panelId,
         ...(appRoot ? { appRoot } : {}),
       });
       const result = WorkspaceOpenResultSchema.parse(raw);
@@ -2250,11 +2257,11 @@ export function peekBuilderController(previewPanelId: string): InspectorControll
  */
 export function holdBuilderController(
   previewPanelId: string,
-  deps: () => InspectorDeps = defaultInspectorDeps
+  deps: (previewPanelId: string) => InspectorDeps = defaultInspectorDeps
 ): () => void {
   let entry = controllers.get(previewPanelId);
   if (!entry) {
-    const controller = new InspectorController(previewPanelId, deps());
+    const controller = new InspectorController(previewPanelId, deps(previewPanelId));
     const created: ControllerEntry = { controller, holders: 0, unwatch: null };
     entry = created;
     controllers.set(previewPanelId, created);

@@ -40,6 +40,7 @@ describe("activate", () => {
       projectId: "p1",
       worktreeId: "w1",
       worktreePath: sandbox.worktree,
+      previewPanelId: "preview-1",
     });
     await test.invoke(CHANNELS.selectionResolve, {
       workspaceSessionId: open.workspaceSessionId,

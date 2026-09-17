@@ -185,6 +185,19 @@ describe("preview binding", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "apps/docs" })).toBeNull());
   });
 
+  it("opens the workspace for its own preview and listens to that preview's pushes only", async () => {
+    await mountBound();
+    await waitFor(() =>
+      expect(host.calls(CHANNELS.workspaceOpen).at(-1)).toMatchObject({
+        previewPanelId: "preview-1",
+      })
+    );
+    const subscribed = host.onPanel.mock.calls.map(([, channel, panelId]) => [channel, panelId]);
+    expect(subscribed).toContainEqual([PUSH_CHANNELS.sourceChanged, "preview-1"]);
+    expect(subscribed).toContainEqual([PUSH_CHANNELS.issue, "preview-1"]);
+    expect(host.on).not.toHaveBeenCalled();
+  });
+
   it("opens the app the preview's dev server runs in without asking", async () => {
     host.handlers.set(CHANNELS.workspaceOpen, (args) =>
       args.appRoot

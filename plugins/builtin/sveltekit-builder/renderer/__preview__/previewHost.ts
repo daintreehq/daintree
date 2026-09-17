@@ -148,7 +148,11 @@ type Handler = (args: Record<string, unknown>) => unknown;
 
 export interface PreviewHost {
   sitePreview: unknown;
-  plugin: { invoke: Handler extends never ? never : (...args: never[]) => unknown; on: unknown };
+  plugin: {
+    invoke: Handler extends never ? never : (...args: never[]) => unknown;
+    on: unknown;
+    onPanel: unknown;
+  };
   handlers: Map<string, Handler>;
   pushPreview(payload: SitePreviewPushPayload): void;
   documentReady(epoch: number): void;
@@ -357,10 +361,16 @@ export function createPreviewHost() {
     set.add(callback);
     return () => set!.delete(callback);
   };
+  const onPanel = (
+    pluginId: string,
+    channel: string,
+    _panelId: string,
+    callback: (payload: unknown) => void
+  ) => on(pluginId, channel, callback);
 
   const host = {
     sitePreview,
-    plugin: { invoke, on },
+    plugin: { invoke, on, onPanel },
     handlers,
     control,
     currentEpoch: 0,

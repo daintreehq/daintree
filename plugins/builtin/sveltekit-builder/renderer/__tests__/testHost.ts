@@ -284,7 +284,7 @@ export function createFakeHost() {
     if (!handler) throw new Error(`fake main: no handler for ${channel}`);
     return handler(args as Record<string, unknown>);
   });
-  const on = vi.fn((_pluginId: string, channel: string, callback: (payload: unknown) => void) => {
+  const subscribe = (channel: string, callback: (payload: unknown) => void) => {
     let set = pluginListeners.get(channel);
     if (!set) {
       set = new Set();
@@ -292,7 +292,15 @@ export function createFakeHost() {
     }
     set.add(callback);
     return () => set!.delete(callback);
-  });
+  };
+  const on = vi.fn((_pluginId: string, channel: string, callback: (payload: unknown) => void) =>
+    subscribe(channel, callback)
+  );
+  // The builder subscribes per preview panel, as main addresses its pushes.
+  const onPanel = vi.fn(
+    (_pluginId: string, channel: string, _panelId: string, callback: (payload: unknown) => void) =>
+      subscribe(channel, callback)
+  );
 
   const host = {
     sitePreview,
@@ -304,6 +312,8 @@ export function createFakeHost() {
     /** What main would hash on disk now; each applied write moves it. */
     diskRevision: REVISION,
     invoke,
+    on,
+    onPanel,
     handlers,
     listenerCounts() {
       let plugin = 0;
@@ -385,7 +395,7 @@ export function createFakeHost() {
       const previous = (window as { electron?: unknown }).electron;
       (window as unknown as { electron: unknown }).electron = {
         sitePreview,
-        plugin: { invoke, on },
+        plugin: { invoke, on, onPanel },
       };
       return () => {
         (window as unknown as { electron: unknown }).electron = previous;

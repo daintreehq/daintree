@@ -114,7 +114,7 @@ export interface TestHost {
   reads: string[];
   writes: Array<{ path: string; contents: string }>;
   watchers: Array<{ paths: string[]; callback: (changed: string) => void }>;
-  pushes(): Array<{ channel: string; payload: unknown }>;
+  pushes(): Array<{ channel: string; payload: unknown; panelId: string | null }>;
 }
 
 export function createTestHost(allowedRoot: string): TestHost {
@@ -222,7 +222,8 @@ export function createTestHost(allowedRoot: string): TestHost {
     writes,
     watchers,
     channels: () => [...handlers.keys()],
-    pushes: () => mock.postToPanelCalls.map(({ channel, payload }) => ({ channel, payload })),
+    pushes: () =>
+      mock.postToPanelCalls.map(({ channel, payload, panelId }) => ({ channel, payload, panelId })),
     async invoke<T>(channel: string, args: unknown): Promise<T> {
       const schema = schemas.get(channel);
       const handler = handlers.get(channel);

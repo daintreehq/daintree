@@ -31,7 +31,12 @@ beforeEach(async () => {
   await activate(test.host);
   const open = await test.invoke<{ status: string; workspaceSessionId: string; appRoot: string }>(
     CHANNELS.workspaceOpen,
-    { projectId: "p1", worktreeId: "w1", worktreePath: sandbox.worktree }
+    {
+      projectId: "p1",
+      worktreeId: "w1",
+      worktreePath: sandbox.worktree,
+      previewPanelId: "preview-1",
+    }
   );
   expect(open).toMatchObject({ status: "ready", appRoot: sandbox.appRoot });
   workspaceSessionId = open.workspaceSessionId;
@@ -687,6 +692,7 @@ describe("sourceChanged", () => {
       {
         channel: PUSH_CHANNELS.sourceChanged,
         payload: { workspaceSessionId, file: NATIVE_IN_WORKTREE, revision: sha(external) },
+        panelId: "preview-1",
       },
     ]);
   });
