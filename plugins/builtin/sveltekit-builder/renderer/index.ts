@@ -1,6 +1,10 @@
 import { lazy } from "react";
 import { registerDevPreviewTool } from "@/registry/devPreviewToolRegistry";
-import { SiteBuilderButton } from "./SiteBuilderButton.js";
+import {
+  SiteBuilderButton,
+  siteBuilderApplies,
+  SITE_BUILDER_UNAVAILABLE_REASON,
+} from "./SiteBuilderButton.js";
 
 // Literal ids: `shared/protocol.ts` pulls in zod, and this entry is eager for
 // every user. `__tests__/entryIds.test.ts` keeps these equal to the protocol.
@@ -23,6 +27,8 @@ registerDevPreviewTool({
   pluginId: ENTRY_PLUGIN_ID,
   label: "Site Builder",
   Button: SiteBuilderButton,
+  isAvailable: siteBuilderApplies,
+  unavailableReason: SITE_BUILDER_UNAVAILABLE_REASON,
   // The session is the controller, and it lives in the same lazy chunk as the
   // surfaces: switching the builder on is what pulls that chunk in.
   createSession: (context) =>
