@@ -61,7 +61,7 @@ npm run build:e2e && npm run test:e2e:plugins                                   
 npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/sveltekit-builder.spec.ts
 ```
 
-- **`sveltekit-builder.spec.ts`** creates a throwaway SvelteKit 2 + Svelte 5 + Tailwind 4 app and installs its dependencies from the registry (network on a cold npm cache), runs it in a dev preview, and walks the Site Builder: enable, switch it on from the plugin tray so it opens a dev preview and starts the site, close it and switch it back on from the preview's own toolbar button, click an element in the preview, edit a class, undo, then send the element to an agent terminal and wait for the site to change. The agent is a deterministic fake `claude` (`e2e/plugins/helpers/siteAgent.ts`) that applies the requested edit only at the source location the prompt names, so a pass proves the context the Site Builder sent.
+- **`sveltekit-builder.spec.ts`** creates a throwaway SvelteKit 2 + Svelte 5 + Tailwind 4 app and installs its dependencies from the registry (network on a cold npm cache), runs it in a dev preview, and walks the Site Builder: enable, switch it on from the plugin tray so it opens a dev preview and starts the site, close it and switch it back on from the preview's own toolbar button, click an element in the preview, walk up to the component that drew it with Option+Up, then send the component to an agent terminal and wait for the site to change. The agent is a deterministic fake `claude` (`e2e/plugins/helpers/siteAgent.ts`) that applies the requested edit only at the source location the prompt names, so a pass proves the context the Site Builder sent.
 
 Things these specs have to handle that bucket specs don't:
 
