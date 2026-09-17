@@ -1590,6 +1590,37 @@ describe("buildArgsForRespawn", () => {
     expect(result.agentLaunchFlags).toEqual(pair);
   });
 
+  // A pane held for recovery (#12434) keeps the fresh command "Start new" runs;
+  // under a stale preset that is settings-derived and must carry it too.
+  it("carries a stale-preset pane's instruction into a held pane's fresh command", () => {
+    getMergedPresetMock.mockReturnValue(undefined);
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal" as const,
+        agentId: "claude",
+        cwd: "/p",
+        location: "grid",
+        agentPresetId: "user-deleted",
+        agentSessionId: "sess-1",
+        agentLaunchFlags: ["--provider", "gone", ...pair],
+      },
+      "agent",
+      "/p",
+      { agents: { claude: {} } },
+      false,
+      undefined,
+      undefined,
+      { coldLaunch: { cwd: "/p", awaitingDestination: true } }
+    );
+    expect(result.restoreRecovery?.awaitingDestination).toBe(true);
+    expect(generateAgentCommandMock.mock.lastCall?.[3]).toMatchObject({
+      systemPromptArgs: pair,
+    });
+    expect(result.agentLaunchFlags).toEqual(pair);
+  });
+
   it("still drops the captured flags on a stale-preset strip with no instruction", () => {
     getMergedPresetMock.mockReturnValue(undefined);
     const result = buildArgsForRespawn(

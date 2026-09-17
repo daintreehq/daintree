@@ -700,6 +700,7 @@ export function buildArgsForRespawn(
           ? generateAgentCommand(baseCommand, effectiveEntry, agentId, {
               clipboardDirectory,
               modelId: saved.agentModelId,
+              systemPromptArgs: staleSystemPromptArgs,
               presetArgs: preset?.args?.join(" "),
               globalSkipPermissions,
               globalUseAltScreen,
