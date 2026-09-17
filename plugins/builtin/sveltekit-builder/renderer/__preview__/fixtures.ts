@@ -46,6 +46,8 @@ const AGENT_TERMINALS = [
 const SAMPLE_REQUEST = [
   "Make the Pro plan stand out more",
   "",
+  "---",
+  "",
   "Context from the Daintree Site Builder — file references only; read the files for the code:",
   "- Worktree: /Users/you/code/orchid-studio",
   "- App: the worktree root (SvelteKit 2.36.0, Svelte 5.38.1, Tailwind 4.1.12)",
