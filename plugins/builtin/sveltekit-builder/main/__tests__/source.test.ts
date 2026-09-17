@@ -354,6 +354,43 @@ describe("sourceChanged", () => {
   });
 });
 
+describe("sourceChanged for a directory already watched", () => {
+  it("reconciles a file tracked after its directory's watcher was wired", async () => {
+    const source = await fs.readFile(sandbox.file(NATIVE), "utf8");
+    await selectOne(observation(locationOf(source, "<h1"), { tagName: "H1" }));
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+    await settle();
+    expect(test.watchers).toHaveLength(1);
+
+    // A sibling in the same directory joins after the watcher exists. Its
+    // bytes change right after the resolve read them, before the tracker had
+    // it registered — the one moment the watcher's event goes unheard.
+    const card = "src/lib/card.svelte";
+    const cardSource = await fs.readFile(sandbox.file(card), "utf8");
+    const external = `${cardSource}\n<!-- agent -->\n`;
+    await fs.writeFile(sandbox.file(card), external);
+    const hostFs = test.host.fs;
+    const readBytes = hostFs.readFileBytes.bind(hostFs);
+    let staleReads = 1;
+    hostFs.readFileBytes = async (target, options) => {
+      const bytes = await readBytes(target, options);
+      if (target === sandbox.file(card) && staleReads-- > 0) return Buffer.from(cardSource);
+      return bytes;
+    };
+    await selectOne(observation(locationOf(cardSource, "<article", card), { tagName: "ARTICLE" }));
+    await settle();
+
+    expect(test.watchers).toHaveLength(1);
+    expect(test.pushes().filter((push) => push.channel === PUSH_CHANNELS.sourceChanged)).toEqual([
+      {
+        channel: PUSH_CHANNELS.sourceChanged,
+        payload: { workspaceSessionId, file: `apps/site/${card}`, revision: sha(external) },
+        panelId: "preview-1",
+      },
+    ]);
+  });
+});
+
 describe("byte order mark", () => {
   it("resolves against BOM-free offsets while the bytes keep the BOM", async () => {
     const file = "src/lib/bom.svelte";

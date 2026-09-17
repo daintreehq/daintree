@@ -100,7 +100,8 @@ describe("WebContentsCdpService", () => {
 
     await bridgeLease.release();
     expect(wc.debugger.methods()).toContain("Runtime.disable");
-    expect(wc.debugger.methods()).toContain("Page.disable");
+    // Page is left on for the callers that enable it without a lease.
+    expect(wc.debugger.methods()).not.toContain("Page.disable");
     expect(isCdpDomainEnabled(WEB_CONTENTS_ID, "Runtime")).toBe(false);
   });
 
@@ -351,9 +352,12 @@ describe("WebContentsCdpService", () => {
     await bridgeReleased;
 
     expect(isCdpDomainEnabled(WEB_CONTENTS_ID, "Page")).toBe(true);
-    expect(wc.debugger.count("Page.disable")).toBe(0);
+    expect(wc.debugger.count("Runtime.disable")).toBe(1);
     await fresh.release();
-    expect(wc.debugger.count("Page.disable")).toBe(1);
+    // The entry retires with its last holder; Page itself is never disabled.
+    expect(isCdpDomainEnabled(WEB_CONTENTS_ID, "Page")).toBe(false);
+    expect(wc.debugger.count("Page.disable")).toBe(0);
+    expect(wc.debugger.listenerCount("message")).toBe(0);
   });
 
   it("brackets the replay for a consumer that joins an enable already in flight", async () => {
@@ -540,6 +544,25 @@ describe("WebContentsCdpService", () => {
     // standing in for it.
     expect(lease.mainFrameId).toBeNull();
     expect(lease.contexts.get(1)).toBe(MAIN_FRAME_ID);
+  });
+
+  it("leaves Page enabled when its last holder releases", async () => {
+    const lease = await acquireCdpLease(asWebContents(wc), ["Page", "Runtime"]);
+    await lease.release();
+
+    // Other main-process callers enable Page ad hoc without a lease and expect
+    // it to stay on; Runtime has no such caller and goes off as before.
+    expect(wc.debugger.count("Runtime.disable")).toBe(1);
+    expect(wc.debugger.count("Page.disable")).toBe(0);
+  });
+
+  it("retires outstanding leases on the test reset", async () => {
+    const lease = await acquireCdpLease(asWebContents(wc), ["Page"]);
+    __resetCdpLeasesForTests();
+
+    expect(lease.invalidated).toBe(true);
+    expect(await lease.refreshMainFrameId()).toBeNull();
+    expect(wc.debugger.count("Page.getFrameTree")).toBe(0);
   });
 
   it("does not let a context-tracking failure escape into the debugger emit", async () => {

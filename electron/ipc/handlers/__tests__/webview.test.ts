@@ -1150,8 +1150,11 @@ describe("registerWebviewHandlers", () => {
 
       // Counting binds no longer isolates this session — the CDP lease service
       // binds its own context tracker per lease cycle — so assert on the
-      // session's own listener instead: the same function, never unbound.
-      expect(getMessageListener()).toBe(listener);
+      // session's own listener instead: bound exactly once, never unbound.
+      const binds = debuggerMock.on.mock.calls.filter(
+        ([event, bound]: unknown[]) => event === "message" && bound === listener
+      );
+      expect(binds).toHaveLength(1);
       expect(debuggerMock.off).not.toHaveBeenCalledWith("message", listener);
     });
 
