@@ -24,6 +24,7 @@ import { AgentStateService } from "./AgentStateService.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import {
   type ExitReason,
+  type GracefulCaptureLease,
   type PtySpawnOptions,
   type TerminalInfo,
   type TerminalPublicState,
@@ -127,11 +128,11 @@ export interface TerminalProcessCallbacks {
    */
   onSubmitStatus?: (id: string, state: TerminalSubmitStatusState) => void;
   /**
-   * The graceful-shutdown capture window opening (`true`) and closing
-   * (`false`), paired once per teardown (#12432). The owner keeps this PTY's
-   * reads flowing past its memory and backpressure holds in between.
+   * Opens this terminal's graceful-shutdown capture window (#12432), at most
+   * once per teardown. The owner keeps the PTY's reads flowing past its memory
+   * and backpressure holds until the lease is closed.
    */
-  onGracefulCapture?: (id: string, active: boolean) => void;
+  openGracefulCapture?: (id: string) => GracefulCaptureLease | null;
 }
 
 export interface TerminalProcessDependencies {
@@ -196,6 +197,7 @@ export class TerminalProcess {
   private identityWatcher!: IdentityWatcher;
 
   private gracefulShutdownInFlight: Promise<string | null> | null = null;
+  private gracefulCaptureLease: GracefulCaptureLease | null = null;
   private writeQueue!: WriteQueue;
   private inputController!: TerminalInputController;
   private ptyDataPipeline!: PtyDataPipeline;
@@ -535,6 +537,7 @@ export class TerminalProcess {
       },
       emitData: (data) => self.emitData(data),
       queueAgentOutput: (agentId, data) => self.queueAgentOutput(agentId, data),
+      shouldDiscardCapturedChunk: (data) => self.gracefulCaptureLease?.shouldDiscard(data) ?? false,
     });
     this.preservedSnapshotCapture = new PreservedSnapshotCapture({
       get id() {
@@ -1487,25 +1490,15 @@ export class TerminalProcess {
   }
 
   private enterGracefulCapture(): () => void {
-    const notify = this.callbacks.onGracefulCapture;
-    if (!notify) return () => {};
-    try {
-      notify(this.id, true);
-    } catch (error) {
-      // Whatever the owner managed to open before throwing must not outlive
-      // the failed attempt.
-      try {
-        notify(this.id, false);
-      } catch {
-        // The original failure is the one worth reporting.
-      }
-      throw error;
-    }
+    const lease = this.callbacks.openGracefulCapture?.(this.id) ?? null;
+    if (!lease) return () => {};
+    this.gracefulCaptureLease = lease;
     let closed = false;
     return () => {
       if (closed) return;
       closed = true;
-      notify(this.id, false);
+      if (this.gracefulCaptureLease === lease) this.gracefulCaptureLease = null;
+      lease.close();
     };
   }
 

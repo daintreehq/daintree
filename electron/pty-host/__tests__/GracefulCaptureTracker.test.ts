@@ -7,6 +7,7 @@ import {
   IPC_HIGH_WATERMARK_PERCENT,
   IPC_MAX_PAUSE_MS,
   IPC_MAX_QUEUE_BYTES,
+  type GracefulCaptureLease,
 } from "../../services/pty/types.js";
 import { logBuffer } from "../../services/LogBuffer.js";
 import { getLogLevelOverrides, setLogLevelOverrides } from "../../utils/logger.js";
@@ -34,7 +35,13 @@ function createHost() {
     emitDataLoss,
   });
 
-  return { tracker, coordinators, live, emitDataLoss, addTerminal };
+  const open = (id: string): GracefulCaptureLease => {
+    const lease = tracker.open(id);
+    if (!lease) throw new Error(`no capture window for ${id}`);
+    return lease;
+  };
+
+  return { tracker, coordinators, live, emitDataLoss, addTerminal, open };
 }
 
 function createIpcQueue(coordinators: Map<string, PtyPauseCoordinator>): IpcQueueManager {
@@ -60,14 +67,14 @@ function createPortQueue(coordinators: Map<string, PtyPauseCoordinator>): PortQu
   });
 }
 
-/** The host's routing decision, reduced to one queue that is never acked. */
+/** A kept chunk posted to a renderer queue that never acknowledges. */
 function route(
-  tracker: GracefulCaptureTracker,
+  lease: GracefulCaptureLease,
   queue: IpcQueueManager | PortQueueManager,
   id: string,
   chunk: string
 ): boolean {
-  if (tracker.shouldDiscardDelivery(id, chunk)) return false;
+  if (lease.shouldDiscard(chunk)) return false;
   queue.addBytes(id, chunk.length);
   queue.applyBackpressure(id, queue.getUtilization(id));
   return true;
@@ -98,13 +105,13 @@ describe("GracefulCaptureTracker", () => {
   }
 
   it("resumes a governor-paused terminal and leaves its neighbour paused", () => {
-    const { tracker, addTerminal } = createHost();
+    const { tracker, addTerminal, open } = createHost();
     const capturing = addTerminal("t1");
     const neighbour = addTerminal("t2");
     capturing.pause("resource-governor");
     neighbour.pause("resource-governor");
 
-    tracker.enter("t1");
+    open("t1");
 
     expect(tracker.isCapturing("t1")).toBe(true);
     expect(capturing.isReadPaused).toBe(false);
@@ -118,52 +125,56 @@ describe("GracefulCaptureTracker", () => {
     expect(tracker.isCapturing("t2")).toBe(false);
   });
 
-  it("does nothing for a terminal without a coordinator", () => {
+  it("opens nothing for a terminal without a coordinator", () => {
     const { tracker } = createHost();
-    tracker.enter("ghost");
+    expect(tracker.open("ghost")).toBeNull();
     expect(tracker.isCapturing("ghost")).toBe(false);
-    expect(tracker.shouldDiscardDelivery("ghost", CHUNK)).toBe(false);
-    expect(() => tracker.end("ghost", "settled")).not.toThrow();
+    expect(() => tracker.end("ghost", "terminal-exit")).not.toThrow();
     expect(captureLogs()).toHaveLength(0);
   });
 
-  it("delivers output while nothing asks for the terminal to be held", () => {
-    const { tracker, addTerminal } = createHost();
+  it("refuses a second window on a terminal that already has one", () => {
+    const { tracker, addTerminal, open } = createHost();
     const coordinator = addTerminal("t1");
-    tracker.enter("t1");
+    const first = open("t1");
 
-    expect(tracker.shouldDiscardDelivery("t1", CHUNK)).toBe(false);
+    expect(tracker.open("t1")).toBeNull();
 
-    coordinator.pause("resource-governor");
-    expect(tracker.shouldDiscardDelivery("t1", CHUNK)).toBe(true);
-
-    coordinator.resume("resource-governor");
-    expect(tracker.shouldDiscardDelivery("t1", CHUNK)).toBe(false);
+    first.close();
+    expect(coordinator.isCapturing).toBe(false);
+    expect(tracker.open("t1")).not.toBeNull();
   });
 
-  it("never discards for a terminal that is not capturing", () => {
-    const { tracker, addTerminal } = createHost();
+  it("keeps output while nothing asks for the terminal to be held", () => {
+    const { addTerminal, open } = createHost();
     const coordinator = addTerminal("t1");
-    coordinator.pause("ipc-queue");
-    expect(tracker.shouldDiscardDelivery("t1", CHUNK)).toBe(false);
+    const lease = open("t1");
+
+    expect(lease.shouldDiscard(CHUNK)).toBe(false);
+
+    coordinator.pause("resource-governor");
+    expect(lease.shouldDiscard(CHUNK)).toBe(true);
+
+    coordinator.resume("resource-governor");
+    expect(lease.shouldDiscard(CHUNK)).toBe(false);
   });
 
   it("keeps an unacknowledged renderer queue under its watermark while capture reads on", () => {
-    const { tracker, coordinators, addTerminal } = createHost();
+    const { coordinators, addTerminal, open } = createHost();
     const coordinator = addTerminal("t1");
     const queue = createIpcQueue(coordinators);
-    tracker.enter("t1");
+    const lease = open("t1");
 
-    let delivered = 0;
+    let kept = 0;
     let dropped = 0;
     // Several times the queue's own hard cap, with no acknowledgement at all.
     for (let i = 0; i < 200; i++) {
-      if (route(tracker, queue, "t1", CHUNK)) delivered++;
+      if (route(lease, queue, "t1", CHUNK)) kept++;
       else dropped++;
       expect(coordinator.isReadPaused).toBe(false);
     }
 
-    expect(delivered).toBeGreaterThan(0);
+    expect(kept).toBeGreaterThan(0);
     expect(dropped).toBeGreaterThan(0);
     expect(queue.getQueuedBytes("t1")).toBeLessThan(HIGH_WATERMARK_BYTES + CHUNK.length);
     expect(queue.getQueuedBytes("t1")).toBeLessThan(IPC_MAX_QUEUE_BYTES);
@@ -171,12 +182,12 @@ describe("GracefulCaptureTracker", () => {
   });
 
   it("bounds a per-window port queue the same way", () => {
-    const { tracker, coordinators, addTerminal } = createHost();
+    const { coordinators, addTerminal, open } = createHost();
     const coordinator = addTerminal("t1");
     const queue = createPortQueue(coordinators);
-    tracker.enter("t1");
+    const lease = open("t1");
 
-    for (let i = 0; i < 200; i++) route(tracker, queue, "t1", CHUNK);
+    for (let i = 0; i < 200; i++) route(lease, queue, "t1", CHUNK);
 
     expect(coordinator.isReadPaused).toBe(false);
     expect(coordinator.hasToken("port-queue-7")).toBe(true);
@@ -184,39 +195,41 @@ describe("GracefulCaptureTracker", () => {
     queue.dispose();
   });
 
-  it("delivers everything to a renderer that keeps up", () => {
-    const { tracker, coordinators, addTerminal } = createHost();
+  it("keeps everything for a renderer that keeps up", () => {
+    const { coordinators, addTerminal, open } = createHost();
     addTerminal("t1");
     const queue = createIpcQueue(coordinators);
-    tracker.enter("t1");
+    const lease = open("t1");
 
     for (let i = 0; i < 200; i++) {
-      expect(route(tracker, queue, "t1", CHUNK)).toBe(true);
+      expect(route(lease, queue, "t1", CHUNK)).toBe(true);
       queue.removeBytes("t1", CHUNK.length);
       queue.tryResume("t1");
     }
     queue.dispose();
   });
 
-  it("re-pauses a surviving terminal whose renderer is still behind, and resyncs it once", () => {
-    const { tracker, coordinators, addTerminal, emitDataLoss } = createHost();
+  it("re-pauses a surviving terminal whose renderer is still behind, and marks the gap once", () => {
+    const { tracker, coordinators, addTerminal, emitDataLoss, open } = createHost();
     const coordinator = addTerminal("t1");
     const queue = createIpcQueue(coordinators);
-    tracker.enter("t1");
+    const lease = open("t1");
 
     let droppedBytes = 0;
     for (let i = 0; i < 100; i++) {
-      if (!route(tracker, queue, "t1", CHUNK)) droppedBytes += CHUNK.length;
+      if (!route(lease, queue, "t1", CHUNK)) droppedBytes += CHUNK.length;
     }
     expect(droppedBytes).toBeGreaterThan(0);
 
-    tracker.end("t1", "settled");
+    lease.close();
+    lease.close();
 
     expect(tracker.isCapturing("t1")).toBe(false);
     expect(coordinator.isCapturing).toBe(false);
     expect(coordinator.isReadPaused).toBe(true);
     expect(emitDataLoss).toHaveBeenCalledTimes(1);
     expect(emitDataLoss).toHaveBeenCalledWith("t1", droppedBytes);
+    expect(lease.shouldDiscard(CHUNK)).toBe(false);
 
     // The queue's own safety bound still applies to the restored hold.
     vi.advanceTimersByTime(IPC_MAX_PAUSE_MS);
@@ -224,71 +237,71 @@ describe("GracefulCaptureTracker", () => {
     queue.dispose();
   });
 
-  it("restores normal protection once a surviving terminal's capture ends", () => {
-    const { tracker, addTerminal } = createHost();
+  it("restores normal protection once a surviving terminal's window closes", () => {
+    const { addTerminal, open } = createHost();
     const coordinator = addTerminal("t1");
-    tracker.enter("t1");
-    tracker.end("t1", "settled");
+    const lease = open("t1");
+    lease.close();
 
     coordinator.pause("resource-governor");
 
     expect(coordinator.isReadPaused).toBe(true);
-    expect(tracker.shouldDiscardDelivery("t1", CHUNK)).toBe(false);
+    expect(lease.shouldDiscard(CHUNK)).toBe(false);
   });
 
-  it("does not resync a terminal that was killed", () => {
-    const { tracker, addTerminal, live, emitDataLoss } = createHost();
+  it("does not mark a gap on a terminal that was killed", () => {
+    const { addTerminal, live, emitDataLoss, open } = createHost();
     const coordinator = addTerminal("t1");
-    tracker.enter("t1");
+    const lease = open("t1");
     coordinator.pause("resource-governor");
-    tracker.shouldDiscardDelivery("t1", CHUNK);
+    lease.shouldDiscard(CHUNK);
     live.set("t1", false);
 
-    tracker.end("t1", "settled");
+    lease.close();
 
     expect(emitDataLoss).not.toHaveBeenCalled();
   });
 
-  it("does not resync when nothing was dropped", () => {
-    const { tracker, addTerminal, emitDataLoss } = createHost();
+  it("does not mark a gap when nothing was discarded", () => {
+    const { addTerminal, emitDataLoss, open } = createHost();
     addTerminal("t1");
-    tracker.enter("t1");
-    tracker.end("t1", "settled");
+    open("t1").close();
     expect(emitDataLoss).not.toHaveBeenCalled();
   });
 
-  it("counts dropped bytes, not characters", () => {
-    const { tracker, addTerminal, emitDataLoss } = createHost();
+  it("counts discarded bytes, not characters", () => {
+    const { addTerminal, emitDataLoss, open } = createHost();
     const coordinator = addTerminal("t1");
-    tracker.enter("t1");
+    const lease = open("t1");
     coordinator.pause("resource-governor");
 
-    tracker.shouldDiscardDelivery("t1", "é");
-    tracker.shouldDiscardDelivery("t1", new Uint8Array(5));
-    tracker.end("t1", "settled");
+    lease.shouldDiscard("é");
+    lease.shouldDiscard(new Uint8Array(5));
+    lease.close();
 
     expect(emitDataLoss).toHaveBeenCalledWith("t1", 7);
   });
 
-  it("ends once however many times it is told to", () => {
-    const { tracker, addTerminal, emitDataLoss } = createHost();
+  it("retires the window when the terminal exits first", () => {
+    const { tracker, addTerminal, emitDataLoss, open } = createHost();
     const coordinator = addTerminal("t1");
-    tracker.enter("t1");
-    tracker.enter("t1");
+    const lease = open("t1");
     coordinator.pause("resource-governor");
-    tracker.shouldDiscardDelivery("t1", CHUNK);
+    lease.shouldDiscard(CHUNK);
 
     tracker.end("t1", "terminal-exit");
-    tracker.end("t1", "settled");
+    expect(emitDataLoss).not.toHaveBeenCalled();
+    lease.close();
 
     expect(captureLogs()).toHaveLength(1);
     expect(emitDataLoss).not.toHaveBeenCalled();
+    expect(coordinator.isCapturing).toBe(false);
   });
 
-  it("ignores a lease left behind by a replaced incarnation", () => {
-    const { tracker, coordinators, addTerminal } = createHost();
+  it("keeps a replaced incarnation's window off its successor", () => {
+    const { tracker, coordinators, addTerminal, emitDataLoss, open } = createHost();
     const old = addTerminal("t1");
-    tracker.enter("t1");
+    const oldLease = open("t1");
     old.pause("resource-governor");
 
     // Respawn at the same id retires the old coordinator.
@@ -297,25 +310,30 @@ describe("GracefulCaptureTracker", () => {
 
     expect(coordinators.get("t1")).toBe(replacement);
     expect(tracker.isCapturing("t1")).toBe(false);
-    expect(tracker.shouldDiscardDelivery("t1", CHUNK)).toBe(false);
+    expect(oldLease.shouldDiscard(CHUNK)).toBe(false);
     expect(replacement.isReadPaused).toBe(true);
 
-    tracker.enter("t1");
-    expect(replacement.isCapturing).toBe(true);
+    const newLease = open("t1");
     expect(replacement.isReadPaused).toBe(false);
+
+    // The old teardown settling late must not close the new window.
+    oldLease.close();
+    expect(replacement.isCapturing).toBe(true);
+    expect(newLease.shouldDiscard(CHUNK)).toBe(true);
+    expect(emitDataLoss).not.toHaveBeenCalled();
   });
 
   it("logs one bounded summary without terminal output", () => {
-    const { tracker, addTerminal } = createHost();
+    const { addTerminal, open } = createHost();
     const coordinator = addTerminal("t1");
     coordinator.pause("resource-governor");
     coordinator.pause("port-queue-4");
-    tracker.enter("t1");
+    const lease = open("t1");
     coordinator.pause("ipc-queue");
-    tracker.shouldDiscardDelivery("t1", "SECRET-OUTPUT codex resume 1234");
+    lease.shouldDiscard("SECRET-OUTPUT codex resume 1234");
     vi.advanceTimersByTime(750);
 
-    tracker.end("t1", "settled");
+    lease.close();
 
     const entries = captureLogs();
     expect(entries).toHaveLength(1);
@@ -338,23 +356,24 @@ describe("GracefulCaptureTracker", () => {
   });
 
   it("records a sleep hold that kept capture from reading", () => {
-    const { tracker, addTerminal } = createHost();
+    const { addTerminal, open } = createHost();
     const coordinator = addTerminal("t1");
     coordinator.pause("system-sleep");
 
-    tracker.enter("t1");
+    const lease = open("t1");
     expect(coordinator.isReadPaused).toBe(true);
-    tracker.end("t1", "settled");
+    lease.close();
 
     const context = captureLogs()[0]!.context as Record<string, unknown>;
     expect(context).toMatchObject({ sleepHeld: true, suppressed: [] });
   });
 
-  it("drops every lease on dispose", () => {
-    const { tracker, addTerminal } = createHost();
+  it("drops every window on dispose", () => {
+    const { tracker, addTerminal, open } = createHost();
     addTerminal("t1");
-    tracker.enter("t1");
+    const lease = open("t1");
     tracker.dispose();
     expect(tracker.isCapturing("t1")).toBe(false);
+    expect(() => lease.close()).not.toThrow();
   });
 });

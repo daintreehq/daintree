@@ -1,4 +1,5 @@
 import { createLogger } from "../utils/logger.js";
+import type { GracefulCaptureHost, GracefulCaptureLease } from "../services/pty/types.js";
 import {
   pauseTokenFamily,
   type PauseTokenFamily,
@@ -17,7 +18,8 @@ export interface GracefulCaptureDeps {
 
 export type GracefulCaptureEndCause = "settled" | "terminal-exit";
 
-interface CaptureLease {
+interface CaptureState {
+  id: string;
   // The lease belongs to one coordinator, i.e. one incarnation of the id. A
   // respawn replaces the coordinator, and the new terminal must not inherit it.
   coordinator: PtyPauseCoordinator;
@@ -30,67 +32,80 @@ interface CaptureLease {
 /**
  * Host side of a graceful-shutdown capture window (#12432). While a terminal's
  * quit handshake is waiting on its output, its pause holds stop gating reads
- * (see `PtyPauseCoordinator.enterCaptureMode`), and this decides what happens
- * to the output that is now read despite them.
+ * (see `PtyPauseCoordinator.enterCaptureMode`), and the lease decides what
+ * happens to the output that is now read despite them.
  *
- * Output is delivered as usual while no owner wants the terminal held. Once
- * one does — a renderer queue past its watermark, a governor under memory
- * pressure — the chunk is dropped instead of being handed to a consumer that
- * asked for it to stop. The queues stay bounded because the hold that would
- * have paused the PTY now stops the posting instead, and the dropped bytes are
- * display output for a pane that is closing. If the close does not take, one
- * `data-loss` pulse makes the renderer resync what it missed.
+ * While no owner wants the terminal held, output flows as usual. Once one does
+ * — a renderer queue past its watermark, a governor under memory pressure —
+ * the chunk is discarded by the terminal's pipeline, exactly as if the hold
+ * had kept it unread: nothing is delivered, analysed, or mirrored, so the
+ * exemption adds no work downstream. The teardown's own listener has still
+ * seen it. If the close does not take, one `data-loss` pulse marks the gap.
  */
-export class GracefulCaptureTracker {
-  private readonly leases = new Map<string, CaptureLease>();
+export class GracefulCaptureTracker implements GracefulCaptureHost {
+  private readonly leases = new Map<string, CaptureState>();
 
   constructor(private readonly deps: GracefulCaptureDeps) {}
 
-  enter(id: string): void {
-    if (this.liveLease(id)) return;
+  open(id: string): GracefulCaptureLease | null {
+    // One window per terminal: a second opener would be able to close the
+    // first one's exemption out from under it.
+    if (this.currentState(id)) return null;
     const coordinator = this.deps.getOrCreatePauseCoordinator(id);
-    if (!coordinator) return;
+    if (!coordinator) return null;
+
     const heldAtEntry = new Set<PauseTokenFamily>();
     for (const token of coordinator.heldTokens) heldAtEntry.add(pauseTokenFamily(token));
-    const readPausedAtEntry = coordinator.isReadPaused;
-    coordinator.enterCaptureMode();
-    this.leases.set(id, {
+    const state: CaptureState = {
+      id,
       coordinator,
       startedAt: Date.now(),
       heldAtEntry: [...heldAtEntry].sort(),
-      readPausedAtEntry,
+      readPausedAtEntry: coordinator.isReadPaused,
       discardedBytes: 0,
-    });
+    };
+    coordinator.enterCaptureMode();
+    this.leases.set(id, state);
+
+    return {
+      shouldDiscard: (data) => this.shouldDiscard(state, data),
+      close: () => this.finish(state, "settled"),
+    };
   }
 
   isCapturing(id: string): boolean {
-    return this.liveLease(id) !== undefined;
+    return this.currentState(id) !== undefined;
   }
 
-  /**
-   * True when this chunk should be dropped rather than routed to any renderer,
-   * mirror, or fallback transport.
-   */
-  shouldDiscardDelivery(id: string, data: string | Uint8Array): boolean {
-    const lease = this.liveLease(id);
-    if (!lease || !lease.coordinator.isPaused) return false;
-    lease.discardedBytes +=
+  /** Retires whatever window is open on `id`, e.g. because the terminal exited. */
+  end(id: string, cause: GracefulCaptureEndCause): void {
+    const state = this.currentState(id);
+    if (state) this.finish(state, cause);
+  }
+
+  dispose(): void {
+    this.leases.clear();
+  }
+
+  private shouldDiscard(state: CaptureState, data: string | Uint8Array): boolean {
+    if (!this.isCurrent(state) || !state.coordinator.isPaused) return false;
+    state.discardedBytes +=
       typeof data === "string" ? Buffer.byteLength(data, "utf8") : data.byteLength;
     return true;
   }
 
-  end(id: string, cause: GracefulCaptureEndCause): void {
-    const lease = this.liveLease(id);
-    if (!lease) return;
-    this.leases.delete(id);
+  private finish(state: CaptureState, cause: GracefulCaptureEndCause): void {
+    if (!this.isCurrent(state)) return;
+    this.leases.delete(state.id);
 
-    const suppressed = lease.coordinator.exitCaptureMode();
+    const { id, coordinator } = state;
+    const suppressed = coordinator.exitCaptureMode();
     const survived = cause === "settled" && this.deps.isTerminalLive(id);
-    if (survived && lease.discardedBytes > 0) {
+    if (survived && state.discardedBytes > 0) {
       try {
-        this.deps.emitDataLoss(id, lease.discardedBytes);
+        this.deps.emitDataLoss(id, state.discardedBytes);
       } catch {
-        // Parent port closing — the renderer resyncs on its next wake anyway.
+        // Parent port closing — nothing left to mark the gap on.
       }
     }
 
@@ -98,28 +113,28 @@ export class GracefulCaptureTracker {
     logger.info("Graceful capture drain ended", {
       terminalId: id,
       cause,
-      durationMs: Date.now() - lease.startedAt,
-      heldAtEntry: lease.heldAtEntry,
-      readPausedAtEntry: lease.readPausedAtEntry,
+      durationMs: Date.now() - state.startedAt,
+      heldAtEntry: state.heldAtEntry,
+      readPausedAtEntry: state.readPausedAtEntry,
       suppressed,
-      sleepHeld: lease.coordinator.hasToken("system-sleep"),
-      discardedBytes: lease.discardedBytes,
+      sleepHeld: coordinator.hasToken("system-sleep"),
+      discardedBytes: state.discardedBytes,
       survived,
-      readPausedAfter: survived ? lease.coordinator.isReadPaused : undefined,
+      readPausedAfter: survived ? coordinator.isReadPaused : undefined,
     });
   }
 
-  dispose(): void {
-    this.leases.clear();
+  private isCurrent(state: CaptureState): boolean {
+    return this.currentState(state.id) === state;
   }
 
-  private liveLease(id: string): CaptureLease | undefined {
-    const lease = this.leases.get(id);
-    if (!lease) return undefined;
-    if (this.deps.getPauseCoordinator(id) !== lease.coordinator) {
+  private currentState(id: string): CaptureState | undefined {
+    const state = this.leases.get(id);
+    if (!state) return undefined;
+    if (this.deps.getPauseCoordinator(id) !== state.coordinator) {
       this.leases.delete(id);
       return undefined;
     }
-    return lease;
+    return state;
   }
 }

@@ -2,14 +2,43 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess, type TerminalProcessCallbacks } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
-import { GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS, GRACEFUL_SHUTDOWN_TIMEOUT_MS } from "../types.js";
+import {
+  GRACEFUL_SHUTDOWN_BUFFER_SIZE,
+  GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS,
+  GRACEFUL_SHUTDOWN_TIMEOUT_MS,
+  IPC_HIGH_WATERMARK_PERCENT,
+  IPC_MAX_QUEUE_BYTES,
+} from "../types.js";
+import { headlessMirrorScheduler } from "../HeadlessMirrorScheduler.js";
 import { getAgentConfig } from "../../../../shared/config/agentRegistry.js";
 import { PtyPauseCoordinator } from "../../../pty-host/PtyPauseCoordinator.js";
 import { GracefulCaptureTracker } from "../../../pty-host/GracefulCaptureTracker.js";
+import { IpcQueueManager } from "../../../pty-host/ipcQueue.js";
 
 vi.mock("node-pty", () => ({ spawn: vi.fn() }));
 
+// Sizes of what the graceful teardown's matcher is asked to scan — the
+// passive end-of-agent scan takes the last match, so it is filtered out.
+const gracefulMatcherInputs = vi.hoisted(() => [] as number[]);
+
+vi.mock("../sessionIdCapture.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../sessionIdCapture.js")>();
+  return {
+    ...actual,
+    createSessionIdMatcher: (pattern: string | undefined) => {
+      const matcher = actual.createSessionIdMatcher(pattern);
+      if (!matcher) return matcher;
+      const recording: typeof matcher = (raw, options) => {
+        if (options.occurrence === "first") gracefulMatcherInputs.push(raw.length);
+        return matcher(raw, options);
+      };
+      return recording;
+    },
+  };
+});
+
 const CTRL_C = String.fromCharCode(3);
+const NATIVE_READ_BYTES = 64 * 1024;
 
 function codexGateText(): string {
   const resume = getAgentConfig("codex")?.resume;
@@ -24,6 +53,9 @@ function codexGateText(): string {
  * agent prints waits (in the kernel buffer, for real) and reaches listeners
  * only once reads resume. A test that merely invoked the capture callback
  * would pass against the original bug; this one has to actually unblock reads.
+ *
+ * The backlog is flushed synchronously on resume, which is stricter than
+ * node-pty (its stream delivers on the next tick).
  */
 function createPausablePty(options?: { writeThrows?: boolean }) {
   const dataListeners = new Set<(data: string) => void>();
@@ -91,19 +123,20 @@ function createPausablePty(options?: { writeThrows?: boolean }) {
 
 type PausablePty = ReturnType<typeof createPausablePty>;
 
+const spawnedTerminals: TerminalProcess[] = [];
+
 function spawnContext(): SpawnContext {
   return { shell: "/bin/zsh", args: ["-l"], env: {} };
 }
 
 /**
  * The pty-host side, as `pty-host.ts` wires it: one coordinator per terminal
- * over its raw pause/resume, and TerminalProcess's capture callback driving
- * the tracker.
+ * over its raw pause/resume, and the tracker handing out capture windows.
  */
 function createHost() {
   const coordinators = new Map<string, PtyPauseCoordinator>();
   const terminals = new Map<string, TerminalProcess>();
-  const captureEvents: Array<[string, boolean]> = [];
+  const captureEvents: Array<[string, "open" | "close"]> = [];
   const tracker = new GracefulCaptureTracker({
     getPauseCoordinator: (id) => coordinators.get(id),
     getOrCreatePauseCoordinator: (id) => coordinators.get(id),
@@ -121,7 +154,8 @@ function createHost() {
       agentId?: string;
       agentSessionId?: string;
       withCapture?: boolean;
-      onCapture?: TerminalProcessCallbacks["onGracefulCapture"];
+      openCapture?: TerminalProcessCallbacks["openGracefulCapture"];
+      emitData?: (data: string) => void;
     } = {}
   ) {
     const coordinator = new PtyPauseCoordinator({
@@ -129,15 +163,30 @@ function createHost() {
       resume: () => handles.pty.resume(),
     });
     coordinators.set(id, coordinator);
-    const callbacks: TerminalProcessCallbacks = { emitData: () => {}, onExit: () => {} };
+    const callbacks: TerminalProcessCallbacks = {
+      emitData: (_termId, data) => options.emitData?.(String(data)),
+      onExit: () => {},
+    };
     if (options.withCapture !== false) {
-      callbacks.onGracefulCapture =
-        options.onCapture ??
-        ((termId, active) => {
-          captureEvents.push([termId, active]);
-          handles.events.push(active ? "capture-open" : "capture-close");
-          if (active) tracker.enter(termId);
-          else tracker.end(termId, "settled");
+      callbacks.openGracefulCapture =
+        options.openCapture ??
+        ((termId) => {
+          // Logged before opening: opening is what resumes reads.
+          handles.events.push("capture-open");
+          const lease = tracker.open(termId);
+          if (!lease) {
+            handles.events.pop();
+            return null;
+          }
+          captureEvents.push([termId, "open"]);
+          return {
+            shouldDiscard: (data) => lease.shouldDiscard(data),
+            close: () => {
+              captureEvents.push([termId, "close"]);
+              handles.events.push("capture-close");
+              lease.close();
+            },
+          };
         });
     }
     const terminal = new TerminalProcess(
@@ -167,6 +216,7 @@ function createHost() {
       handles.pty
     );
     terminals.set(id, terminal);
+    spawnedTerminals.push(terminal);
     handles.events.length = 0;
     return { terminal, coordinator };
   }
@@ -182,9 +232,15 @@ async function flushMicrotasks(): Promise<void> {
 describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    gracefulMatcherInputs.length = 0;
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    // Let the shared headless scheduler run its pending tick before timers are
+    // cleared: a cancelled tick leaves it convinced one is still coming.
+    await vi.advanceTimersByTimeAsync(0);
+    for (const terminal of spawnedTerminals.splice(0)) terminal.dispose();
+    await vi.advanceTimersByTimeAsync(0);
     vi.clearAllTimers();
     vi.useRealTimers();
     vi.restoreAllMocks();
@@ -281,6 +337,99 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     expect(b.coordinator.isCapturing).toBe(false);
   });
 
+  it("keeps held output out of the rest of the pipeline", async () => {
+    const host = createHost();
+    const handles = createPausablePty();
+    const delivered: string[] = [];
+    const { terminal, coordinator } = host.spawn("t1", handles, {
+      agentId: "claude",
+      emitData: (data) => delivered.push(data),
+    });
+    const mirrorFeeds = vi.spyOn(headlessMirrorScheduler, "enqueue");
+
+    handles.output("history line\n");
+    expect(delivered).toEqual(["history line\n"]);
+    expect(mirrorFeeds).toHaveBeenCalled();
+
+    coordinator.pause("resource-governor");
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    delivered.length = 0;
+    mirrorFeeds.mockClear();
+    for (let i = 0; i < 20; i++) handles.output("x".repeat(NATIVE_READ_BYTES));
+    expect(delivered).toEqual([]);
+    expect(mirrorFeeds).not.toHaveBeenCalled();
+
+    // Once nothing holds it any more, output flows everywhere as usual.
+    coordinator.resume("resource-governor");
+    handles.output("visible goodbye\n");
+    expect(delivered).toEqual(["visible goodbye\n"]);
+    expect(mirrorFeeds).toHaveBeenCalled();
+
+    handles.output("claude --resume shed-1\n");
+    await expect(promise).resolves.toBe("shed-1");
+  });
+
+  it("captures while a renderer that never acknowledges stays within its queue watermark", async () => {
+    const host = createHost();
+    const handles = createPausablePty();
+    let terminalCoordinator: PtyPauseCoordinator | undefined;
+    const queue = new IpcQueueManager({
+      getTerminal: () => undefined,
+      getPauseCoordinator: () => terminalCoordinator,
+      sendEvent: vi.fn(),
+      metricsEnabled: () => false,
+      emitTerminalStatus: vi.fn(),
+      emitReliabilityMetric: vi.fn(),
+    });
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    // The host's IPC fallback: post, account, and let the watermark decide.
+    const { terminal, coordinator } = host.spawn("t1", handles, {
+      agentId: "claude",
+      emitData: (data) => {
+        const bytes = Buffer.byteLength(data, "utf8");
+        queue.addBytes("t1", bytes);
+        queue.applyBackpressure("t1", queue.getUtilization("t1"));
+      },
+    });
+    terminalCoordinator = coordinator;
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+
+    // Several times the queue's hard cap, and not one acknowledgement.
+    for (let i = 0; i < 150; i++) {
+      handles.output("y".repeat(NATIVE_READ_BYTES));
+      expect(handles.paused).toBe(false);
+    }
+    const highWatermarkBytes = (IPC_MAX_QUEUE_BYTES * IPC_HIGH_WATERMARK_PERCENT) / 100;
+    expect(coordinator.hasToken("ipc-queue")).toBe(true);
+    expect(queue.getQueuedBytes("t1")).toBeLessThan(highWatermarkBytes + NATIVE_READ_BYTES);
+
+    handles.output("claude --resume unacked-1\n");
+    await expect(promise).resolves.toBe("unacked-1");
+    queue.dispose();
+  });
+
+  it("scans a bounded window however much the agent prints before its hint", async () => {
+    const host = createHost();
+    const handles = createPausablePty();
+    const { terminal } = host.spawn("t1", handles, { agentId: "claude" });
+
+    const promise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    for (let i = 0; i < 40; i++) handles.output("z".repeat(NATIVE_READ_BYTES));
+    handles.output("claude --resume frag-");
+    handles.output("ment-1\n");
+
+    await expect(promise).resolves.toBe("frag-ment-1");
+    expect(gracefulMatcherInputs.length).toBeGreaterThan(40);
+    expect(Math.max(...gracefulMatcherInputs)).toBeLessThanOrEqual(
+      GRACEFUL_SHUTDOWN_BUFFER_SIZE + NATIVE_READ_BYTES
+    );
+  });
+
   it("reads the footer at the head of a burst larger than the capture buffer", async () => {
     const host = createHost();
     const handles = createPausablePty();
@@ -290,7 +439,7 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     await flushMicrotasks();
     expect(handles.writes).toEqual([CTRL_C]);
 
-    handles.output(`  Ctrl+C ${codexGateText()}  ${"\x1b[0m.".repeat(64 * 1024)}`);
+    handles.output(`  Ctrl+C ${codexGateText()}  ${"\x1b[0m.".repeat(8 * 1024)}`);
     await flushMicrotasks();
     expect(handles.writes).toEqual([CTRL_C, CTRL_C]);
 
@@ -298,7 +447,10 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     await expect(promise).resolves.toBe("burst-gate");
   });
 
-  it("settles without writing when the resumed reads already carry the hint", async () => {
+  it("settles without writing when the agent was already on its way out", async () => {
+    // The hint was printed while the terminal was held — the agent was quit a
+    // moment before the teardown began. Resumed reads can deliver it before a
+    // single byte is written, and nothing must be sent after it.
     const host = createHost();
     const handles = createPausablePty();
     const { terminal, coordinator } = host.spawn("t1", handles, { agentId: "claude" });
@@ -311,8 +463,8 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
     expect(handles.writes).toEqual([]);
     expect(host.captureEvents).toEqual([
-      ["t1", true],
-      ["t1", false],
+      ["t1", "open"],
+      ["t1", "close"],
     ]);
   });
 
@@ -340,6 +492,41 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     expect(handles.backlog).toBe(1);
   });
 
+  describe("under a system-sleep hold", () => {
+    it("never reads past it, so a teardown asleep through its deadline times out", async () => {
+      const host = createHost();
+      const handles = createPausablePty();
+      const { terminal, coordinator } = host.spawn("t1", handles, { agentId: "claude" });
+      coordinator.pause("system-sleep");
+
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      handles.output("claude --resume asleep-1\n");
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_TIMEOUT_MS);
+
+      await expect(promise).resolves.toBeNull();
+      expect(handles.backlog).toBe(1);
+      expect(coordinator.hasToken("system-sleep")).toBe(true);
+    });
+
+    it("captures once the machine wakes, even with other holds still recorded", async () => {
+      const host = createHost();
+      const handles = createPausablePty();
+      const { terminal, coordinator } = host.spawn("t1", handles, { agentId: "claude" });
+      coordinator.pause("system-sleep");
+      coordinator.pause("resource-governor");
+
+      const promise = terminal.gracefulShutdown();
+      await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+      handles.output("claude --resume woke-1\n");
+      expect(handles.backlog).toBe(1);
+
+      coordinator.resume("system-sleep");
+
+      await expect(promise).resolves.toBe("woke-1");
+    });
+  });
+
   describe("opens and closes the window exactly once", () => {
     async function expectOneWindow(
       run: (ctx: { terminal: TerminalProcess; handles: PausablePty }) => Promise<unknown>,
@@ -355,8 +542,8 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
       await run({ terminal, handles });
 
       expect(host.captureEvents).toEqual([
-        ["t1", true],
-        ["t1", false],
+        ["t1", "open"],
+        ["t1", "close"],
       ]);
       expect(coordinator.isCapturing).toBe(false);
       expect(host.tracker.isCapturing("t1")).toBe(false);
@@ -449,7 +636,7 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
       await expectOneWindow(async ({ terminal, handles }) => {
         const promise = terminal.gracefulShutdown();
         await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
-        handles.output(`claude --resume burst-1\n${"x".repeat(256 * 1024)}`);
+        handles.output(`claude --resume burst-1\n${"x".repeat(NATIVE_READ_BYTES)}`);
         await expect(promise).resolves.toBe("burst-1");
       });
     });
@@ -474,12 +661,10 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
   it("still tears down when the host cannot open the window", async () => {
     const host = createHost();
     const handles = createPausablePty();
-    const calls: boolean[] = [];
     const { terminal } = host.spawn("t1", handles, {
       agentId: "claude",
-      onCapture: (_id, active) => {
-        calls.push(active);
-        if (active) throw new Error("host unavailable");
+      openCapture: () => {
+        throw new Error("host unavailable");
       },
     });
 
@@ -489,7 +674,5 @@ describe("TerminalProcess.gracefulShutdown — capture window (#12432)", () => {
     handles.output("claude --resume no-window\n");
 
     await expect(promise).resolves.toBe("no-window");
-    // The failed open is rolled back once, and never closed a second time.
-    expect(calls).toEqual([true, false]);
   });
 });

@@ -466,7 +466,7 @@ function getOrCreatePauseCoordinator(id: string): PtyPauseCoordinator | undefine
 }
 
 // Terminals whose graceful-shutdown quit handshake is waiting on their output
-// (#12432). Opened and closed by TerminalProcess through PtyManager.
+// (#12432). TerminalProcess opens and closes the windows through PtyManager.
 const gracefulCaptureTracker = new GracefulCaptureTracker({
   getPauseCoordinator,
   getOrCreatePauseCoordinator,
@@ -483,6 +483,7 @@ const gracefulCaptureTracker = new GracefulCaptureTracker({
       timestamp: Date.now(),
     }),
 });
+ptyManager.setGracefulCaptureHost(gracefulCaptureTracker);
 
 // Per-window MessagePort connections for direct Renderer ↔ Pty Host communication
 const rendererConnections = new Map<number, RendererConnection>();
@@ -894,13 +895,6 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     terminalInfo.contentEpoch++;
   }
 
-  // A capturing terminal is read past its holds so its quit handshake can see
-  // the output; what a hold asked to stop is dropped here rather than routed to
-  // a renderer, mirror, or fallback that asked for less (#12432).
-  if (gracefulCaptureTracker.shouldDiscardDelivery(id, data)) {
-    return;
-  }
-
   // EXPERIMENT (hibernation teardown step 1 — #10807): visual streaming is
   // unconditional with respect to the background tier. recomputeActivityTiers no
   // longer demotes terminals to "background", and as belt-and-suspenders we hard-
@@ -1272,14 +1266,6 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         console.log(`[PtyHost] Analysis buffer full - dropping frame for terminal ${id}`);
       }
     }
-  }
-});
-
-ptyManager.on("graceful-capture", (id: string, active: boolean) => {
-  if (active) {
-    gracefulCaptureTracker.enter(id);
-  } else {
-    gracefulCaptureTracker.end(id, "settled");
   }
 });
 

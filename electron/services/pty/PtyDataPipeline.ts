@@ -20,6 +20,7 @@ export interface PtyDataPipelineHost {
   readonly shouldHandleOscColorQueries: boolean;
   emitData(data: string | Uint8Array): void;
   queueAgentOutput(agentId: string, data: string): void;
+  shouldDiscardCapturedChunk(data: string): boolean;
 }
 
 export class PtyDataPipeline {
@@ -38,6 +39,15 @@ export class PtyDataPipeline {
       terminal.firstByteAt = now;
     }
     terminal.lastOutputTime = now;
+
+    // Graceful-shutdown capture (#12432): the teardown reads this PTY on its own
+    // listener past holds that would otherwise have paused it. Everywhere else
+    // a chunk those holds still want stopped is handled as if it had stayed
+    // unread — no renderer delivery, analysis, headless mirror, or agent output
+    // — so the exemption costs nothing downstream of the capture itself.
+    if (this.host.shouldDiscardCapturedChunk(data)) {
+      return;
+    }
 
     // Hibernation removed: PTY output ALWAYS flows through the live parse
     // pipeline regardless of activity tier, so a backgrounded pane's renderer

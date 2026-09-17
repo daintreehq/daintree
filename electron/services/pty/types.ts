@@ -342,6 +342,22 @@ export const GRACEFUL_SHUTDOWN_TIMEOUT_MS = 3000;
 // shutdown.ts` with its RPC round-trip still covered.
 export const GRACEFUL_KILL_TERMINAL_BUDGET_MS = GRACEFUL_SHUTDOWN_TIMEOUT_MS + 250;
 export const GRACEFUL_SHUTDOWN_BUFFER_SIZE = 8 * 1024;
+
+/**
+ * One graceful-shutdown capture window (#12432), handed out by the pty-host
+ * that owns the terminal's pause holds. While open, those holds no longer stop
+ * the PTY's reads — the quit handshake needs the output — and `shouldDiscard`
+ * names the chunks they would still have kept unread.
+ */
+export interface GracefulCaptureLease {
+  shouldDiscard(data: string | Uint8Array): boolean;
+  close(): void;
+}
+
+export interface GracefulCaptureHost {
+  /** Null when there is nothing to exempt, or a window is already open. */
+  open(terminalId: string): GracefulCaptureLease | null;
+}
 // Delay between writing the input-clear prelude and the quit command. Without this gap,
 // the target CLI's async event loop can drop or corrupt the quit command bytes under load.
 export const GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS = 100;
