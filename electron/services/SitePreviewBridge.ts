@@ -17,9 +17,11 @@
  * one; and nothing the guest says about files, paths or revisions is acted on
  * here. What survives validation is an observation, forwarded as such.
  *
- * There is intentionally no "evaluate this script in the guest" operation. The
- * runtime body arrives once, at bind time, and the only other thing evaluated
- * is a fixed host-authored mode poke. See `sitePreview/guestRuntime.ts`.
+ * There is intentionally no "evaluate this script in the guest" operation, and
+ * no caller-supplied body either: a bind names a host-registered guest adapter
+ * (`sitePreview/guestAdapters.ts`) and the host loads that adapter's text
+ * itself. The only other thing evaluated is a fixed host-authored mode poke.
+ * See `sitePreview/guestRuntime.ts`.
  */
 
 import { randomBytes, randomUUID } from "node:crypto";
@@ -39,13 +41,17 @@ import { getWebviewDialogService } from "./WebviewDialogService.js";
 import { getProjectForWebContents } from "../window/webContentsRegistry.js";
 import { validateGuestEnvelope, type GuestEnvelopeRejection } from "./sitePreview/guestProtocol.js";
 import {
-  MAX_RUNTIME_SOURCE_BYTES,
   buildDisposeSource,
   buildGuestRuntimeSource,
   buildModeUpdateSource,
   buildClearSelectionSource,
   buildReselectSource,
 } from "./sitePreview/guestRuntime.js";
+import {
+  loadGuestAdapterSource,
+  resolveGuestAdapter,
+  type GuestAdapter,
+} from "./sitePreview/guestAdapters.js";
 
 const DEV_PREVIEW_PANEL_KIND = "dev-preview";
 
@@ -107,6 +113,9 @@ export interface SitePreviewBridgeDeps {
   push: (payload: SitePreviewPushPayload) => void;
   newSessionId: () => string;
   newBindingName: () => string;
+  /** The guest runtime registry. Injected so tests need no real asset on disk. */
+  resolveGuestAdapter: (adapterId: string) => Pick<GuestAdapter, "id" | "pluginId"> | null;
+  loadGuestAdapterSource: (adapterId: string) => Promise<string>;
 }
 
 interface Binding {
@@ -115,6 +124,10 @@ interface Binding {
   projectId: string;
   webContentsId: number;
   bindingName: string;
+  /** The guest adapter this binding names, and the plugin that owns it. */
+  adapterId: string;
+  pluginId: string;
+  /** The adapter's body, resolved host-side at bind time. */
   runtimeSource: string;
   mode: SitePreviewMode;
   documentEpoch: number;
@@ -212,6 +225,8 @@ export class SitePreviewBridge {
       // binding by name. It is obfuscation, not authorisation — anything running
       // in the document can enumerate globals and find it either way.
       newBindingName: () => `__daintreeSitePreview_${randomBytes(8).toString("hex")}`,
+      resolveGuestAdapter,
+      loadGuestAdapterSource,
       ...deps,
     };
   }
@@ -253,7 +268,7 @@ export class SitePreviewBridge {
   async bind(input: {
     projectId: string;
     panelId: string;
-    runtimeSource: string;
+    adapterId: string;
     mode: SitePreviewMode;
   }): Promise<SitePreviewBindingState> {
     return this.withPanelLock(input.panelId, () => this.bindLocked(input));
@@ -262,10 +277,10 @@ export class SitePreviewBridge {
   private async bindLocked(input: {
     projectId: string;
     panelId: string;
-    runtimeSource: string;
+    adapterId: string;
     mode: SitePreviewMode;
   }): Promise<SitePreviewBindingState> {
-    const { projectId, panelId, runtimeSource, mode } = input;
+    const { projectId, panelId, adapterId, mode } = input;
 
     if (this.closed) {
       throw new AppError({
@@ -275,11 +290,12 @@ export class SitePreviewBridge {
       });
     }
 
-    if (Buffer.byteLength(runtimeSource, "utf8") > MAX_RUNTIME_SOURCE_BYTES) {
+    const adapter = this.deps.resolveGuestAdapter(adapterId);
+    if (!adapter) {
       throw new AppError({
-        code: "PAYLOAD_TOO_LARGE",
-        message: "Site preview runtime source exceeds the per-binding ceiling",
-        context: { panelId },
+        code: "NOT_FOUND",
+        message: "No guest runtime is registered under that id",
+        context: { panelId, adapterId },
       });
     }
 
@@ -317,6 +333,20 @@ export class SitePreviewBridge {
       });
     }
 
+    // Loaded before anything is torn down: a failed read would otherwise leave
+    // the panel with no binding at all.
+    const runtimeSource = await this.deps.loadGuestAdapterSource(adapterId);
+    // The read is the first await a bind performs, so a shutdown can complete
+    // underneath it. `disposeAll` has already walked the bindings map by then
+    // and would never see the one this call is about to add.
+    if (this.closed) {
+      throw new AppError({
+        code: "CANCELLED",
+        message: "The site preview bridge is shutting down",
+        context: { panelId },
+      });
+    }
+
     // Rebinding the same panel supersedes the previous session rather than
     // running two runtimes that would fight over the global.
     for (const existing of [...this.bindings.values()]) {
@@ -331,6 +361,8 @@ export class SitePreviewBridge {
       projectId,
       webContentsId,
       bindingName: this.deps.newBindingName(),
+      adapterId,
+      pluginId: adapter.pluginId,
       runtimeSource,
       mode,
       documentEpoch: 0,
@@ -583,6 +615,9 @@ export class SitePreviewBridge {
       console.warn("[SitePreviewBridge] dropped guest envelope", {
         sessionId: binding.sessionId,
         panelId: binding.panelId,
+        // Which runtime is misbehaving, and whose it is.
+        adapterId: binding.adapterId,
+        pluginId: binding.pluginId,
         reason,
         droppedMessages: binding.droppedMessages,
       });

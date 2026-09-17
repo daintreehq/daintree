@@ -13,6 +13,8 @@ import { GUEST_RUNTIME_GLOBAL } from "../sitePreview/guestRuntime.js";
 import type { SitePreviewPushPayload } from "../../../shared/types/ipc/sitePreview.js";
 
 const PANEL_ID = "panel-1";
+const ADAPTER_ID = "test.guest";
+const PLUGIN_ID = "test.plugin";
 const PROJECT_ID = "project-1";
 const WEB_CONTENTS_ID = 42;
 const MAIN_FRAME_ID = "frame-main";
@@ -69,6 +71,10 @@ function makeHarness(overrides: { guestProject?: string | null; panelKind?: stri
   const wc = new FakeWebContents();
   const pushed: SitePreviewPushPayload[] = [];
   let sessionCounter = 0;
+  // Stands in for the host's guest-adapter registry: the bridge never sees a
+  // caller-supplied body, so a test that wants one registers it here.
+  const adapterBodies = new Map<string, string>([[ADAPTER_ID, ""]]);
+  const adapterLoad: { fails: boolean; gate: Promise<void> | null } = { fails: false, gate: null };
   const bridge = new SitePreviewBridge({
     push: (payload) => pushed.push(payload),
     listGuests: () => [
@@ -83,8 +89,15 @@ function makeHarness(overrides: { guestProject?: string | null; panelKind?: stri
       overrides.guestProject === undefined ? PROJECT_ID : overrides.guestProject,
     newSessionId: () => `session-${++sessionCounter}`,
     newBindingName: () => "__binding",
+    resolveGuestAdapter: (adapterId) =>
+      adapterBodies.has(adapterId) ? { id: adapterId, pluginId: PLUGIN_ID } : null,
+    loadGuestAdapterSource: async (adapterId) => {
+      if (adapterLoad.gate) await adapterLoad.gate;
+      if (adapterLoad.fails) throw new Error("asset missing");
+      return adapterBodies.get(adapterId) ?? "";
+    },
   });
-  return { bridge, wc, pushed };
+  return { bridge, wc, pushed, adapterBodies, adapterLoad };
 }
 
 /** Replay the execution-context announcements CDP makes after `Runtime.enable`. */
@@ -134,7 +147,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "/* runtime */",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -148,11 +161,72 @@ describe("SitePreviewBridge", () => {
     expect(methods).toContain("Runtime.evaluate");
   });
 
+  it("refuses a bind that names a runtime the host never registered", async () => {
+    await expect(
+      harness.bridge.bind({
+        projectId: PROJECT_ID,
+        panelId: PANEL_ID,
+        adapterId: "not.registered",
+        mode: "browse",
+      })
+    ).rejects.toMatchObject({ code: "NOT_FOUND" });
+
+    // Nothing was attached or installed on the guest's behalf.
+    expect(harness.wc.debugger.methods()).toEqual([]);
+    expect(harness.bridge.listCandidates(PROJECT_ID)[0]?.boundSessionId).toBeNull();
+  });
+
+  it("leaves the live binding alone when the adapter's body cannot be read", async () => {
+    const first = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+
+    harness.adapterLoad.fails = true;
+
+    await expect(
+      harness.bridge.bind({
+        projectId: PROJECT_ID,
+        panelId: PANEL_ID,
+        adapterId: ADAPTER_ID,
+        mode: "browse",
+      })
+    ).rejects.toThrow(/asset missing/);
+
+    // A failed rebind must not have torn down the session that still works.
+    expect(harness.bridge.getState(PROJECT_ID, first.sessionId)).not.toBeNull();
+  });
+
+  it("registers no binding when the bridge shuts down while the body is loading", async () => {
+    let release: (() => void) | null = null;
+    harness.adapterLoad.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const bind = harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    // The read is the first await a bind performs, so a shutdown can finish
+    // walking the bindings map before this one is ever in it.
+    await harness.bridge.disposeAll();
+    release!();
+
+    await expect(bind).rejects.toThrow(/shutting down/);
+    expect(harness.bridge.listCandidates(PROJECT_ID)[0]?.boundSessionId).toBeNull();
+    expect(harness.wc.debugger.listenerCount("message")).toBe(0);
+  });
+
   it("bakes the session, epoch and binding name into the installed source", async () => {
+    harness.adapterBodies.set(ADAPTER_ID, "api.post({ type: 'x' });");
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "api.post({ type: 'x' });",
+      adapterId: ADAPTER_ID,
       mode: "select",
     });
 
@@ -170,7 +244,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     announceContexts(harness.wc);
@@ -188,7 +262,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     announceContexts(harness.wc);
@@ -221,7 +295,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     announceContexts(harness.wc);
@@ -262,7 +336,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     const before = harness.wc.debugger.commands.filter(
@@ -291,7 +365,7 @@ describe("SitePreviewBridge", () => {
       foreign.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
-        runtimeSource: "",
+        adapterId: ADAPTER_ID,
         mode: "browse",
       })
     ).rejects.toThrow(/different project/i);
@@ -303,7 +377,7 @@ describe("SitePreviewBridge", () => {
       browserPanel.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
-        runtimeSource: "",
+        adapterId: ADAPTER_ID,
         mode: "browse",
       })
     ).rejects.toThrow(/not a dev preview/i);
@@ -313,7 +387,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -328,7 +402,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     announceContexts(harness.wc);
@@ -350,13 +424,13 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     const second = await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -378,7 +452,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -401,7 +475,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -416,13 +490,13 @@ describe("SitePreviewBridge", () => {
       harness.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
-        runtimeSource: "",
+        adapterId: ADAPTER_ID,
         mode: "browse",
       }),
       harness.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
-        runtimeSource: "",
+        adapterId: ADAPTER_ID,
         mode: "browse",
       }),
     ]);
@@ -441,13 +515,13 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -464,7 +538,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     announceContexts(harness.wc);
@@ -489,7 +563,7 @@ describe("SitePreviewBridge", () => {
       harness.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
-        runtimeSource: "throw new TypeError()",
+        adapterId: ADAPTER_ID,
         mode: "browse",
       })
     ).rejects.toThrow(/threw while initialising/);
@@ -506,7 +580,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     harness.wc.debugger.rejects.set(
@@ -527,7 +601,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     const installed = harness.wc.debugger.commands.find(
@@ -548,7 +622,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -566,7 +640,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     announceContexts(harness.wc);
@@ -594,7 +668,7 @@ describe("SitePreviewBridge", () => {
       await harness.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
-        runtimeSource: "",
+        adapterId: ADAPTER_ID,
         mode: "browse",
       });
       announceContexts(harness.wc);
@@ -620,7 +694,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -629,7 +703,7 @@ describe("SitePreviewBridge", () => {
       harness.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
-        runtimeSource: "",
+        adapterId: ADAPTER_ID,
         mode: "browse",
       }),
     ]);
@@ -644,7 +718,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -652,7 +726,7 @@ describe("SitePreviewBridge", () => {
     const late = harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 
@@ -674,7 +748,7 @@ describe("SitePreviewBridge", () => {
       const bound = harness.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
-        runtimeSource: "",
+        adapterId: ADAPTER_ID,
         mode: "browse",
       });
       await vi.waitFor(() => {
@@ -715,7 +789,7 @@ describe("SitePreviewBridge", () => {
     const bound = harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
     await vi.waitFor(() => {
@@ -754,7 +828,7 @@ describe("SitePreviewBridge", () => {
     const bound = harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "select",
     });
     await vi.waitFor(() => {
@@ -776,7 +850,7 @@ describe("SitePreviewBridge", () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
-      runtimeSource: "",
+      adapterId: ADAPTER_ID,
       mode: "browse",
     });
 

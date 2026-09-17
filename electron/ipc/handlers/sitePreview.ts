@@ -1,12 +1,13 @@
 /**
  * IPC surface for the site-preview bridge.
  *
- * Deliberately absent: any method that evaluates caller-supplied script in a
- * guest. The runtime body is handed over once, at `bind`, and nothing else ever
- * runs in the page. Adding an `evaluate` op here would give every renderer-side
- * caller — including a compromised plugin view — arbitrary code execution
- * inside whatever site the user is previewing, so it is a security boundary
- * rather than an API-surface preference.
+ * Deliberately absent: any way for a caller to choose the script that runs in a
+ * guest. `bind` names one of the guest adapters main registered at startup and
+ * the host loads that adapter's body itself; there is no `evaluate` op and no
+ * runtime source on the wire. Either would give every renderer-side caller —
+ * including a compromised plugin view — arbitrary code execution inside
+ * whatever site the user is previewing, so this is a security boundary rather
+ * than an API-surface preference.
  *
  * Every op takes its project from the IPC context, never from the payload: the
  * sender's WebContents is what the host can actually prove, and resolving an
@@ -20,7 +21,7 @@ import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { getSitePreviewBridge, resetSitePreviewBridge } from "../../services/SitePreviewBridge.js";
-import { MAX_RUNTIME_SOURCE_BYTES } from "../../services/sitePreview/guestRuntime.js";
+import { registerSvelteKitGuestAdapter } from "../../services/sitePreview/svelteKitGuestAdapter.js";
 import type { HandlerDependencies } from "../types.js";
 import type { IpcContext } from "../types.js";
 import type {
@@ -34,7 +35,8 @@ const modeSchema = z.enum(["browse", "select"]);
 const bindSchema = z
   .object({
     panelId: z.string().min(1).max(256),
-    runtimeSource: z.string().min(1).max(MAX_RUNTIME_SOURCE_BYTES),
+    /** A guest adapter the host registered; unknown ids are refused by the bridge. */
+    adapterId: z.string().min(1).max(200),
     mode: modeSchema.optional(),
   })
   .strict();
@@ -104,7 +106,7 @@ export const sitePreviewNamespace = defineIpcNamespace({
         getSitePreviewBridge().bind({
           projectId: requireProject(ctx),
           panelId: payload.panelId,
-          runtimeSource: payload.runtimeSource,
+          adapterId: payload.adapterId,
           mode: payload.mode ?? "browse",
         }),
       { withContext: true }
@@ -156,6 +158,11 @@ export const sitePreviewNamespace = defineIpcNamespace({
 });
 
 export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => void {
+  // Registered here rather than in a plugin's activation: the body is an app
+  // asset, and the bridge must be able to resolve it whether or not the Site
+  // Builder's renderer view has ever been loaded.
+  const disposeAdapter = registerSvelteKitGuestAdapter();
+
   const bridge = getSitePreviewBridge({
     push: (payload) => {
       // Sent only to views of the owning project. Deliberately NOT
@@ -176,6 +183,7 @@ export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => v
   const disposeNamespace = sitePreviewNamespace.register();
   return () => {
     disposeNamespace();
+    disposeAdapter();
     void bridge.disposeAll();
     resetSitePreviewBridge();
   };

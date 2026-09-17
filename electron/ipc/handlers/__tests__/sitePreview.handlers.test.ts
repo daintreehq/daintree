@@ -16,6 +16,8 @@ vi.mock("../../../services/SitePreviewBridge.js", () => ({
   resetSitePreviewBridge: vi.fn(),
 }));
 
+const ADAPTER_ID = "daintree.sveltekit-builder.guest";
+
 function ctx(projectId: string | null): IpcContext {
   return {
     event: {} as Electron.IpcMainInvokeEvent,
@@ -38,9 +40,9 @@ describe("sitePreview handlers", () => {
 
   it("exposes no way to evaluate caller-supplied script in a guest", async () => {
     const names = Object.keys(await ops());
-    // The runtime body is handed over once at bind time. An `evaluate` op here
-    // would be arbitrary code execution inside the user's site, so this is a
-    // boundary worth pinning rather than a naming preference.
+    // A bind names a host-registered adapter; the host loads the body. An
+    // `evaluate` op here would be arbitrary code execution inside the user's
+    // site, so this is a boundary worth pinning rather than a naming preference.
     expect(names.filter((name) => /eval|exec|inject|script/i.test(name))).toEqual([]);
     expect(names.sort()).toEqual(Object.keys(SITE_PREVIEW_METHOD_CHANNELS).sort());
   });
@@ -57,7 +59,7 @@ describe("sitePreview handlers", () => {
     const all = await ops();
     await expect(all.listCandidates.handler(ctx(null))).rejects.toThrow(/project/i);
     await expect(
-      all.bind.handler(ctx(null), { panelId: "p", runtimeSource: "x", mode: "browse" })
+      all.bind.handler(ctx(null), { panelId: "p", adapterId: ADAPTER_ID, mode: "browse" })
     ).rejects.toThrow(/project/i);
     await expect(all.detach.handler(ctx(null), { sessionId: "s1" })).rejects.toThrow(/project/i);
     await expect(all.getState.handler(ctx(null), { sessionId: "s1" })).rejects.toThrow(/project/i);
@@ -68,7 +70,7 @@ describe("sitePreview handlers", () => {
     const all = await ops();
     await all.bind.handler(ctx("project-a"), {
       panelId: "panel-1",
-      runtimeSource: "runtime",
+      adapterId: ADAPTER_ID,
       // A caller-supplied project must not be able to reach the bridge; the
       // schema is strict, so this is rejected before the handler body runs.
       mode: "select",
@@ -76,14 +78,14 @@ describe("sitePreview handlers", () => {
     expect(bridge.bind).toHaveBeenCalledWith({
       projectId: "project-a",
       panelId: "panel-1",
-      runtimeSource: "runtime",
+      adapterId: ADAPTER_ID,
       mode: "select",
     });
   });
 
   it("defaults the mode to browse when the caller omits it", async () => {
     const all = await ops();
-    await all.bind.handler(ctx("project-a"), { panelId: "panel-1", runtimeSource: "runtime" });
+    await all.bind.handler(ctx("project-a"), { panelId: "panel-1", adapterId: ADAPTER_ID });
     expect(bridge.bind).toHaveBeenCalledWith(expect.objectContaining({ mode: "browse" }));
   });
 
@@ -91,18 +93,27 @@ describe("sitePreview handlers", () => {
     const all = await ops();
     const parsed = all.bind.schema.safeParse({
       panelId: "panel-1",
-      runtimeSource: "runtime",
+      adapterId: ADAPTER_ID,
       projectId: "project-b",
     });
     expect(parsed.success).toBe(false);
   });
 
-  it("caps the runtime source a single bind can carry", async () => {
+  it("accepts no way to put script on the wire", async () => {
     const all = await ops();
-    const parsed = all.bind.schema.safeParse({
-      panelId: "panel-1",
-      runtimeSource: "x".repeat(600_000),
-    });
-    expect(parsed.success).toBe(false);
+    // The body is the host's to choose. A payload carrying source is not a
+    // larger bind, it is a different contract, and the schema must refuse it.
+    expect(
+      all.bind.schema.safeParse({
+        panelId: "panel-1",
+        adapterId: ADAPTER_ID,
+        runtimeSource: "globalThis.x = 1",
+      }).success
+    ).toBe(false);
+    expect(all.bind.schema.safeParse({ panelId: "panel-1" }).success).toBe(false);
+    expect(all.bind.schema.safeParse({ panelId: "panel-1", adapterId: "" }).success).toBe(false);
+    expect(
+      all.bind.schema.safeParse({ panelId: "panel-1", adapterId: "x".repeat(600) }).success
+    ).toBe(false);
   });
 });

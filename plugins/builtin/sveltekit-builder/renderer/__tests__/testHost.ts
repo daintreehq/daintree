@@ -126,9 +126,8 @@ export function createFakeHost() {
 
   const sitePreview = {
     listCandidates: vi.fn(async () => candidates),
-    bind: vi.fn(
-      async (request: { panelId: string; runtimeSource: string; mode?: SitePreviewMode }) =>
-        state(request.panelId, request.mode ?? "browse")
+    bind: vi.fn(async (request: { panelId: string; adapterId: string; mode?: SitePreviewMode }) =>
+      state(request.panelId, request.mode ?? "browse")
     ),
     detach: vi.fn(async (_request: { sessionId: string }) => undefined),
     setMode: vi.fn(async (request: { sessionId: string; mode: SitePreviewMode }) =>

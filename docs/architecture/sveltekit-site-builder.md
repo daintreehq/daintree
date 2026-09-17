@@ -106,6 +106,8 @@ A guest message carries the raw `__svelte_meta` it read, geometry, and a runtime
 
 Every envelope is validated on five fields before its payload is looked at — protocol version, session, document epoch, sequence, and size — so a stale runtime from a previous binding, a replayed message, or an oversized body is dropped without interpretation.
 
+**The host chooses the script, not the caller.** `sitePreview.bind` takes an `adapterId`, never source: main keeps a registry of guest adapters (`electron/services/sitePreview/guestAdapters.ts`), registers the builder's at startup (`svelteKitGuestAdapter.ts`), and loads the body from an app asset. An unknown id is a `NOT_FOUND`, and every binding carries the owning plugin. The runtime used to travel from the renderer as `Function.prototype.toString()` output, which forced the whole ~1,500-line factory into one closure and broke on any transform that hoisted a helper out of it; it is now bundled by `scripts/build-main.mjs` into a standalone IIFE at `dist-electron/plugins/builtin/sveltekit-builder/guest/runtime.js`, resolved under `app.getAppPath()` in dev and inside `app.asar` when packaged. The asset is spliced into the prelude's scope, so it must leave `api` a free identifier and must not read the CDP binding directly.
+
 ## Writes
 
 The builder makes none. It holds `fs:project-read` and nothing else, its manifest declares no write capability, and every channel it registers reads: resolve a selection, read an excerpt, read revisions, read the project model. What changes the user's source is the agent they sent the selection to, working in the same worktree with their own tools.
@@ -119,6 +121,8 @@ So the honest guard is freshness, not a compare-and-swap. `host.fs.writeFile(pat
 An earlier version of this plugin did write — planned replacements over ranges of the original source, an `expectedRevision` on every write, an in-memory journal for Undo, and a re-proof of the selection after each one. The drawer never called it (see below), so it is gone: the engine, the journal, the undo channel, the receipt, and the Tailwind class model that existed to validate what those edits wrote. `packages/svelte-source-model` keeps its edit planner, which has its own tests and no caller here.
 
 ## Where it lives
+
+The guest runtime is the exception to everything below: `renderer/guest/entry.ts` is a build-time entry, not renderer code. Nothing in the plugin's bundle imports it — `scripts/build-main.mjs` bundles it separately into the plugin's dist directory, and only main ever reads it, as text.
 
 The builder is part of the dev preview, not a panel of its own. A built-in registers a **dev preview tool** (`src/registry/devPreviewToolRegistry.ts`):
 
