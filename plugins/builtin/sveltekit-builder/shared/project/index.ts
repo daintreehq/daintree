@@ -9,6 +9,7 @@ import {
 import { detectPackageManager, type PackageManagerDetection } from "./packageManager.js";
 import {
   analyzeRoutes,
+  resolveBasePath,
   resolveRoutesDirectory,
   type RouteDiagnostic,
   type RoutesDirectory,
@@ -65,12 +66,14 @@ export async function inspectProject(
   const manifest = await readJsonFile(reader, joinPath(appRoot, "package.json"));
   const declared = manifest ? declaredDependencies(manifest) : {};
 
-  const [versionReport, packageManager, routesDirectory, installStyle] = await Promise.all([
-    readInstalledVersionReport(reader, appRoot, worktreeRoot),
-    detectPackageManager(reader, appRoot, worktreeRoot),
-    resolveRoutesDirectory(reader, appRoot),
-    detectInstallStyle(reader, appRoot, worktreeRoot),
-  ]);
+  const [versionReport, packageManager, routesDirectory, installStyle, basePath] =
+    await Promise.all([
+      readInstalledVersionReport(reader, appRoot, worktreeRoot),
+      detectPackageManager(reader, appRoot, worktreeRoot),
+      resolveRoutesDirectory(reader, appRoot),
+      detectInstallStyle(reader, appRoot, worktreeRoot),
+      resolveBasePath(reader, appRoot),
+    ]);
 
   const { versions, resolutions } = versionReport;
   const support = assessSupport(versions, declared, { installStyle, resolutions });
@@ -88,6 +91,7 @@ export async function inspectProject(
       versions,
       support: support.verdict,
       routes,
+      basePath,
     },
     app: manifest
       ? {

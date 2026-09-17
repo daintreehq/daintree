@@ -6,7 +6,7 @@ import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import type { EditCapability, SelectedNode } from "../shared/model.js";
-import type { ClassDescription } from "../shared/protocol.js";
+import type { ClassConflicts, ClassDescription } from "../shared/protocol.js";
 import {
   capabilityFor,
   editTargetOf,
@@ -32,6 +32,8 @@ export interface SelectionActions {
   removeClass: (selectionId: string, token: string) => void;
   completeClasses: (query: string) => Promise<ClassCompletion>;
   describeClass: (token: string) => Promise<ClassDescription>;
+  replaceClasses: (selectionId: string, remove: string[], add: string[]) => Promise<boolean>;
+  classConflicts: (existing: string[], candidates: string[]) => Promise<ClassConflicts>;
 }
 
 type ReadySelection = Extract<SelectionState, { status: "ready" }>;
@@ -273,6 +275,7 @@ export function SelectionEdits({
   const node = selection.selection.nodes[0];
   if (!node) return null;
   const occurrences = node.definition?.renderedOccurrences ?? 1;
+  const atLeast = node.definition?.renderedOccurrencesAtLeast === true;
   // Direct edits write one element. With a component picked, that element is
   // its root — named here, beside its own file, so the identity above (the
   // component and its definition) is never read as what these controls change.
@@ -298,7 +301,9 @@ export function SelectionEdits({
           change the component.
         </InspectorNotice>
       ) : null}
-      {occurrences > 1 ? <SharedMarkupRow count={occurrences} /> : null}
+      {occurrences > 1 || atLeast ? (
+        <SharedMarkupRow count={occurrences} atLeast={atLeast} />
+      ) : null}
       <Surface title="Text" capability={capabilityFor(node, "text")}>
         <TextSurface state={state} selection={selection} actions={actions} />
       </Surface>
@@ -314,7 +319,7 @@ export function SelectionEdits({
  * — an `{#each}` draws copies — and the user meets it on most list items, so
  * it says the one fact in a line and keeps the explanation behind a disclosure.
  */
-function SharedMarkupRow({ count }: { count: number }) {
+function SharedMarkupRow({ count, atLeast }: { count: number; atLeast: boolean }) {
   const [open, setOpen] = useState(false);
   const bodyId = useId();
   return (
@@ -328,7 +333,11 @@ function SharedMarkupRow({ count }: { count: number }) {
       >
         <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-text-primary">
-          {`Applies to all ${count} rendered copies`}
+          {atLeast
+            ? count > 1
+              ? `Applies to at least ${count} rendered copies`
+              : "May apply to copies the page was too large to count"
+            : `Applies to all ${count} rendered copies`}
         </span>
         <ChevronRight
           aria-hidden="true"
@@ -517,8 +526,10 @@ function ClassSurface({
           pending={state.reselecting}
           onAdd={(tokens) => actions.addClasses(selectionId, tokens)}
           onRemove={(token) => actions.removeClass(selectionId, token)}
+          onReplace={(remove, add) => actions.replaceClasses(selectionId, remove, add)}
           complete={actions.completeClasses}
           describe={actions.describeClass}
+          conflicts={actions.classConflicts}
         />
       ) : (
         <NoDecodedValue node={node} />

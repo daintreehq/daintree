@@ -124,7 +124,7 @@ export function createSiteBuilderGuest(
   let occurrenceCounter = resumed.occurrence;
 
   const occurrenceIds = new WeakMap<Element, string>();
-  const locCounts = new Map<string, number>();
+  const locCounts = new Map<string, { count: number; partial: boolean }>();
   const teardown: Array<() => void> = [];
   const selectTeardown: Array<() => void> = [];
 
@@ -352,13 +352,22 @@ export function createSiteBuilderGuest(
    * How many live elements share this markup. Without it the inspector would
    * offer "this element only" for a line that renders every card on the page.
    */
-  function countSameLoc(loc: SourceLoc): number {
+  function sameLocOf(loc: SourceLoc | null): { sameLocCount: number; sameLocCountPartial?: true } {
+    if (loc === null) return { sameLocCount: 1 };
+    const { count, partial } = countSameLoc(loc);
+    return partial ? { sameLocCount: count, sameLocCountPartial: true } : { sameLocCount: count };
+  }
+
+  function countSameLoc(loc: SourceLoc): { count: number; partial: boolean } {
     const key = locKey(loc);
     const cached = locCounts.get(key);
     if (cached !== undefined) return cached;
     let count = 0;
     const all = document.getElementsByTagName("*");
-    for (let index = 0; index < all.length; index += 1) {
+    // Bounded like every other sweep. Past the bound the count is a floor, and
+    // says so: one copy counted is not proof the markup is unique.
+    const limit = Math.min(all.length, AUDIT_SCAN_LIMIT);
+    for (let index = 0; index < limit; index += 1) {
       const element = all[index];
       if (element === undefined) continue;
       const other = readLoc(element);
@@ -371,9 +380,12 @@ export function createSiteBuilderGuest(
         count += 1;
       }
     }
-    const bounded = Math.min(Math.max(count, 1), MAX_SAME_LOC);
-    locCounts.set(key, bounded);
-    return bounded;
+    const result = {
+      count: Math.min(Math.max(count, 1), MAX_SAME_LOC),
+      partial: all.length > AUDIT_SCAN_LIMIT,
+    };
+    locCounts.set(key, result);
+    return result;
   }
 
   function occurrenceId(node: Element): string {
@@ -472,7 +484,7 @@ export function createSiteBuilderGuest(
       loc,
       ancestry: ancestry.frames,
       tagName: clamp(target.tagName.toLowerCase(), MAX_TAG),
-      sameLocCount: loc === null ? 1 : countSameLoc(loc),
+      ...sameLocOf(loc),
       locIndex: loc === null ? 0 : indexAmongSameLoc(target, loc),
       label: describe(target),
       bounds: boundsOf(target),
@@ -1007,18 +1019,21 @@ export function createSiteBuilderGuest(
    * Repeated markup — a card per plan — draws several elements from one
    * location, and "the fourth card" is what the user selected, not "a card".
    */
-  function indexAmongSameLoc(target: Element, loc: SourceLoc): number {
+  function indexAmongSameLoc(target: Element, loc: SourceLoc): number | undefined {
     const key = locKey(loc);
     const all = document.getElementsByTagName("*");
+    const limit = Math.min(all.length, AUDIT_SCAN_LIMIT);
     let index = 0;
-    for (let cursor = 0; cursor < all.length; cursor += 1) {
+    for (let cursor = 0; cursor < limit; cursor += 1) {
       const element = all[cursor];
       if (element === undefined) continue;
       if (element === target) return index;
       const other = readLoc(element);
       if (other !== null && locKey(other) === key) index += 1;
     }
-    return 0;
+    // Past the sweep: no occurrence is claimed, so no reselect can land on the
+    // first copy in its place. The host treats a missing index as unknown.
+    return undefined;
   }
 
   /**

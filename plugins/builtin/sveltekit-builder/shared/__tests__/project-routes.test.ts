@@ -5,6 +5,7 @@ import {
   buildRouteTree,
   classifyRouteFile,
   isDynamicSegment,
+  resolveBasePath,
   resolveRoutesDirectory,
   routeIdFromSegments,
 } from "../project/routes.js";
@@ -326,5 +327,73 @@ describe("buildRouteTree", () => {
     });
 
     expect(routes).toEqual([]);
+  });
+});
+
+describe("route data files", () => {
+  it("lists the load modules feeding a page, outermost first, and drops those a reset leaves", async () => {
+    const memory = createMemoryReader({
+      "/repo/src/routes/+layout.svelte": "<slot />",
+      "/repo/src/routes/+layout.server.ts": "export const load = () => ({});",
+      "/repo/src/routes/shop/+layout.ts": "export const load = () => ({});",
+      "/repo/src/routes/shop/[item]/+page.svelte": "<h1>Item</h1>",
+      "/repo/src/routes/shop/[item]/+page.ts": "export const load = () => ({});",
+      "/repo/src/routes/shop/[item]/+page.server.ts": "export const load = () => ({});",
+      "/repo/src/routes/admin/+layout.svelte": "<slot />",
+      "/repo/src/routes/admin/+layout.ts": "export const load = () => ({});",
+      "/repo/src/routes/admin/login/+page@.svelte": "<h1>Login</h1>",
+    });
+    const { routes } = await analyzeRoutes(memory, {
+      appRoot: "/repo",
+      worktreeRoot: "/repo",
+      routesDir: "/repo/src/routes",
+    });
+
+    expect(byId(routes, "/shop/[item]").dataFiles).toEqual([
+      "src/routes/+layout.server.ts",
+      "src/routes/shop/+layout.ts",
+      "src/routes/shop/[item]/+page.server.ts",
+      "src/routes/shop/[item]/+page.ts",
+    ]);
+    // `+page@` resets to the root layout: the admin layout's load no longer runs.
+    expect(byId(routes, "/admin/login").dataFiles).toEqual(["src/routes/+layout.server.ts"]);
+  });
+
+  it("drops a load-only layout that a reset skips", async () => {
+    const memory = createMemoryReader({
+      "/repo/src/routes/+layout.server.ts": "export const load = () => ({});",
+      "/repo/src/routes/admin/+layout.server.ts": "export const load = () => ({});",
+      "/repo/src/routes/admin/login/+page@.svelte": "<h1>Login</h1>",
+      "/repo/src/routes/admin/users/+page.svelte": "<h1>Users</h1>",
+    });
+    const { routes } = await analyzeRoutes(memory, {
+      appRoot: "/repo",
+      worktreeRoot: "/repo",
+      routesDir: "/repo/src/routes",
+    });
+    expect(byId(routes, "/admin/login").dataFiles).toEqual(["src/routes/+layout.server.ts"]);
+    expect(byId(routes, "/admin/users").dataFiles).toEqual([
+      "src/routes/+layout.server.ts",
+      "src/routes/admin/+layout.server.ts",
+    ]);
+  });
+});
+
+describe("resolveBasePath", () => {
+  it("reads a literal base, says none when unset, and refuses a computed one", async () => {
+    const literal = createMemoryReader({
+      "/a/svelte.config.js": "export default { kit: { paths: { base: '/docs' } } };",
+    });
+    const unset = createMemoryReader({ "/b/svelte.config.js": "export default { kit: {} };" });
+    const computed = createMemoryReader({
+      "/c/svelte.config.js": "export default { kit: { paths: { base: process.env.BASE_PATH } } };",
+    });
+    expect(await resolveBasePath(literal, "/a")).toBe("/docs");
+    expect(await resolveBasePath(unset, "/b")).toBe("");
+    expect(await resolveBasePath(computed, "/c")).toBe(null);
+    const indirect = createMemoryReader({
+      "/d/svelte.config.js": "const paths = { base: '/x' };\nexport default { kit: { paths } };",
+    });
+    expect(await resolveBasePath(indirect, "/d")).toBe(null);
   });
 });

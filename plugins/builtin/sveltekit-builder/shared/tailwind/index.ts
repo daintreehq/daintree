@@ -8,7 +8,7 @@ export type {
   TailwindProjectRef,
   ThemeEntry,
 } from "./designSystem.js";
-export { loadTailwindDesignSystem, escapeClassName } from "./designSystem.js";
+export { loadTailwindDesignSystem, escapeClassName, stylesheetRevision } from "./designSystem.js";
 
 export type { CandidateDescription, CandidateSlot, DeclarationRole } from "./candidates.js";
 export {

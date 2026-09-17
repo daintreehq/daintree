@@ -146,6 +146,8 @@ export const DefinitionSchema = z
     revision: z.string().regex(/^[0-9a-f]{64}$/),
     /** How many nodes in the live document resolve to this same source range. */
     renderedOccurrences: z.number().int().positive(),
+    /** The count is a floor: the page was too large to count every copy. */
+    renderedOccurrencesAtLeast: z.literal(true).optional(),
   })
   .strict();
 export type Definition = z.infer<typeof DefinitionSchema>;

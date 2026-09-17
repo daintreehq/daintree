@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createHash } from "node:crypto";
 import type { ResponsiveRange } from "../shared/protocol.js";
 import type { TailwindDesignSystem } from "../shared/tailwind/index.js";
 import { readSource } from "./source.js";
@@ -6,13 +7,15 @@ import type { Workspace } from "./workspace.js";
 
 /**
  * The project's Tailwind design system, loaded once per workspace and rebuilt
- * when the CSS entry's bytes change. Only the entry is hashed: an `@import`ed
- * stylesheet or plugin changing underneath it is not noticed until the entry
- * changes or the workspace is reopened.
+ * when the CSS entry or any of the project's own stylesheets it imports changes
+ * — a theme file is where design tokens live. Dependency stylesheets under
+ * `node_modules` aren't re-read on every request; an install arrives with a
+ * change to the entry or a reopened workspace.
  */
 export interface TailwindCache {
   cssEntry: string;
-  revision: string;
+  /** The entry's revision this system was compiled from. */
+  entryRevision: string;
   loaded: Promise<LoadedSystem>;
 }
 
@@ -22,6 +25,8 @@ type LoadedSystem =
       system: TailwindDesignSystem;
       classNames: string[] | null;
       skippedModules: string[];
+      /** The project's own imported stylesheets and the revision each was compiled from. */
+      dependencies: Array<{ file: string; real: string; revision: string }>;
     }
   | { status: "unavailable"; reason: string };
 
@@ -155,22 +160,17 @@ export async function loadWorkspaceTailwind(workspace: Workspace): Promise<Works
   }
 
   let cache = workspace.tailwind;
-  if (!cache || cache.cssEntry !== cssEntry || cache.revision !== read.revision) {
-    const loaded = import("../shared/tailwind/index.js").then(
-      async ({ loadTailwindDesignSystem }): Promise<LoadedSystem> => {
-        const result = await loadTailwindDesignSystem({ appRoot: workspace.appRoot, cssEntry });
-        return result.status === "ok"
-          ? {
-              status: "ok",
-              system: result.system,
-              classNames: null,
-              skippedModules: result.skippedModules,
-            }
-          : result;
-      },
-      (error: unknown): LoadedSystem => ({ status: "unavailable", reason: String(error) })
-    );
-    cache = { cssEntry, revision: read.revision, loaded };
+  if (cache && cache.cssEntry === cssEntry && cache.entryRevision === read.revision) {
+    const cached = await cache.loaded;
+    if (cached.status === "ok" && !(await dependenciesUnchanged(cached))) {
+      if (workspace.tailwind === cache) workspace.tailwind = null;
+      cache = null;
+    }
+  } else {
+    cache = null;
+  }
+  if (!cache) {
+    cache = { cssEntry, entryRevision: read.revision, loaded: compile(workspace, cssEntry) };
     workspace.tailwind = cache;
   }
   const loaded = await cache.loaded;
@@ -180,7 +180,58 @@ export async function loadWorkspaceTailwind(workspace: Workspace): Promise<Works
     if (workspace.tailwind === cache) workspace.tailwind = null;
     return { ...loaded, unused: false };
   }
-  return { status: "ok", revision: cache.revision, loaded };
+  return { status: "ok", revision: combinedRevision(cache.entryRevision, loaded), loaded };
+}
+
+function compile(workspace: Workspace, cssEntry: string): Promise<LoadedSystem> {
+  return import("../shared/tailwind/index.js").then(
+    async ({ loadTailwindDesignSystem }): Promise<LoadedSystem> => {
+      const result = await loadTailwindDesignSystem({
+        appRoot: workspace.appRoot,
+        cssEntry,
+        readRoot: workspace.worktreePath,
+      });
+      if (result.status !== "ok") return result;
+      // The revisions of the bytes that were compiled, not of a later read: a
+      // theme saved mid-compile must not be cached under its newer hash.
+      const dependencies = result.stylesheets
+        .filter((sheet) => !sheet.real.split(path.sep).includes("node_modules"))
+        .map((sheet) => ({ file: sheet.path, real: sheet.real, revision: sheet.revision }));
+      return {
+        status: "ok",
+        system: result.system,
+        classNames: null,
+        skippedModules: result.skippedModules,
+        dependencies,
+      };
+    },
+    (error: unknown): LoadedSystem => ({ status: "unavailable", reason: String(error) })
+  );
+}
+
+async function dependenciesUnchanged(
+  loaded: Extract<LoadedSystem, { status: "ok" }>
+): Promise<boolean> {
+  const { stylesheetRevision } = await import("../shared/tailwind/index.js");
+  for (const dependency of loaded.dependencies) {
+    // Unreadable now is a change: recompiling says why, where equality wouldn't.
+    const now = await stylesheetRevision(dependency.file, dependency.real);
+    if (now === null || now !== dependency.revision) return false;
+  }
+  return true;
+}
+
+/** One revision for everything the system was compiled from. */
+function combinedRevision(
+  entryRevision: string,
+  loaded: Extract<LoadedSystem, { status: "ok" }>
+): string {
+  if (loaded.dependencies.length === 0) return entryRevision;
+  const hash = createHash("sha256").update(entryRevision);
+  for (const dependency of loaded.dependencies) {
+    hash.update(`\0${dependency.file}\0${dependency.revision}`);
+  }
+  return hash.digest("hex");
 }
 
 export async function tailwindCatalog(workspace: Workspace): Promise<
@@ -294,4 +345,38 @@ export async function describeClass(
     css: css === null ? null : css.slice(0, MAX_CANDIDATE_CSS_CHARS),
     partial: loaded.skippedModules.length > 0,
   };
+}
+
+/**
+ * Which of the element's tokens each candidate would fight with. Built on the
+ * declarations the project's Tailwind generates, so variants, composing
+ * utilities and shorthands are judged by what they write, not by name.
+ */
+export async function classConflicts(
+  workspace: Workspace,
+  existing: string[],
+  candidates: string[]
+): Promise<
+  | { status: "ok"; conflicts: Array<{ candidate: string; token: string; properties: string[] }> }
+  | Unavailable
+> {
+  const current = await loadWorkspaceTailwind(workspace);
+  if (current.status !== "ok") return unavailableOf(current);
+  const { findConflicts } = await import("../shared/tailwind/index.js");
+  const conflicts: Array<{ candidate: string; token: string; properties: string[] }> = [];
+  for (const candidate of candidates) {
+    try {
+      for (const conflict of findConflicts(current.loaded.system, existing, candidate).conflicts) {
+        if (candidates.includes(conflict.token)) continue;
+        conflicts.push({
+          candidate,
+          token: conflict.token,
+          properties: conflict.properties.slice(0, 64),
+        });
+      }
+    } catch {
+      // One candidate the engine can't analyse doesn't hide the others' conflicts.
+    }
+  }
+  return { status: "ok", conflicts: conflicts.slice(0, 256) };
 }

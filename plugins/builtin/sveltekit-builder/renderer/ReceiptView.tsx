@@ -2,7 +2,7 @@ import { useId, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import type { ReceiptState } from "./inspectorController.js";
+import type { ReceiptChange, ReceiptState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { basename } from "./copy.js";
 
@@ -26,9 +26,9 @@ const SURFACE_NOUN: Record<ReceiptState["surface"], string> = {
  * disclosure, because they are the same every time and the user who has read
  * them once does not need them pinned.
  *
- * It says which surface was written, never what the new value is: the receipt
- * carries a range and revisions, not the text, and inventing a diff from them
- * would be reporting a conclusion the panel cannot support.
+ * It says what changed as the write asked for it — the value the panel was
+ * showing and the value it sent, which main applied or it would have refused.
+ * That is a statement about the source, not about what the page now looks like.
  */
 export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: () => void }) {
   const { receipt, previewRefreshed, undo } = state;
@@ -70,6 +70,15 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
           value is an observation: "unconfirmed" until a later document proves the
           reload, "unverified" because nothing here reads computed styles back. */}
         <dl className="flex flex-col gap-0.5 text-xs">
+          {state.change ? (
+            <Fact
+              label={state.kind === "undo" ? "Reverted" : "Change"}
+              mono
+              full={describeChange(state.change, state.kind === "undo", Infinity)}
+            >
+              {describeChange(state.change, state.kind === "undo")}
+            </Fact>
+          ) : null}
           <Fact label="Preview">{previewRefreshed ? "reloaded" : "refresh unconfirmed"}</Fact>
           {state.surface === "classes" ? <Fact label="Styles">unverified</Fact> : null}
           {copies > 1 ? <Fact label="Copies">{`${copies} rendered, all changed`}</Fact> : null}
@@ -132,11 +141,53 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
   );
 }
 
-function Fact({ label, children }: { label: string; children: string }) {
+function Fact({
+  label,
+  children,
+  mono = false,
+  full,
+}: {
+  label: string;
+  children: string;
+  mono?: boolean;
+  /** The untruncated value, when the shown one is shortened. */
+  full?: string;
+}) {
   return (
     <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 leading-5">
       <dt className="text-text-secondary">{label}</dt>
-      <dd className="truncate text-text-primary">{children}</dd>
+      <dd
+        className={cn("truncate text-text-primary", mono && "font-mono")}
+        title={full ?? children}
+      >
+        {children}
+      </dd>
     </div>
   );
+}
+
+const MAX_TEXT_IN_CHANGE = 60;
+
+/** Line breaks stay visible (`⏎`), so `A⏎B` → `A B` never reads as no change. */
+function quoted(text: string, limit: number): string {
+  const shown = text.replace(/\r?\n/g, "⏎");
+  return `“${shown.length > limit ? `${shown.slice(0, limit - 1)}…` : shown}”`;
+}
+
+/** `px-6 → px-8`, `+ shadow-md`, `− px-6`; an undo reads the other way. */
+export function describeChange(
+  change: ReceiptChange,
+  reversed: boolean,
+  limit = MAX_TEXT_IN_CHANGE
+): string {
+  if (change.surface === "text") {
+    const [from, to] = reversed ? [change.after, change.before] : [change.before, change.after];
+    return `${quoted(from, limit)} → ${quoted(to, limit)}`;
+  }
+  const [removed, added] = reversed
+    ? [change.added, change.removed]
+    : [change.removed, change.added];
+  if (removed.length > 0 && added.length > 0) return `${removed.join(" ")} → ${added.join(" ")}`;
+  if (added.length > 0) return `+ ${added.join(" ")}`;
+  return `− ${removed.join(" ")}`;
 }

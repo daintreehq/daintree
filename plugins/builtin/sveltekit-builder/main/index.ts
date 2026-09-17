@@ -5,6 +5,8 @@ import {
   CHANNELS,
   ClassCompleteArgsSchema,
   ClassCompleteResultSchema,
+  ClassConflictsArgsSchema,
+  ClassConflictsResultSchema,
   ClassDescribeArgsSchema,
   ClassDescribeResultSchema,
   TailwindStatusArgsSchema,
@@ -51,7 +53,13 @@ import {
   resolveReportedPath,
   resolveWorktreePath,
 } from "./source.js";
-import { completeClasses, describeClass, tailwindCatalog, tailwindStatus } from "./tailwind.js";
+import {
+  classConflicts,
+  completeClasses,
+  describeClass,
+  tailwindCatalog,
+  tailwindStatus,
+} from "./tailwind.js";
 import { SourceTracker } from "./tracker.js";
 import { WorkspaceRegistry, type Workspace } from "./workspace.js";
 
@@ -412,6 +420,21 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
           unused: false,
         };
       return describeClass(workspace, token);
+    }
+  );
+
+  await host.registerHandler(
+    CHANNELS.classConflicts,
+    {
+      args: ClassConflictsArgsSchema,
+      result: ClassConflictsResultSchema,
+      requires: ["fs:project-read"],
+    },
+    async (_ctx, { workspaceSessionId, existing, candidates }) => {
+      const workspace = registry.get(workspaceSessionId);
+      if (!workspace)
+        return { status: "unavailable" as const, reason: "that source workspace is not open" };
+      return classConflicts(workspace, existing, candidates);
     }
   );
 

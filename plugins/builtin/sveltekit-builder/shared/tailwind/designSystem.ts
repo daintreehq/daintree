@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
+import { createHash } from "node:crypto";
 import { SUPPORTED_BASELINE } from "../model.js";
 
 /**
@@ -92,7 +93,20 @@ export interface TailwindProjectRef {
   appRoot: string;
   /** Absolute path to the CSS entry that imports Tailwind. */
   cssEntry: string;
+  /**
+   * Where the project's own stylesheets may be read from — the worktree. An
+   * `@import` resolving anywhere else is refused unless it is a dependency's
+   * stylesheet under a `node_modules` directory. Omitted, nothing is refused.
+   */
+  readRoot?: string;
 }
+
+/** Bounds on what compiling one project's CSS may read. */
+export const STYLESHEET_LIMITS = {
+  maxFileBytes: 2 * 1024 * 1024,
+  maxTotalBytes: 16 * 1024 * 1024,
+  maxFiles: 256,
+} as const;
 
 export type TailwindLoadResult =
   | {
@@ -104,6 +118,11 @@ export type TailwindLoadResult =
        * Utilities they add are absent from this system.
        */
       skippedModules: string[];
+      /**
+       * Every stylesheet `@import`ed while compiling, as real absolute paths,
+       * with the sha256 of the very bytes compiled; the entry excluded.
+       */
+      stylesheets: Array<{ path: string; real: string; revision: string }>;
     }
   | { status: "unavailable"; reason: string };
 
@@ -221,12 +240,14 @@ export async function loadTailwindDesignSystem(
   }
 
   const skipped: string[] = [];
+  const reads: StylesheetReads = { files: [], reserved: 0, totalBytes: 0, readRoot: null };
   let raw: RawDesignSystem;
   try {
-    const css = await fs.readFile(ref.cssEntry, "utf8");
+    reads.readRoot = ref.readRoot ? await fs.realpath(ref.readRoot) : null;
+    const css = await readBoundedStylesheet(ref.cssEntry, reads, { entry: true });
     raw = (await loadDesignSystem(css, {
       base: path.dirname(ref.cssEntry),
-      loadStylesheet: (id: string, base: string) => resolveStylesheet(require, id, base),
+      loadStylesheet: (id: string, base: string) => resolveStylesheet(require, id, base, reads),
       loadModule: (id: string, base: string, hint?: string) => inertModule(id, base, hint, skipped),
     })) as RawDesignSystem;
   } catch (error) {
@@ -259,7 +280,7 @@ export async function loadTailwindDesignSystem(
     );
   }
 
-  return { status: "ok", system, skippedModules: skipped };
+  return { status: "ok", system, skippedModules: skipped, stylesheets: reads.files };
 }
 
 /**
@@ -315,13 +336,117 @@ function pickLoader(
 async function resolveStylesheet(
   require: ProjectRequire,
   id: string,
-  base: string
+  base: string,
+  reads: StylesheetReads
 ): Promise<{ base: string; content: string; path: string }> {
   const file =
     id.startsWith(".") || path.isAbsolute(id)
       ? resolveRelativeCss(path.resolve(base, id))
       : resolveCssSubpath(require, id, base);
-  return { base: path.dirname(file), content: await fs.readFile(file, "utf8"), path: file };
+  const content = await readBoundedStylesheet(file, reads, { entry: false });
+  return { base: path.dirname(file), content, path: file };
+}
+
+interface StylesheetReads {
+  files: Array<{ path: string; real: string; revision: string }>;
+  reserved: number;
+  totalBytes: number;
+  readRoot: string | null;
+}
+
+function isWithin(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+/**
+ * Project CSS decides what gets read, so the read is bounded like any other
+ * input: inside the worktree or a dependency's own stylesheet, a size per file
+ * and in total, and a file count that also ends an import cycle.
+ */
+async function readBoundedStylesheet(
+  file: string,
+  reads: StylesheetReads,
+  { entry }: { entry: boolean }
+): Promise<string> {
+  // Reserved before any await: Tailwind loads sibling imports concurrently, and
+  // a count checked after the reads would let every sibling past the bound.
+  if (!entry) {
+    if (reads.reserved >= STYLESHEET_LIMITS.maxFiles) {
+      throw new Error(`more than ${STYLESHEET_LIMITS.maxFiles} stylesheets are imported`);
+    }
+    reads.reserved += 1;
+  }
+  const real = await fs.realpath(file);
+  if (
+    reads.readRoot !== null &&
+    !isWithin(reads.readRoot, real) &&
+    !real.split(path.sep).includes("node_modules")
+  ) {
+    throw new Error(`refused to read ${file}: it is outside the worktree and not a dependency`);
+  }
+  const bytes = await readBoundedBytes(real, (size) => {
+    // Checked and reserved in one step, before the bytes are read: siblings
+    // reading side by side share the budget rather than all passing it.
+    if (reads.totalBytes + size > STYLESHEET_LIMITS.maxTotalBytes) {
+      throw new Error("the imported stylesheets are too large in total");
+    }
+    reads.totalBytes += size;
+  });
+  if (bytes === null) {
+    throw new Error(`${path.basename(file)} is too large to read as a stylesheet`);
+  }
+  // The path as imported as well as where it led: a symlink retargeted to
+  // another file is a change, even when the old target's bytes are not.
+  if (!entry) reads.files.push({ path: file, real, revision: sha256(bytes) });
+  return new TextDecoder().decode(bytes);
+}
+
+/** The file's bytes, or null past the per-file bound — checked on the open handle, not a prior stat. */
+async function readBoundedBytes(
+  file: string,
+  reserve?: (size: number) => void
+): Promise<Uint8Array | null> {
+  const handle = await fs.open(file, "r");
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > STYLESHEET_LIMITS.maxFileBytes) return null;
+    reserve?.(stat.size);
+    // Sized to the file, plus room to notice it grew past the bound mid-read.
+    const buffer = Buffer.alloc(Math.min(stat.size, STYLESHEET_LIMITS.maxFileBytes) + 1);
+    let length = 0;
+    for (;;) {
+      const { bytesRead } = await handle.read(buffer, length, buffer.length - length, null);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+      // Grew since the stat: the reservation no longer describes it.
+      if (length > stat.size) return null;
+    }
+    return buffer.subarray(0, length);
+  } finally {
+    await handle.close();
+  }
+}
+
+function sha256(bytes: Uint8Array): string {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+/**
+ * The revision a stylesheet would be compiled from now, under the same bounds
+ * the compile read it with; null when it can no longer be read that way.
+ */
+export async function stylesheetRevision(
+  file: string,
+  expectedReal?: string
+): Promise<string | null> {
+  try {
+    if (expectedReal !== undefined && (await fs.realpath(file)) !== expectedReal) return null;
+    const bytes = await readBoundedBytes(file);
+    return bytes === null ? null : sha256(bytes);
+  } catch {
+    return null;
+  }
 }
 
 function resolveRelativeCss(file: string): string {

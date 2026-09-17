@@ -17,6 +17,7 @@ import {
   type SourceRevisions,
   type ComponentDefinitions,
   type PickedComponent,
+  type PagePlace,
 } from "./agentTask.js";
 import { forgetComposerMemories } from "./composerMemory.js";
 import { wireFailureMessage } from "./copy.js";
@@ -26,11 +27,13 @@ import {
   CHANNELS,
   ClassCompleteResultSchema,
   ClassDescribeResultSchema,
+  ClassConflictsResultSchema,
+  type ClassConflicts,
   TailwindStatusResultSchema,
   type ClassDescription,
   ComponentDefinitionsResultSchema,
   SourceRevisionsResultSchema,
-  SourceExcerptResultSchema,
+  ProjectModelResultSchema,
   EditApplyResultSchema,
   EditUndoResultSchema,
   IssuePushSchema,
@@ -217,7 +220,17 @@ export interface ReceiptState {
   /** Proven only by a `documentReady` from a later epoch. */
   previewRefreshed: boolean;
   undo: UndoState | null;
+  /**
+   * What the write asked for and main applied, from the value the panel was
+   * showing: removed and added class tokens, or the text before and after.
+   * Null when the panel didn't hold the previous value.
+   */
+  change: ReceiptChange | null;
 }
+
+export type ReceiptChange =
+  | { surface: "classes"; removed: string[]; added: string[] }
+  | { surface: "text"; before: string; after: string };
 
 export interface InspectorIssue {
   severity: "warning" | "error";
@@ -225,6 +238,9 @@ export interface InspectorIssue {
   /** The page's own verdict, when it came from the page. */
   code?: string;
 }
+
+/** How long an agent request waits for the route files before going without them. */
+const PAGE_PLACE_TIMEOUT_MS = 3_000;
 
 /** Matches `ClassDescribeArgsSchema`. */
 const MAX_DESCRIBED_TOKEN = 2048;
@@ -1211,14 +1227,18 @@ export class InspectorController {
       : this.state.selectionGeneration + 1;
     // Every proven selection can be continued through this panel's own writes
     // and the reload they cause; the record is refreshed by each write.
+    // A copy the page couldn't place can't be asked for again: "the first one"
+    // would be a guess, and past the page's scan bound even a count of one is
+    // only a floor.
+    const pickedOccurrence = nodes[0]?.locIndex;
     this.continuity =
-      after !== null && location !== null
+      after !== null && location !== null && pickedOccurrence !== undefined
         ? {
             file: file ?? location.file,
             afterRevision: after.revision,
             tagName: after.tagName,
             loc: { ...location },
-            locIndex: nodes[0]?.locIndex ?? 0,
+            locIndex: pickedOccurrence,
             prior: null,
             attempts: 0,
             at: this.continuity?.at ?? 0,
@@ -1557,38 +1577,44 @@ export class InspectorController {
   /* ------------------------------------------------------------------------ */
 
   addClasses(selectionId: string, tokens: string[]): Promise<boolean> {
+    return this.replaceClasses(selectionId, [], tokens);
+  }
+
+  removeClass(selectionId: string, token: string): Promise<boolean> {
+    return this.replaceClasses(selectionId, [token], []);
+  }
+
+  /**
+   * One intention, one write: `px-6` becomes `px-8` as a single transaction
+   * and a single Undo, never a removal and an addition with a moment between
+   * them where the element has neither.
+   */
+  replaceClasses(selectionId: string, remove: string[], add: string[]): Promise<boolean> {
     const target = editTargetOf(this.state, "classes", selectionId);
     const classes = target?.node.surfaces.classes;
     if (!target || !classes) return Promise.resolve(false);
     const existing = new Set(classes.tokens);
-    const add = [...new Set(tokens)].filter(
-      (token) => isClassTokenShape(token) && !existing.has(token)
+    const removing = [...new Set(remove)].filter((token) => existing.has(token));
+    const adding = [...new Set(add)].filter(
+      (token) => isClassTokenShape(token) && (!existing.has(token) || removing.includes(token))
     );
-    if (add.length === 0) return Promise.resolve(false);
-    return this.apply("classes", selectionId, [
-      {
-        kind: "set_class_tokens",
-        range: target.node.definition!.range,
-        add,
-        remove: [],
-        responsive: { kind: "base" },
-      },
-    ]);
-  }
-
-  removeClass(selectionId: string, token: string): Promise<boolean> {
-    const target = editTargetOf(this.state, "classes", selectionId);
-    const classes = target?.node.surfaces.classes;
-    if (!target || !classes || !classes.tokens.includes(token)) return Promise.resolve(false);
-    return this.apply("classes", selectionId, [
-      {
-        kind: "set_class_tokens",
-        range: target.node.definition!.range,
-        add: [],
-        remove: [token],
-        responsive: { kind: "base" },
-      },
-    ]);
+    const net = adding.filter((token) => !removing.includes(token));
+    const dropped = removing.filter((token) => !adding.includes(token));
+    if (net.length === 0 && dropped.length === 0) return Promise.resolve(false);
+    return this.apply(
+      "classes",
+      selectionId,
+      [
+        {
+          kind: "set_class_tokens",
+          range: target.node.definition!.range,
+          add: net,
+          remove: dropped,
+          responsive: { kind: "base" },
+        },
+      ],
+      { surface: "classes", removed: dropped, added: net }
+    );
   }
 
   setText(selectionId: string, text: string): Promise<boolean> {
@@ -1596,15 +1622,19 @@ export class InspectorController {
     const current = target?.node.surfaces.text;
     if (!target || !current) return Promise.resolve(false);
     if (text.trim().length === 0 || text === current.text) return Promise.resolve(false);
-    return this.apply("text", selectionId, [
-      { kind: "set_literal_text", range: target.node.definition!.range, text },
-    ]);
+    return this.apply(
+      "text",
+      selectionId,
+      [{ kind: "set_literal_text", range: target.node.definition!.range, text }],
+      { surface: "text", before: current.text, after: text }
+    );
   }
 
   private async apply(
     surface: EditSurface,
     selectionId: string,
-    operations: EditOperation[]
+    operations: EditOperation[],
+    change: ReceiptChange
   ): Promise<boolean> {
     const target = editTargetOf(this.state, surface, selectionId);
     if (!target) return false;
@@ -1614,7 +1644,7 @@ export class InspectorController {
     const previewSessionId = this.boundSessionId();
     this.update({ edit: { status: "applying", surface }, mutating: true });
     const done = await this.write(target, definition, operations);
-    return this.settle(surface, selectionId, target, previewSessionId, done);
+    return this.settle(surface, selectionId, target, previewSessionId, done, change);
   }
 
   private async write(
@@ -1643,7 +1673,8 @@ export class InspectorController {
     selectionId: string,
     target: EditTarget,
     previewSessionId: string | null,
-    done: { raw: unknown } | { error: unknown }
+    done: { raw: unknown } | { error: unknown },
+    change: ReceiptChange
   ): boolean {
     if (this.currentWorkspaceId() !== target.workspaceSessionId) {
       // The reply belongs to a workspace this panel has left; its receipt and
@@ -1703,6 +1734,7 @@ export class InspectorController {
             epochAtWrite: this.state.epoch,
             previewRefreshed: false,
             undo: { status: "available" },
+            change,
           },
           // The file's bytes moved, so every range held against it is spent —
           // including a newer selection that resolved while the write was out.
@@ -1830,6 +1862,7 @@ export class InspectorController {
         epochAtWrite: this.state.epoch,
         previewRefreshed: false,
         undo: null,
+        change: current.change,
       },
       ...(this.selectionFile() === result.receipt.file
         ? this.staleSelectionPatch("source-changed")
@@ -1903,6 +1936,31 @@ export class InspectorController {
     }
   }
 
+  /** Existing tokens the candidates would override; unavailable means "don't know", not "none". */
+  async classConflicts(existing: string[], candidates: string[]): Promise<ClassConflicts> {
+    const workspace = this.state.workspace;
+    if (workspace.status !== "ready") {
+      return { status: "unavailable", reason: "The site source isn't open" };
+    }
+    const bounded = (tokens: string[]) => tokens.filter((token) => token.length <= 2048);
+    try {
+      const raw = await this.deps.invoke(CHANNELS.classConflicts, {
+        workspaceSessionId: workspace.workspaceSessionId,
+        existing: bounded(existing).slice(0, 256),
+        candidates: bounded(candidates).slice(0, 32),
+      });
+      const parsed = ClassConflictsResultSchema.safeParse(raw);
+      return parsed.success
+        ? parsed.data
+        : { status: "unavailable", reason: "Class analysis unavailable" };
+    } catch (error) {
+      return {
+        status: "unavailable",
+        reason: formatErrorMessage(error, "Class analysis unavailable"),
+      };
+    }
+  }
+
   /** What one class token generates in this project, asked exactly rather than searched for. */
   async describeClass(token: string): Promise<ClassDescription> {
     const workspace = this.state.workspace;
@@ -1941,29 +1999,43 @@ export class InspectorController {
   }
 
   /**
-   * The owning markup with a few lines either side, for an agent task. Null when
-   * the source isn't open or main won't excerpt it (generated or dependency
-   * files); the task then goes without, and says the source wasn't traced.
+   * Where the selected page sits in the project, for an agent task: the app,
+   * its toolchain versions, and the route files serving the page's URL. Read
+   * fresh — routes are exactly what an agent adds while the panel is open.
+   * Null when the model can't be read; the task then goes without.
    */
-  async sourceExcerpt(
-    selection: SiteSelection,
-    file: string
-  ): Promise<{ text: string; firstLine: number; revision: string } | null> {
-    const range = selection.nodes[0]?.definition?.range;
-    if (!range) return null;
+  async pagePlace(selection: SiteSelection): Promise<PagePlace | null> {
     try {
-      const raw = await this.deps.invoke(CHANNELS.sourceExcerpt, {
-        workspaceSessionId: selection.workspaceSessionId,
-        file,
-        range,
-        contextLines: 6,
-      });
-      const parsed = SourceExcerptResultSchema.safeParse(raw);
-      if (!parsed.success || parsed.data.status !== "ok") return null;
+      // Optional context: a slow project scan must not hold the request up.
+      const raw = await Promise.race([
+        this.deps.invoke(CHANNELS.projectModel, {
+          workspaceSessionId: selection.workspaceSessionId,
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), PAGE_PLACE_TIMEOUT_MS)),
+      ]);
+      if (raw === null) return null;
+      const parsed = ProjectModelResultSchema.safeParse(raw);
+      if (!parsed.success) return null;
+      const model = parsed.data;
+      let pathname: string;
+      try {
+        pathname = new URL(selection.displayedUrl, "http://localhost").pathname;
+      } catch {
+        return null;
+      }
+      const { matchRoute } = await import("../shared/project/routeMatch.js");
+      const worktreePath = this.context.worktreePath;
       return {
-        text: parsed.data.text,
-        firstLine: parsed.data.firstLine,
-        revision: parsed.data.revision,
+        appPath: worktreePath
+          ? (worktreeRelative(model.appRoot, worktreePath, "") ?? "").replace(/\/$/, "")
+          : "",
+        versions: {
+          svelte: model.versions.svelte,
+          kit: model.versions.kit,
+          tailwind: model.versions.tailwind,
+        },
+        // A base the config computes can't be stripped; no route is named then.
+        route: model.basePath === null ? null : matchRoute(model.routes, pathname, model.basePath),
       };
     } catch {
       return null;

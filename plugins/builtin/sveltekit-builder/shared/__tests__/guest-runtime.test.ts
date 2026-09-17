@@ -412,6 +412,23 @@ describe("reselect", () => {
     expect(events("selectionChanged")).toHaveLength(0);
   });
 
+  it("claims no occurrence for a copy past the scan bound", () => {
+    const filler = Array.from({ length: 20_050 }, () => "<i></i>").join("");
+    document.body.innerHTML = `<b id="first"></b>${filler}<b id="late"></b>`;
+    const first = document.getElementById("first")!;
+    const late = document.getElementById("late")!;
+    setMeta(first, loc(40));
+    setMeta(late, loc(40));
+    install("select");
+
+    click(first);
+    expect(lastSelection()[0]?.locIndex).toBe(0);
+    // One copy counted, and the count says it is only a floor.
+    expect(lastSelection()[0]).toMatchObject({ sameLocCount: 1, sameLocCountPartial: true });
+    click(late);
+    expect(lastSelection()[0]?.locIndex).toBeUndefined();
+  });
+
   it("fails rather than substituting the first occurrence when the one asked for is gone", () => {
     // Repeated markup shares file, tag and revision: the host could not tell a
     // stand-in from the real thing, so a missing occurrence is a failure.

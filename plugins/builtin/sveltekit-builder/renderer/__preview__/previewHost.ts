@@ -256,6 +256,36 @@ export function createPreviewHost() {
       candidates: CATALOG.filter((entry) => entry.candidate.startsWith(query)),
     };
   });
+  // Padding along the inline axis is the one rivalry these fakes know: enough
+  // to exercise the replace-or-keep choice without pretending to be Tailwind.
+  handlers.set(CHANNELS.classConflicts, (args) => {
+    const existing = args.existing as string[];
+    const conflicts = (args.candidates as string[]).flatMap((candidate) =>
+      /^px-\d+$/.test(candidate)
+        ? existing
+            .filter((token) => /^px-\d+$/.test(token) && token !== candidate)
+            .map((token) => ({ candidate, token, properties: ["padding-left", "padding-right"] }))
+        : []
+    );
+    return { status: "ok", conflicts };
+  });
+  handlers.set(CHANNELS.projectModel, () => ({
+    appRoot: WORKTREE,
+    packageManager: "pnpm",
+    versions: { svelte: "5.38.1", kit: "2.36.0", tailwind: "4.1.12", vite: "7.1.2" },
+    support: { level: "full" },
+    basePath: "",
+    routes: [
+      {
+        routeId: "/pricing",
+        pageFile: FILE,
+        layoutFiles: ["src/routes/+layout.svelte"],
+        dataFiles: ["src/routes/pricing/+page.server.ts"],
+        dynamic: false,
+        endpointOnly: false,
+      },
+    ],
+  }));
   handlers.set(CHANNELS.tailwindStatus, () => ({ status: "available", skippedModules: [] }));
   handlers.set(CHANNELS.classDescribe, (args) => {
     const token = String(args.token ?? "");

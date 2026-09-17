@@ -2,12 +2,13 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { WaitingRow } from "./WaitingRow.js";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { splitClassTokens, type ClassCompletion } from "./inspectorController.js";
-import type { ClassDescription } from "../shared/protocol.js";
+import type { ClassConflicts, ClassDescription } from "../shared/protocol.js";
 
 const COMPLETION_DEBOUNCE_MS = 120;
 const MAX_VISIBLE_CANDIDATES = 8;
@@ -30,8 +31,10 @@ export function ClassEditor({
   pending = false,
   onAdd,
   onRemove,
+  onReplace,
   complete,
   describe,
+  conflicts,
 }: {
   tokens: string[];
   editable: boolean;
@@ -44,9 +47,14 @@ export function ClassEditor({
   pending?: boolean;
   onAdd: (tokens: string[]) => Promise<boolean>;
   onRemove: (token: string) => void;
+  /** Remove and add in one write, so one intention is one Undo. */
+  onReplace: (remove: string[], add: string[]) => Promise<boolean>;
   complete: (query: string) => Promise<ClassCompletion>;
   describe: (token: string) => Promise<ClassDescription>;
+  conflicts: (existing: string[], candidates: string[]) => Promise<ClassConflicts>;
 }) {
+  const [replacing, setReplacing] = useState<string | null>(null);
+  const replaceTarget = replacing !== null && tokens.includes(replacing) ? replacing : null;
   return (
     // The marker spans BOTH halves: the Backspace step walks from the input to
     // the chips, and a root that contains only the input finds nothing.
@@ -54,7 +62,13 @@ export function ClassEditor({
       {tokens.length === 0 ? (
         <p className="text-xs text-text-secondary">No classes yet</p>
       ) : (
-        <ClassChips tokens={tokens} editable={editable} onRemove={onRemove} describe={describe} />
+        <ClassChips
+          tokens={tokens}
+          editable={editable}
+          onRemove={onRemove}
+          onReplaceStart={setReplacing}
+          describe={describe}
+        />
       )}
       <ClassAddField
         pending={pending}
@@ -62,7 +76,11 @@ export function ClassEditor({
         editable={editable}
         saving={saving}
         onAdd={onAdd}
+        onReplace={onReplace}
+        replacing={replaceTarget}
+        onReplaceEnd={() => setReplacing(null)}
         complete={complete}
+        conflicts={conflicts}
       />
     </div>
   );
@@ -72,11 +90,13 @@ function ClassChips({
   tokens,
   editable,
   onRemove,
+  onReplaceStart,
   describe,
 }: {
   tokens: string[];
   editable: boolean;
   onRemove: (token: string) => void;
+  onReplaceStart: (token: string) => void;
   describe: (token: string) => Promise<ClassDescription>;
 }) {
   return (
@@ -89,7 +109,11 @@ function ClassChips({
               like one system. The remove control stays a real button with its
               own name and focus ring. */}
           <Badge size="sm" tone="neutral" className="max-w-full pl-0 pr-0.5 text-text-primary">
-            <ClassInspector token={token} describe={describe} />
+            <ClassInspector
+              token={token}
+              describe={describe}
+              onReplace={editable ? () => onReplaceStart(token) : undefined}
+            />
             <button
               type="button"
               aria-label={`Remove ${token}`}
@@ -127,12 +151,18 @@ type Inspection =
 function ClassInspector({
   token,
   describe,
+  onReplace,
 }: {
   token: string;
   describe: (token: string) => Promise<ClassDescription>;
+  /** Absent when the element can't be edited. */
+  onReplace?: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [inspection, setInspection] = useState<Inspection | null>(null);
+  // Replace hands focus to the class field on purpose; the popover's own
+  // close-time restoration would take it straight back to this chip.
+  const handingOff = useRef(false);
   // The request's lifetime is the token's, not the loading state's. An effect
   // that depended on `inspection` re-ran its own cleanup the moment it set
   // "loading", cancelled itself, and left the popover spinning forever.
@@ -174,7 +204,16 @@ function ClassInspector({
           {token}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" sideOffset={4} className="w-[300px] p-2.5">
+      <PopoverContent
+        align="start"
+        sideOffset={4}
+        className="w-[300px] p-2.5"
+        onCloseAutoFocus={(event) => {
+          if (!handingOff.current) return;
+          handingOff.current = false;
+          event.preventDefault();
+        }}
+      >
         <p className="mb-1.5 truncate font-mono text-xs text-text-primary" title={token}>
           {token}
         </p>
@@ -205,6 +244,21 @@ function ClassInspector({
         ) : (
           <p className="text-xs text-text-secondary">{inspection.reason}</p>
         )}
+        {onReplace ? (
+          <div className="mt-2 flex justify-end">
+            <Button
+              variant="subtle"
+              size="xs"
+              onClick={() => {
+                handingOff.current = true;
+                setOpen(false);
+                onReplace();
+              }}
+            >
+              Replace…
+            </Button>
+          </div>
+        ) : null}
       </PopoverContent>
     </Popover>
   );
@@ -216,14 +270,23 @@ function ClassAddField({
   saving,
   pending = false,
   onAdd,
+  onReplace,
+  replacing,
+  onReplaceEnd,
   complete,
+  conflicts,
 }: {
   tokens: string[];
   editable: boolean;
   saving: boolean;
   pending?: boolean;
   onAdd: (tokens: string[]) => Promise<boolean>;
+  onReplace: (remove: string[], add: string[]) => Promise<boolean>;
+  /** A chip the user chose to replace: the next submit swaps it in one write. */
+  replacing: string | null;
+  onReplaceEnd: () => void;
   complete: (query: string) => Promise<ClassCompletion>;
+  conflicts: (existing: string[], candidates: string[]) => Promise<ClassConflicts>;
 }) {
   const listboxId = useId();
   const errorId = useId();
@@ -239,7 +302,33 @@ function ClassAddField({
   const [active, setActive] = useState(-1);
   const [open, setOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** An addition that conflicts with classes already here, waiting for the user's call. */
+  const [choice, setChoice] = useState<{
+    add: string[];
+    overrides: Array<{ token: string; by: string }>;
+  } | null>(null);
+  const [analysing, setAnalysing] = useState(false);
+  /** Each conflict question; an answer to an older one is dropped. */
+  const analysisRef = useRef(0);
   const requestRef = useRef(0);
+  const choiceId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Starting a replacement puts the caret where the new class goes, and ends
+  // any question about a different addition.
+  useEffect(() => {
+    analysisRef.current += 1;
+    setAnalysing(false);
+    setChoice(null);
+    if (replacing !== null) inputRef.current?.focus();
+  }, [replacing]);
+
+  useEffect(
+    () => () => {
+      analysisRef.current += 1;
+    },
+    []
+  );
 
   const trimmed = query.trim();
   useEffect(() => {
@@ -272,21 +361,80 @@ function ClassAddField({
     setActive(-1);
   };
 
+  const blocked = !editable || saving || pending;
+
+  const finish = (saved: boolean) => {
+    // A refused write keeps what was typed, so it can be corrected and retried.
+    if (!saved) return;
+    setQuery("");
+    setChoice(null);
+    onReplaceEnd();
+    // The choice's buttons are gone; the keyboard goes back to the field.
+    inputRef.current?.focus();
+  };
+
+  const dropChoice = () => {
+    analysisRef.current += 1;
+    setAnalysing(false);
+    setChoice(null);
+  };
+
   const submit = async (value: string) => {
     const next = splitClassTokens(value);
-    if (next.length === 0 || !editable || saving) return;
-    const duplicate = next.find((token) => tokens.includes(token));
+    if (next.length === 0 || blocked || analysing) return;
+    // A picked suggestion becomes the draft, so a question about it and the
+    // Enter that answers it both refer to what is in the field.
+    if (value !== query) setQuery(value);
+    const duplicate = next.find((token) => tokens.includes(token) && token !== replacing);
     if (duplicate) {
       setError(`${duplicate} is already on this element`);
       return;
     }
-    // Suggestions are a bounded search, not a validity oracle, and nothing here
-    // or in main asks Tailwind: an unlisted token is written exactly as typed.
+    // Suggestions are a bounded search, not a validity oracle: an unlisted
+    // token is written exactly as typed.
     setError(null);
     close();
-    const saved = await onAdd(next);
-    // A refused write keeps what was typed, so it can be corrected and retried.
-    if (saved) setQuery("");
+    if (replacing !== null) {
+      finish(await onReplace([replacing], next));
+      return;
+    }
+    // An addition that overrides a class already here is almost always a
+    // replacement the user hasn't said out loud. Ask, rather than leave two
+    // competing tokens; a project whose classes can't be analysed just adds.
+    const analysis = ++analysisRef.current;
+    setAnalysing(true);
+    const found = await conflicts(tokens, next);
+    // The draft changed, Escape was pressed, or replace mode began meanwhile:
+    // this answer is about something no longer being asked.
+    if (analysis !== analysisRef.current) return;
+    setAnalysing(false);
+    if (found.status === "ok" && found.conflicts.length > 0) {
+      const overrides = [
+        ...new Map(
+          found.conflicts.map((c) => [c.token, { token: c.token, by: c.candidate }])
+        ).values(),
+      ];
+      setChoice({ add: next, overrides });
+      return;
+    }
+    finish(await onAdd(next));
+  };
+
+  const replaceOverridden = async () => {
+    if (!choice || blocked) return;
+    // Only what is still on the element: a write since the question may have
+    // removed one, and replacing nothing would quietly become an addition.
+    const remove = choice.overrides.map((o) => o.token).filter((token) => tokens.includes(token));
+    if (remove.length === 0) {
+      dropChoice();
+      return;
+    }
+    finish(await onReplace(remove, choice.add));
+  };
+
+  const keepBoth = async () => {
+    if (!choice || blocked) return;
+    finish(await onAdd(choice.add));
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
@@ -313,6 +461,11 @@ function ClassAddField({
         // user's source file on that keystroke is the wrong reading of it.
         if (event.nativeEvent.isComposing) return;
         event.preventDefault();
+        // With a conflict question showing, Enter takes its first answer.
+        if (choice !== null && trimmed === choice.add.join(" ")) {
+          void replaceOverridden();
+          return;
+        }
         const picked = open && active >= 0 ? candidates[active] : undefined;
         void submit(picked ? picked.candidate : query);
         return;
@@ -336,6 +489,11 @@ function ClassAddField({
         event.preventDefault();
         if (open && candidates.length > 0) {
           close();
+          if (analysing) dropChoice();
+        } else if (choice !== null || analysing) {
+          dropChoice();
+        } else if (replacing !== null) {
+          onReplaceEnd();
         } else {
           setQuery("");
           setError(null);
@@ -362,13 +520,14 @@ function ClassAddField({
           <Input
             density="compact"
             role="combobox"
-            aria-label="Add a class"
+            ref={inputRef}
+            aria-label={replacing !== null ? `Replace ${replacing} with` : "Add a class"}
             aria-expanded={showList}
             aria-controls={listboxId}
             aria-autocomplete="list"
             aria-activedescendant={activeId}
-            aria-describedby={error ? errorId : undefined}
-            placeholder="Add a class"
+            aria-describedby={choice ? choiceId : error ? errorId : undefined}
+            placeholder={replacing !== null ? `Replace ${replacing} with…` : "Add a class"}
             // Enabled placeholder text is text: the shared token is a quieter
             // tier the theme system calibrates for light themes, and on the
             // dark ones it measured ~2.7:1. This surface steps it up.
@@ -383,6 +542,7 @@ function ClassAddField({
               setQuery(event.target.value);
               setActive(-1);
               setError(null);
+              dropChoice();
               setOpen(true);
             }}
             onKeyDown={onKeyDown}
@@ -411,7 +571,55 @@ function ClassAddField({
           />
         </PopoverContent>
       </Popover>
-      {error ? (
+      {replacing !== null ? (
+        <div className="flex h-6 items-center justify-between gap-2 text-xs text-text-secondary">
+          <span className="min-w-0 truncate">
+            Replacing <span className="font-mono text-text-primary">{replacing}</span>
+          </span>
+          <Button variant="ghost" size="xs" onClick={onReplaceEnd}>
+            Cancel
+          </Button>
+        </div>
+      ) : null}
+      {choice ? (
+        <div
+          role="group"
+          aria-label="Class conflict"
+          className="flex flex-col gap-1.5 text-xs"
+          onKeyDown={(event) => {
+            if (event.key !== "Escape") return;
+            event.stopPropagation();
+            event.preventDefault();
+            dropChoice();
+            inputRef.current?.focus();
+          }}
+        >
+          <p id={choiceId} role="status" aria-live="polite" className="text-text-secondary">
+            {choice.overrides.map((o, index) => (
+              <span key={o.token}>
+                {index > 0 ? ", " : null}
+                <span className="font-mono text-text-primary">{o.by}</span>
+                {" conflicts with "}
+                <span className="font-mono text-text-primary">{o.token}</span>
+              </span>
+            ))}
+          </p>
+          <div className="flex flex-wrap items-center gap-1">
+            <Button
+              variant="subtle"
+              size="xs"
+              disabled={blocked}
+              onClick={() => void replaceOverridden()}
+            >
+              {`Replace ${choice.overrides.map((o) => o.token).join(" ")}`}
+            </Button>
+            <Button variant="ghost" size="xs" disabled={blocked} onClick={() => void keepBoth()}>
+              Keep both
+            </Button>
+            <span className="text-3xs text-text-secondary">⏎ replaces · Esc to edit</span>
+          </div>
+        </div>
+      ) : error ? (
         <p id={errorId} className="text-xs text-status-error">
           {error}
         </p>

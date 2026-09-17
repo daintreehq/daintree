@@ -121,6 +121,10 @@ interface RouteDir {
   page: { file: string; reset: string | null } | null;
   /** `+page.ts` / `+page.server.ts`. A page can exist without a component. */
   pageModuleFile: string | null;
+  /** Every page module, universal and server, in the order read. */
+  pageModules: string[];
+  /** `+layout.ts` / `+layout.server.ts`. */
+  layoutModules: string[];
   endpointFile: string | null;
   errorFile: string | null;
 }
@@ -133,6 +137,8 @@ function emptyRouteDir(absPath: string, segments: string[], parent: RouteDir | n
     layout: null,
     page: null,
     pageModuleFile: null,
+    pageModules: [],
+    layoutModules: [],
     endpointFile: null,
     errorFile: null,
   };
@@ -221,8 +227,12 @@ async function collectDirs(
     if (!info) continue;
     if (info.kind === "page") dir.page = { file: abs, reset: info.layoutReset };
     else if (info.kind === "layout") dir.layout = { file: abs, reset: info.layoutReset };
-    else if (info.kind === "page-load" || info.kind === "page-server") dir.pageModuleFile = abs;
-    else if (info.kind === "endpoint") dir.endpointFile = abs;
+    else if (info.kind === "page-load" || info.kind === "page-server") {
+      dir.pageModuleFile = abs;
+      dir.pageModules.push(abs);
+    } else if (info.kind === "layout-load" || info.kind === "layout-server") {
+      dir.layoutModules.push(abs);
+    } else if (info.kind === "endpoint") dir.endpointFile = abs;
     else if (info.kind === "error") dir.errorFile = abs;
   }
 
@@ -275,6 +285,37 @@ export async function analyzeRoutes(
    * so it is reported as a diagnostic rather than quietly becoming an empty
    * chain that reads like a valid page with no layouts.
    */
+  /**
+   * The directories whose layout applies, outermost first — a layout being a
+   * `+layout.svelte`, a load module, or both. Same reset rules as
+   * {@link chainFor}, which lists only the components; a load-only layout
+   * skipped by a reset must not be reported as feeding the page.
+   */
+  const dirChains = new Map<string, RouteDir[]>();
+  function dirChainFor(dir: RouteDir): RouteDir[] {
+    const cached = dirChains.get(dir.absPath);
+    if (cached) return cached;
+    dirChains.set(dir.absPath, []);
+    const inherited = dir.parent ? dirChainFor(dir.parent) : [];
+    let chain = inherited;
+    if (dir.layout || dir.layoutModules.length > 0) {
+      const base =
+        dir.layout === null || dir.layout.reset === null
+          ? inherited
+          : resetDirChain(dir.layout.reset, ancestorsOf(dir, false));
+      chain = [...base, dir];
+    }
+    dirChains.set(dir.absPath, chain);
+    return chain;
+  }
+  const resetDirChain = (target: string, candidates: RouteDir[]): RouteDir[] => {
+    if (target === "") return dirChainFor(root);
+    const match = candidates.find(
+      (dir) => dir.segments[dir.segments.length - 1] === target && dir !== root
+    );
+    return match ? dirChainFor(match) : [];
+  };
+
   const resolveReset = (target: string, candidates: RouteDir[], owner: string): string[] => {
     if (target === "") return chainFor(root);
     const match = candidates.find(
@@ -325,10 +366,26 @@ export async function analyzeRoutes(
         ? chainFor(dir)
         : resolveReset(dir.page.reset, ancestorsOf(dir, true), dir.page.file);
 
+    // The load functions that feed this page: its own, and those of every
+    // layout directory on its path whose layout still applies after a reset.
+    // A `+layout.ts` with no `+layout.svelte` beside it still runs.
+    const layoutDirs = !hasPage
+      ? []
+      : dir.page === null || dir.page.reset === null
+        ? dirChainFor(dir)
+        : resetDirChain(dir.page.reset, ancestorsOf(dir, true));
+    const dataFiles = !hasPage
+      ? []
+      : [
+          ...layoutDirs.flatMap((layoutDir) => [...layoutDir.layoutModules].sort().map(relative)),
+          ...[...dir.pageModules].sort().map(relative),
+        ];
+
     nodes.push({
       routeId: routeIdFromSegments(dir.segments),
       pageFile: dir.page ? relative(dir.page.file) : null,
       layoutFiles,
+      dataFiles,
       dynamic: dir.segments.some((segment) => !isRouteGroup(segment) && isDynamicSegment(segment)),
       endpointOnly: hasEndpoint && !hasPage,
     });
@@ -434,6 +491,37 @@ function stripComments(source: string): string {
 
 function isAbsolutePath(value: string): boolean {
   return value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+}
+
+/**
+ * `kit.paths.base` read statically, like the routes directory: `""` when the
+ * config sets none, the literal when it is one, and null when it is computed
+ * (usually from an environment variable) and so can't be known without
+ * running the config.
+ */
+export async function resolveBasePath(
+  reader: ProjectFileReader,
+  appRoot: string
+): Promise<string | null> {
+  for (const fileName of CONFIG_FILENAMES) {
+    const text = await readTextFile(reader, joinPath(appRoot, fileName));
+    if (text === null) continue;
+    const source = stripComments(text);
+    const named = /\bkit\s*:\s*\{[\s\S]{0,4000}?\bpaths\s*:\s*\{[\s\S]{0,400}?\bbase\s*:/.exec(
+      source
+    );
+    if (!named) {
+      // `paths` written any other way — `paths: configured`, `{ base }`,
+      // a spread — may set a base this can't read. Only its absence proves none.
+      return /\bpaths\b/.test(source) ? null : "";
+    }
+    const literal = /^\s*(['"`])([^'"`\n]*)\1\s*[,}]/.exec(
+      source.slice(named.index + named[0].length)
+    );
+    if (!literal || literal[2]!.includes("${")) return null;
+    return literal[2]!;
+  }
+  return "";
 }
 
 /**

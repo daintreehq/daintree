@@ -231,6 +231,7 @@ async function resolveNode(
         tagName: element.tagName,
         revision: read.revision,
         renderedOccurrences: observation.sameLocCount,
+        ...(observation.sameLocCountPartial ? { renderedOccurrencesAtLeast: true as const } : {}),
       },
       mapping: invocation === null ? "definition-only" : "exact",
       ...(await surfacesOf(read.text, element, capabilities)),

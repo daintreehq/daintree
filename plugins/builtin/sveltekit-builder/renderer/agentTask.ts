@@ -1,11 +1,17 @@
 import type { AgentState } from "@shared/types/agent";
 import type { TerminalSubmissionPhase } from "@shared/types/terminalSubmission";
 import type { SiteSelection } from "../shared/model.js";
+import type { RouteNode } from "../shared/protocol.js";
 
 /**
  * The context an agent task carries. Everything here is observed or resolved
  * source identity — never a conclusion the Inspector drew — so an agent reading
  * it can check each claim against the files itself.
+ *
+ * References, not contents: files, locations and the route that serves the
+ * page. The agent is working in the same worktree and reads what it needs;
+ * pasting source into its input would go stale the moment either side edits,
+ * and spends the agent's context on code it may not need.
  */
 export interface AgentTaskContext {
   instruction: string;
@@ -13,7 +19,8 @@ export interface AgentTaskContext {
   /** Worktree-relative file that owns the element's markup, when known. */
   file: string | null;
   worktreePath: string | null;
-  excerpt: { text: string; firstLine: number } | null;
+  /** The app and the route files around the page, when the project model answered. */
+  place: PagePlace | null;
   /** Which of {@link taskScopes} the request is about. Defaults to the element. */
   scope?: TaskScope;
 }
@@ -191,8 +198,16 @@ export interface AgentTarget {
 
 export const MAX_INSTRUCTION_CHARS = 4000;
 
+export interface PagePlace {
+  /** Worktree-relative app directory; "" when the app is the worktree. */
+  appPath: string;
+  versions: { svelte: string | null; kit: string | null; tailwind: string | null };
+  /** The route serving the page's URL, matched against the project's routes. */
+  route: RouteNode | null;
+}
+
 export function buildAgentTaskPrompt(context: AgentTaskContext): string {
-  const { selection, file, worktreePath, excerpt } = context;
+  const { selection, file, worktreePath, place } = context;
   // App-relative paths from the page map onto the worktree through the app's
   // own place in it — not through the element's file, which a visual-only
   // root doesn't have.
@@ -209,12 +224,37 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
 
   lines.push(context.instruction.trim());
   lines.push("");
-  lines.push("Context from the Daintree Site Builder:");
-  if (worktreePath) lines.push(`- Worktree: ${worktreePath}`);
   lines.push(
-    `- Page: ${selection.displayedUrl}${selection.routeId ? ` (route ${selection.routeId})` : ""}`
+    "Context from the Daintree Site Builder — file references only; read the files for the code:"
+  );
+  if (worktreePath) lines.push(`- Worktree: ${worktreePath}`);
+  if (place) {
+    const { svelte, kit, tailwind } = place.versions;
+    const stack = [
+      kit ? `SvelteKit ${kit}` : null,
+      svelte ? `Svelte ${svelte}` : null,
+      tailwind ? `Tailwind ${tailwind}` : "no Tailwind",
+    ].filter((part): part is string => part !== null);
+    lines.push(
+      `- App: ${place.appPath === "" ? "the worktree root" : place.appPath} (${stack.join(", ")})`
+    );
+  }
+  const route = place?.route ?? null;
+  lines.push(
+    `- Page: ${selection.displayedUrl}${route ? ` (route ${route.routeId})` : selection.routeId ? ` (route ${selection.routeId})` : ""}`
   );
   lines.push(`- Viewport: ${selection.viewport.width}×${selection.viewport.height}`);
+  if (route) {
+    const files = [
+      ...route.layoutFiles.map((layout) => `  - layout: ${layout}`),
+      ...(route.dataFiles ?? []).map((data) => `  - data: ${data}`),
+      ...(route.pageFile ? [`  - page: ${route.pageFile}`] : []),
+    ];
+    if (files.length > 0) {
+      lines.push("- Route files, outermost layout first:");
+      lines.push(...files);
+    }
+  }
   const scope = context.scope;
   if (scope?.kind === "component") {
     const used = scope.usedAt
@@ -230,7 +270,11 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
   if (definition) {
     const location = `${file ?? definition.location.file}:${definition.location.line}:${definition.location.column + 1}`;
     lines.push(`- Source: <${definition.tagName}> at ${location}`);
-    if (definition.renderedOccurrences > 1) {
+    if (definition.renderedOccurrencesAtLeast) {
+      lines.push(
+        `- This markup renders at least ${definition.renderedOccurrences} ${definition.renderedOccurrences === 1 ? "copy" : "copies"} on the page (too large to count them all); changing it changes every copy`
+      );
+    } else if (definition.renderedOccurrences > 1) {
       lines.push(
         `- This markup renders ${definition.renderedOccurrences} copies on the page; changing it changes all of them`
       );
@@ -245,10 +289,6 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
         `${entry.componentTag ?? "component"} (${inWorktree(entry.location.file)}:${entry.location.line})`
     );
   if (components.length > 0) lines.push(`- Rendered inside: ${components.join(" ← ")}`);
-  if (node?.surfaces.classes) {
-    lines.push(`- Current classes: ${node.surfaces.classes.tokens.join(" ") || "(none)"}`);
-  }
-  if (node?.surfaces.text) lines.push(`- Current text: ${JSON.stringify(node.surfaces.text.text)}`);
   // Every selected element goes out, not just the first: "make these match"
   // is meaningless with one of them missing.
   for (const other of selection.nodes.slice(1)) {
@@ -258,17 +298,6 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
     lines.push(
       `- Also selected: ${other.label || other.definition?.tagName || "element"} (${where})`
     );
-  }
-
-  if (excerpt && definition) {
-    const lastLine = excerpt.firstLine + excerpt.text.split("\n").length - 1;
-    lines.push("");
-    lines.push(
-      `Source around it (${file ?? definition.location.file}, lines ${excerpt.firstLine}–${lastLine}):`
-    );
-    lines.push("```svelte");
-    lines.push(excerpt.text);
-    lines.push("```");
   }
 
   lines.push("");
