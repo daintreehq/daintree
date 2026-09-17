@@ -85,22 +85,51 @@ function launchOrder(ids: readonly string[]): string[] {
   return [...leading, ...ids.filter((id) => !LEADING_AGENTS.includes(id))];
 }
 
-const ELEMENT_INTENTS = [
-  "Rewrite this copy to be clearer and more persuasive",
-  "Make this stand out more",
-  "Tighten the spacing",
-  "Make this look right on mobile",
+/**
+ * A suggestion is two things: the words that go into the draft, and a label
+ * short enough to read whole in a 280px column.
+ *
+ * They used to be one string, so the chip showed as much of the instruction as
+ * fitted and hid the rest — "Rewrite this copy to be clear…" dropped "and more
+ * persuasive", which is a stronger editorial intent than the visible half asks
+ * for. A chip must not put words in the agent's mouth that the user could not
+ * read before clicking.
+ */
+interface Intent {
+  readonly label: string;
+  readonly prompt: string;
+}
+
+const ELEMENT_INTENTS: readonly Intent[] = [
+  { label: "Clarify the copy", prompt: "Rewrite this copy to be clearer and more persuasive" },
+  { label: "Add emphasis", prompt: "Make this stand out more" },
+  { label: "Tighten spacing", prompt: "Tighten the spacing" },
+  { label: "Fix on mobile", prompt: "Make this look right on mobile" },
 ];
-const COMPONENT_INTENTS = [
-  "Polish this component's visual design",
-  "Add a subtle hover and entrance animation",
-  "Make this component responsive",
-  "Match the rest of the site's style",
+const COMPONENT_INTENTS: readonly Intent[] = [
+  { label: "Polish the design", prompt: "Polish this component's visual design" },
+  { label: "Add motion", prompt: "Add a subtle hover and entrance animation" },
+  { label: "Make responsive", prompt: "Make this component responsive" },
+  { label: "Match the site", prompt: "Match the rest of the site's style" },
 ];
 
 type Pinned = ComposerPin;
 
-/** Segments while the chain is short enough to read at a glance in the drawer. */
+/**
+ * Segments while the chain is short enough to read at a glance in the drawer.
+ *
+ * 30 characters is what fits the control's own width, and the control now gets
+ * that width at every drawer size: `PropertyRow` drops its 64px label column
+ * below a 340px drawer (see `InspectorSection`), so the 280px floor hands the
+ * segments the full content box rather than 184px of it. Before that the
+ * budget was a guess about the widest case and the narrow case silently
+ * overflowed into an `overflow-hidden` wrapper — which did not truncate a
+ * label, it removed a scope the user could no longer reach.
+ *
+ * Lowering the count instead was tried and reverted: it pushed the ordinary
+ * three-step chain (Element / PricingCard / +page.svelte) into the list form,
+ * which is a worse control for a chain short enough to see whole.
+ */
 const MAX_SEGMENTS = 3;
 const MAX_SEGMENT_CHARS = 30;
 
@@ -266,12 +295,19 @@ export function AgentComposer({
     selection.status === "ready" &&
     selection.stale !== null &&
     selection.selection.selectionId === subject.selection.selectionId;
+  // `busy` is deliberately NOT a gate. It comes from passive PTY output
+  // heuristics, which are frequently wrong, and the note beside the button
+  // already says what was seen. Blocking on it made a wrong guess
+  // unrecoverable: the advice was to check the terminal, but checking it
+  // cannot clear a heuristic that is stuck, so a finished agent could strand a
+  // written request with no way to send it. The real safeguards below — a
+  // delivery still in flight, an unproven scope, a stale subject, a
+  // half-delivered request — are all things the host can prove.
   const canSendAgain = Boolean(
     subject &&
     activeScope &&
     destination &&
     draft.trim() &&
-    !busy &&
     !sending &&
     !scopeUnproven &&
     !subjectStale &&
@@ -398,7 +434,10 @@ export function AgentComposer({
   }
 
   return (
-    <div aria-label="Ask an agent" className="flex flex-col gap-2">
+    // `role="group"` is what makes the label count: an `aria-label` on a bare
+    // div is ignored, so the composer had no accessible grouping at all once
+    // its visible header went. This restores the name without drawing one.
+    <div role="group" aria-label="Ask an agent" className="flex flex-col gap-2">
       {retargetable && current ? (
         <div className="flex min-w-0 items-center justify-between gap-2 text-xs">
           <span className="min-w-0 truncate text-text-secondary" title={subjectLabel}>
@@ -539,9 +578,14 @@ export function AgentComposer({
             >
               <SelectValue placeholder="Choose an agent" />
             </SelectTrigger>
-            {/* As wide as its trigger: session titles run long, and a menu
-                sized to them spilled past the drawer's left gutter. */}
-            <SelectContent className="w-[var(--radix-select-trigger-width)]">
+            {/* Wider than its trigger, capped at 20rem. Trigger-width was right
+                when the trigger was a full-width row; in the footer it is about
+                200px, and two claude sessions in one worktree are told apart by
+                the tail of their titles — exactly what that width cut off. The
+                cap is what keeps it from spilling past the drawer's left gutter,
+                and the available-width clamp keeps it inside the window when the
+                panel is tiled narrow. */}
+            <SelectContent className="w-[min(20rem,var(--radix-select-content-available-width))] min-w-[var(--radix-select-trigger-width)]">
               {targets.length > 0 ? (
                 <SelectGroup>
                   <SelectLabel>Running in this worktree</SelectLabel>
@@ -595,8 +639,8 @@ export function AgentComposer({
           liveTarget={liveTarget}
           onOpenTerminal={openTerminal}
           onReviewChanges={reviewChanges}
-          // Offered only when it can actually send: a busy agent, a stale
-          // subject or an empty draft would make it a button that does nothing.
+          // Offered only when it can actually send: a stale subject or an empty
+          // draft would make it a button that does nothing.
           onSendAnyway={!blockedByPartial || canSendAgain ? sendAnyway : undefined}
           onDismiss={dismissDelivery}
         />
@@ -621,14 +665,16 @@ export function AgentComposer({
               because they are code. */}
           {intents.map((intent) => (
             <Button
-              key={intent}
+              key={intent.label}
               variant="pill"
               size="xs"
-              title={intent}
+              // The words that will actually land in the draft, for anyone who
+              // wants them before committing.
+              title={intent.prompt}
               className="min-w-0 justify-start font-normal text-text-secondary"
-              onClick={() => applyIntent(intent)}
+              onClick={() => applyIntent(intent.prompt)}
             >
-              <span className="truncate">{intent}</span>
+              <span className="truncate">{intent.label}</span>
             </Button>
           ))}
         </div>
@@ -644,8 +690,11 @@ export function AgentComposer({
           account
         </p>
       ) : busy && destination?.kind === "terminal" ? (
+        // A heads-up, not a gate. Sending is still armed — this says what the
+        // terminal looked like, and leaves the call to the person who can
+        // actually look at it.
         <p className="text-xs text-text-secondary">
-          {`Activity in ${destination.target.title} — check the terminal before sending`}
+          {`Activity in ${destination.target.title} — worth a look before you send`}
         </p>
       ) : null}
     </div>
@@ -811,25 +860,32 @@ function DeliveryStatus({
         <InspectorNotice
           tone="warning"
           role="status"
-          title={`${title} may be waiting for an answer`}
+          // What was seen, not what it means. "May be waiting for an answer" is
+          // a reading of the pattern that matched; the pattern itself is the
+          // only thing the host can vouch for.
+          title={`Prompt detected in ${title}`}
           action={open}
         >
-          A prompt was detected in the terminal. Answer it there; your request goes in once it's
-          ready.
+          If it's asking you something, answer it there; your request goes in once it's ready.
         </InspectorNotice>
       );
     case "sent": {
-      // Observed terminal activity, reported as such — not a claim that the
-      // agent is working on this request in particular.
-      const working = liveTarget ? isAgentBusy(liveTarget.agentState) : false;
+      // Terminal activity, which is not evidence that the agent is working on
+      // THIS request — or on anything. The title used to read
+      // "Sent to X · working", and a reader takes that as confirmation the
+      // delivery was picked up. The one thing proven here is the send, so that
+      // is what the headline says; the observation goes below it, named as an
+      // observation.
+      const active = liveTarget ? isAgentBusy(liveTarget.agentState) : false;
       return (
         <InspectorNotice
           onDismiss={dismiss}
           tone="info"
           role="status"
-          title={working ? `Sent to ${title} · working` : `Sent to ${title}`}
+          title={`Sent to ${title}`}
           action={open}
         >
+          {active ? "There's been activity in the terminal since. " : ""}
           File changes it saves appear in the preview.
         </InspectorNotice>
       );

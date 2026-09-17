@@ -419,7 +419,11 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
       // 360px where the panel has room; in a tiled layout it gives way down to
       // 280px rather than taking a fixed bite out of a narrow page — the page's
       // own width is what decides its responsive layout.
-      className="flex w-[40%] min-w-[280px] max-w-[360px] shrink-0 flex-col overflow-hidden border-l border-overlay bg-surface-panel text-text-primary"
+      // `@container/drawer` so the rows inside answer to the drawer's real
+      // width rather than the window's — a tiled preview takes this down to
+      // 280px, where a fixed label column is the difference between a control
+      // that fits and one that is clipped.
+      className="@container/drawer flex w-[40%] min-w-[280px] max-w-[360px] shrink-0 flex-col overflow-hidden border-l border-overlay bg-surface-panel text-text-primary"
     >
       {/* Pinned. A desktop inspector always says what is selected; a form
           scrolls it away. */}
@@ -632,7 +636,10 @@ function SiteSourceBody({
                         title={appRoot}
                         className="font-mono"
                       >
-                        {relative === "." ? "./" : relative}
+                        {/* A monorepo path runs longer than a trigger-width
+                            popup; without asking to truncate it is cut at the
+                            edge with no ellipsis. */}
+                        <span className="block truncate">{relative === "." ? "./" : relative}</span>
                       </SelectItem>
                     );
                   })}
