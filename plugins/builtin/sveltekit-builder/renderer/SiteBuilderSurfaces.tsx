@@ -481,14 +481,12 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
     <aside
       ref={drawerRef}
       aria-label="Site Builder details"
-      // 360px where the panel has room; in a tiled layout it gives way down to
-      // 280px rather than taking a fixed bite out of a narrow page — the page's
-      // own width is what decides its responsive layout.
-      // `@container/drawer` so the rows inside answer to the drawer's real
-      // width rather than the window's — a tiled preview takes this down to
-      // 280px, where a fixed label column is the difference between a control
-      // that fits and one that is clipped.
-      className="@container/drawer flex w-[40%] min-w-[280px] max-w-[360px] shrink-0 flex-col overflow-hidden border-l border-overlay bg-surface-panel text-text-primary"
+      // Width, resizing, the narrow-pane policy and the `@container/drawer` the
+      // rows below answer to all belong to the host's drawer chrome
+      // (`src/components/DevPreview/DevPreviewToolDrawerChrome.tsx`); this fills
+      // whatever it is given. Rendering nothing is still how the drawer stays
+      // shut — the chrome hides itself when there is nothing inside it.
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
     >
       {/* Pinned. A desktop inspector always says what is selected; a form
           scrolls it away. */}

@@ -1,6 +1,8 @@
-import { useEffect, useState } from "react";
 import { SquareDashedMousePointer } from "lucide-react";
-import type { DevPreviewToolButtonProps } from "@/registry/devPreviewToolRegistry";
+import type {
+  DevPreviewToolButtonProps,
+  DevPreviewToolContext,
+} from "@/registry/devPreviewToolRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
@@ -12,7 +14,7 @@ export const DETECT_APPS_CHANNEL = "detect-apps";
 /**
  * One lookup per worktree, reused briefly: every preview in a worktree asks the
  * same question as it mounts. The answer can change — someone scaffolds the app
- * after opening the preview — so it is re-asked whenever the preview's page
+ * after opening the preview — so the host re-asks whenever the preview's page
  * changes or becomes ready, and a "no" is never reused.
  */
 const DETECTION_TTL_MS = 15_000;
@@ -40,32 +42,25 @@ function hasSvelteKitApp(worktreePath: string): Promise<boolean> {
   return pending;
 }
 
-/** The dev preview toolbar toggle, shown only on a worktree with a SvelteKit app. */
-export function SiteBuilderButton({
-  worktreePath,
-  url,
-  isWebviewReady,
-  active,
-  onToggle,
-}: DevPreviewToolButtonProps) {
-  const [available, setAvailable] = useState<{ path: string; ok: boolean } | null>(null);
+/**
+ * Whether this preview has anything to build: the tool's one availability
+ * answer, which the host uses for both the toolbar toggle and any command
+ * aimed at the builder.
+ */
+export function siteBuilderApplies(context: DevPreviewToolContext): Promise<boolean> {
+  if (!context.worktreePath) return Promise.resolve(false);
+  return hasSvelteKitApp(context.worktreePath);
+}
 
-  // Re-asked when the page changes or finishes loading: a dev server that just
-  // came up may be the first sign the app exists.
-  useEffect(() => {
-    if (!worktreePath) return;
-    let cancelled = false;
-    void hasSvelteKitApp(worktreePath).then((ok) => {
-      if (!cancelled) setAvailable({ path: worktreePath, ok });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [worktreePath, url, isWebviewReady]);
+/** Why a command is refused where the builder does not apply. */
+export const SITE_BUILDER_UNAVAILABLE_REASON =
+  "The Site Builder needs a SvelteKit app in this worktree";
 
-  // Keep an active builder reachable even if detection hasn't answered.
-  if (!active && !(available?.ok && available.path === worktreePath)) return null;
-
+/**
+ * The dev preview toolbar toggle. Where it is shown is the host's call — it
+ * asks `siteBuilderApplies` for this preview.
+ */
+export function SiteBuilderButton({ active, onToggle }: DevPreviewToolButtonProps) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>

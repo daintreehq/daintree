@@ -10,6 +10,7 @@ import {
   __resetDevPreviewToolsForTests,
   getAvailableDevPreviewTool,
   registerDevPreviewTool,
+  type DevPreviewTool,
   type DevPreviewToolButtonProps,
   type DevPreviewToolSessionContext,
   type DevPreviewToolSurfaceProps,
@@ -303,5 +304,108 @@ describe("dev preview tools", () => {
     // Not just hidden: a disabled plugin ends the tool, session and all.
     expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
     expect(live.disposals).toBe(1);
+  });
+});
+
+/** Re-register the picker with an availability predicate, as a real tool declares one. */
+function registerWithAvailability(isAvailable: DevPreviewTool["isAvailable"]): void {
+  __resetDevPreviewToolsForTests();
+  registerDevPreviewTool({
+    id: TOOL,
+    pluginId: PLUGIN,
+    label: "Picker",
+    Button,
+    Toolbar,
+    Drawer,
+    createSession: makeSession,
+    isAvailable,
+    unavailableReason: "The Picker needs something to pick",
+  });
+}
+
+describe("dev preview tool availability", () => {
+  it("hides the toggle where the tool's predicate says it does not apply", async () => {
+    registerWithAvailability(() => Promise.resolve(false));
+    pluginLoaded(true);
+    render(<Preview />);
+    await act(async () => {});
+    expect(screen.queryByRole("button", { name: "Picker" })).toBeNull();
+  });
+
+  it("shows the toggle where the predicate says it applies", async () => {
+    registerWithAvailability(() => Promise.resolve(true));
+    pluginLoaded(true);
+    render(<Preview />);
+    await act(async () => {});
+    expect(screen.getByRole("button", { name: "Picker" })).toBeTruthy();
+  });
+
+  it("keeps an active tool reachable while the predicate has not answered", () => {
+    registerWithAvailability(() => new Promise<boolean>(() => {}));
+    pluginLoaded(true);
+    useDevPreviewToolStore.setState({ activeByPanel: { [host.panelId]: TOOL } });
+    render(<Preview />);
+    // The one control that switches it off must not vanish under the user.
+    expect(screen.getByRole("button", { name: "Picker" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+  });
+});
+
+describe("dev preview tool drawer chrome", () => {
+  beforeEach(() => {
+    pluginLoaded(true);
+    useDevPreviewToolStore.getState().setDrawerWidth(360);
+  });
+
+  function open(): HTMLElement {
+    fireEvent.click(screen.getByRole("button", { name: "Picker" }));
+    return screen.getByTestId("dev-preview-tool-drawer");
+  }
+
+  it("owns the drawer's width, with a keyboard-resizable handle clamped to its window", () => {
+    render(<Preview />);
+    const chrome = open();
+    expect(chrome.style.width).toBe("360px");
+
+    const handle = screen.getByRole("separator", {
+      name: "Resize tool drawer (double-click to reset)",
+    });
+    fireEvent.keyDown(handle, { key: "ArrowLeft" });
+    expect(chrome.style.width).toBe("376px");
+
+    act(() => useDevPreviewToolStore.getState().setDrawerWidth(2000));
+    expect(chrome.style.width).toBe("560px");
+    expect(handle.getAttribute("aria-valuemax")).toBe("560");
+  });
+
+  it("docks beside the page while the page keeps its own room", () => {
+    const { container } = render(<Preview />);
+    Object.defineProperty(container, "clientWidth", { value: 1200, configurable: true });
+    expect(open().getAttribute("data-floating")).toBeNull();
+  });
+
+  it("floats over a preview too narrow to share, rather than squeezing the page", () => {
+    const { container } = render(<Preview />);
+    Object.defineProperty(container, "clientWidth", { value: 700, configurable: true });
+    expect(open().getAttribute("data-floating")).toBe("true");
+  });
+
+  it("never covers the whole page, however narrow the preview is", () => {
+    const { container } = render(<Preview />);
+    Object.defineProperty(container, "clientWidth", { value: 360, configurable: true });
+    const chrome = open();
+    expect(chrome.getAttribute("data-floating")).toBe("true");
+    expect(chrome.style.width).toBe("304px");
+  });
+
+  it("returns focus to the toggle when a surface closes the tool", () => {
+    render(<Preview />);
+    open();
+    const close = screen.getByRole("button", { name: "Close picker" });
+    close.focus();
+    fireEvent.click(close);
+    // Never `document.body`: the close control was inside what it closed.
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Picker" }));
   });
 });

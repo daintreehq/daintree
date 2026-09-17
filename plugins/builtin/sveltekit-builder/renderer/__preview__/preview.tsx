@@ -7,6 +7,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { PtyPanelData } from "@shared/types/panel";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { DevPreviewToolDrawerChrome } from "@/components/DevPreview/DevPreviewToolDrawerChrome";
 import { usePanelStore } from "@/store/panelStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { SiteBuilderDrawer, SiteBuilderToolbar } from "../SiteBuilderSurfaces.js";
@@ -222,9 +223,13 @@ function Harness() {
       >
         <MockBrowserToolbar />
         <SiteBuilderToolbar {...props} />
-        <div className="flex min-h-0 flex-1">
+        {/* The host's drawer chrome, as in the app: the width, the resize handle
+            and the narrow-pane policy are its, not the plugin's. */}
+        <div className="relative flex min-h-0 flex-1">
           <MockSite />
-          <SiteBuilderDrawer {...props} />
+          <DevPreviewToolDrawerChrome>
+            <SiteBuilderDrawer {...props} />
+          </DevPreviewToolDrawerChrome>
         </div>
       </div>
     </TooltipProvider>

@@ -9,7 +9,11 @@ import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isDevPreviewPanel } from "@shared/types/panel";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
-import { getAvailableDevPreviewTool } from "@/registry/devPreviewToolRegistry";
+import {
+  getAvailableDevPreviewTool,
+  type DevPreviewTool,
+  type DevPreviewToolContext,
+} from "@/registry/devPreviewToolRegistry";
 import { startDevPreviewToolSessions } from "@/services/devPreviewTools/sessionManager";
 import { actionService } from "@/services/ActionService";
 
@@ -67,6 +71,53 @@ function readActiveWorktreePath(activeWorktreeId: string | undefined): string | 
 
 function firstAbsolutePath(...candidates: Array<string | undefined>): string | undefined {
   return candidates.find((candidate) => typeof candidate === "string" && isAbsolute(candidate));
+}
+
+/**
+ * What a command can tell a tool's availability predicate about a preview. The
+ * page and its readiness are the pane's to know — a command runs wherever it was
+ * dispatched from — so this carries the last URL the panel recorded and reports
+ * the webview as not ready. A predicate whose answer turns on the live page must
+ * treat that as "not yet", which is what the toolbar button already does.
+ */
+function devPreviewToolContext(panelId: string, ctx: ActionContext): DevPreviewToolContext {
+  const panel = usePanelStore.getState().panelsById[panelId];
+  const worktreeId = (panel && isDevPreviewPanel(panel) ? panel.worktreeId : undefined) ?? null;
+  return {
+    panelId,
+    projectId: ctx.projectId ?? null,
+    worktreeId,
+    worktreePath: (worktreeId ? readActiveWorktreePath(worktreeId) : undefined) ?? null,
+    url: (panel && isDevPreviewPanel(panel) ? (panel.browserUrl ?? panel.devServerUrl) : "") ?? "",
+    isWebviewReady: false,
+  };
+}
+
+/**
+ * The same answer the toolbar button gets, so a palette or an agent can never
+ * switch on a tool the button is hiding. The tool owns the refusal's wording.
+ */
+async function refuseUnlessToolApplies(
+  tool: DevPreviewTool,
+  panelId: string,
+  ctx: ActionContext
+): Promise<void> {
+  const isAvailable = tool.isAvailable;
+  if (!isAvailable) return;
+  const asked = devPreviewToolContext(panelId, ctx);
+  // Inside the chain: a predicate that throws synchronously is a refusal with
+  // the tool's own wording, not an unhandled error from the action.
+  const applies = await Promise.resolve()
+    .then(() => isAvailable(asked))
+    .catch(() => false);
+  // Detection takes a round trip, and the preview can move worktrees inside it.
+  // An answer about the worktree we no longer have is not an answer.
+  if (applies && devPreviewToolContext(panelId, ctx).worktreePath !== asked.worktreePath) {
+    throw new Error(`${tool.label} is no longer about this preview's worktree — try again`);
+  }
+  if (!applies) {
+    throw new Error(tool.unavailableReason ?? `${tool.label} does not apply to this dev preview`);
+  }
 }
 
 export function registerDevServerActions(
@@ -152,7 +203,8 @@ export function registerDevServerActions(
       startDevPreviewToolSessions();
       // Registration is unconditional for built-ins; only an enabled plugin's
       // tool may start or focus anything.
-      if (!getAvailableDevPreviewTool(args.toolId)) {
+      const tool = getAvailableDevPreviewTool(args.toolId);
+      if (!tool) {
         throw new Error(
           `No dev preview tool "${args.toolId}" is available — is its plugin enabled?`
         );
@@ -189,9 +241,15 @@ export function registerDevServerActions(
         panelId = started.result.panelId;
         // The plugin may have been disabled while the preview was starting.
         if (!getAvailableDevPreviewTool(args.toolId)) return { panelId, active: false };
+        await refuseUnlessToolApplies(tool, panelId, ctx);
         store.setActive(panelId, args.toolId);
         void actionService.dispatch("panel.focus", { panelId }, { source });
         return { panelId, active: true };
+      }
+      // Switching a tool off is always allowed: a preview that stopped applying
+      // while the tool was on must still be switchable back to plain browsing.
+      if (store.activeByPanel[panelId] !== args.toolId) {
+        await refuseUnlessToolApplies(tool, panelId, ctx);
       }
       store.toggle(panelId, args.toolId);
       const active = useDevPreviewToolStore.getState().activeByPanel[panelId] === args.toolId;

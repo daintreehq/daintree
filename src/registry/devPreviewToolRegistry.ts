@@ -74,12 +74,25 @@ export interface DevPreviewTool<TSession extends DevPreviewToolSession = DevPrev
   pluginId: string;
   /** User-facing name, used for error fallbacks and the default tooltip. */
   label: string;
-  /**
-   * The toolbar toggle. Renders nothing when the tool doesn't apply to this
-   * preview (a Svelte tool on a Next.js site), so the button only appears where
-   * it can do something.
-   */
+  /** The toolbar toggle. The host decides where it is shown — see `isAvailable`. */
   Button: ComponentType<DevPreviewToolButtonProps>;
+  /**
+   * Whether the tool applies to this preview at all — a Svelte tool has nothing
+   * to offer a Next.js site. One answer serves the button and every command: the
+   * host hides the toggle where this is false and refuses `devPreview.toggleTool`
+   * there, so an agent can never switch on what the toolbar is hiding. Undeclared
+   * means the tool applies everywhere.
+   *
+   * Asked again whenever the preview's worktree, page or readiness changes, so a
+   * project that grows an app while the preview is open starts offering the tool.
+   * A tool already switched on stays reachable while this is unanswered.
+   */
+  isAvailable?: (context: DevPreviewToolContext) => boolean | Promise<boolean>;
+  /**
+   * What a command is told when `isAvailable` says no. The tool owns the wording
+   * because only it knows what is missing.
+   */
+  unavailableReason?: string;
   /**
    * Builds the tool's session for one preview. Called by the host when the
    * tool is switched on, before any surface mounts, and may load the tool's

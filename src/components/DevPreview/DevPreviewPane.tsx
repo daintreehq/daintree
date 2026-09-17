@@ -992,7 +992,9 @@ export function DevPreviewPane({
 
         {status === "running" && hmrDead && <DevPreviewHmrDeadBanner onReload={handleReload} />}
 
-        <div className="flex flex-1 min-h-0">
+        {/* `relative`: a tool drawer floats over the page rather than squeezing it
+            when the pane is too narrow to share (`DevPreviewToolDrawerChrome`). */}
+        <div className="relative flex flex-1 min-h-0">
           <div
             className={cn(
               "relative flex-1 min-w-0 min-h-0 bg-surface-canvas",
