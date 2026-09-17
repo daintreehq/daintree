@@ -4,6 +4,14 @@ import { isGeneratedSourceFile } from "./resolve/generated.js";
 import type { DevLocation, ResolveResult, SvelteAstRoot, SvelteParse } from "./types.js";
 
 export { isGeneratedSourceFile } from "./resolve/generated.js";
+export { resolveElementByStructure } from "./resolve/structure.js";
+export type {
+  StructureFailureReason,
+  StructureFrame,
+  StructureRequest,
+  StructureResult,
+  StructureStep,
+} from "./resolve/structure.js";
 export { interpretAncestry } from "./resolve/ancestry.js";
 export type {
   AncestryEntry,

@@ -68,6 +68,9 @@ afterEach(() => {
   handle?.dispose();
   handle = null;
   envelopes = [];
+  // The runtime carries its sequence and occurrence counters across installs
+  // on purpose; between tests that carry is order-dependence.
+  delete scope[HANDLE + ".state"];
   document.body.innerHTML = "";
   document.head.innerHTML = "";
   delete scope[BINDING];
@@ -249,9 +252,38 @@ describe("source metadata", () => {
     expect(lastSelection()[0].sameLocCount).toBe(1);
   });
 
-  it("selects the nearest mapped ancestor of an unmarked node", () => {
+  it("reports an unmarked node that could be the template's own, for the host to place", () => {
+    // Raw `{@html}` markup and a template element whose stamp hydration
+    // dropped look the same here: unstamped, at the tail of a stamped parent.
+    // The host walks the source and tells them apart; the page reports the
+    // node itself with its shape rather than standing its ancestor in for it.
     document.body.innerHTML = '<div id="prose"><em id="raw">from {@html}</em></div>';
     setMeta(document.body.querySelector("#prose")!, loc(21));
+    install("select");
+
+    click(document.body.querySelector("#raw")!);
+    const node = lastSelection()[0];
+
+    expect(node.tagName).toBe("em");
+    expect(node.loc).toBeNull();
+    expect(node.unmapped).toBe(false);
+    expect(node.structure).toEqual({
+      file: "src/routes/+page.svelte",
+      path: [
+        { tag: "div", index: 0 },
+        { tag: "em", index: 0 },
+      ],
+    });
+  });
+
+  it("selects the nearest mapped ancestor of an unmarked node the template cannot own", () => {
+    // Unstamped, but followed by a stamped sibling of the same frame: the
+    // hydration walk never leaves a template element ahead of a stamped one.
+    document.body.innerHTML =
+      '<div id="prose"><em id="raw">from {@html}</em><p id="after">p</p></div>';
+    const page = { type: "component", file: "root.svelte", line: 1, column: 0 };
+    setMeta(document.body.querySelector("#prose")!, loc(21), page);
+    setMeta(document.body.querySelector("#after")!, loc(22), page);
     install("select");
 
     click(document.body.querySelector("#raw")!);
@@ -701,9 +733,11 @@ describe("hardening the observation", () => {
   });
 
   it("re-reports a target when the pointer moves into its unmapped content", () => {
-    document.body.innerHTML = '<div id="prose"><em id="raw">raw</em></div>';
+    document.body.innerHTML = '<div id="prose"><em id="raw">raw</em><p id="after">p</p></div>';
     const prose = document.body.querySelector("#prose")!;
-    setMeta(prose, loc(21));
+    const page = { type: "component", file: "root.svelte", line: 1, column: 0 };
+    setMeta(prose, loc(21), page);
+    setMeta(document.body.querySelector("#after")!, loc(22), page);
     install("select");
 
     const move = (node: Element) =>
@@ -966,5 +1000,395 @@ describe("keyboard traversal and component selection", () => {
     renderCards();
     install("select");
     expect(key({ key: "ArrowUp" }).defaultPrevented).toBe(false);
+  });
+});
+
+describe("structural path", () => {
+  it("reports where a node sits among its own frame's elements, not the DOM's", () => {
+    // A hydrated page: the Header component's root precedes the template's
+    // own elements, and Svelte's location walk counted it. The path counts
+    // only siblings that share the frame, so `div.journal` is index 0 and the
+    // toolbar inside it index 0, whatever the stamps say.
+    document.body.innerHTML = [
+      '<header id="h"><h1>Site</h1></header>',
+      '<div id="journal"><div id="toolbar"><p>September</p></div></div>',
+      '<div id="end"><span>*</span></div>',
+    ].join("");
+    const page = {
+      type: "component",
+      file: ".svelte-kit/generated/root.svelte",
+      line: 56,
+      column: 18,
+      componentTag: "Pyramid_2",
+    };
+    const header = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 6,
+      column: 0,
+      componentTag: "Header",
+      parent: page,
+    };
+    setMeta(document.body.querySelector("#h")!, loc(7, 0), header);
+    setMeta(document.body.querySelector("#journal")!, loc(18, 0), page);
+    setMeta(document.body.querySelector("#toolbar")!, loc(19, 2), page);
+    setMeta(document.body.querySelector("#end")!, loc(20, 0), page);
+    install("select");
+    click(document.body.querySelector("#toolbar")!);
+    const [node] = lastSelection();
+    expect(node?.structure).toEqual({
+      file: "src/routes/+page.svelte",
+      path: [
+        { tag: "div", index: 0 },
+        { tag: "div", index: 0 },
+      ],
+    });
+    click(document.body.querySelector("#end")!);
+    expect(lastSelection()[0]?.structure).toEqual({
+      file: "src/routes/+page.svelte",
+      path: [{ tag: "div", index: 1 }],
+    });
+  });
+
+  it("places an unstamped element at the tail of a stamped run, and refuses one before a stamped sibling", () => {
+    // The hydration walk drops stamps off the tail: `p` and `nav` inside the
+    // toolbar carry nothing, and so does everything under them. They are the
+    // template's own, counted after the stamped siblings; an unstamped element
+    // before a stamped one is not.
+    document.body.innerHTML = [
+      '<div id="journal"><div id="toolbar"><p id="label">September</p><nav id="nav"><div id="months"></div><div id="years"><a id="year">2026</a></div></nav></div></div>',
+      '<section id="late"><i id="raw">x</i><p id="stamped">y</p></section>',
+    ].join("");
+    const page = {
+      type: "component",
+      file: "root.svelte",
+      line: 1,
+      column: 0,
+      componentTag: "Page",
+    };
+    setMeta(document.body.querySelector("#journal")!, loc(366, 0), page);
+    setMeta(document.body.querySelector("#toolbar")!, loc(367, 1), page);
+    setMeta(document.body.querySelector("#late")!, loc(370, 0), page);
+    setMeta(document.body.querySelector("#stamped")!, loc(372, 2), page);
+    install("select");
+    click(document.body.querySelector("#label")!);
+    let [node] = lastSelection();
+    expect(node?.loc).toBeNull();
+    expect(node?.unmapped).toBe(false);
+    expect(node?.label).toContain("p");
+    expect(node?.ancestry[0]).toMatchObject({ type: "component", componentTag: "Page" });
+    expect(node?.structure).toEqual({
+      file: "src/routes/+page.svelte",
+      path: [
+        { tag: "div", index: 0 },
+        { tag: "div", index: 0 },
+        { tag: "p", index: 0 },
+      ],
+    });
+    click(document.body.querySelector("#year")!);
+    [node] = lastSelection();
+    expect(node?.structure).toEqual({
+      file: "src/routes/+page.svelte",
+      path: [
+        { tag: "div", index: 0 },
+        { tag: "div", index: 0 },
+        { tag: "nav", index: 1 },
+        { tag: "div", index: 1 },
+        { tag: "a", index: 0 },
+      ],
+    });
+    // `i` sits before a stamped sibling under a stamped parent: not the
+    // template's. The click falls back to the stamped ancestor, as before.
+    click(document.body.querySelector("#raw")!);
+    [node] = lastSelection();
+    expect(node?.loc).toEqual(loc(370, 0));
+  });
+
+  it("does not claim a dropped root for the enclosing component's template", () => {
+    // `div.journal-end` lost its whole stamp; its nearest stamped ancestor is
+    // the shell's container. Beside it sits a `header` of a frame reached
+    // from the shell's only through the page's component frame — so this
+    // container holds another template's roots, and the unstamped div may
+    // be one of them. The click stands the container in, as before.
+    document.body.innerHTML =
+      '<div id="shell"><header id="h">h</header><div id="end"><p id="p">end</p></div></div>';
+    const shellFile = "src/lib/components/SitePageShell.svelte";
+    const shellFrame = {
+      type: "component",
+      file: "src/routes/+layout.svelte",
+      line: 13,
+      column: 0,
+      componentTag: "SitePageShell",
+    };
+    const render = { type: "render", file: shellFile, line: 53, column: 1, parent: shellFrame };
+    const pageFrame = {
+      type: "component",
+      file: ".svelte-kit/generated/root.svelte",
+      line: 56,
+      column: 18,
+      componentTag: "Pyramid_2",
+      parent: render,
+    };
+    const headerFrame = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 6,
+      column: 0,
+      componentTag: "Header",
+      parent: pageFrame,
+    };
+    setMeta(document.body.querySelector("#shell")!, loc(53, 1, shellFile), shellFrame);
+    setMeta(document.body.querySelector("#h")!, loc(3, 0, "src/lib/Header.svelte"), headerFrame);
+    install("select");
+    click(document.body.querySelector("#p")!);
+    const [node] = lastSelection();
+    expect(node?.label).toContain("div");
+    expect(node?.loc).toEqual(loc(53, 1, shellFile));
+    expect(node?.unmapped).toBe(true);
+    // A child component of the shell's own template beside it is fine: only a
+    // block, or nothing, lies between its frame and the anchor's.
+    const widget = {
+      type: "component",
+      file: shellFile,
+      line: 60,
+      column: 2,
+      componentTag: "Widget",
+      parent: shellFrame,
+    };
+    setMeta(document.body.querySelector("#h")!, loc(9, 0, "src/lib/Widget.svelte"), widget);
+    click(document.body.querySelector("#p")!);
+    // The shell's container is itself a root of the shell's template.
+    expect(lastSelection()[0]?.structure).toEqual({
+      file: shellFile,
+      path: [
+        { tag: "div", index: 0 },
+        { tag: "div", index: 0 },
+        { tag: "p", index: 0 },
+      ],
+    });
+  });
+
+  it("refuses a node after a snippet rendered inline, whose walk may have stamped it", () => {
+    // `{@render a()}` is not bracketed in server output, so b's template walk
+    // stamped a's elements with b's locations and frame — and a2, past the
+    // end of a's own list, kept them. From a2 the siblings before it reach b's
+    // frame through a's render frame; that is the tell, and a2 is not placed.
+    document.body.innerHTML =
+      '<header id="h">H</header><section id="a1"></section><section id="a2"></section><section id="b1"></section>';
+    const page = {
+      type: "component",
+      file: "root.svelte",
+      line: 1,
+      column: 0,
+      componentTag: "Page",
+    };
+    const renderB = { type: "render", file: "src/X.svelte", line: 4, column: 0, parent: page };
+    const renderA = { type: "render", file: "src/X.svelte", line: 3, column: 14, parent: renderB };
+    const header = {
+      type: "component",
+      file: "src/X.svelte",
+      line: 2,
+      column: 14,
+      componentTag: "Header",
+      parent: renderA,
+    };
+    setMeta(document.body.querySelector("#h")!, loc(1, 0, "src/Header.svelte"), header);
+    setMeta(document.body.querySelector("#a1")!, loc(2, 40, "src/X.svelte"), renderA);
+    setMeta(document.body.querySelector("#a2")!, loc(3, 60, "src/X.svelte"), renderB);
+    setMeta(document.body.querySelector("#b1")!, loc(3, 40, "src/X.svelte"), renderB);
+    install("select");
+    click(document.body.querySelector("#a2")!);
+    expect(lastSelection()[0]?.structure).toBeUndefined();
+    // b1, after a2, is refused for the same reason; a1 inside the snippet is fine.
+    click(document.body.querySelector("#b1")!);
+    expect(lastSelection()[0]?.structure).toBeUndefined();
+    click(document.body.querySelector("#a1")!);
+    expect(lastSelection()[0]?.structure).toEqual({
+      file: "src/X.svelte",
+      path: [{ tag: "section", index: 0 }],
+    });
+  });
+
+  it("does not claim a block's dropped root for the enclosing template", () => {
+    // `{#if}` content is bracketed in server output and skipped by the
+    // template's walk; a section inside it that lost its own stamp is the
+    // block's, whatever the enclosing div's frame says.
+    document.body.innerHTML =
+      '<div id="wrap"><i id="c1">c</i><!--[--><i id="c2">c</i><section id="inside"></section><!--]--><section id="outside"></section></div>';
+    const page = {
+      type: "component",
+      file: "root.svelte",
+      line: 1,
+      column: 0,
+      componentTag: "Page",
+    };
+    const c1 = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 3,
+      column: 2,
+      componentTag: "C",
+      parent: page,
+    };
+    const ifFrame = {
+      type: "if",
+      file: "src/routes/+page.svelte",
+      line: 4,
+      column: 2,
+      parent: page,
+    };
+    const c2 = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 4,
+      column: 10,
+      componentTag: "C",
+      parent: ifFrame,
+    };
+    setMeta(document.body.querySelector("#wrap")!, loc(2, 0), page);
+    setMeta(document.body.querySelector("#c1")!, loc(1, 0, "src/C.svelte"), c1);
+    setMeta(document.body.querySelector("#c2")!, loc(1, 0, "src/C.svelte"), c2);
+    install("select");
+    click(document.body.querySelector("#inside")!);
+    expect(lastSelection()[0]?.loc).toEqual(loc(2, 0));
+    // The template's own dropped tail, outside the region, is placed.
+    click(document.body.querySelector("#outside")!);
+    expect(lastSelection()[0]?.structure).toEqual({
+      file: "src/routes/+page.svelte",
+      path: [
+        { tag: "div", index: 0 },
+        { tag: "section", index: 0 },
+      ],
+    });
+  });
+
+  it("does not place raw markup that inherited a stamp inside a descendant component", () => {
+    // Page's walk stamped RawWrapper's raw `div` with a Page location and
+    // frame before RawWrapper re-stamped its own `aside`. The raw `p` under
+    // it would read as Page's `div[0] > p[0]` — but its container's frame is
+    // RawWrapper's, which is below Page's, not above: no template's roots
+    // sit in a descendant's element.
+    document.body.innerHTML =
+      '<aside id="aside"><div id="raw"><p id="rawp">raw</p></div></aside><div id="own"><p>authored</p></div>';
+    const page = {
+      type: "component",
+      file: "root.svelte",
+      line: 1,
+      column: 0,
+      componentTag: "Page",
+    };
+    const wrapper = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 2,
+      column: 0,
+      componentTag: "RawWrapper",
+      parent: page,
+    };
+    setMeta(document.body.querySelector("#aside")!, loc(1, 0, "src/RawWrapper.svelte"), wrapper);
+    setMeta(document.body.querySelector("#raw")!, loc(3, 5), page);
+    setMeta(document.body.querySelector("#own")!, loc(2, 13), page);
+    install("select");
+    click(document.body.querySelector("#rawp")!);
+    expect(lastSelection()[0]?.structure).toBeUndefined();
+  });
+
+  it("refuses a node beside a snippet's own element rendered inline", () => {
+    // The sibling's own frame is the render frame: the snippet's element was
+    // rendered right here, and the outer walk went through it.
+    document.body.innerHTML = '<i id="s">snippet</i><section id="a"></section><div id="d"></div>';
+    const page = {
+      type: "component",
+      file: "root.svelte",
+      line: 1,
+      column: 0,
+      componentTag: "Page",
+    };
+    const renderA = { type: "render", file: "src/X.svelte", line: 3, column: 0, parent: page };
+    setMeta(document.body.querySelector("#s")!, loc(2, 14, "src/X.svelte"), renderA);
+    setMeta(document.body.querySelector("#a")!, loc(3, 30, "src/X.svelte"), page);
+    setMeta(document.body.querySelector("#d")!, loc(3, 30, "src/X.svelte"), page);
+    install("select");
+    click(document.body.querySelector("#a")!);
+    expect(lastSelection()[0]?.structure).toBeUndefined();
+  });
+
+  it("stops the path at the frame's edge, so a component's root is a root", () => {
+    document.body.innerHTML =
+      '<section id="outer"><article id="root"><b id="leaf">x</b></article></section>';
+    const page = {
+      type: "component",
+      file: "root.svelte",
+      line: 1,
+      column: 0,
+      componentTag: "Page",
+    };
+    const card = {
+      type: "component",
+      file: "src/routes/+page.svelte",
+      line: 3,
+      column: 2,
+      componentTag: "Card",
+      parent: page,
+    };
+    setMeta(document.body.querySelector("#outer")!, loc(2, 0), page);
+    setMeta(document.body.querySelector("#root")!, loc(9, 0, "src/lib/Card.svelte"), card);
+    setMeta(document.body.querySelector("#leaf")!, loc(10, 2, "src/lib/Card.svelte"), card);
+    install("select");
+    click(document.body.querySelector("#leaf")!);
+    expect(lastSelection()[0]?.structure).toEqual({
+      file: "src/lib/Card.svelte",
+      path: [
+        { tag: "article", index: 0 },
+        { tag: "b", index: 0 },
+      ],
+    });
+  });
+});
+
+describe("reselect by occurrence", () => {
+  it("asks for the element the host was told about, not whichever node carries its location", () => {
+    // A hydrated page: the toolbar's true location is stamped on the header's
+    // child. Asked by location alone the page would light up that neighbour;
+    // asked by the id it reported, it lights up the toolbar.
+    document.body.innerHTML = [
+      '<header><h1 id="stray">Site</h1></header>',
+      '<div id="journal"><div id="toolbar"><p>September</p></div></div>',
+    ].join("");
+    const page = {
+      type: "component",
+      file: "root.svelte",
+      line: 1,
+      column: 0,
+      componentTag: "Page",
+    };
+    setMeta(document.body.querySelector("#stray")!, loc(296, 1), page);
+    setMeta(document.body.querySelector("#journal")!, loc(366, 0), page);
+    setMeta(document.body.querySelector("#toolbar")!, loc(367, 1), page);
+    const runtime = install("select");
+    click(document.body.querySelector("#toolbar")!);
+    const [node] = lastSelection();
+    expect(node?.loc).toEqual(loc(367, 1));
+    // Something else is selected in between, so the answer has to be a fresh
+    // selection of the toolbar, not the one already standing.
+    click(document.body.querySelector("#journal")!);
+    expect(lastSelection()[0]?.loc).toEqual(loc(366, 0));
+    const before = events("selectionChanged").length;
+
+    expect(runtime.reselect(loc(296, 1), 0, null, node!.runtimeOccurrenceId)).toBe(true);
+    expect(events("selectionChanged")).toHaveLength(before + 1);
+    expect(lastSelection()[0]?.runtimeOccurrenceId).toBe(node!.runtimeOccurrenceId);
+    expect(lastSelection()[0]?.loc).toEqual(loc(367, 1));
+
+    // Without the id, the location is all there is, and it names the neighbour.
+    expect(runtime.reselect(loc(296, 1), 0, null)).toBe(true);
+    expect(lastSelection()[0]?.label).toContain("h1");
+
+    // A node no longer in the document is not the same element.
+    document.body.querySelector("#toolbar")!.remove();
+    expect(runtime.reselect(loc(367, 1), 0, null, node!.runtimeOccurrenceId)).toBe(false);
+    // The ask then falls back to the location, which here names the neighbour.
+    expect(runtime.reselect(loc(296, 1), 0, null, node!.runtimeOccurrenceId)).toBe(true);
+    expect(lastSelection()[0]?.label).toContain("h1");
   });
 });

@@ -159,7 +159,9 @@ describe("buildAgentTaskPrompt", () => {
       worktreePath: null,
       place: null,
     });
-    expect(prompt).toContain("renders at least 1 copy on the page (too large to count them all)");
+    expect(prompt).toContain(
+      "renders at least 1 copy on the page (the page could not count them all)"
+    );
   });
 
   it("says the source wasn't traced rather than inventing a location", () => {

@@ -52,6 +52,12 @@ export interface SiteGuestNodeObservation {
   sameLocCountPartial?: true;
   /** Which of those this node is, in document order; absent from older runtimes. */
   locIndex?: number;
+  /**
+   * Where the node sits in its template — outermost first, each step the tag
+   * and the index among the elements at that level that share its frame — for
+   * a page whose `loc` is a neighbour's. Absent from older runtimes.
+   */
+  structure?: { file: string; path: Array<{ tag: string; index: number }> };
   label: string;
   bounds: SiteGuestRect[];
   unmapped: boolean;

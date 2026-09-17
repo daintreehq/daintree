@@ -984,6 +984,9 @@ describe("stale selections", () => {
       sessionId: "session-1",
       loc: { file: FILE, line: 6, column: 2 },
       index: OBSERVATION.locIndex,
+      // By the id the page reported it under first: on a hydrated page the
+      // element's true location is stamped on a neighbour.
+      occurrence: OBSERVATION.runtimeOccurrenceId,
       component: { file: "src/lib/PricingCard.svelte", line: 3, column: 0 },
     });
     // The page's answer is a component selection, and both surfaces follow it:

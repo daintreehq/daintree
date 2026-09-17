@@ -189,6 +189,135 @@ describe("selectionResolve", () => {
     });
   });
 
+  it("places a hydrated page's misstamped element by its shape, and proves it there", async () => {
+    // Svelte's dev walk counted the Header's root while hydrating, so the
+    // toolbar div carries the location of the span after it. The shape the
+    // guest reports still identifies it; the definition names the true line.
+    const file = "src/routes/hydrated.svelte";
+    const source = [
+      "<script>import Header from '$lib/Header.svelte';</script>",
+      "<Header />",
+      '<div class="journal">',
+      '  <div class="toolbar"><p>September</p></div>',
+      "</div>",
+      '<div class="end"><span>*</span></div>',
+      "",
+    ].join("\n");
+    await fs.writeFile(sandbox.file(file), source);
+    const stamped = locationOf(source, "<span", file);
+    const frame = {
+      type: "component",
+      file: ".svelte-kit/generated/root.svelte",
+      line: 56,
+      column: 18,
+      componentTag: "Pyramid_2",
+    };
+    const node = await selectOne(
+      observation(stamped, {
+        ancestry: [frame],
+        sameLocCount: 7,
+        structure: {
+          file,
+          path: [
+            { tag: "div", index: 0 },
+            { tag: "div", index: 0 },
+          ],
+        },
+      })
+    );
+    expect(node.definition).toMatchObject({
+      location: locationOf(source, '<div class="toolbar"', file),
+      tagName: "div",
+      renderedOccurrences: 1,
+      renderedOccurrencesAtLeast: true,
+    });
+    // Without the shape, the disagreement is reported as what it is.
+    expect(await resolve([observation(stamped, { ancestry: [frame] })])).toEqual({
+      status: "stale",
+      mismatch: { ...stamped, reported: "div", found: "span" },
+    });
+    // A shape the source cannot follow leaves the disagreement as it was.
+    expect(
+      await resolve([
+        observation(stamped, {
+          ancestry: [frame],
+          structure: { file, path: [{ tag: "div", index: 4 }] },
+        }),
+      ])
+    ).toEqual({ status: "stale", mismatch: { ...stamped, reported: "div", found: "span" } });
+  });
+
+  it("keeps a stamp the file agrees with, whatever the shape says", async () => {
+    // The page can move an element after stamping it; its new place says
+    // nothing about its source. So a stamp that resolves cleanly is the
+    // answer, and the shape is consulted only when the file contradicts it —
+    // which also means a neighbour's stamp of the same tag goes unseen here.
+    const file = "src/routes/twins.svelte";
+    const source = [
+      "<script>import Header from '$lib/Header.svelte';</script>",
+      "<Header />",
+      '<section class="one"><p>1</p></section>',
+      '<section class="two"><p>2</p></section>',
+      "",
+    ].join("\n");
+    await fs.writeFile(sandbox.file(file), source);
+    const frame = {
+      type: "component",
+      file: ".svelte-kit/generated/root.svelte",
+      line: 5,
+      column: 0,
+    };
+    const node = await selectOne(
+      observation(locationOf(source, '<section class="two"', file), {
+        ancestry: [frame],
+        tagName: "SECTION",
+        sameLocCount: 3,
+        structure: { file, path: [{ tag: "section", index: 0 }] },
+      })
+    );
+    expect(node.definition).toMatchObject({
+      location: locationOf(source, '<section class="two"', file),
+      renderedOccurrences: 3,
+    });
+  });
+
+  it("places an element the page could not stamp at all, by its shape", async () => {
+    const file = "src/routes/tail.svelte";
+    const source = [
+      "<script>import Header from '$lib/Header.svelte';</script>",
+      "<Header />",
+      '<div class="toolbar"><p class="label">September</p></div>',
+      "",
+    ].join("\n");
+    await fs.writeFile(sandbox.file(file), source);
+    const frame = {
+      type: "component",
+      file: ".svelte-kit/generated/root.svelte",
+      line: 5,
+      column: 0,
+    };
+    const node = await selectOne(
+      observation(null, {
+        ancestry: [frame],
+        tagName: "P",
+        structure: {
+          file,
+          path: [
+            { tag: "div", index: 0 },
+            { tag: "p", index: 0 },
+          ],
+        },
+      })
+    );
+    expect(node.definition).toMatchObject({
+      location: locationOf(source, '<p class="label"', file),
+      tagName: "p",
+      renderedOccurrences: 1,
+      renderedOccurrencesAtLeast: true,
+    });
+    expect(node.mapping).toBe("definition-only");
+  });
+
   it("returns stale when the location no longer lands on an element, never a neighbour", async () => {
     const original = await fs.readFile(sandbox.file(NATIVE), "utf8");
     const captured = locationOf(original, "<h1");

@@ -77,6 +77,11 @@ export function createSiteBuilderGuest(
   const AUDIT_DEV_SETTLE_MS = 15_000;
   /** Parent links walked per observation, however few of them are usable. */
   const MAX_ANCESTRY_LINKS = 512;
+  /** Levels a structural path may run, and siblings a level may be counted over. */
+  const MAX_STRUCTURE_DEPTH = 64;
+  const MAX_STRUCTURE_SIBLINGS = 5_000;
+  /** Occurrence entries kept before dead ones are swept. */
+  const MAX_OCCURRENCE_ENTRIES = 2_000;
   /** Side of the transform probe, in the page's own fixed-position pixels. */
   const PROBE_SIZE = 100;
 
@@ -124,6 +129,14 @@ export function createSiteBuilderGuest(
   let occurrenceCounter = resumed.occurrence;
 
   const occurrenceIds = new WeakMap<Element, string>();
+  /**
+   * The other direction, for the host to ask for an element by the id it was
+   * reported under. A location cannot always do that: on a hydrated page the
+   * element's true location is stamped on a neighbour. Weak, so a replaced
+   * node is not kept alive by the map; a replaced node is not the same
+   * element and is not returned.
+   */
+  const elementsByOccurrence = new Map<string, WeakRef<Element>>();
   const locCounts = new Map<string, { count: number; partial: boolean }>();
   const teardown: Array<() => void> = [];
   const selectTeardown: Array<() => void> = [];
@@ -199,7 +212,9 @@ export function createSiteBuilderGuest(
    */
   function componentFrames(node: Element): object[] {
     const frames: object[] = [];
-    const meta = readMeta(node);
+    // An unstamped element placed by shape belongs to its nearest stamped
+    // ancestor's template, and so to its invocations.
+    const meta = readMeta(node) ?? readMeta(nearestMapped(node) ?? node);
     let current: unknown = meta === null ? null : meta.parent;
     const seen = new Set<object>();
     let visited = 0;
@@ -395,6 +410,16 @@ export function createSiteBuilderGuest(
     resumed.occurrence = occurrenceCounter;
     const id = "occ-" + occurrenceCounter;
     occurrenceIds.set(node, id);
+    if (typeof WeakRef === "function") {
+      // The refs let go of replaced nodes; the entries would not.
+      if (elementsByOccurrence.size >= MAX_OCCURRENCE_ENTRIES) {
+        for (const [key, ref] of elementsByOccurrence) {
+          const held = ref.deref();
+          if (held === undefined || !held.isConnected) elementsByOccurrence.delete(key);
+        }
+      }
+      elementsByOccurrence.set(id, new WeakRef(node));
+    }
     return id;
   }
 
@@ -461,18 +486,238 @@ export function createSiteBuilderGuest(
     return name.indexOf("-") !== -1 && customElements.get(name) !== undefined;
   }
 
-  function isUnmapped(hit: Element): boolean {
+  function isUnmapped(hit: Element, ignoringStamp = false): boolean {
     if (hit.getRootNode() !== hit.ownerDocument) return true;
     if (hit.tagName === "CANVAS" || hit.closest("canvas") !== null) return true;
     if (isCrossOriginFrame(hit)) return true;
     if (hidesItsOwnContent(hit)) return true;
-    return readLoc(hit) === null;
+    return !ignoringStamp && readLoc(hit) === null;
+  }
+
+  /**
+   * Where a node sits in its template, by shape rather than by the location
+   * stamped on it. Svelte assigns `loc` by walking a template's rendered
+   * siblings, and on a hydrated page that walk also meets the root a child
+   * component rendered just before — so from there on every element carries
+   * its neighbour's location, and the last ones carry none. The frame
+   * (`__svelte_meta.parent`, one object per block or invocation) and each
+   * element's index among the siblings that share it are not assigned that
+   * way, and the host can walk the source by them.
+   *
+   * Siblings of another frame — a child component's root, a block's
+   * contents — are not this template's elements and are not counted. An
+   * unstamped element is counted as the template's own only where the
+   * hydration walk leaves them: a trailing run after stamped siblings of the
+   * frame, or anywhere under a parent that is itself unstamped; a stamped
+   * sibling after an unstamped one means the unstamped one is not the
+   * template's, and nothing is reported.
+   */
+  /**
+   * What lies between `frame` and `ancestor` on the parent chain: nothing but
+   * blocks, a component frame, or a `{@render}` — or no `ancestor` at all.
+   * A rendered snippet is the one region Svelte's server output does not
+   * bracket, so the template around it walks straight through the snippet's
+   * elements while stamping its own: everything after such a region may carry
+   * the wrong location and the wrong frame, and nothing at that level can be
+   * placed by shape.
+   */
+  function framesBetween(
+    frame: unknown,
+    ancestor: unknown
+  ): "blocks" | "component" | "render" | "none" {
+    let current: unknown = frame;
+    let rendered = false;
+    let component = false;
+    for (let hops = 0; hops < MAX_ANCESTRY_LINKS; hops += 1) {
+      if (current === ancestor) return rendered ? "render" : component ? "component" : "blocks";
+      if (current === null || current === undefined || typeof current !== "object") return "none";
+      const raw = current as SvelteMetaFrame;
+      // The sibling's own frame counts when it is a rendered snippet's: that
+      // element was rendered inline here, and the walk went through it. Its
+      // own component frame does not: a child component's root is expected.
+      if (raw.type === "render" || raw.type === "snippet") rendered = true;
+      else if (hops > 0 && raw.type === "component") component = true;
+      current = raw.parent;
+    }
+    return "none";
+  }
+
+  function structureOf(target: Element): GuestNodeObservation["structure"] | undefined {
+    // A page can put a throwing getter on `__svelte_meta`; the shape is an
+    // extra, and a click must not die for it.
+    try {
+      return structurePath(target);
+    } catch {
+      return undefined;
+    }
+  }
+
+  function structurePath(target: Element): GuestNodeObservation["structure"] | undefined {
+    // `<svelte:head>` renders into the head, where the template's order says nothing.
+    const head = target.ownerDocument.head;
+    if (head !== null && head.contains(target)) return undefined;
+    // The nearest stamped element: the target itself, or the ancestor an
+    // unstamped target takes its template and frame from.
+    const anchor = nearestMapped(target);
+    if (anchor === null) return undefined;
+    const anchorLoc = readLoc(anchor);
+    const meta = readMeta(anchor);
+    if (anchorLoc === null || meta === null) return undefined;
+    if (anchorLoc.file.length > MAX_FILE) return undefined;
+    const frame = meta.parent ?? null;
+    const frameOf = (
+      node: Element
+    ): { stamped: boolean; same: boolean; foreign: boolean; rendered: boolean } => {
+      const other = readMeta(node);
+      if (other === null) return { stamped: false, same: false, foreign: false, rendered: false };
+      const theirs = other.parent ?? null;
+      const between = theirs === frame ? "blocks" : framesBetween(theirs, frame);
+      return {
+        stamped: true,
+        same: theirs === frame,
+        foreign: between !== "blocks" && between !== "render",
+        rendered: between === "render",
+      };
+    };
+    const path: Array<{ tag: string; index: number }> = [];
+    let node: Element = target;
+    let reachedRoot = false;
+    for (let depth = 0; depth < MAX_STRUCTURE_DEPTH; depth += 1) {
+      const parent = parentOf(node);
+      const own = frameOf(node);
+      const parentStamped = parent !== null && frameOf(parent).stamped;
+      // Walked by sibling links, not indexed: a live collection is rebuilt
+      // per index in some DOMs, and a wide parent made that quadratic.
+      // Walked by sibling links, not indexed: a live collection is rebuilt
+      // per index in some DOMs, and a wide parent made that quadratic.
+      // Comments are walked too, for an unstamped node: the server output
+      // brackets every block in `<!--[-->` … `<!--]-->`, and the hydration
+      // walk skips what is inside, so an unstamped node found inside a region
+      // is a block's dropped element, not this template's, and unstamped
+      // content inside a region before it is not counted. A stamped node
+      // needs none of this: its frame says which block it belongs to, and
+      // its own template's roots may well sit inside an enclosing template's
+      // region (a `{@render children()}`).
+      let child: ChildNode | null = parent === null ? node : parent.firstChild;
+      let index = 0;
+      let found = false;
+      let scanned = 0;
+      let unstampedBefore = false;
+      let region = 0;
+      // A stamped sibling under a frame that is not the anchor's nor inside
+      // it: the anchor is an enclosing component's element, and an unstamped
+      // node beside such siblings is one of THEIR template's dropped roots,
+      // not the anchor's. Nothing here can say which, so nothing is said.
+      const foreignBeside = (kin: { stamped: boolean; foreign: boolean }): boolean =>
+        !own.stamped && parentStamped && kin.stamped && kin.foreign;
+      while (child !== null) {
+        if (child === node) {
+          if (region > 0) return undefined;
+          found = true;
+          break;
+        }
+        if (++scanned > MAX_STRUCTURE_SIBLINGS) return undefined;
+        if (child.nodeType === 8 && !own.stamped) {
+          const data = (child as Comment).data;
+          if (data.charAt(0) === "[") region += 1;
+          else if (data.charAt(0) === "]" && region > 0) region -= 1;
+        } else if (child.nodeType === 1 && region === 0) {
+          const sibling = child as Element;
+          const kin = frameOf(sibling);
+          if (foreignBeside(kin)) return undefined;
+          // A snippet rendered inline before this node: the template's walk
+          // went through it, and this node's stamp and frame may be its own
+          // template's or the snippet's. Not placeable either way.
+          if (kin.rendered) return undefined;
+          if (kin.same) {
+            // A stamped sibling after an unstamped one: the unstamped one was
+            // never the template's, and the count is off by it.
+            if (unstampedBefore) return undefined;
+            index += 1;
+          } else if (!kin.stamped) {
+            // Under a stamped parent the template's unstamped elements are the
+            // tail of the run; a stamped node preceded by one is not placeable.
+            if (parentStamped && own.stamped) return undefined;
+            unstampedBefore = true;
+            index += 1;
+          }
+        }
+        child = child.nextSibling;
+      }
+      if (!found) return undefined;
+      // An unstamped node is the template's only at the tail of the stamped
+      // run: a stamped sibling of the frame after it says otherwise.
+      if (!own.stamped && parentStamped) {
+        let after: ChildNode | null = node.nextSibling;
+        let inner = 0;
+        while (after !== null) {
+          if (++scanned > MAX_STRUCTURE_SIBLINGS) return undefined;
+          if (after.nodeType === 8) {
+            const data = (after as Comment).data;
+            if (data.charAt(0) === "[") inner += 1;
+            else if (data.charAt(0) === "]" && inner > 0) inner -= 1;
+          } else if (after.nodeType === 1 && inner === 0) {
+            const kin = frameOf(after as Element);
+            if (kin.same || foreignBeside(kin)) return undefined;
+          }
+          after = after.nextSibling;
+        }
+      }
+      path.unshift({ tag: clamp(node.tagName.toLowerCase(), MAX_TAG), index });
+      if (parent === null) {
+        reachedRoot = true;
+        break;
+      }
+      const above = frameOf(parent);
+      if (above.stamped) {
+        if (!above.same) {
+          // The template's roots sit in a container of an enclosing template:
+          // its frame is above the anchor's. A container whose frame is not —
+          // a descendant component's element — holds markup that only
+          // inherited the anchor's stamp, such as raw HTML the walk went into.
+          const container = (readMeta(parent)?.parent ?? null) as unknown;
+          if (framesBetween(frame, container) === "none") return undefined;
+          reachedRoot = true;
+          break;
+        }
+        node = parent;
+        continue;
+      }
+      // An unstamped parent below the anchor lost its stamp with the anchor's
+      // subtree; one above it is beyond the template.
+      if (parent !== anchor && anchor.contains(parent)) {
+        node = parent;
+        continue;
+      }
+      reachedRoot = true;
+      break;
+    }
+    // Out of depth is not a path: a suffix of one names the wrong element.
+    if (!reachedRoot) return undefined;
+    return { file: anchorLoc.file, path };
+  }
+
+  /**
+   * The element a hit stands for: itself when it is stamped, or unstamped
+   * but placeable by shape; otherwise the nearest stamped ancestor, as before.
+   * One answer for observing, selecting and hovering, so the outline, the
+   * report and a Cmd-click all mean the same node.
+   */
+  function targetOf(hit: Element): {
+    target: Element;
+    placeable: GuestNodeObservation["structure"] | undefined;
+  } {
+    const placeable =
+      readLoc(hit) === null && !isUnmapped(hit, true) ? structureOf(hit) : undefined;
+    return { target: placeable !== undefined ? hit : (nearestMapped(hit) ?? hit), placeable };
   }
 
   function observe(hit: Element): GuestNodeObservation {
-    const target = nearestMapped(hit) ?? hit;
+    const { target, placeable } = targetOf(hit);
     const loc = readLoc(target);
-    const ancestry = readAncestry(target);
+    const structure = placeable ?? (loc === null ? undefined : structureOf(target));
+    // The frames are the template's, which an unstamped element inherits.
+    const ancestry = readAncestry(nearestMapped(target) ?? target);
     if (ancestry.truncated) {
       issue(
         "internal",
@@ -486,9 +731,11 @@ export function createSiteBuilderGuest(
       tagName: clamp(target.tagName.toLowerCase(), MAX_TAG),
       ...sameLocOf(loc),
       locIndex: loc === null ? 0 : indexAmongSameLoc(target, loc),
+      ...(structure === undefined ? {} : { structure }),
       label: describe(target),
       bounds: boundsOf(target),
-      unmapped: isUnmapped(hit),
+      // An unstamped hit the shape placed is markup, not a visual-only region.
+      unmapped: placeable !== undefined ? isUnmapped(hit, true) : isUnmapped(hit),
     };
   }
 
@@ -894,8 +1141,11 @@ export function createSiteBuilderGuest(
     const hit = hitFromEvent(event);
     if (hit === lastHit) return;
     lastHit = hit;
-    const target = hit === null || isOverlay(hit) ? null : (nearestMapped(hit) ?? hit);
-    const mapping = hit === null || target === null ? null : isUnmapped(hit);
+    const target = hit === null || isOverlay(hit) ? null : targetOf(hit).target;
+    const mapping =
+      hit === null || target === null
+        ? null
+        : isUnmapped(hit, target === hit && readLoc(hit) === null);
     // Moving from a container into its own `{@html}` child keeps the outline
     // but changes the answer, so the report is keyed on both.
     if (target === hovered && mapping === hoveredMapping) return;
@@ -921,10 +1171,12 @@ export function createSiteBuilderGuest(
     suppress(event);
     const hit = hitFromEvent(event);
     if (hit === null || isOverlay(hit)) return;
-    const target = nearestMapped(hit) ?? hit;
+    const { target } = targetOf(hit);
     const mouse = event as MouseEvent;
     const additive = mouse.metaKey === true || mouse.ctrlKey === true;
     const previous = selection;
+    const previousScope = selectionScope;
+    const previousFrame = selectedFrame;
     selectionScope = "element";
     selectedFrame = null;
     if (additive) {
@@ -943,6 +1195,8 @@ export function createSiteBuilderGuest(
     }
     if (!emitSelection("user")) {
       selection = previous;
+      selectionScope = previousScope;
+      selectedFrame = previousFrame;
       issue("internal", "selection left unchanged: the observation did not fit one envelope");
     }
     schedulePaint();
@@ -1042,10 +1296,23 @@ export function createSiteBuilderGuest(
    * could not tell the substitution from the real thing; a missing occurrence
    * is a failure, and the stale notice is the honest answer.
    */
-  function reselect(loc: SourceLoc, index?: number, component?: SourceLoc | null): boolean {
+  function reselect(
+    loc: SourceLoc,
+    index?: number,
+    component?: SourceLoc | null,
+    occurrence?: string | null
+  ): boolean {
     if (disposed || mode !== "select") return false;
     const wanted = typeof index === "number" && index >= 0 ? Math.floor(index) : 0;
-    const target = elementAt(loc, wanted);
+    // The element the host is asking about, by the id it was reported under,
+    // while it is still the same node in the document; else by location and
+    // occurrence, as after a reload has replaced it.
+    const held =
+      typeof occurrence === "string"
+        ? (elementsByOccurrence.get(occurrence)?.deref() ?? null)
+        : null;
+    const target =
+      held !== null && held.isConnected && !isOverlay(held) ? held : elementAt(loc, wanted);
     if (target === null) return false;
     // A component the user widened to stays the selection: the overlay keeps
     // naming it, and Option/Alt+Up keeps stepping outward from it rather than

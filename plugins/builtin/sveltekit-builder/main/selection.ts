@@ -180,9 +180,13 @@ async function resolveNode(
     },
   });
 
-  if (observation.unmapped || observation.loc === null) return inspectOnly("unmapped-content");
-
-  const loc = observation.loc;
+  if (observation.unmapped) return inspectOnly("unmapped-content");
+  // An unstamped element the page could still place by shape is asked for at
+  // the head of its template; the location comes from the walk.
+  const loc =
+    observation.loc ??
+    (observation.structure ? { file: observation.structure.file, line: 1, column: 0 } : null);
+  if (loc === null) return inspectOnly("unmapped-content");
   if (model.isGeneratedSourceFile(loc.file)) return inspectOnly("generated-file");
   const target = resolveReportedPath(workspace, loc.file);
   // Outside the app root is a workspace package or a dependency: real markup,
@@ -200,31 +204,74 @@ async function resolveNode(
   workspace.tracker.observe(target.absolute, target.worktreeRelative, read.revision);
 
   const parse = await loadParse();
-  const resolved = model.resolveElementAtLocation(read.text, loc, parse);
   const reported = observation.tagName.toLowerCase();
-  if (resolved.status !== "resolved") {
-    if (resolved.reason === "generated-file") return inspectOnly("generated-file");
-    // Out of range, no element starting there, ambiguous, or unparseable: the
-    // file is not the one this node was rendered from. Never a nearest match.
-    // Nothing starting there is said as such: the caller can then tell a
-    // location the page got wrong from a document that moved on.
-    if (resolved.reason === "no-element-at-location") {
-      return { status: "stale", mismatch: { ...loc, reported, found: null } };
+  const attempt = (
+    at: typeof loc
+  ):
+    | { status: "ok"; element: ResolvedElement }
+    | { status: "stale"; mismatch?: SelectionMismatch }
+    | { status: "inspect-only" } => {
+    const resolved = model.resolveElementAtLocation(read.text, at, parse);
+    if (resolved.status !== "resolved") {
+      if (resolved.reason === "generated-file") return { status: "inspect-only" };
+      // Out of range, ambiguous, or unparseable: the file is not the one this
+      // node was rendered from. Never a nearest match. Nothing starting there
+      // is said as such, so the caller can tell a location the page got wrong
+      // from a document that moved on.
+      if (resolved.reason === "no-element-at-location") {
+        return { status: "stale", mismatch: { ...at, reported, found: null } };
+      }
+      return { status: "stale" };
     }
-    return { status: "stale" };
-  }
+    // The guest's coordinates carry no revision, so an observation captured
+    // before an HMR update can land exactly on a different element in the new
+    // bytes. The tag is the one independent witness available; a mismatch is
+    // a stale selection. Same-tag shifts remain undetectable here.
+    const element = resolved.node;
+    if (element.kind === "RegularElement" && element.tagName.toLowerCase() !== reported) {
+      return {
+        status: "stale",
+        mismatch: { ...at, reported, found: element.tagName.toLowerCase() },
+      };
+    }
+    return { status: "ok", element };
+  };
 
-  const element = resolved.node;
-  // The guest's coordinates carry no revision, so an observation captured
-  // before an HMR update can land exactly on a different element in the new
-  // bytes. The tag is the one independent witness available; a mismatch is a
-  // stale selection. Same-tag shifts remain undetectable here.
-  if (element.kind === "RegularElement" && element.tagName.toLowerCase() !== reported) {
-    return {
-      status: "stale",
-      mismatch: { ...loc, reported, found: element.tagName.toLowerCase() },
-    };
+  const stamped = observation.loc !== null;
+  let outcome = stamped
+    ? attempt(loc)
+    : { status: "stale" as const, mismatch: { ...loc, reported, found: null } };
+  let location = loc;
+  let placedByStructure = false;
+  // A location the file contradicts, or none at all, on a node that reported
+  // its place in the template: on a hydrated page Svelte stamps an element
+  // with its neighbour's location and drops the tail's, and the shape is what
+  // still identifies it. Exact or nothing — the path has to land on an element
+  // of the reported tag in one fragment through levels the page and the
+  // source count alike — and the answer is re-proved at the location it
+  // names. A stamp the file agrees with is kept as it is: the page can move an
+  // element after stamping it, and its new place says nothing about its
+  // source; a same-tag neighbour's stamp cannot be told from it here.
+  if (outcome.status === "stale" && outcome.mismatch !== undefined && observation.structure) {
+    const frame = observation.ancestry[0] ?? null;
+    const placed = model.resolveElementByStructure(
+      read.text,
+      loc.file,
+      { frame, path: observation.structure.path, hint: stamped ? loc : null },
+      parse
+    );
+    if (placed.status === "resolved") {
+      const retried = attempt(placed.location);
+      if (retried.status === "ok") {
+        outcome = retried;
+        location = placed.location;
+        placedByStructure = true;
+      }
+    }
   }
+  if (outcome.status === "inspect-only") return inspectOnly("generated-file");
+  if (outcome.status === "stale") return outcome;
+  const element = outcome.element;
   const capabilities =
     workspace.support.level === "full"
       ? capabilitiesOf(element)
@@ -235,12 +282,17 @@ async function resolveNode(
     node: {
       ...base,
       definition: {
-        location: loc,
+        location,
         range: element.range,
         tagName: element.tagName,
         revision: read.revision,
-        renderedOccurrences: observation.sameLocCount,
-        ...(observation.sameLocCountPartial ? { renderedOccurrencesAtLeast: true as const } : {}),
+        // The page counted the copies sharing the location it stamped; for an
+        // element placed by shape that count describes some other element, and
+        // the one copy in hand is all that is known.
+        renderedOccurrences: placedByStructure ? 1 : observation.sameLocCount,
+        ...(observation.sameLocCountPartial || placedByStructure
+          ? { renderedOccurrencesAtLeast: true as const }
+          : {}),
       },
       mapping: invocation === null ? "definition-only" : "exact",
       ...(await withWritten(

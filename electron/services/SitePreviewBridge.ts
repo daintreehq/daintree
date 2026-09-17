@@ -435,7 +435,8 @@ export class SitePreviewBridge {
     sessionId: string,
     loc: { file: string; line: number; column: number },
     index = 0,
-    component: { file: string; line: number; column: number } | null = null
+    component: { file: string; line: number; column: number } | null = null,
+    occurrence: string | null = null
   ): Promise<boolean> {
     const binding = this.bindings.get(sessionId);
     if (!binding || binding.projectId !== projectId) {
@@ -448,7 +449,7 @@ export class SitePreviewBridge {
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (!wc) return false;
     const result = (await this.send(wc, "Runtime.evaluate", {
-      expression: buildReselectSource(loc, index, component),
+      expression: buildReselectSource(loc, index, component, occurrence),
       returnByValue: true,
       timeout: GUEST_EVALUATE_TIMEOUT_MS,
     })) as { result?: { value?: unknown } } | undefined;

@@ -81,6 +81,8 @@ export interface SitePreviewApi {
     index?: number;
     /** The component call site to keep selected, when the user had widened to one. */
     component?: { file: string; line: number; column: number };
+    /** The id the page reported the element under, to ask for it by identity while it is still that node. */
+    occurrence?: string;
   }): Promise<boolean>;
   /** Drop the page's selection without observing anything. */
   clearSelection(request: { sessionId: string }): Promise<void>;
@@ -193,6 +195,8 @@ interface Continuity {
   tagName: string;
   loc: { file: string; line: number; column: number };
   locIndex: number;
+  /** What the page reported the element as; the reselect names it first. */
+  occurrence: string;
   prior: Extract<SelectionState, { status: "ready" }> | null;
   attempts: number;
   /** When the write landed; empty observations inside the window are HMR, not the user. */
@@ -1284,6 +1288,7 @@ export class InspectorController {
             tagName: after.tagName,
             loc: { ...location },
             locIndex: pickedOccurrence,
+            occurrence: nodes[0]!.runtimeOccurrenceId,
             prior: null,
             attempts: 0,
             at: this.continuity?.at ?? 0,
@@ -1558,6 +1563,7 @@ export class InspectorController {
         sessionId: binding.sessionId,
         loc: record.loc,
         index: record.locIndex,
+        occurrence: record.occurrence,
         ...(picked
           ? { component: { file: picked.file, line: picked.line, column: picked.column } }
           : {}),
@@ -1667,6 +1673,7 @@ export class InspectorController {
         sessionId: binding.sessionId,
         loc: record.loc,
         index: record.locIndex,
+        occurrence: record.occurrence,
         component: { file: usedAt.file, line: usedAt.line, column: usedAt.column },
       });
     } catch {
