@@ -759,11 +759,6 @@ describe("resize transport attribution (#12442)", () => {
     handlers["connect-port"]({ windowId: 1 }, [port] as never);
     port.emit("message", { data: { type: "resize", id: "term-1", cols: 100, rows: 30 } });
 
-    expect(ctx.ptyManager.resize).toHaveBeenCalledWith(
-      "term-1",
-      100,
-      30,
-      "renderer-message-port"
-    );
+    expect(ctx.ptyManager.resize).toHaveBeenCalledWith("term-1", 100, 30, "renderer-message-port");
   });
 });

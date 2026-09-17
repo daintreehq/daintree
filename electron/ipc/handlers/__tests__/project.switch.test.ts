@@ -1407,12 +1407,7 @@ describe("project:switch outgoing terminalSizes merge", () => {
     // must still keep a sibling window's healthy entries.
     const sizes = await runSwitchWithSizes(
       {
-        terminals: [
-          sizedPane("t1"),
-          sizedPane("collapsed"),
-          sizedPane("narrow"),
-          sizedPane("sib"),
-        ],
+        terminals: [sizedPane("t1"), sizedPane("collapsed"), sizedPane("narrow"), sizedPane("sib")],
         terminalSizes: {
           t1: { cols: 80, rows: 24 },
           collapsed: { cols: 2, rows: 1 },
@@ -1421,12 +1416,7 @@ describe("project:switch outgoing terminalSizes merge", () => {
         },
       },
       {
-        terminals: [
-          sizedPane("t1"),
-          sizedPane("collapsed"),
-          sizedPane("narrow"),
-          sizedPane("sib"),
-        ],
+        terminals: [sizedPane("t1"), sizedPane("collapsed"), sizedPane("narrow"), sizedPane("sib")],
         terminalSizes: { t1: { cols: 203, rows: 51 } },
       }
     );

@@ -29,10 +29,7 @@ import {
   unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
-import {
-  COLLAPSED_TERMINAL_COLS,
-  COLLAPSED_TERMINAL_ROWS,
-} from "@shared/types/terminal";
+import { COLLAPSED_TERMINAL_COLS, COLLAPSED_TERMINAL_ROWS } from "@shared/types/terminal";
 import type { ManagedTerminal } from "../types";
 
 /**

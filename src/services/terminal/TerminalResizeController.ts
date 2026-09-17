@@ -823,11 +823,7 @@ export class TerminalResizeController {
    * with its own handling further in, and reporting it as an implausible grid
    * here would reroute it.
    */
-  private derivesImplausibleGrid(
-    managed: ManagedTerminal,
-    width: number,
-    height: number
-  ): boolean {
+  private derivesImplausibleGrid(managed: ManagedTerminal, width: number, height: number): boolean {
     const cellDims = getXtermCellDimensions(managed.terminal);
     if (!cellDims) return false;
     const cols = colsForWidth(managed.terminal, width, cellDims.width);
