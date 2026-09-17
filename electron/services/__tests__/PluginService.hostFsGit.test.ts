@@ -20,10 +20,26 @@ vi.mock("electron", () => ({
   webContents: { getAllWebContents: vi.fn(() => []) },
 }));
 
+// A workspace-scoped fs resolves its project's root through the project store,
+// never through a window, so the scoped tests register their projects here.
+const projectStoreMock = vi.hoisted(() => ({
+  paths: {} as Record<string, string>,
+  closed: new Set<string>(),
+}));
 vi.mock("../ProjectStore.js", () => ({
   projectStore: {
     getAllProjects: vi.fn(() => []),
     getCurrentProjectId: vi.fn(() => null),
+    getProjectById: vi.fn((id: string) =>
+      projectStoreMock.paths[id]
+        ? {
+            id,
+            path: projectStoreMock.paths[id],
+            // A closed project keeps its row, so the row carries the status.
+            status: projectStoreMock.closed.has(id) ? "closed" : "open",
+          }
+        : undefined
+    ),
   },
 }));
 
@@ -64,7 +80,11 @@ import {
   _resetPluginCapabilityServicesForTest,
 } from "../plugin-capability/instances.js";
 import type { SimpleGit } from "simple-git";
-import type { PluginManifest, PluginHostApi } from "../../../shared/types/plugin.js";
+import type {
+  PluginManifest,
+  PluginHostApi,
+  BuiltinPluginHostApi,
+} from "../../../shared/types/plugin.js";
 
 let svc: PluginService;
 let baseDir: string;
@@ -994,6 +1014,247 @@ describe("a bound plugin's ${project}/${worktree} allowlist roots", () => {
 
     // Fails closed: the token contributes no root rather than falling back.
     await expect(host.fs.readFile(join(ambient, "a.txt"))).rejects.toThrow();
+  });
+});
+
+// #12174 follow-up: a built-in has no project binding, so its `${worktree}` /
+// `${project}` roots otherwise track the focused window. `fsForWorkspace` pins
+// them to one named project + worktree for the life of the handle.
+describe("a built-in's workspace-scoped host.fs (fsForWorkspace)", () => {
+  const PROJECT_A = "a".repeat(64);
+  const PROJECT_B = "b".repeat(64);
+
+  interface Tree {
+    id: string;
+    path: string;
+    isCurrent?: boolean;
+    isMainWorktree?: boolean;
+  }
+
+  /**
+   * A workspace client whose per-project read answers each project's own trees
+   * and whose ambient (focused-window) read answers `focused`. A scoped handle
+   * that consulted focus would land on `focused`.
+   */
+  function setProjects(perProject: Record<string, Tree[]>, focused: Tree[]) {
+    projectStoreMock.paths = Object.fromEntries(
+      Object.keys(perProject).map((id) => [id, join(baseDir, id.slice(0, 6))])
+    );
+    (svc as unknown as { setWorkspaceClient(c: unknown): void }).setWorkspaceClient({
+      getAllStatesAsync: async () => focused,
+      getAllStatesResultAsync: async () => ({
+        status: "ok",
+        projectId: "project-focused",
+        states: focused,
+      }),
+      getAllStatesForProjectAsync: async (_root: string, projectId: string) =>
+        perProject[projectId] ?? [],
+      getAllStatesForProjectResultAsync: async (_root: string, projectId: string) =>
+        projectId in perProject
+          ? { status: "ok", projectId, states: perProject[projectId] }
+          : { status: "unavailable", reason: "project-unavailable" },
+      on: vi.fn(),
+      off: vi.fn(),
+    });
+  }
+
+  function registerBuiltin(capabilities: string[], allowedPaths: string[]): BuiltinPluginHostApi {
+    const seam = svc as unknown as {
+      _registerFakePluginForTests(p: FakeLoadedPlugin): void;
+      _createBuiltinHostForTests(id: string): BuiltinPluginHostApi;
+    };
+    seam._registerFakePluginForTests({
+      manifest: makeManifest(capabilities, allowedPaths),
+      dir: baseDir,
+      loadedAt: 0,
+      isBuiltin: true,
+    });
+    return seam._createBuiltinHostForTests("acme.fsgit");
+  }
+
+  /** `${dir}/a.txt` holding `dir`'s basename, so a read says which tree it came from. */
+  async function tree(name: string): Promise<Tree> {
+    const dir = join(baseDir, name);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(join(dir, "a.txt"), name, "utf8");
+    return { id: `wt-${name}`, path: dir };
+  }
+
+  afterEach(() => {
+    projectStoreMock.paths = {};
+    projectStoreMock.closed.clear();
+    windowScopeMock.hasActiveView = true;
+  });
+
+  it("resolves ${worktree} to the named worktree, not the current one", async () => {
+    const mine = await tree("mine");
+    const current = await tree("current");
+    setProjects({ [PROJECT_A]: [mine, { ...current, isCurrent: true }] }, [
+      { ...current, isCurrent: true },
+    ]);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+
+    const scoped = host.fsForWorkspace({ projectId: PROJECT_A, worktreeId: mine.id });
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("mine");
+    // The project's OWN current worktree is outside this handle's root, which
+    // is the whole point: the handle is about one worktree.
+    await expect(scoped.readFile(join(current.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    // Ambient `host.fs` still follows the current worktree — the scoped handle
+    // narrows one handle, it does not change the plugin's other roots.
+    expect(await host.fs.readFile(join(current.path, "a.txt"))).toBe("current");
+  });
+
+  it("does not move when another project is focused, or when no window resolves", async () => {
+    const mine = await tree("scoped-mine");
+    const theirs = await tree("scoped-theirs");
+    setProjects({ [PROJECT_A]: [mine], [PROJECT_B]: [{ ...theirs, isCurrent: true }] }, [
+      { ...theirs, isCurrent: true },
+    ]);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+    const scoped = host.fsForWorkspace({ projectId: PROJECT_A, worktreeId: mine.id });
+
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("scoped-mine");
+    await expect(scoped.readFile(join(theirs.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+
+    // No resolvable window at all — which denies every ambient token root —
+    // leaves the scoped handle untouched, because it never asked a window.
+    windowScopeMock.hasActiveView = false;
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("scoped-mine");
+    await expect(host.fs.readFile(join(theirs.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("resolves ${project} to the named project's main worktree", async () => {
+    const main = await tree("scoped-main");
+    const feature = await tree("scoped-feature");
+    setProjects(
+      {
+        [PROJECT_A]: [
+          { ...main, isMainWorktree: true },
+          { ...feature, isCurrent: true },
+        ],
+      },
+      []
+    );
+    const host = registerBuiltin(["fs:project-read"], ["${project}"]);
+
+    const scoped = host.fsForWorkspace({ projectId: PROJECT_A, worktreeId: feature.id });
+    expect(await scoped.readFile(join(main.path, "a.txt"))).toBe("scoped-main");
+    await expect(scoped.readFile(join(feature.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("fails closed for an unknown project and for an unknown worktree", async () => {
+    const mine = await tree("closed-mine");
+    setProjects({ [PROJECT_A]: [mine] }, [{ ...mine, isCurrent: true }]);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+
+    // A project the store does not know: no root, so containment denies rather
+    // than falling back to the focused project (which would read here).
+    await expect(
+      host
+        .fsForWorkspace({ projectId: PROJECT_B, worktreeId: mine.id })
+        .readFile(join(mine.path, "a.txt"))
+    ).rejects.toThrow(/PATH_NOT_ALLOWED/);
+
+    await expect(
+      host
+        .fsForWorkspace({ projectId: PROJECT_A, worktreeId: "wt-does-not-exist" })
+        .readFile(join(mine.path, "a.txt"))
+    ).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("keeps every capability, containment and liveness gate host.fs applies", async () => {
+    const mine = await tree("gated");
+    setProjects({ [PROJECT_A]: [mine] }, []);
+    const scope = { projectId: PROJECT_A, worktreeId: mine.id };
+
+    // A project path with only user-data caps: denied on class, not on path.
+    const uncapable = registerBuiltin(["fs:user-data-read"], ["${worktree}"]);
+    await expect(
+      uncapable.fsForWorkspace(scope).readFile(join(mine.path, "a.txt"))
+    ).rejects.toThrow(/PERMISSION_REQUIRED/);
+    svc.unloadPlugin("acme.fsgit");
+
+    const host = registerBuiltin(["fs:project-read", "fs:project-write"], ["${worktree}"]);
+    const scoped = host.fsForWorkspace(scope);
+    // A symlink out of the scoped root is rejected by the same realpath check.
+    const secret = join(baseDir, "scoped-secret.txt");
+    await fs.writeFile(secret, "TOPSECRET", "utf8");
+    await fs.symlink(secret, join(mine.path, "link.txt"));
+    await expect(scoped.readFile(join(mine.path, "link.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+    // Writes are audited exactly like host.fs writes.
+    appendSpy.mockClear();
+    await scoped.writeFile(join(mine.path, "written.txt"), "x");
+    expect(
+      appendSpy.mock.calls.filter(
+        (c) => (c[0] as { channel: string }).channel === "plugin:fs-write"
+      ).length
+    ).toBe(1);
+    // And the data dir stays reachable to a plugin holding user-data caps only
+    // through its own class gate, never through the scope.
+    await expect(scoped.writeFile(join(dataDir(), "x.txt"), "x")).rejects.toThrow(
+      /PERMISSION_REQUIRED/
+    );
+
+    svc.unloadPlugin("acme.fsgit");
+    await expect(scoped.readFile(join(mine.path, "a.txt"))).rejects.toThrow(/PLUGIN_UNLOADED/);
+  });
+
+  it("registers scoped watchers in the plugin's teardown set", async () => {
+    const mine = await tree("watched");
+    setProjects({ [PROJECT_A]: [mine] }, []);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+    const scoped = host.fsForWorkspace({ projectId: PROJECT_A, worktreeId: mine.id });
+
+    const dispose = await scoped.watch([join(mine.path, "a.txt")], () => {});
+    const watcherMap = (svc as unknown as { pluginFsWatchers: Map<string, Set<unknown>> })
+      .pluginFsWatchers;
+    expect(watcherMap.get("acme.fsgit")?.size ?? 0).toBe(1);
+    svc.unloadPlugin("acme.fsgit");
+    expect(watcherMap.has("acme.fsgit")).toBe(false);
+    expect(() => dispose()).not.toThrow();
+  });
+
+  it("denies a project the user has closed, even while its host is still warm", async () => {
+    const mine = await tree("closing");
+    // The pool entry (and so the snapshots) outlive the close by design; the
+    // persisted row going `closed` is what has to end the scope's authority.
+    setProjects({ [PROJECT_A]: [mine] }, []);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+    const scope = { projectId: PROJECT_A, worktreeId: mine.id };
+    expect(await host.fsForWorkspace(scope).readFile(join(mine.path, "a.txt"))).toBe("closing");
+
+    projectStoreMock.closed.add(PROJECT_A);
+    await expect(host.fsForWorkspace(scope).readFile(join(mine.path, "a.txt"))).rejects.toThrow(
+      /PATH_NOT_ALLOWED/
+    );
+  });
+
+  it("pins the handle to the scope it was minted with, not to the caller's object", async () => {
+    const mine = await tree("pinned");
+    const other = await tree("repointed");
+    setProjects({ [PROJECT_A]: [mine, other] }, []);
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+
+    const scope = { projectId: PROJECT_A, worktreeId: mine.id };
+    const scoped = host.fsForWorkspace(scope);
+    // The caller keeps its object; mutating it must not redirect a live handle.
+    (scope as { worktreeId: string }).worktreeId = other.id;
+
+    expect(await scoped.readFile(join(mine.path, "a.txt"))).toBe("pinned");
+    await expect(scoped.readFile(join(other.path, "a.txt"))).rejects.toThrow(/PATH_NOT_ALLOWED/);
+  });
+
+  it("rejects a malformed scope instead of silently expanding to nothing", async () => {
+    const host = registerBuiltin(["fs:project-read"], ["${worktree}"]);
+    expect(() => host.fsForWorkspace({ projectId: "", worktreeId: "wt" })).toThrow(
+      /fsForWorkspace/
+    );
+    expect(() =>
+      host.fsForWorkspace({ projectId: PROJECT_A } as unknown as {
+        projectId: string;
+        worktreeId: string;
+      })
+    ).toThrow(/fsForWorkspace/);
   });
 });
 

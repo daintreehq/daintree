@@ -16,6 +16,7 @@ export interface Workspace {
   readonly worktreePath: string;
   readonly appRoot: string;
   readonly support: SupportVerdict;
+  /** Filesystem authority pinned to this workspace's project and worktree, not to focus. */
   readonly fs: PluginFsApi;
   readonly tracker: SourceTracker;
 }

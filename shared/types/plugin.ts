@@ -3378,6 +3378,47 @@ export interface PluginHostApi extends PluginActivationApi {
 }
 
 /**
+ * The project and worktree a built-in plugin's filesystem handle is pinned to
+ * for the life of that handle — see {@link BuiltinPluginHostApi.fsForWorkspace}.
+ */
+export interface PluginWorkspaceScope {
+  readonly projectId: string;
+  readonly worktreeId: string;
+}
+
+/**
+ * The host as a BUILT-IN plugin sees it. Deliberately absent from
+ * `shared/types/plugin-sdk.ts`: it is not part of `@daintreehq/plugin-sdk`, and
+ * the out-of-process host proxy third-party plugins talk to never carries it.
+ *
+ * A built-in is app-global — it has no project binding of its own — so its
+ * `host.fs` resolves `${project}` / `${worktree}` from whichever window is
+ * focused at each call. That is right for a plugin acting on "the project the
+ * user is looking at" and wrong for one holding long-lived state about a named
+ * worktree: the roots move under it the moment focus does.
+ */
+export interface BuiltinPluginHostApi extends PluginHostApi {
+  /**
+   * A {@link PluginFsApi} whose `${project}` / `${worktree}` roots are pinned
+   * to `scope` instead of the focused window: `${worktree}` is the worktree
+   * with that id, `${project}` that project's main worktree. Every gate
+   * `host.fs` applies still applies — capability class, realpath containment,
+   * the implicit data dir, the write audit trail. A project that is not open
+   * contributes no token roots at all; an id matching none of its worktrees
+   * drops `${worktree}` alone (`${project}` still names that project's main
+   * worktree, as the manifest asked for). Nothing falls back to focus.
+   *
+   * A caller must only name a scope it was invoked for: the workspace scope is
+   * supplied by a renderer, so validate it against the handler's
+   * {@link PluginIpcContext} (`args.projectId === ctx.projectId`) before asking.
+   *
+   * Watchers taken through the returned handle are torn down on unload exactly
+   * like `host.fs.watch` ones.
+   */
+  fsForWorkspace(scope: PluginWorkspaceScope): PluginFsApi;
+}
+
+/**
  * Synchronous, fire-and-forget diagnostic logger handed to a plugin via
  * {@link PluginHostApi.logger}. Each call appends one line to the plugin's
  * ring buffer and mirrors it to the host console. `fields` is an optional

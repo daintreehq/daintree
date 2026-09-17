@@ -95,6 +95,7 @@ import type {
   PluginPtyProcessHandle,
   PluginPtyProcessSpawnOptions,
   PluginFsApi,
+  PluginWorkspaceScope,
   PluginFsDirEntry,
   PluginFsWriteErrorCode,
   PluginFsStat,
@@ -330,9 +331,17 @@ export interface PluginHostFactoryDeps {
   pluginDisplayName: (pluginId: string) => string;
   pluginDataDir: (pluginId: string) => string;
   isPathUnder: (root: string, candidate: string) => boolean;
+  /**
+   * `scope` pins the `${project}` / `${worktree}` tokens to one named project
+   * and worktree instead of resolving them from the plugin's binding (or, for
+   * an unbound plugin, the focused window) — the expansion behind
+   * a built-in host's `fsForWorkspace`. It only ever replaces the
+   * token resolution: a scope naming a project or worktree that is not live
+   * contributes no token root, so containment denies.
+   */
   expandAllowedPathEntries: (
     pluginId: string,
-    options: { includeDataDir: boolean }
+    options: { includeDataDir: boolean; scope?: PluginWorkspaceScope }
   ) => Promise<ExpandedFsPath[]>;
   subscribeWorktreeEvent: (
     pluginId: string,
@@ -2089,8 +2098,17 @@ function fsWriteError(code: PluginFsWriteErrorCode, message: string): Error & { 
  * (traversal/symlink-escape rejected), and reads/writes are capability-gated
  * (`fs:*-read` / `fs:*-write`). This is the first runtime enforcement of
  * `scopes.fs.allowedPaths` — formerly advisory-only. Writes are audited.
+ *
+ * `workspaceScope`, when given, pins the `${project}` / `${worktree}` roots to
+ * one named project and worktree for the life of the returned handle — see
+ * {@link buildScopedFsApi}. Nothing else about the surface changes: it is the
+ * same closures, the same gates, and the same watcher registry.
  */
-function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi {
+function buildFsApi(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  workspaceScope?: PluginWorkspaceScope
+): PluginFsApi {
   const requireLoaded = (op: string): void => {
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" fs.${op}: plugin is no longer loaded`);
@@ -2141,7 +2159,7 @@ function buildFsApi(deps: PluginHostFactoryDeps, pluginId: string): PluginFsApi 
     }
   };
   const containWithClass = (targetPath: string) =>
-    containToDeclaredRoots(deps, pluginId, targetPath);
+    containToDeclaredRoots(deps, pluginId, targetPath, workspaceScope);
 
   return {
     readFile: async (filePath, options) => {
@@ -2634,6 +2652,33 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
 }
 
 /**
+ * A `host.fs` for one named project and worktree — the implementation behind a
+ * built-in host's `fsForWorkspace` (`shared/types/plugin.ts`).
+ *
+ * Built-ins are app-global, so their token roots otherwise track the focused
+ * window; a built-in holding long-lived state about a worktree needs roots that
+ * do not move when the user looks elsewhere. It repoints the tokens rather than
+ * relaxing anything: the declared `allowedPaths`, capability classes, realpath
+ * containment and write audit are untouched, and the roots it names are ones
+ * the same manifest already reaches when that project is focused — reaching
+ * them while it is NOT focused is the point, and is why the caller must
+ * validate the scope against its own invocation context. A project that is not
+ * open expands to no token root at all, and an unresolvable worktree drops
+ * `${worktree}` alone, both following #9492's fail-closed posture.
+ *
+ * Whether the caller may name this scope is the CALLER's check, made against
+ * the invoking renderer's `PluginIpcContext` before it asks — nothing about a
+ * scope object is authenticated here.
+ */
+export function buildScopedFsApi(
+  deps: PluginHostFactoryDeps,
+  pluginId: string,
+  scope: PluginWorkspaceScope
+): PluginFsApi {
+  return buildFsApi(deps, pluginId, scope);
+}
+
+/**
  * Contain a plugin-supplied path against the plugin's call-time-expanded
  * allowed roots and report which root class matched.
  *
@@ -2650,9 +2695,13 @@ function buildGitApi(deps: PluginHostFactoryDeps, pluginId: string): PluginGitAp
 async function containToDeclaredRoots(
   deps: PluginHostFactoryDeps,
   pluginId: string,
-  targetPath: string
+  targetPath: string,
+  scope?: PluginWorkspaceScope
 ): Promise<{ resolved: string; rootClass: FsRootClass; root: string }> {
-  const entries = await deps.expandAllowedPathEntries(pluginId, { includeDataDir: true });
+  const entries = await deps.expandAllowedPathEntries(pluginId, {
+    includeDataDir: true,
+    scope,
+  });
   let lastErr: unknown;
   for (const entry of entries) {
     try {

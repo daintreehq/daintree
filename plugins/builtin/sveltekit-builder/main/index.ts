@@ -1,6 +1,10 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
-import type { PluginFsApi, PluginHostApi } from "../../../../shared/types/plugin.js";
+import type {
+  BuiltinPluginHostApi,
+  PluginFsApi,
+  PluginIpcContext,
+} from "../../../../shared/types/plugin.js";
 import {
   CHANNELS,
   IssuePushSchema,
@@ -62,6 +66,36 @@ function workspaceClosed(): Error {
   return new Error("WORKSPACE_CLOSED: that source workspace is not open; open it again");
 }
 
+/**
+ * Thrown when a view asks to open a workspace on a project other than its own.
+ * The project and worktree arrive from the renderer, and they decide which
+ * files the workspace may read, so the only trustworthy check is against the
+ * project the host itself resolved for the sender. The worktree is not checked
+ * the same way: the context reports the sender window's ACTIVE worktree, and a
+ * builder on a background worktree legitimately names a different one.
+ */
+function workspaceForbidden(): Error {
+  return new Error("WORKSPACE_FORBIDDEN: that project is not this view's project");
+}
+
+/**
+ * A session id is not authority: it rides along in every source-changed push,
+ * so a view of another project could hold one. Ownership is re-checked on every
+ * lookup against the project the host resolved for the caller — otherwise the
+ * workspace's pinned filesystem would read another project's files on its
+ * behalf, which is the confused deputy this whole change exists to close.
+ */
+function ownedWorkspace(
+  registry: WorkspaceRegistry,
+  ctx: PluginIpcContext,
+  workspaceSessionId: string
+): Workspace | undefined {
+  const workspace = registry.get(workspaceSessionId);
+  if (!workspace) return undefined;
+  if (workspace.projectId !== ctx.projectId) throw workspaceForbidden();
+  return workspace;
+}
+
 function projectReader(fs: PluginFsApi): ProjectFileReader {
   return {
     readFile: (target) => fs.readFile(target),
@@ -70,8 +104,11 @@ function projectReader(fs: PluginFsApi): ProjectFileReader {
   };
 }
 
-export async function activate(host: PluginHostApi): Promise<() => void> {
+export async function activate(host: BuiltinPluginHostApi): Promise<() => void> {
   const registry = new WorkspaceRegistry();
+  // For the handlers that own no workspace (app discovery): ambient roots, the
+  // path the caller named. Everything a workspace does goes through the
+  // workspace's own scoped fs instead.
   const reader = projectReader(host.fs);
 
   // Every push names the preview panel it is about: the workspace's owner
@@ -118,12 +155,22 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       result: WorkspaceOpenResultSchema,
       requires: ["fs:project-read"],
     },
-    async (_ctx, args) => {
+    async (ctx, args) => {
+      if (args.projectId !== ctx.projectId) throw workspaceForbidden();
       const { inspectWorktree } = await import("../shared/project/index.js");
       const worktreePath = path.resolve(args.worktreePath);
       const requested = args.appRoot === undefined ? undefined : path.resolve(args.appRoot);
 
-      let scan = await inspectWorktree(reader, worktreePath, requested);
+      // The workspace's filesystem authority, pinned to the project and
+      // worktree it is about: this builder keeps reading its own worktree's
+      // files while the user works in another worktree or another project.
+      const workspaceFs = host.fsForWorkspace({
+        projectId: args.projectId,
+        worktreeId: args.worktreeId,
+      });
+      const workspaceReader = projectReader(workspaceFs);
+
+      let scan = await inspectWorktree(workspaceReader, worktreePath, requested);
       if (!scan.inspection) {
         if (requested !== undefined || scan.apps.length === 0) return { status: "no-app" as const };
         if (scan.apps.length > 1) {
@@ -133,7 +180,7 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
         // "the only app", and neither does this: it opens the one it found and
         // says the list may be incomplete.
         const only = scan.apps[0]!;
-        scan = await inspectWorktree(reader, worktreePath, only.appRoot);
+        scan = await inspectWorktree(workspaceReader, worktreePath, only.appRoot);
         if (!scan.inspection) return { status: "no-app" as const };
         warnIssue(
           "APP_SCAN_TRUNCATED",
@@ -152,9 +199,9 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
         worktreePath,
         appRoot,
         support,
-        fs: host.fs,
+        fs: workspaceFs,
         tracker: new SourceTracker({
-          fs: host.fs,
+          fs: workspaceFs,
           workspaceSessionId: id,
           push: (payload) =>
             post(
@@ -185,7 +232,11 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
   await host.registerHandler(
     CHANNELS.workspaceClose,
     { args: WorkspaceCloseArgsSchema, result: WorkspaceCloseResultSchema },
-    (_ctx, { workspaceSessionId }) => ({ closed: registry.close(workspaceSessionId) })
+    (ctx, { workspaceSessionId }) => ({
+      closed:
+        ownedWorkspace(registry, ctx, workspaceSessionId) !== undefined &&
+        registry.close(workspaceSessionId),
+    })
   );
 
   await host.registerHandler(
@@ -195,8 +246,8 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       result: SelectionResolveResultSchema,
       requires: ["fs:project-read"],
     },
-    async (_ctx, args) => {
-      const workspace = registry.get(args.workspaceSessionId);
+    async (ctx, args) => {
+      const workspace = ownedWorkspace(registry, ctx, args.workspaceSessionId);
       if (!workspace) throw workspaceClosed();
       return resolveSelection(workspace, args);
     }
@@ -209,8 +260,8 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       result: SourceRevisionsResultSchema,
       requires: ["fs:project-read"],
     },
-    async (_ctx, { workspaceSessionId, files }) => {
-      const workspace = registry.get(workspaceSessionId);
+    async (ctx, { workspaceSessionId, files }) => {
+      const workspace = ownedWorkspace(registry, ctx, workspaceSessionId);
       if (!workspace) throw workspaceClosed();
       const { isGeneratedSourceFile } = await import("@daintreehq/svelte-source-model");
       // One read at a time, each file once, and nothing larger than a source
@@ -244,8 +295,8 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       result: ComponentDefinitionsResultSchema,
       requires: ["fs:project-read"],
     },
-    async (_ctx, { workspaceSessionId, callSites }) => {
-      const workspace = registry.get(workspaceSessionId);
+    async (ctx, { workspaceSessionId, callSites }) => {
+      const workspace = ownedWorkspace(registry, ctx, workspaceSessionId);
       if (!workspace) throw workspaceClosed();
       const [parse, model, { resolveComponentDefinitions }] = await Promise.all([
         loadParse(),
@@ -270,9 +321,9 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       result: SourceExcerptResultSchema,
       requires: ["fs:project-read"],
     },
-    async (_ctx, { workspaceSessionId, file, range, contextLines }) => {
+    async (ctx, { workspaceSessionId, file, range, contextLines }) => {
       const unavailable = { status: "unavailable" as const };
-      const workspace = registry.get(workspaceSessionId);
+      const workspace = ownedWorkspace(registry, ctx, workspaceSessionId);
       if (!workspace) return unavailable;
       const target = resolveWorktreePath(workspace, file);
       if (!target.ok || !EXCERPTABLE.test(target.appRelative)) return unavailable;
@@ -308,12 +359,12 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
       result: ProjectModelResultSchema,
       requires: ["fs:project-read"],
     },
-    async (_ctx, { workspaceSessionId }) => {
-      const workspace = registry.get(workspaceSessionId);
+    async (ctx, { workspaceSessionId }) => {
+      const workspace = ownedWorkspace(registry, ctx, workspaceSessionId);
       if (!workspace) throw workspaceClosed();
       const { inspectProject } = await import("../shared/project/index.js");
       // Read fresh: routes are exactly what an agent adds while the panel is open.
-      const { model } = await inspectProject(reader, {
+      const { model } = await inspectProject(projectReader(workspace.fs), {
         worktreeRoot: workspace.worktreePath,
         appRoot: workspace.appRoot,
       });
