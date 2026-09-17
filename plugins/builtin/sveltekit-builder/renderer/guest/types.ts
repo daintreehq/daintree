@@ -59,7 +59,12 @@ export interface GuestRuntimeHandle {
    * selection through its own write and the reload that follows.
    */
   /** `component`: the call site of the component the selection was widened to, if any. */
-  reselect(loc: GuestSourceLoc, index?: number, component?: GuestSourceLoc | null): boolean;
+  reselect(
+    loc: GuestSourceLoc,
+    index?: number,
+    component?: GuestSourceLoc | null,
+    occurrence?: string | null
+  ): boolean;
   /**
    * Drop the selection and its overlay without observing anything. The host
    * uses this when a re-proof turned out to name a different element, so the

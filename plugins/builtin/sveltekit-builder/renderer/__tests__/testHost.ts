@@ -172,6 +172,7 @@ export function createFakeHost() {
         loc: SiteGuestNodeObservation["loc"];
         index?: number;
         component?: { file: string; line: number; column: number };
+        occurrence?: string;
       }) => {
         if (!host.reselectFinds) return false;
         const component = request.component;

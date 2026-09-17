@@ -135,6 +135,32 @@ export const GuestNodeObservationSchema = z
      * older runtime does not report it, and the host then asks for the first.
      */
     locIndex: z.number().int().nonnegative().max(100_000).optional(),
+    /**
+     * Where the node sits in its template: outermost first, each step the tag
+     * and the index among the elements at that level that belong to the same
+     * frame (`ancestry[0]`). Shape, for when the location the page stamped is
+     * a neighbour's (a hydrated page); reported only where the page can vouch
+     * for whose elements it counted. Optional: an older runtime does not
+     * report it.
+     */
+    structure: z
+      .object({
+        /** The file the template was compiled from; an unstamped node takes it from its template's stamped kin. */
+        file: z.string().min(1).max(1024),
+        path: z
+          .array(
+            z
+              .object({
+                tag: z.string().min(1).max(64),
+                index: z.number().int().nonnegative().max(100_000),
+              })
+              .strict()
+          )
+          .min(1)
+          .max(64),
+      })
+      .strict()
+      .optional(),
     label: z.string().max(200),
     bounds: z.array(RectSchema).max(32),
     /** True when the node sits inside `{@html}`, canvas, or a shadow root. */

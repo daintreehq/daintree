@@ -279,7 +279,7 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
     lines.push(`- Source: <${definition.tagName}> at ${location}`);
     if (definition.renderedOccurrencesAtLeast) {
       lines.push(
-        `- This markup renders at least ${definition.renderedOccurrences} ${definition.renderedOccurrences === 1 ? "copy" : "copies"} on the page (too large to count them all); changing it changes every copy`
+        `- This markup renders at least ${definition.renderedOccurrences} ${definition.renderedOccurrences === 1 ? "copy" : "copies"} on the page (the page could not count them all); changing it changes every copy`
       );
     } else if (definition.renderedOccurrences > 1) {
       lines.push(

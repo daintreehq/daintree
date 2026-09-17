@@ -1676,6 +1676,7 @@ export interface GeneratedIpcInvokeMap {
         loc: { file: string; line: number; column: number };
         index?: number | undefined;
         component?: { file: string; line: number; column: number } | undefined;
+        occurrence?: string | undefined;
       },
     ];
     result: boolean;

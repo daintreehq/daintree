@@ -133,11 +133,12 @@ export function buildModeUpdateSource(mode: SitePreviewMode): string {
 export function buildReselectSource(
   loc: { file: string; line: number; column: number },
   index: number,
-  component: { file: string; line: number; column: number } | null = null
+  component: { file: string; line: number; column: number } | null = null,
+  occurrence: string | null = null
 ): string {
   return `(() => {
   const api = globalThis[${JSON.stringify(GUEST_RUNTIME_GLOBAL)}];
-  return api && typeof api.reselect === "function" ? api.reselect(${JSON.stringify(loc)}, ${JSON.stringify(index)}, ${JSON.stringify(component)}) === true : false;
+  return api && typeof api.reselect === "function" ? api.reselect(${JSON.stringify(loc)}, ${JSON.stringify(index)}, ${JSON.stringify(component)}, ${JSON.stringify(occurrence)}) === true : false;
 })();`;
 }
 

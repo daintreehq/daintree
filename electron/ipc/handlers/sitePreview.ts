@@ -69,6 +69,12 @@ const reselectSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * The id the runtime reported the element under, so it is asked for by
+     * identity while it is still the same node: on a hydrated page its true
+     * location is stamped on a neighbour.
+     */
+    occurrence: z.string().min(1).max(128).optional(),
   })
   .strict();
 
@@ -127,7 +133,8 @@ export const sitePreviewNamespace = defineIpcNamespace({
           payload.sessionId,
           payload.loc,
           payload.index ?? 0,
-          payload.component ?? null
+          payload.component ?? null,
+          payload.occurrence ?? null
         ),
       { withContext: true }
     ),

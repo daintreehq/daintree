@@ -74,6 +74,25 @@ export const GuestNodeObservationSchema = z
     sameLocCountPartial: z.literal(true).optional(),
     /** Which of those this node is, in document order; absent from older runtimes. */
     locIndex: z.number().int().nonnegative().max(100_000).optional(),
+    /** Where the node sits in its template, for a page whose `loc` is a neighbour's; absent from older runtimes. */
+    structure: z
+      .object({
+        /** The file the template was compiled from; an unstamped node takes it from its template's stamped kin. */
+        file: z.string().min(1).max(1024),
+        path: z
+          .array(
+            z
+              .object({
+                tag: z.string().min(1).max(64),
+                index: z.number().int().nonnegative().max(100_000),
+              })
+              .strict()
+          )
+          .min(1)
+          .max(64),
+      })
+      .strict()
+      .optional(),
     label: z.string().max(200),
     bounds: z.array(RectSchema).max(32),
     unmapped: z.boolean(),
