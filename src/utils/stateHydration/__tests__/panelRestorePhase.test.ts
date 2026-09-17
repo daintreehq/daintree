@@ -537,6 +537,36 @@ describe("restorePanelsPhase — saved panels", () => {
     expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toBeUndefined();
   });
 
+  it("omits a saved grid no pane could have been showing (#12442)", async () => {
+    // The map on disk after the collapse. Seeding xterm to match is what made
+    // the 2x1 survive a restart, so an implausible entry counts as no entry:
+    // the pane boots at the construction default and the first real fit sizes
+    // it — and the PTY with it.
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 2, rows: 1 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toBeUndefined();
+  });
+
+  it("refuses a collapsed LIVE PTY grid instead of inheriting it (#12442)", async () => {
+    // The live grid normally outranks everything below — but a PTY at 2x1 is
+    // the corruption, not a truth to adopt, and it is the higher-precedence
+    // source, so the floor has to hold on this side too. With the persisted
+    // entry equally collapsed there is nothing left to fall back to, which is
+    // the case that matters: refusing both is what lets the pane re-measure.
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 2, rows: 1 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 2, ptyRows: 1 }));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toBeUndefined();
+  });
+
+  it("falls back to a healthy persisted size when the live PTY grid is collapsed", async () => {
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 203, rows: 51 } } });
+    ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 3, ptyRows: 90 }));
+    await restorePanelsPhase([panel("t1")], ctx);
+    expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toEqual({ cols: 203, rows: 51 });
+  });
+
   /**
    * The live PTY grid outranks the persisted map (#11718 follow-up). The map is
    * written by exactly one renderer path and was empty on disk for four months

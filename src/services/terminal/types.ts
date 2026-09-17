@@ -149,6 +149,11 @@ export interface ManagedTerminal {
   ptyGeometryDivergenceSignature?: string;
   // Same episode-dedup for the container-vs-xterm fit diagnostic.
   fitGeometryDivergenceSignature?: string;
+  // Same episode-dedup for refused implausible grids (#12442). A hidden pane
+  // whose box keeps measuring zero is asked for the same impossible grid on
+  // every observer tick, and the log has to name the caller without becoming
+  // the flood it exists to explain.
+  implausibleGridSignature?: string;
   // Visibility tracking
   isVisible: boolean;
   lastActiveTime: number;

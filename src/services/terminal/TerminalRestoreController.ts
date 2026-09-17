@@ -4,7 +4,7 @@ import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 import { logWarn, logError } from "@/utils/logger";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import type { TerminalGeometry } from "@shared/types/terminal";
-import { isValidTerminalGeometry } from "@shared/types/terminal";
+import { isPlausibleTerminalGeometry } from "@shared/types/terminal";
 
 function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
   const timestamp = Date.now();
@@ -102,7 +102,7 @@ export class TerminalRestoreController {
   private intendedGeometry(managed: ManagedTerminal): TerminalGeometry | undefined {
     if (!managed.isOpened) {
       const target = { cols: managed.targetCols, rows: managed.targetRows };
-      return isValidTerminalGeometry(target) ? target : undefined;
+      return isPlausibleTerminalGeometry(target) ? target : undefined;
     }
     return { cols: managed.terminal.cols, rows: managed.terminal.rows };
   }
@@ -113,8 +113,11 @@ export class TerminalRestoreController {
    *
    * A no-op — replay verbatim, exactly as before this fix — when the snapshot
    * carries no geometry (an older pty host across an upgrade, or a preserved
-   * snapshot captured pre-#11552), when the geometry is not a grid a terminal
-   * could plausibly have had, or when it already matches. Losing the session
+   * snapshot captured pre-#11552), when the geometry is not a grid a real pane
+   * could have been showing, or when it already matches. That second case now
+   * covers the snapshots written during a collapse: parking xterm on a 2x1
+   * capture grid is how the renderer adopted it, and `collectTerminalSizes`
+   * then persisted it as the pane's real size (#12442). Losing the session
    * would be a worse compatibility policy than reproducing today's behaviour
    * for payloads that predate the contract.
    */
@@ -122,7 +125,7 @@ export class TerminalRestoreController {
     managed: ManagedTerminal,
     captureGeometry: TerminalGeometry | undefined
   ): void {
-    if (!isValidTerminalGeometry(captureGeometry)) return;
+    if (!isPlausibleTerminalGeometry(captureGeometry)) return;
     if (
       captureGeometry.cols === managed.terminal.cols &&
       captureGeometry.rows === managed.terminal.rows

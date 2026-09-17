@@ -52,7 +52,7 @@ import {
   resolveAgentLaunchBaseCommand,
 } from "@/utils/agentLaunchCommand";
 import { codexClient } from "@/clients/codexClient";
-import { isValidTerminalGeometry } from "@shared/types/terminal";
+import { isPlausibleTerminalGeometry } from "@shared/types/terminal";
 import type { TerminalGeometry } from "@shared/types/terminal";
 
 type AddPanelFn = HydrationOptions["addPanel"];
@@ -76,7 +76,7 @@ function resolvePersistedGeometry(
 ): TerminalGeometry | undefined {
   if (!terminalSizes || typeof terminalSizes !== "object") return undefined;
   const saved = terminalSizes[terminalId];
-  return isValidTerminalGeometry(saved) ? saved : undefined;
+  return isPlausibleTerminalGeometry(saved) ? saved : undefined;
 }
 
 /**
@@ -113,8 +113,13 @@ function resolveRestoreGeometry(
   terminalSizes: Record<string, { cols: number; rows: number }> | undefined,
   terminalId: string
 ): TerminalGeometry | undefined {
+  // Both sources are judged plausible, not merely valid. A surviving PTY at
+  // 2x1 is not a truth to inherit — it is the corruption in #12442, and
+  // seeding xterm to match it is what made the collapse survive a restart.
+  // Refusing both leaves the pane at the construction default, where the first
+  // real fit measures the container and resizes the PTY back up with it.
   const livePtyGrid = { cols: live?.ptyCols, rows: live?.ptyRows };
-  if (isValidTerminalGeometry(livePtyGrid)) return livePtyGrid;
+  if (isPlausibleTerminalGeometry(livePtyGrid)) return livePtyGrid;
   return resolvePersistedGeometry(terminalSizes, terminalId);
 }
 type RestoreTerminalOrderFn = NonNullable<HydrationOptions["restoreTerminalOrder"]>;

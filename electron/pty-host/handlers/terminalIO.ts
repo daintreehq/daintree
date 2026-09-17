@@ -18,7 +18,7 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
     },
 
     resize: (msg) => {
-      ptyManager.resize(msg.id, msg.cols, msg.rows);
+      ptyManager.resize(msg.id, msg.cols, msg.rows, "main-ipc");
     },
 
     "broadcast-write": (msg) => {

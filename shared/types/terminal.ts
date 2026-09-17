@@ -113,3 +113,42 @@ export function isValidTerminalGeometry(value: unknown): value is TerminalGeomet
     rows <= MAX_TERMINAL_GRID_DIMENSION
   );
 }
+
+/**
+ * Smallest grid a pane a user could actually work in describes.
+ *
+ * Structural validity starts at 1x1, which is the hole #12442 came through: a
+ * hidden container measures 0x0, FitAddon's own floor (and the `colsForWidth` /
+ * `rowsForHeight` twins that reproduce it) answers 2x1, `isValidTerminalGeometry`
+ * accepts it, and every layer downstream — the PTY, the snapshot header, the
+ * persisted `terminalSizes` map — records it as a real measurement. The CLI then
+ * paints its frame into a 2-column PTY and the overflow is in scrollback for
+ * good.
+ *
+ * 20 columns is the floor `calculateTerminalDimensions` already refuses to
+ * estimate below, so it is the number this codebase has long treated as the
+ * narrowest pane worth booting. 5 rows is well under that estimator's 10-row
+ * floor and still excludes the single-row collapse.
+ */
+export const MIN_PLAUSIBLE_TERMINAL_COLS = 20;
+export const MIN_PLAUSIBLE_TERMINAL_ROWS = 5;
+
+/**
+ * True when `value` is a grid a real pane could be showing — structurally valid
+ * AND at least {@link MIN_PLAUSIBLE_TERMINAL_COLS} x
+ * {@link MIN_PLAUSIBLE_TERMINAL_ROWS}.
+ *
+ * Deliberately a second predicate rather than a raised floor on
+ * `isValidTerminalGeometry`: that one answers "could a terminal have been
+ * captured at this?", which xterm-level code and snapshot decoding legitimately
+ * ask of grids smaller than any pane. This one answers "did a pane measure
+ * this?", which is the question every write boundary should be asking.
+ *
+ * A rejection is never clamped upward — inventing 20x5 for a pane nobody
+ * measured splits xterm from the PTY just as thoroughly as 2x1 did. Callers hold
+ * the geometry they already have and let the next real measurement correct it.
+ */
+export function isPlausibleTerminalGeometry(value: unknown): value is TerminalGeometry {
+  if (!isValidTerminalGeometry(value)) return false;
+  return value.cols >= MIN_PLAUSIBLE_TERMINAL_COLS && value.rows >= MIN_PLAUSIBLE_TERMINAL_ROWS;
+}

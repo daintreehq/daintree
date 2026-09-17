@@ -1392,6 +1392,30 @@ describe("project:switch outgoing terminalSizes merge", () => {
     );
     expect(sizes).toEqual({ t1: { cols: 80, rows: 24 } });
   });
+
+  it("drops a collapsed grid already stored, not just one arriving (#12442)", async () => {
+    // The entries written before the floor existed are still on disk — three of
+    // the reporter's panes persisted at 2x1 — and hydration builds a restored
+    // pane's xterm on exactly this map. A merge that only filters the INCOMING
+    // side preserves every one of them, so each restore rebuilds the collapse.
+    // `sib` is the guard on over-correcting: sanitizing the stored side must
+    // still keep a sibling window's healthy entries.
+    const sizes = await runSwitchWithSizes(
+      {
+        terminals: [sizedPane("t1"), sizedPane("stale"), sizedPane("sib")],
+        terminalSizes: {
+          t1: { cols: 2, rows: 1 },
+          stale: { cols: 3, rows: 90 },
+          sib: { cols: 100, rows: 30 },
+        },
+      },
+      {
+        terminals: [sizedPane("t1"), sizedPane("stale"), sizedPane("sib")],
+        terminalSizes: { t1: { cols: 203, rows: 51 } },
+      }
+    );
+    expect(sizes).toEqual({ t1: { cols: 203, rows: 51 }, sib: { cols: 100, rows: 30 } });
+  });
 });
 
 describe("project:switch worktree-load-status (#8400)", () => {

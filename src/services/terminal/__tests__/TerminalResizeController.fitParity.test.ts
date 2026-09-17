@@ -29,6 +29,10 @@ import {
   unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
+import {
+  MIN_PLAUSIBLE_TERMINAL_COLS,
+  MIN_PLAUSIBLE_TERMINAL_ROWS,
+} from "@shared/types/terminal";
 import type { ManagedTerminal } from "../types";
 
 /**
@@ -465,30 +469,40 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
   });
 
   // Both floors are reached with a container the resize entry points still
-  // accept as layout — a box below that floor is now refused outright rather
-  // than flooring to 2x1 and re-wrapping a cached pane's scrollback (#11900),
-  // so the degenerate geometry has to come from the gutter and the cell size
+  // accept as layout — a box below that floor is refused outright (#11900) — so
+  // the degenerate geometry has to come from the gutter and the cell size
   // instead of from the box.
-  it("clamps to FitAddon's floor when the gutter is wider than the container", () => {
+  //
+  // Parity with FitAddon is asserted on the PROPOSAL and deliberately not on
+  // what the controller applies: agreeing with the addon here would mean
+  // adopting its 2x1, and the whole of #12442 is that no layer downstream can
+  // tell that floor apart from a measurement. So these two cases invert — the
+  // addon still floors, and the controller refuses what the addon floored to.
+  // The fixtures are kept because they are the only ones that reach the floor
+  // through arithmetic rather than through a box the pixel gates already reject.
+  it("refuses FitAddon's floor grid when the gutter is wider than the container", () => {
     const narrow = { width: 50, height: 360 };
     const { managed, fitAddon } = buildPane(narrow, { scrollbar: { width: 60 } });
     const controller = makeController(managed);
 
     // Witness that the fixture is genuinely in the flooring regime: the gutter
     // alone exceeds the container, so available width is negative and only the
-    // floor can produce a column count. Without this the equality below would
+    // floor can produce a column count. Without this the refusal below would
     // still hold on a fixture that quietly stopped reaching the floor.
     expect(getEffectiveScrollbarWidth(managed.terminal.options)).toBeGreaterThan(narrow.width);
+    expect(fitAddon.proposeDimensions()!.cols).toBeLessThan(MIN_PLAUSIBLE_TERMINAL_COLS);
 
-    const proposal = fitAddon.proposeDimensions();
     const applied = controller.resize("t1", narrow.width, narrow.height);
 
-    // Negative available width must not produce a negative or zero column count
-    // on either side.
-    expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
+    // Negative available width produces no column count worth applying: nothing
+    // reaches xterm, the PTY, or the target cache the wake paths replay.
+    expect(applied).toBeNull();
+    expect(managed.latestCols).toBe(80);
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(resizeMock).not.toHaveBeenCalled();
   });
 
-  it("clamps to FitAddon's floor when the container is shorter than one cell", () => {
+  it("refuses FitAddon's floor grid when the container is shorter than one cell", () => {
     const short = { width: 665, height: 50 };
     const cell = { width: 9, height: 60 };
     const { managed, fitAddon } = buildPane(short, {}, cell);
@@ -497,11 +511,14 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     // Same witness on the row axis: one cell is taller than the whole container,
     // so the unclamped quotient is below one and the floor is what answers.
     expect(cell.height).toBeGreaterThan(short.height);
+    expect(fitAddon.proposeDimensions()!.rows).toBeLessThan(MIN_PLAUSIBLE_TERMINAL_ROWS);
 
-    const proposal = fitAddon.proposeDimensions();
     const applied = controller.resize("t1", short.width, short.height);
 
-    expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
+    expect(applied).toBeNull();
+    expect(managed.latestRows).toBe(24);
+    expect(managed.terminal.resize).not.toHaveBeenCalled();
+    expect(resizeMock).not.toHaveBeenCalled();
   });
 
   it("rejects a non-finite box instead of caching a garbage grid", () => {

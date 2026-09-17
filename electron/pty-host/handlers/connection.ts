@@ -123,7 +123,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
             typeof portMsg.cols === "number" &&
             typeof portMsg.rows === "number"
           ) {
-            ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows);
+            ptyManager.resize(portMsg.id, portMsg.cols, portMsg.rows, "renderer-message-port");
           } else if (
             portMsg.type === "ack" &&
             typeof portMsg.id === "string" &&

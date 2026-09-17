@@ -48,7 +48,7 @@ import { beginSwitchTrace, consumeSwitchTrace, markSwitch } from "@/utils/switch
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { isEphemeralPanel } from "./slices/panelRegistry/panelCount";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
-import { isValidTerminalGeometry } from "@shared/types/terminal";
+import { isPlausibleTerminalGeometry } from "@shared/types/terminal";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -101,8 +101,10 @@ function collectTerminalSizes(
         ? managed.pendingRestoreGeometry
         : { cols: managed.terminal.cols, rows: managed.terminal.rows };
     // Main sanitizes too, but an implausible grid should never reach the wire:
-    // a rejected entry restores at the default, a bad one restores wrong.
-    if (isValidTerminalGeometry(grid)) {
+    // a rejected entry restores at the default, a bad one restores wrong. The
+    // floor is what the name always claimed — three of the panes in #12442
+    // persisted at 2x1 through the structural check (#12442).
+    if (isPlausibleTerminalGeometry(grid)) {
       sizes[panel.id] = grid;
     }
   }

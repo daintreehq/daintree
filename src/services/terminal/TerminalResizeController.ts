@@ -2,7 +2,12 @@ import { Terminal } from "@xterm/xterm";
 import { terminalClient } from "@/clients";
 import { TerminalRefreshTier } from "@/types";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { normalizeTerminalGridDimension } from "@shared/types/terminal";
+import {
+  isPlausibleTerminalGeometry,
+  MIN_PLAUSIBLE_TERMINAL_COLS,
+  MIN_PLAUSIBLE_TERMINAL_ROWS,
+  normalizeTerminalGridDimension,
+} from "@shared/types/terminal";
 import { getEffectiveScrollbarWidth } from "@/config/xtermConfig";
 import { logError, logWarn } from "@/utils/logger";
 import type { ManagedTerminal, TerminalResyncOptions } from "./types";
@@ -352,6 +357,45 @@ export class TerminalResizeController {
     this.deps = deps;
   }
 
+  /**
+   * Whether `cols`x`rows` is a grid no pane could be showing, and so must not
+   * reach xterm, the caches or the PTY (#12442).
+   *
+   * The pixel floors above bound the BOX; this bounds the grid the box became,
+   * which also depends on the gutter and the cell — and it catches the grids
+   * that never came from a box at all: a cached target replayed by
+   * `forceImmediateResize`, a snapshot's capture width, a persisted size from
+   * an earlier collapse. Every such path is a way back to the 2x1 the pixel
+   * floors alone did not stop.
+   *
+   * Refusal holds what the caller already has rather than clamping up to the
+   * floor: nobody measured 20x5 either, and asserting an invented grid splits
+   * xterm from the PTY exactly as a tiny one does. Callers must ask BEFORE
+   * writing a cache or cancelling queued work, so a refusal costs only
+   * staleness — `reconcileGeometryFresh` re-measures the pane on reveal, and
+   * the reconciliation watchdog repairs whatever outlasts that.
+   *
+   * `source` names the call site, deduped per grid so a pane whose box keeps
+   * measuring zero logs once per episode instead of once per observer tick.
+   */
+  private refusesImplausibleGrid(id: string, cols: number, rows: number, source: string): boolean {
+    const managed = this.deps.getInstance(id);
+    if (isPlausibleTerminalGeometry({ cols, rows })) {
+      if (managed) managed.implausibleGridSignature = undefined;
+      return false;
+    }
+    const signature = `${source}:${cols}x${rows}`;
+    if (managed?.implausibleGridSignature !== signature) {
+      if (managed) managed.implausibleGridSignature = signature;
+      logWarn(
+        `[TerminalResizeController] ${id}: refused an implausible grid ${cols}x${rows} from ${source} ` +
+          `(floor ${MIN_PLAUSIBLE_TERMINAL_COLS}x${MIN_PLAUSIBLE_TERMINAL_ROWS}); ` +
+          `holding ${managed ? `${managed.terminal.cols}x${managed.terminal.rows}` : "no instance"}`
+      );
+    }
+    return true;
+  }
+
   lockResize(id: string, locked: boolean, customTtlMs?: number): void {
     if (locked) {
       const ttl = customTtlMs ?? RESIZE_LOCK_TTL_MS;
@@ -404,6 +448,13 @@ export class TerminalResizeController {
       }
 
       const { cols, rows } = normalizeProposal(proposal);
+      // Ahead of every cache write: `normalizeProposal` turns a non-finite
+      // proposal into 1, which the `<= 1` checks above do not catch (a
+      // comparison against NaN is false), and a poisoned lastWidth/latestCols
+      // pair would then suppress the corrective resize through the dedup guard.
+      if (this.refusesImplausibleGrid(id, cols, rows, "fit")) {
+        return null;
+      }
       const buffer = managed.terminal.buffer.active;
       const wasAtBottom = buffer.viewportY >= buffer.baseY;
       managed.lastWidth = rect.width;
@@ -545,6 +596,9 @@ export class TerminalResizeController {
         }
 
         const { cols, rows } = normalizeProposal(proposal);
+        if (this.refusesImplausibleGrid(id, cols, rows, "observer-proposal")) {
+          return null;
+        }
         managed.lastWidth = width;
         managed.lastHeight = height;
         managed.latestCols = cols;
@@ -558,6 +612,15 @@ export class TerminalResizeController {
 
       const cols = colsForWidth(managed.terminal, width, cellDims.width);
       const rows = rowsForHeight(height, cellDims.height);
+
+      // The pixel floor bounds the box, not the grid: at a large cell a box
+      // well clear of MIN_VIABLE_RESIZE_PX still divides to the FitAddon floor,
+      // and this is the branch a cached pane takes whenever its stale
+      // `isVisible` routes it away from the background one (#12442). Refuse
+      // before the dedup below, which writes `latestCols`/`latestRows`.
+      if (this.refusesImplausibleGrid(id, cols, rows, "observer")) {
+        return null;
+      }
 
       if (managed.terminal.cols === cols && managed.terminal.rows === rows) {
         // The grid this box wants is the one xterm is already on, so there is no
@@ -652,7 +715,7 @@ export class TerminalResizeController {
     // touching anything: the checks below discard the alt-buffer stash, replace
     // the lock stash and cancel queued work, so learning at the helper that this
     // box was never usable would cost real geometry to reject an unusable one.
-    if (this.derivesFloorGrid(managed, width)) {
+    if (this.derivesImplausibleGrid(managed, width, height)) {
       return null;
     }
     // Choke point for the alt-screen exclusion: a live full-screen TUI paints an
@@ -721,18 +784,28 @@ export class TerminalResizeController {
   }
 
   /**
-   * Whether `width` divides down to the column floor for this pane's cached
-   * cell — the signal that a box passed the pixel floor and still describes no
-   * usable pane (#11900).
+   * Whether this box divides down to a grid no pane could be showing, for this
+   * pane's cached cell — the signal that a box passed the pixel floor and still
+   * describes no usable pane (#11900).
+   *
+   * Both axes, not columns alone: the column floor left three-column and
+   * single-row grids passing, and a one-row PTY corrupts a CLI's frame just as
+   * a two-column one does (#12442).
    *
    * Answers `false` when cell metrics are missing: that is a separate condition
-   * with its own handling further in, and reporting it as a floor grid here
-   * would reroute it.
+   * with its own handling further in, and reporting it as an implausible grid
+   * here would reroute it.
    */
-  private derivesFloorGrid(managed: ManagedTerminal, width: number): boolean {
+  private derivesImplausibleGrid(
+    managed: ManagedTerminal,
+    width: number,
+    height: number
+  ): boolean {
     const cellDims = getXtermCellDimensions(managed.terminal);
     if (!cellDims) return false;
-    return colsForWidth(managed.terminal, width, cellDims.width) <= FIT_MIN_COLS;
+    const cols = colsForWidth(managed.terminal, width, cellDims.width);
+    const rows = rowsForHeight(height, cellDims.height);
+    return this.refusesImplausibleGrid(managed.id, cols, rows, "background-window");
   }
 
   // Computes cols/rows from cached cell metrics with no DOM reads — a hidden or
@@ -776,9 +849,12 @@ export class TerminalResizeController {
     // grids stay put and the reveal-time `reconcileGeometryFresh` measures the
     // pane for real. `applyBackgroundResize` asks the same question up front, so
     // by here this is the backstop for anything that reaches the conversion
-    // another way; a visible pane keeps its floor grid, the honest answer when
-    // the container really is that narrow (#11900).
-    if (cols <= FIT_MIN_COLS) {
+    // another way (#11900).
+    //
+    // Judged on the whole grid against the plausibility floor rather than on
+    // columns against FitAddon's: `cols <= FIT_MIN_COLS` still admitted three
+    // columns and one row, and the panes in #12442 collapsed to exactly that.
+    if (this.refusesImplausibleGrid(managed.id, cols, rows, "cached-metrics")) {
       return null;
     }
     // Convergence is a claim about the grid xterm actually holds, never about
@@ -848,6 +924,15 @@ export class TerminalResizeController {
     // this only bites geometry handed in from outside the controller.
     const normalizedCols = normalizeTerminalGridDimension(cols);
     const normalizedRows = normalizeTerminalGridDimension(rows);
+    // The last gate before xterm's own grid, and the one that matters most:
+    // `collectTerminalSizes` persists `terminal.cols`/`rows`, so a grid that
+    // lands here outlives the session in `terminalSizes` and rebuilds the pane
+    // at that size on the next restore (#12442). Refuse rather than park it in
+    // `pendingRestoreGeometry` either — that is the target a replay normalizes
+    // to when it closes.
+    if (this.refusesImplausibleGrid(managed.id, normalizedCols, normalizedRows, "xterm-resize")) {
+      return;
+    }
     if (managed.isSerializedRestoreInProgress) {
       managed.pendingRestoreGeometry = { cols: normalizedCols, rows: normalizedRows };
       return;
@@ -895,6 +980,13 @@ export class TerminalResizeController {
     const targetRows = managed.latestRows;
 
     if (currentCols === targetCols && currentRows === targetRows) {
+      return;
+    }
+
+    // Same reason as `forceImmediateResize`: this replays the target cache, and
+    // the wake paths that call it are exactly where a pane that collapsed while
+    // hidden would re-assert that grid to both halves (#12442).
+    if (this.refusesImplausibleGrid(id, targetCols, targetRows, "deferred-resync")) {
       return;
     }
 
@@ -990,6 +1082,15 @@ export class TerminalResizeController {
       rows = rowsForHeight(rect.height, cellDims.height);
     }
 
+    // This is the reveal-time measurement every other refusal defers to, so it
+    // is the one that must not itself adopt a floor grid: a pane revealed into
+    // a container that has not finished laying out measures the same 2x1 a
+    // hidden one does. Reported as "not measurable yet" so the reveal sweep
+    // retries on a later frame (#12442).
+    if (this.refusesImplausibleGrid(id, cols, rows, "reveal-reconcile")) {
+      return false;
+    }
+
     // Never re-wrap a main-buffer pane out from under a CLI that is still
     // streaming (#10863). xterm's resize() reflows committed scrollback while
     // an Ink-style CLI repaints its sticky region with cursor-relative erase
@@ -1059,6 +1160,12 @@ export class TerminalResizeController {
     if (this.isResizeLocked(id)) {
       return;
     }
+    // Above `cancelPendingResize` on purpose: a queued job may hold a grid
+    // something actually measured, and dropping it on the way to refusing this
+    // one would cost real geometry (#11900, #12442).
+    if (this.refusesImplausibleGrid(id, cols, rows, "apply-resize")) {
+      return;
+    }
     this.cancelPendingResize(id);
 
     if (this.getResizeStrategy(managed) === "settled") {
@@ -1081,6 +1188,10 @@ export class TerminalResizeController {
   private commitResize(id: string, cols: number, rows: number): void {
     const managed = this.deps.getInstance(id);
     if (!managed || this.isResizeLocked(id)) return;
+    // Ahead of the held-byte flush: that drains and RESETS the ingest queue, so
+    // learning here that the grid was never applicable would have cost the
+    // flush for nothing.
+    if (this.refusesImplausibleGrid(id, cols, rows, "commit-resize")) return;
 
     const flushedHeldBytes = this.flushHeldBytesBeforeResize(id);
     this.resizeTerminal(managed, cols, rows);
@@ -1145,6 +1256,9 @@ export class TerminalResizeController {
   }
 
   sendPtyResize(id: string, cols: number, rows: number): void {
+    // Before the instance lookup so the instance-less forward below inherits
+    // it: that branch reaches the PTY with nothing else in its way.
+    if (this.refusesImplausibleGrid(id, cols, rows, "send-pty-resize")) return;
     const managed = this.deps.getInstance(id);
     if (!managed) {
       terminalClient.resize(id, cols, rows);
@@ -1200,6 +1314,13 @@ export class TerminalResizeController {
     const cols = managed.latestCols;
     const rows = managed.latestRows;
     if (!Number.isInteger(cols) || !Number.isInteger(rows) || cols <= 0 || rows <= 0) {
+      return;
+    }
+    // The target cache is not a measurement — it is whatever was last written
+    // to it, including by a path that has since been refused. Ask before
+    // asserting it to the PTY, and before cancelling queued work that may hold
+    // a grid something did measure (#12442).
+    if (this.refusesImplausibleGrid(id, cols, rows, "force-immediate")) {
       return;
     }
 

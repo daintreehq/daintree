@@ -442,6 +442,22 @@ describe("buildOutgoingState terminal sizes", () => {
     expect(outgoing.terminalSizes).toEqual({ t2: { cols: 97, rows: 24 } });
   });
 
+  it("drops a collapsed grid a hidden pane reports (#12442)", async () => {
+    // These grids ARE structurally valid — 2x1 is a grid xterm can hold, which
+    // is why the collapse persisted through the old check and rebuilt the pane
+    // at 2x1 on the next restore. What disqualifies them is that no pane was
+    // ever showing them.
+    mockTerminalGrids.set("t1", { cols: 2, rows: 1 });
+    mockTerminalGrids.set("t2", { cols: 3, rows: 90 });
+    mockTerminalGrids.set("t3", { cols: 302, rows: 90 });
+    const outgoing = await switchWithPanels({
+      t1: terminalPanel("t1"),
+      t2: terminalPanel("t2"),
+      t3: terminalPanel("t3"),
+    });
+    expect(outgoing.terminalSizes).toEqual({ t3: { cols: 302, rows: 90 } });
+  });
+
   it("excludes panels the switch does not persist", async () => {
     // Same filter as `terminals`: a trashed pane is not restored, so a size for
     // it is dead weight in the map.

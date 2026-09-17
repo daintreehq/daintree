@@ -472,8 +472,11 @@ export type {
 } from "./terminal.js";
 export {
   isValidTerminalGeometry,
+  isPlausibleTerminalGeometry,
   normalizeTerminalGridDimension,
   MAX_TERMINAL_GRID_DIMENSION,
+  MIN_PLAUSIBLE_TERMINAL_COLS,
+  MIN_PLAUSIBLE_TERMINAL_ROWS,
 } from "./terminal.js";
 
 // Pty Host types - IPC protocol for terminal management

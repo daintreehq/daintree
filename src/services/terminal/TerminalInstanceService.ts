@@ -54,7 +54,7 @@ import { reduceScrollback, restoreScrollback } from "./TerminalScrollbackControl
 import { hasUsableRenderer } from "./xtermRendererProbe";
 import { DEFAULT_TERMINAL_FONT_FAMILY, onTerminalFontArrivedLate } from "@/config/terminalFont";
 import { isPtyPanel } from "@shared/types/panel";
-import { isValidTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
+import { isPlausibleTerminalGeometry, type TerminalGeometry } from "@shared/types/terminal";
 import type { TerminalResizeResult } from "@shared/types/pty-host";
 import { applyXtermReflowFastpath } from "@shared/utils/xtermReflowFastpath";
 import { usePanelStore } from "@/store/panelStore";
@@ -827,8 +827,11 @@ class TerminalInstanceService {
 
     // Shared ceiling, not a local 500: a restored pane that legitimately
     // exceeds it must not silently keep the previous target and boot the PTY at
-    // a geometry xterm never adopts (#11641).
-    if (isValidTerminalGeometry({ cols, rows })) {
+    // a geometry xterm never adopts (#11641). Shared FLOOR for the same reason
+    // one layer down — a parked target is what the attach rAF applies instead
+    // of measuring, so a collapsed grid parked here boots the pane into it
+    // (#12442).
+    if (isPlausibleTerminalGeometry({ cols, rows })) {
       instance.targetCols = cols;
       instance.targetRows = rows;
     }

@@ -49,7 +49,10 @@ import {
 } from "./pty/agentSessionCaptureDelivery.js";
 import type { GracefulKillResult, TerminalResizeResult } from "../../shared/types/pty-host.js";
 import {
+  isPlausibleTerminalGeometry,
   isValidTerminalGeometry,
+  MIN_PLAUSIBLE_TERMINAL_COLS,
+  MIN_PLAUSIBLE_TERMINAL_ROWS,
   type SerializedTerminalSnapshot,
 } from "../../shared/types/terminal.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
@@ -669,11 +672,25 @@ export class PtyManager extends EventEmitter {
    * enforcement cannot live in the Main IPC handler alone — a fractional or
    * absurd grid arriving there would otherwise be buffered as spawn dims,
    * skipping `TerminalProcess.resize`'s own validation entirely.
+   *
+   * Structural validity is not enough: it starts at 1x1, and a hidden pane's
+   * zero-size box divides to FitAddon's 2x1 floor, which every layer then
+   * records as a real measurement (#12442). A grid no pane could be showing is
+   * refused here too — the PTY keeps the size it has, which is the last grid
+   * something actually measured. `transport` names the delivery path in the
+   * rejection log; the renderer logs its own call site before sending, so
+   * between the two the next occurrence names its origin.
    */
-  resize(id: string, cols: number, rows: number): void {
+  resize(id: string, cols: number, rows: number, transport = "unknown"): void {
     const terminal = this.registry.get(id);
-    if (!isValidTerminalGeometry({ cols, rows })) {
-      logWarn(`Terminal ${id} resize rejected: invalid dims ${cols}x${rows}`);
+    if (!isPlausibleTerminalGeometry({ cols, rows })) {
+      const reason = isValidTerminalGeometry({ cols, rows })
+        ? `implausible dims ${cols}x${rows} (below ${MIN_PLAUSIBLE_TERMINAL_COLS}x${MIN_PLAUSIBLE_TERMINAL_ROWS})`
+        : `invalid dims ${cols}x${rows}`;
+      const held = terminal?.readPtyGeometry();
+      logWarn(
+        `Terminal ${id} resize rejected via ${transport}: ${reason}; holding ${held ? `${held.cols}x${held.rows}` : "unspawned"}`
+      );
       if (terminal) {
         this.emitResizeResult(id, {
           requestedCols: cols,

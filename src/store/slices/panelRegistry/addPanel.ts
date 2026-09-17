@@ -52,7 +52,7 @@ import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { countPanelsTowardLimit } from "./panelCount";
-import { isValidTerminalGeometry } from "@shared/types/terminal";
+import { isPlausibleTerminalGeometry } from "@shared/types/terminal";
 
 // Lazy accessor to break circular dependency: addPanel -> projectStore -> panelPersistence -> addPanel.
 // Resolved on first call (after app init), then cached.
@@ -197,7 +197,17 @@ const OVERLAY_CHROME_Y_PX = 240;
 function getAttachedGridDims(id: string): { cols: number; rows: number } | null {
   const managed = terminalInstanceService.get(id);
   if (!managed?.terminal.element?.isConnected) return null;
-  return { cols: managed.terminal.cols, rows: managed.terminal.rows };
+  const grid = { cols: managed.terminal.cols, rows: managed.terminal.rows };
+  // Attached is not the same as measured. A pane attached into a container that
+  // has not laid out yet holds whatever grid it was constructed on, and the
+  // post-spawn re-assert would then hand that to the PTY as the pane's real
+  // size — one of the routes to #12442. Treated as no measurement at all, so
+  // the caller keeps the spawn dims and the first real fit corrects both halves.
+  if (!isPlausibleTerminalGeometry(grid)) {
+    logWarn("[TerminalStore] Ignoring implausible attached grid", { id, ...grid });
+    return null;
+  }
+  return grid;
 }
 
 /**
@@ -649,7 +659,7 @@ export const createAddPanelActions = (
     // XtermAdapter is about to fit to, and the two never co-occur (an overlay
     // is never a restore). Re-validated here because `addPanel` is also reached
     // from plugins and MCP.
-    const restoredDims = isValidTerminalGeometry(options.initialTerminalGeometry)
+    const restoredDims = isPlausibleTerminalGeometry(options.initialTerminalGeometry)
       ? options.initialTerminalGeometry
       : null;
     const constructionDims = overlayDims ?? restoredDims;

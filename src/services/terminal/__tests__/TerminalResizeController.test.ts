@@ -2352,6 +2352,107 @@ describe("TerminalResizeController", () => {
       expect(geometryOf(managed)).toEqual(before);
     });
 
+    // #12442: the column floor above admitted every grid from three columns up,
+    // and one row. The panes in that issue collapsed to exactly what it let
+    // through, so the floor is now the plausibility floor and covers both axes.
+    it.each([
+      {
+        axis: "columns",
+        cell: { width: 100, height: 20 },
+        expectGrid: { cols: 15, rows: 40 },
+      },
+      {
+        axis: "rows",
+        cell: { width: 10, height: 200 },
+        expectGrid: { cols: 158, rows: 4 },
+      },
+    ])("refuses a background grid too small on $axis to be a pane", ({ cell, expectGrid }) => {
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = false;
+      attachCellDims(managed, cell);
+      seedDetectable(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      // Witness the regime: a box this size is nowhere near the pixel floor, and
+      // the grid it derives clears FitAddon's old floor on both axes — so only
+      // the plausibility floor can be what rejects it.
+      expect(Math.floor((1600 - SCROLLBAR_PX) / cell.width)).toBe(expectGrid.cols);
+      expect(Math.floor(800 / cell.height)).toBe(expectGrid.rows);
+
+      expect(controller.resize("term-1", 1600, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("refuses an implausible grid on the measured branch a visible pane takes", () => {
+      // The observer branch a cached view's stale `isVisible` routes down had a
+      // pixel floor and no grid floor at all, so wrong cell metrics on a hidden
+      // pane went straight through to both grids (#12442). Caches must survive
+      // untouched: a poisoned `lastWidth` would make the dedup gate swallow the
+      // corrective resize that follows.
+      const managed = createManagedTerminal();
+      managed.isFocused = true;
+      managed.isVisible = true;
+      managed.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      attachCellDims(managed, { width: 100, height: 200 });
+      seedDetectable(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      expect(controller.resize("term-1", 1600, 800)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("refuses a poisoned target cache on the paths that replay it", () => {
+      // `latestCols`/`latestRows` are a pending target, not a measurement —
+      // written ahead of every commit and by the PTY-only sizing panel spawn
+      // does. A pane that collapsed while hidden leaves the collapse sitting
+      // there, and these are the paths that re-assert it at wake and reveal
+      // (#12442).
+      const managed = createManagedTerminal();
+      managed.latestCols = 2;
+      managed.latestRows = 1;
+      const controller = makeController(managed);
+
+      controller.forceImmediateResize("term-1");
+      controller.applyDeferredResize("term-1");
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.terminal.cols).toBe(80);
+    });
+
+    it("refuses an implausible grid at the xterm choke point, restore included", () => {
+      // The last gate before xterm's own grid, and the one `collectTerminalSizes`
+      // reads back: a grid that lands here is persisted as the pane's real size
+      // and rebuilds the collapse on the next restore. The parked restore target
+      // is refused for the same reason — a replay normalizes to it when it
+      // closes (#12442).
+      const managed = createManagedTerminal();
+      const controller = makeController(managed);
+
+      controller.resizeTerminal(managed, 2, 1);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+
+      managed.isSerializedRestoreInProgress = true;
+      controller.resizeTerminal(managed, 2, 1);
+      expect(managed.pendingRestoreGeometry).toBeUndefined();
+
+      // A plausible grid still lands, so the refusal is the floor and not the
+      // gate itself having been broken.
+      controller.resizeTerminal(managed, 120, 40);
+      expect(managed.pendingRestoreGeometry).toEqual({ cols: 120, rows: 40 });
+    });
+
     it("refuses a sub-viable box on the measured branch a cached view's stale isVisible routes it down", () => {
       // A backgrounded project view leaves `isVisible` true from before the
       // detach, so the tier is BACKGROUND but the branch taken is the measured

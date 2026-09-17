@@ -1,6 +1,6 @@
 import { projectStore } from "../../services/ProjectStore.js";
 import { noteRendererSessionIdentityEdits } from "../../services/pty/agentSessionCapturePersistence.js";
-import { isValidTerminalGeometry } from "../../../shared/types/terminal.js";
+import { isPlausibleTerminalGeometry } from "../../../shared/types/terminal.js";
 import {
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
@@ -105,8 +105,13 @@ export function appliedSessionIdentityClaims(
 
 /**
  * Validate and sanitize terminal size records.
- * Entries whose geometry a terminal could not actually have been captured at
- * are dropped.
+ * Entries whose geometry no real pane could be showing are dropped.
+ *
+ * The floor is plausibility, not structural validity: this map is the grid a
+ * restored pane is BORN on, so a `2x1` entry — what a hidden pane's zero-size
+ * box divides to (#12442) — rebuilds that pane into the collapse on the next
+ * eviction or restart. A dropped entry restores at the default and the first
+ * real fit corrects it; a kept one restores wrong and stays wrong.
  */
 export function sanitizeTerminalSizes(
   sizes: Record<string, unknown>
@@ -122,7 +127,7 @@ export function sanitizeTerminalSizes(
       typeof (size as { rows: unknown }).rows === "number"
     ) {
       const { cols, rows } = size as { cols: number; rows: number };
-      if (isValidTerminalGeometry({ cols, rows })) {
+      if (isPlausibleTerminalGeometry({ cols, rows })) {
         sanitized[terminalId] = { cols, rows };
       }
     }

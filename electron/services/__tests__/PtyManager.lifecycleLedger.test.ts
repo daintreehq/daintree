@@ -369,6 +369,33 @@ describe("PtyManager lifecycle ledger", () => {
     ]);
   });
 
+  it("refuses a grid no pane could be showing, on a live PTY and before spawn (#12442)", () => {
+    const manager = new PtyManager();
+    const results: unknown[] = [];
+    manager.on("resize-result", (_id: string, result: unknown) => results.push(result));
+
+    // Before spawn: an implausible grid must not be buffered either, or it
+    // becomes the boot geometry of the terminal that follows — the PTY then
+    // starts life at the collapsed size with no resize to correct it.
+    manager.resize("t1", 2, 1);
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    expect(shared.created[0]?.options.cols).toBe(80);
+    expect(shared.created[0]?.options.rows).toBe(24);
+
+    // On the live PTY: refused, reported, and the PTY keeps the grid it has.
+    manager.resize("t1", 120, 40);
+    manager.resize("t1", 2, 1);
+    manager.resize("t1", 3, 90);
+    manager.resize("t1", 120, 4);
+
+    expect(results).toEqual([
+      expect.objectContaining({ outcome: "applied", appliedCols: 120, appliedRows: 40 }),
+      expect.objectContaining({ outcome: "rejected", requestedCols: 2, appliedCols: null }),
+      expect.objectContaining({ outcome: "rejected", requestedCols: 3, appliedCols: null }),
+      expect.objectContaining({ outcome: "rejected", requestedRows: 4, appliedRows: null }),
+    ]);
+  });
+
   it("drops a buffered resize stamped by a previous incarnation", () => {
     const manager = new PtyManager();
 
@@ -378,8 +405,10 @@ describe("PtyManager lifecycle ledger", () => {
 
     // Stale resize from the killed incarnation lands after the kill removed
     // the pendingResizes entry but before the respawn — buffered, stamped
-    // with generation 1.
-    manager.resize("t1", 500, 2);
+    // with generation 1. Deliberately a grid a real pane could be showing: the
+    // plausibility gate (#12442) would refuse a tiny one outright, and the
+    // assertion below would then hold without the staleness check ever running.
+    manager.resize("t1", 500, 20);
 
     manager.spawn("t1", spawnOptions({ launchGeneration: 2 }));
 

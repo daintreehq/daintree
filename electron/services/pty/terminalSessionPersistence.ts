@@ -16,7 +16,7 @@ import type {
   SerializedTerminalSnapshot,
   TerminalGeometry,
 } from "../../../shared/types/terminal.js";
-import { isValidTerminalGeometry } from "../../../shared/types/terminal.js";
+import { isPlausibleTerminalGeometry } from "../../../shared/types/terminal.js";
 
 export interface RestoreResult {
   restored: boolean;
@@ -62,7 +62,7 @@ const SESSION_HEADER_V1 = "DAINTREE_SESSION_v1\n";
 const SESSION_HEADER = "DAINTREE_SESSION_v2\n";
 const SESSION_HEADER_BYTES = Buffer.byteLength(SESSION_HEADER, "utf8");
 // v2 adds a `<cols>x<rows>\n` line after the version line. The writer only ever
-// emits a geometry `isValidTerminalGeometry` accepts (four digits per dimension
+// emits a geometry `isPlausibleTerminalGeometry` accepts (four digits per dimension
 // is already past MAX_TERMINAL_GRID_DIMENSION), so this bounds the whole
 // preamble for the size gate.
 const SESSION_GEOMETRY_LINE_MAX_BYTES = "9999x9999\n".length;
@@ -125,14 +125,21 @@ function extractSessionContent(raw: string): ParsedSessionFile | null {
   return { content: raw, geometry: null };
 }
 
-// Digit count is deliberately unbounded here: `isValidTerminalGeometry` is the
-// single bound both ends of this format agree on, and a second, tighter one in
-// the regex is how a grid the writer could emit came back unreadable.
+// Digit count is deliberately unbounded here: `isPlausibleTerminalGeometry` is
+// the single bound both ends of this format agree on, and a second, tighter one
+// in the regex is how a grid the writer could emit came back unreadable.
+//
+// Plausibility rather than structural validity because the files written before
+// #12442 are still on disk: five of the reporter's seven snapshots recorded a
+// 2x1 capture grid, and a header the reader honours parks the mirror — and, via
+// the renderer's own alignment, xterm — on that grid at every restore. Refusing
+// it degrades the file to the v1 meaning, "no capture geometry", so the
+// scrollback still replays and nothing adopts a grid no pane ever had.
 function parseGeometryLine(line: string): TerminalGeometry | null {
   const match = /^(\d+)x(\d+)$/.exec(line);
   if (!match) return null;
   const geometry = { cols: Number(match[1]), rows: Number(match[2]) };
-  return isValidTerminalGeometry(geometry) ? geometry : null;
+  return isPlausibleTerminalGeometry(geometry) ? geometry : null;
 }
 
 /**
@@ -141,11 +148,16 @@ function parseGeometryLine(line: string): TerminalGeometry | null {
  * A grid the reader would refuse is written as v1 — the format that already
  * means "no capture geometry" — rather than as a v2 file the next restore would
  * choke on. Both ends therefore agree on exactly one bound
- * (`isValidTerminalGeometry`), and an unrepresentable grid costs the width
+ * (`isPlausibleTerminalGeometry`), and an unrepresentable grid costs the width
  * alignment while the scrollback still comes back.
+ *
+ * The payload is kept either way. Geometry and data are indivisible — a header
+ * has to describe the exact bytes beneath it — so a collapsed mirror's capture
+ * cannot be relabelled with a healthier grid; dropping the header is the only
+ * honest option, and it is the one v1 already means.
  */
 function formatSessionFile(snapshot: SerializedTerminalSnapshot): string {
-  if (!isValidTerminalGeometry({ cols: snapshot.cols, rows: snapshot.rows })) {
+  if (!isPlausibleTerminalGeometry({ cols: snapshot.cols, rows: snapshot.rows })) {
     return `${SESSION_HEADER_V1}${snapshot.data}`;
   }
   return `${SESSION_HEADER}${snapshot.cols}x${snapshot.rows}\n${snapshot.data}`;
