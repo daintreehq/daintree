@@ -1,26 +1,6 @@
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SitePreviewDetachReason } from "@shared/types/ipc/sitePreview";
-import type { EditSupport, UnsupportedReason } from "../shared/model.js";
 import type { StaleReason } from "./inspectorController.js";
-
-export const UNSUPPORTED_REASON_COPY: Record<UnsupportedReason, string> = {
-  "dynamic-expression": "Set by an expression in the source, not a literal value",
-  "class-directive": "Controlled by a class: directive",
-  "spread-attribute": "Comes from spread attributes",
-  "data-driven": "Comes from data at runtime, not from source",
-  "snippet-supplied": "Supplied by a snippet from the parent component",
-  "dependency-owned": "Defined in a dependency, not in this project",
-  "generated-file": "Defined in a file SvelteKit generates",
-  "ambiguous-invocation": "More than one call site could have drawn this element",
-  "unmapped-content": "Couldn't be traced back to source",
-  "unsupported-framework-version": "This Svelte or SvelteKit version isn't supported for editing",
-};
-
-export const SUPPORT_LABEL: Record<EditSupport, string> = {
-  direct: "Editable",
-  "agent-assisted": "Needs an agent",
-  "inspect-only": "Inspect only",
-};
 
 /**
  * One voice: every reason opens with the action, then says why. Two of these

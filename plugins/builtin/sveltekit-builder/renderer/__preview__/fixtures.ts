@@ -81,18 +81,6 @@ async function until(what: string, predicate: () => boolean, timeoutMs = 10_000)
 
 const seen = (text: string): boolean => (document.body.textContent ?? "").includes(text);
 
-/** The button in the surfaces whose trimmed label is exactly `label`. */
-/**
- * The "Edit directly" disclosure trigger. A real button with `aria-expanded`
- * now, rather than a native `summary` — found by its accessible role so the
- * fixture exercises the same contract a keyboard user gets.
- */
-function summary(): HTMLButtonElement | undefined {
-  return [...document.querySelectorAll("button")].find(
-    (node) => node.hasAttribute("aria-expanded") && node.textContent?.trim() === "Edit directly"
-  );
-}
-
 function button(label: string): HTMLButtonElement | undefined {
   return [...document.querySelectorAll("button")].find(
     (node) => node.textContent?.trim() === label
@@ -130,7 +118,7 @@ export const FIXTURES = {
 
   picking: {
     title: "Select mode, waiting for a click on the page",
-    settled: "text=Click an element to edit it or ask an agent",
+    settled: "text=Click an element to ask an agent about it",
     act: async (host) => {
       await bind(host);
     },
@@ -152,14 +140,14 @@ export const FIXTURES = {
   element: {
     title: "An element picked: identity, source line, breadcrumb, composer",
     terminals: AGENT_TERMINALS,
-    settled: "text=Ask an agent",
+    settled: '[aria-label="Ask an agent"]',
     act: selectElement,
   },
 
   component: {
     title: "A component picked rather than the element inside it",
     terminals: AGENT_TERMINALS,
-    settled: "text=Ask an agent",
+    settled: '[aria-label="Ask an agent"]',
     act: async (host) => {
       await selectElement(host);
       // Walking up to the component scope is what ⌥↑ does in the page.
@@ -172,68 +160,13 @@ export const FIXTURES = {
   composing: {
     title: "A request written, an agent chosen, ready to send",
     terminals: AGENT_TERMINALS,
-    settled: "text=Ask an agent",
+    settled: '[aria-label="Ask an agent"]',
     act: async (host) => {
       await selectElement(host);
       updateComposerMemory(MEMORY_KEY, {
         draft: "Make this button feel more premium — softer corners and a calmer hover.",
       });
       await tick(120);
-    },
-  },
-
-  edits: {
-    title: "The direct text and class editors, disclosed",
-    terminals: AGENT_TERMINALS,
-    settled: "text=Edit directly",
-    act: async (host) => {
-      await selectElement(host);
-      await until("the Edit directly disclosure", () => summary() !== undefined);
-      if (summary()!.getAttribute("aria-expanded") !== "true") summary()!.click();
-      await until(
-        "the class tokens",
-        () => document.querySelector('[aria-label="Classes"]') !== null
-      );
-      await tick(160);
-    },
-  },
-
-  receipt: {
-    title: "What the last saved change proved, with undo",
-    terminals: AGENT_TERMINALS,
-    // The receipt's own headline, not its aria-label: the proof has to be
-    // something a reviewer can see in the capture.
-    settled: '[aria-label="Last change"]',
-    arrange: (host) => {
-      // On top of the host's own apply, which remembers the revision it wrote:
-      // a receipt minted here alone sent the re-proof back at the old revision
-      // and photographed the fallback banner instead of the continued state.
-      const apply = host.handlers.get(CHANNELS.editApply)!;
-      host.handlers.set(CHANNELS.editApply, (args) => {
-        const result = apply(args) as { status: "applied"; receipt: Record<string, unknown> };
-        return { ...result, receipt: { ...result.receipt, affectedOccurrences: 3 } };
-      });
-    },
-    act: async (host) => {
-      await selectElement(host);
-      await until("the Edit directly disclosure", () => summary() !== undefined);
-      if (summary()!.getAttribute("aria-expanded") !== "true") summary()!.click();
-      await until(
-        "the class tokens",
-        () => document.querySelector('[aria-label="Classes"]') !== null
-      );
-      await until(
-        "the px-6 class token",
-        () => document.querySelector('button[aria-label="Remove px-6"]') !== null
-      );
-      document.querySelector<HTMLButtonElement>('button[aria-label="Remove px-6"]')!.click();
-      await until("the edit receipt", () => seen("Classes saved in +page.svelte"));
-      // The receipt is the last thing in a drawer that already holds a notice,
-      // the composer and both editors, so on a laptop viewport it lands below
-      // the fold. Scroll to it: the capture is about the receipt.
-      const drawer = document.querySelector('[aria-label="Site Builder details"]');
-      if (drawer) drawer.scrollTop = drawer.scrollHeight;
-      await tick(160);
     },
   },
 
@@ -256,69 +189,10 @@ export const FIXTURES = {
     },
   },
 
-  multiple: {
-    title: "The picked markup draws several copies on the page",
-    terminals: AGENT_TERMINALS,
-    settled: "text=Edit directly",
-    arrange: (host) => {
-      host.handlers.set(CHANNELS.selectionResolve, (args) => ({
-        status: "ok",
-        selection: makeSelection({
-          documentEpoch: args.documentEpoch as number,
-          renderedOccurrences: 4,
-        }),
-      }));
-    },
-    act: async (host) => {
-      await selectElement(host);
-      await until("the Edit directly disclosure", () => summary() !== undefined);
-      if (summary()!.getAttribute("aria-expanded") !== "true") summary()!.click();
-      await until(
-        "the class tokens",
-        () => document.querySelector('[aria-label="Classes"]') !== null
-      );
-      await tick(160);
-    },
-  },
-
-  readOnlyExpression: {
-    title: "A class list written as an expression: shown as written, left to an agent",
-    terminals: AGENT_TERMINALS,
-    settled: '[aria-label="Classes as written in the source"]',
-    arrange: (host) => {
-      host.handlers.set(CHANNELS.selectionResolve, (args) => ({
-        status: "ok",
-        selection: makeSelection({
-          documentEpoch: args.documentEpoch as number,
-          capabilities: [
-            { surface: "text", support: "direct" },
-            { surface: "classes", support: "agent-assisted", reason: "dynamic-expression" },
-          ],
-          surfaces: { classes: null, text: { text: "Start Pro" } },
-          node: {
-            written: {
-              classes:
-                'class={["btn px-6", featured && "bg-indigo-600 text-white"]} class:ring={focused}',
-              text: null,
-            },
-          },
-        }),
-      }));
-    },
-    act: async (host) => {
-      await selectElement(host);
-      await until(
-        "the written expression",
-        () => document.querySelector('[aria-label="Classes as written in the source"]') !== null
-      );
-      await tick(160);
-    },
-  },
-
   deepScope: {
     title: "A deep component chain with repeated names, as a list",
     terminals: AGENT_TERMINALS,
-    settled: "text=Ask an agent",
+    settled: '[aria-label="Ask an agent"]',
     arrange: (host) => {
       const chain = [
         ["PriceTag", "src/lib/pricing/Card.svelte", 14],
@@ -402,31 +276,6 @@ export const FIXTURES = {
       button("View request")!.click();
       await tick(160);
     },
-  },
-
-  unsupported: {
-    title: "Direct editing and class suggestions are unavailable, separately",
-    // Both rows, not just the heading: the capture must show each capability
-    // with its own verdict, as main reports them — separately.
-    settled: "text=Class suggestions",
-    arrange: (host) => {
-      host.handlers.set(CHANNELS.workspaceOpen, () => ({
-        status: "ready",
-        workspaceSessionId: "ws-1",
-        appRoot: "/Users/you/code/orchid-studio",
-        support: {
-          level: "preview-only",
-          reasons: ["svelte 4.2.19 is installed; direct editing needs svelte 5"],
-        },
-      }));
-      host.handlers.set(CHANNELS.tailwindStatus, () => ({
-        status: "unavailable",
-        reason:
-          "class awareness is built on tailwindcss 4.3.3, and this project uses 4.0.9; its utilities could differ, so completion is off rather than misleading",
-        unused: false,
-      }));
-    },
-    act: bind,
   },
 
   ambiguous: {

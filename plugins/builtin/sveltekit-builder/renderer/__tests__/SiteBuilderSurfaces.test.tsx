@@ -23,7 +23,6 @@ import {
 } from "../composerMemory";
 import { usePanelStore } from "@/store/panelStore";
 import {
-  BUTTON_RANGE,
   FILE,
   OBSERVATION,
   REVISION,
@@ -66,16 +65,17 @@ async function mountBound() {
 async function mountSelected() {
   await mountBound();
   await act(async () => host.select(0));
-  await screen.findByRole("button", { name: "Remove px-6" });
+  // The selection has landed when the drawer names where it came from and the
+  // composer is there to send a request about it. This used to wait on a class
+  // chip's remove control — the only readiness signal the panel had while it
+  // was an editor — so every test in this file, editing or not, was gated on a
+  // control that has nothing to do with what it was asserting.
+  await screen.findByRole("textbox", { name: "Request for the agent" });
   await waitFor(() =>
-    expect(
-      (screen.getByRole("button", { name: "Remove px-6" }) as HTMLButtonElement).disabled
-    ).toBe(false)
+    expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
+      `${FILE}:6`
+    )
   );
-}
-
-function removeButton(): HTMLButtonElement {
-  return screen.getByRole("button", { name: "Remove px-6" }) as HTMLButtonElement;
 }
 
 function text(): string {
@@ -118,7 +118,7 @@ describe("page verdicts", () => {
     expect(text()).toContain("production build");
 
     await act(async () => host.select(0));
-    await screen.findByRole("button", { name: "Remove px-6" });
+    await screen.findByRole("textbox", { name: "Request for the agent" });
     expect(text()).not.toContain("production build");
   });
 
@@ -126,7 +126,7 @@ describe("page verdicts", () => {
     await mountBound();
     await act(async () => runtimeIssue("overlay-blocked"));
     await act(async () => host.select(0));
-    await screen.findByRole("button", { name: "Remove px-6" });
+    await screen.findByRole("textbox", { name: "Request for the agent" });
     expect(text()).toContain("The page blocked the selection overlay");
   });
 });
@@ -285,15 +285,13 @@ describe("preview binding", () => {
       support: { level: "preview-only", reasons: ["Found svelte 4.2.1; editing needs Svelte 5"] },
     }));
     await mountBound();
-    // The rule: the reason main gave is shown, under a heading that scopes it to
-    // direct editing rather than to the panel as a whole. Matched as a substring
-    // because the notice adds what still works alongside it.
-    // The rule: the project's capabilities are reported under one "Site source"
-    // heading, with the reason main gave scoped to the capability it affects.
-    await screen.findByRole("region", { name: "Site source" });
-    await screen.findByText(/Found svelte 4\.2\.1; editing needs Svelte 5/);
-    expect(screen.getAllByText(/unavailable/i).length).toBeGreaterThan(0);
-    // Still traced and still sendable to an agent; only direct edits are gated.
+    // The rule: a Svelte version this plugin cannot write to costs the user
+    // nothing, so the panel says nothing about it. What the builder offers —
+    // trace an element, hand it to an agent — does not depend on being able to
+    // edit the source here, and a notice about a road that isn't there would
+    // read as a degraded panel.
+    expect(screen.queryByRole("region", { name: "Site source" })).toBeNull();
+    expect(screen.queryByText(/editing needs Svelte 5/)).toBeNull();
     host.handlers.set(CHANNELS.selectionResolve, (args) => ({
       status: "ok",
       selection: makeSelection({
@@ -310,7 +308,6 @@ describe("preview binding", () => {
     expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
       `${FILE}:6`
     );
-    expect(screen.queryByRole("combobox", { name: "Add a class" })).toBeNull();
   });
 });
 
@@ -484,444 +481,6 @@ describe("selection identity", () => {
       screen.getByRole("button", { name: "PricingCard", pressed: true }).getAttribute("title")
     ).toBe("src/lib/Card.svelte");
   });
-
-  it("warns about shared markup before any edit control", async () => {
-    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
-      status: "ok",
-      selection: makeSelection({
-        documentEpoch: args.documentEpoch as number,
-        renderedOccurrences: 3,
-      }),
-    }));
-    await mountSelected();
-    const warning = screen.getByText(/all 3 rendered copies/);
-    const firstControl = screen.getByRole("button", { name: /^Edit text: / });
-    expect(
-      warning.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING
-    ).toBeTruthy();
-    expect(text()).not.toMatch(/this element only/i);
-  });
-
-  it("explains a surface that isn't directly editable and offers no working control", async () => {
-    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
-      status: "ok",
-      selection: makeSelection({
-        documentEpoch: args.documentEpoch as number,
-        capabilities: [
-          { surface: "text", support: "agent-assisted", reason: "dynamic-expression" },
-          { surface: "classes", support: "inspect-only", reason: "class-directive" },
-        ],
-      }),
-    }));
-    await mountBound();
-    await act(async () => host.select(0));
-    await screen.findByText("Set by an expression in the source, not a literal value");
-    expect(screen.getByText("Controlled by a class: directive")).toBeTruthy();
-    expect(screen.getByText("Needs an agent")).toBeTruthy();
-    expect(screen.getByText("Inspect only")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /^Edit text: / })).toBeNull();
-    expect(screen.queryByRole("combobox", { name: "Add a class" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
-  });
-});
-
-describe("editing", () => {
-  it("adds a class against the selection's revision and does not claim the styles rendered", async () => {
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "shadow-md" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    const [apply] = host.calls(CHANNELS.editApply);
-    expect(apply).toMatchObject({
-      workspaceSessionId: "ws-1",
-      file: FILE,
-      expectedRevision: REVISION,
-      affectedOccurrences: 1,
-      operations: [
-        {
-          kind: "set_class_tokens",
-          range: BUTTON_RANGE,
-          add: ["shadow-md"],
-          remove: [],
-          responsive: { kind: "base" },
-        },
-      ],
-    });
-
-    await screen.findByRole("region", { name: "Last change" });
-    expect(text()).toMatch(/styles\s*(not verified|unverified)/i);
-    expect(text()).not.toMatch(/styles (generated|applied|rendered)/i);
-    // The write spent the selection's ranges — so editing resumes only once
-    // the page has been asked for the element again and main has re-proved it.
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalled());
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-
-    // The page re-reporting itself in the same document (a client-side
-    // navigation, a resize) is not a reload, and must not read as one.
-    await act(async () => host.documentReady(0));
-    expect(text()).toMatch(/refresh unconfirmed/i);
-
-    await act(async () => host.documentReady(1));
-    // A later document is the only thing that proves the reload, and the
-    // receipt starts reporting it once one lands — while still refusing to
-    // claim anything about the styles, which nothing here can prove.
-    await waitFor(() => expect(text()).toMatch(/preview\s*reloaded/i));
-    expect(text()).not.toMatch(/refresh unconfirmed/i);
-    expect(text()).toMatch(/styles\s*(not verified|unverified)/i);
-  });
-
-  it("reports a class main refuses by name and keeps what was typed", async () => {
-    host.handlers.set(CHANNELS.editApply, () => ({
-      status: "error",
-      code: "INVALID_CANDIDATE",
-      message: "shadow-huge isn't a class Tailwind can generate in this project",
-    }));
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "shadow-huge" } });
-    await screen.findByText("Not in the suggestion list — it'll be written as typed");
-    fireEvent.keyDown(input, { key: "Enter" });
-    await screen.findByText("Not saved — that class isn't valid here");
-    expect(text()).not.toMatch(/Saved —/);
-    expect((input as HTMLInputElement).value).toBe("shadow-huge");
-  });
-
-  it("blocks a second write while one is out, and spends a newer selection in the written file", async () => {
-    await mountSelected();
-    let finish: (value: unknown) => void = () => {};
-    host.handlers.set(CHANNELS.editApply, () => new Promise((resolve) => (finish = resolve)));
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-
-    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
-      status: "ok",
-      selection: makeSelection({
-        documentEpoch: args.documentEpoch as number,
-        selectionId: "sel-2",
-      }),
-    }));
-    await act(async () => host.select(0));
-    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2));
-    expect(removeButton().disabled).toBe(true);
-    fireEvent.click(removeButton());
-    expect(host.calls(CHANNELS.editApply)).toHaveLength(1);
-
-    await act(async () => finish({ status: "applied", receipt: makeReceipt() }));
-    await screen.findByRole("region", { name: "Last change" });
-    expect(screen.getByText("Saved — select again to keep editing")).toBeTruthy();
-    expect(removeButton().disabled).toBe(true);
-    expect(host.calls(CHANNELS.editApply)).toHaveLength(1);
-  });
-
-  it("leaves class validity to main, so valid variants aren't refused here", async () => {
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "[&>*]:p-2 before:content-['x']" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    expect(host.calls(CHANNELS.editApply)[0]!.operations).toMatchObject([
-      { add: ["[&>*]:p-2", "before:content-['x']"], range: BUTTON_RANGE },
-    ]);
-  });
-
-  it("keeps a non-breaking space inside one token, as main does", async () => {
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "after:content-['a\u00a0b']" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    expect(host.calls(CHANNELS.editApply)[0]!.operations).toMatchObject([
-      { add: ["after:content-['a\u00a0b']"] },
-    ]);
-  });
-
-  it("writes text verbatim, whitespace included", async () => {
-    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
-      status: "ok",
-      selection: makeSelection({
-        documentEpoch: args.documentEpoch as number,
-        surfaces: { classes: { tokens: ["px-6"] }, text: { text: " Start Pro " } },
-      }),
-    }));
-    await mountSelected();
-    fireEvent.click(screen.getByRole("button", { name: /^Edit text: / }));
-    const field = screen.getByRole("textbox", { name: "Text" });
-    fireEvent.keyDown(field, { key: "Enter" });
-    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: /^Edit text: / }));
-    fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
-      target: { value: " Go Pro " },
-    });
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "Text" }), { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    expect(host.calls(CHANNELS.editApply)[0]!.operations).toMatchObject([{ text: " Go Pro " }]);
-  });
-
-  it("invalidates a resolve that is out when our own write to that file lands", async () => {
-    await mountSelected();
-    let finishWrite: (value: unknown) => void = () => {};
-    host.handlers.set(CHANNELS.editApply, () => new Promise((resolve) => (finishWrite = resolve)));
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-
-    let finishResolve: (value: unknown) => void = () => {};
-    host.handlers.set(
-      CHANNELS.selectionResolve,
-      () => new Promise((resolve) => (finishResolve = resolve))
-    );
-    await act(async () => host.select(0));
-    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2));
-    await act(async () => finishWrite({ status: "applied", receipt: makeReceipt() }));
-    // Long after the settle window: elapsed time alone must not rescue it.
-    vi.spyOn(Date, "now").mockReturnValue(Date.now() + 60_000);
-    await act(async () =>
-      finishResolve({
-        status: "ok",
-        selection: makeSelection({ documentEpoch: 0, selectionId: "sel-2" }),
-      })
-    );
-    await screen.findByText("Selection changed — select again");
-    expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
-  });
-
-  it("removes a class through a token operation", async () => {
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    expect(host.calls(CHANNELS.editApply)[0]!.operations).toEqual([
-      {
-        kind: "set_class_tokens",
-        range: BUTTON_RANGE,
-        add: [],
-        remove: ["px-6"],
-        responsive: { kind: "base" },
-      },
-    ]);
-  });
-
-  it("edits literal text on Enter and cancels on Escape without writing", async () => {
-    await mountSelected();
-    fireEvent.click(screen.getByRole("button", { name: /^Edit text: / }));
-    let field = screen.getByRole("textbox", { name: "Text" }) as HTMLInputElement;
-    fireEvent.change(field, { target: { value: "Go Pro" } });
-    fireEvent.keyDown(field, { key: "Escape" });
-    expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull();
-    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
-
-    fireEvent.click(screen.getByRole("button", { name: /^Edit text: / }));
-    field = screen.getByRole("textbox", { name: "Text" }) as HTMLInputElement;
-    fireEvent.change(field, { target: { value: "Go Pro" } });
-    fireEvent.keyDown(field, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    expect(host.calls(CHANNELS.editApply)[0]!.operations).toEqual([
-      { kind: "set_literal_text", range: BUTTON_RANGE, text: "Go Pro" },
-    ]);
-    await screen.findByRole("region", { name: "Last change" });
-    expect(text()).not.toContain("Styles not verified");
-  });
-
-  it("keeps typing inside its field instead of reaching panel shortcuts", async () => {
-    await mountBound();
-    cleanup();
-    const panelKeys = vi.fn();
-    render(
-      <div onKeyDown={panelKeys}>
-        <Builder />
-      </div>
-    );
-    await act(async () => host.select(0));
-    const input = await screen.findByRole("combobox", { name: "Add a class" });
-    fireEvent.keyDown(input, { key: "s" });
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(panelKeys).not.toHaveBeenCalled();
-  });
-});
-
-describe("capabilities", () => {
-  function row(label: string): string {
-    const region = screen.getByRole("region", { name: "Site source" });
-    const line = [...region.querySelectorAll("p")].find((p) => p.textContent?.startsWith(label));
-    return line?.textContent ?? "";
-  }
-
-  it("says direct editing is available when only class awareness is missing", async () => {
-    host.handlers.set(CHANNELS.tailwindStatus, () => ({
-      status: "unavailable",
-      reason:
-        "class awareness is built on tailwindcss 4.3.3, and this project uses 4.1.0; completion is off",
-      unused: false,
-    }));
-    await mountBound();
-    await screen.findByRole("region", { name: "Site source" });
-    expect(row("Direct editing")).toContain("available");
-    expect(row("Direct editing")).not.toContain("unavailable");
-    expect(row("Class suggestions")).toContain("unavailable");
-    expect(text()).toContain("this project uses 4.1.0");
-  });
-
-  it("asks again on a new document, so an install doesn't stay reported as missing", async () => {
-    let installed = false;
-    host.handlers.set(CHANNELS.tailwindStatus, () =>
-      installed
-        ? { status: "available", skippedModules: [] }
-        : { status: "unavailable", reason: "tailwindcss is not installed", unused: false }
-    );
-    await mountBound();
-    await screen.findByText(/tailwindcss is not installed/);
-
-    installed = true;
-    // Same document: nothing to suggest anything changed.
-    await waitFor(() => expect(host.calls(CHANNELS.tailwindStatus).length).toBeGreaterThan(0));
-    const asked = host.calls(CHANNELS.tailwindStatus).length;
-    await act(async () => host.documentReady(0));
-    expect(host.calls(CHANNELS.tailwindStatus)).toHaveLength(asked);
-    // The dev server restarted after the install: a new document.
-    await act(async () => host.epochAdvanced(1));
-    await act(async () => host.documentReady(1));
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Site source" })).toBeNull());
-  });
-
-  it("asks again when the recovery document lands while the first answer is still out", async () => {
-    let release: (value: unknown) => void = () => {};
-    let calls = 0;
-    host.handlers.set(CHANNELS.tailwindStatus, () => {
-      calls += 1;
-      if (calls === 1) {
-        return new Promise((resolve) => {
-          release = resolve;
-        });
-      }
-      return { status: "available", skippedModules: [] };
-    });
-    await mountBound();
-    await waitFor(() => expect(calls).toBeGreaterThan(0));
-    await act(async () => host.epochAdvanced(1));
-    await act(async () => host.documentReady(1));
-    await act(async () =>
-      release({ status: "unavailable", reason: "tailwindcss is not installed", unused: false })
-    );
-    await waitFor(() => expect(calls).toBeGreaterThan(1));
-    await waitFor(() => expect(screen.queryByRole("region", { name: "Site source" })).toBeNull());
-  });
-
-  it("says nothing about a site that doesn't use Tailwind at all", async () => {
-    host.handlers.set(CHANNELS.tailwindStatus, () => ({
-      status: "unavailable",
-      reason: "no stylesheet in this app imports tailwindcss",
-      unused: true,
-    }));
-    await mountBound();
-    await waitFor(() => expect(host.calls(CHANNELS.tailwindStatus).length).toBeGreaterThan(0));
-    await act(async () => {});
-    expect(screen.queryByRole("region", { name: "Site source" })).toBeNull();
-  });
-
-  it("reports direct editing from the version verdict, and suggestions only if they fail too", async () => {
-    host.handlers.set(CHANNELS.workspaceOpen, () => ({
-      status: "ready",
-      workspaceSessionId: "ws-1",
-      appRoot: "/repo",
-      support: {
-        level: "preview-only",
-        reasons: ["svelte 6.0.0 is newer than direct editing supports"],
-      },
-    }));
-    await mountBound();
-    await screen.findByRole("region", { name: "Site source" });
-    await waitFor(() => expect(host.calls(CHANNELS.tailwindStatus)).toHaveLength(1));
-    expect(row("Direct editing")).toContain("unavailable");
-    expect(row("Class suggestions")).toBe("");
-  });
-});
-
-describe("class inspection", () => {
-  async function selectWithClasses(tokens: string[]) {
-    host.handlers.set(CHANNELS.selectionResolve, (args) => {
-      const selection = makeSelection({
-        documentEpoch: args.documentEpoch as number,
-        surfaces: { classes: { tokens }, text: { text: "Start Pro" } },
-      });
-      selection.nodes[0]!.definition!.revision = host.diskRevision;
-      return { status: "ok", selection };
-    });
-    await mountBound();
-    await act(async () => host.select(0));
-    await screen.findByRole("button", { name: `Inspect ${tokens[0]}` });
-  }
-
-  it("asks for the exact token, so a variant is described rather than called empty", async () => {
-    // `hover:px-8` is not in Tailwind's class list, and never comes back from a
-    // completion search — but it generates CSS.
-    host.handlers.set(CHANNELS.classComplete, () => ({ status: "ok", candidates: [] }));
-    await selectWithClasses(["hover:px-8"]);
-    fireEvent.click(screen.getByRole("button", { name: "Inspect hover:px-8" }));
-    await screen.findByText("/* hover:px-8 */");
-    expect(host.calls(CHANNELS.classDescribe)).toEqual([
-      { workspaceSessionId: "ws-1", token: "hover:px-8" },
-    ]);
-  });
-
-  it("doesn't call a class empty when the model left plugins out", async () => {
-    host.handlers.set(CHANNELS.classDescribe, () => ({ status: "ok", css: null, partial: true }));
-    await selectWithClasses(["prose"]);
-    fireEvent.click(screen.getByRole("button", { name: "Inspect prose" }));
-    await screen.findByText(/plugins Daintree doesn't run/);
-  });
-
-  it("qualifies a declaration read without the project's plugins", async () => {
-    host.handlers.set(CHANNELS.classDescribe, () => ({
-      status: "ok",
-      css: "/* px-6 */",
-      partial: true,
-    }));
-    await selectWithClasses(["px-6"]);
-    fireEvent.click(screen.getByRole("button", { name: "Inspect px-6" }));
-    await screen.findByText("/* px-6 */");
-    await screen.findByText(/they\s+can change what this class does/);
-  });
-
-  it("won't inspect a shortened class in place of a long one", async () => {
-    const long = `bg-[url(${"a".repeat(2100)})]`;
-    await selectWithClasses([long]);
-    fireEvent.click(screen.getByRole("button", { name: `Inspect ${long}` }));
-    await screen.findByText("This class is too long to inspect here");
-    expect(host.calls(CHANNELS.classDescribe)).toEqual([]);
-  });
-
-  it("points a plain CSS class at the site's own CSS", async () => {
-    host.handlers.set(CHANNELS.classDescribe, () => ({
-      status: "unavailable",
-      reason: "no stylesheet in this app imports tailwindcss",
-      unused: true,
-    }));
-    await selectWithClasses(["hero"]);
-    fireEvent.click(screen.getByRole("button", { name: "Inspect hero" }));
-    await screen.findByText(/doesn't use Tailwind/);
-  });
-});
-
-describe("surfaces it won't edit", () => {
-  it("shows how a dynamic class list is written, without offering it as editable", async () => {
-    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
-      status: "ok",
-      selection: makeSelection({
-        documentEpoch: args.documentEpoch as number,
-        capabilities: [
-          { surface: "text", support: "direct" },
-          { surface: "classes", support: "agent-assisted", reason: "dynamic-expression" },
-        ],
-        surfaces: { classes: null, text: { text: "Start Pro" } },
-        node: { written: { classes: 'class={["btn", active && "on"]}', text: null } },
-      }),
-    }));
-    await mountBound();
-    await act(async () => host.select(0));
-    const written = await screen.findByLabelText("Classes as written in the source");
-    expect(written.textContent).toBe('class={["btn", active && "on"]}');
-    expect(screen.queryByRole("combobox", { name: "Add a class" })).toBeNull();
-  });
 });
 
 describe("starting a fresh agent", () => {
@@ -997,163 +556,6 @@ describe("request scope", () => {
   });
 });
 
-describe("replacing a class", () => {
-  function lastOperation() {
-    const call = host.calls(CHANNELS.editApply).at(-1)!;
-    return (call.operations as Array<Record<string, unknown>>)[0]!;
-  }
-
-  it("swaps a chip for a new class in one write, and the receipt says what changed", async () => {
-    await mountSelected();
-    fireEvent.click(screen.getByRole("button", { name: "Inspect px-6" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Replace…" }));
-    const field = await screen.findByRole("combobox", { name: "Replace px-6 with" });
-    fireEvent.change(field, { target: { value: "px-8" } });
-    fireEvent.keyDown(field, { key: "Enter" });
-
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    expect(lastOperation()).toMatchObject({ add: ["px-8"], remove: ["px-6"] });
-    const receipt = await screen.findByRole("region", { name: "Last change" });
-    await waitFor(() => expect(receipt.textContent).toContain("px-6 → px-8"));
-    // Back to adding once the replacement landed.
-    await screen.findByRole("combobox", { name: "Add a class" });
-  });
-
-  it("asks before adding a class that overrides one already there, and replaces on request", async () => {
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "px-8" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-
-    const choice = await screen.findByRole("group", { name: "Class conflict" });
-    expect(choice.textContent).toContain("px-8 conflicts with px-6");
-    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
-
-    fireEvent.click(within(choice).getByRole("button", { name: "Replace px-6" }));
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    expect(lastOperation()).toMatchObject({ add: ["px-8"], remove: ["px-6"] });
-  });
-
-  it("keeps both when asked, and adds without asking when nothing is overridden", async () => {
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "px-8" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    fireEvent.click(await screen.findByRole("button", { name: "Keep both" }));
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    expect(lastOperation()).toMatchObject({ add: ["px-8"], remove: [] });
-    const receipt = await screen.findByRole("region", { name: "Last change" });
-    await waitFor(() => expect(receipt.textContent).toContain("+ px-8"));
-
-    await waitFor(() =>
-      expect(
-        (screen.getByRole("combobox", { name: "Add a class" }) as HTMLInputElement).readOnly
-      ).toBe(false)
-    );
-    const again = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(again, { target: { value: "shadow-md" } });
-    fireEvent.keyDown(again, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(2));
-    expect(screen.queryByRole("group", { name: "Class conflict" })).toBeNull();
-  });
-
-  it("says what a class removal changed, and reads the other way after Undo", async () => {
-    await mountSelected();
-    fireEvent.click(removeButton());
-    const receipt = await screen.findByRole("region", { name: "Last change" });
-    await waitFor(() => expect(receipt.textContent).toContain("− px-6"));
-    fireEvent.click(within(receipt).getByRole("button", { name: "Undo" }));
-    await waitFor(() => expect(receipt.textContent).toContain("Reverted"));
-    expect(receipt.textContent).toContain("+ px-6");
-  });
-
-  it("drops a conflict answer that arrives after the draft changed", async () => {
-    let answer: (value: unknown) => void = () => {};
-    host.handlers.set(
-      CHANNELS.classConflicts,
-      () =>
-        new Promise((resolve) => {
-          answer = resolve;
-        })
-    );
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "px-8" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.classConflicts)).toHaveLength(1));
-    // The user keeps typing while the question is out.
-    fireEvent.change(input, { target: { value: "px-10" } });
-    await act(async () =>
-      answer({
-        status: "ok",
-        conflicts: [{ candidate: "px-8", token: "px-6", properties: ["padding-left"] }],
-      })
-    );
-    expect(screen.queryByRole("group", { name: "Class conflict" })).toBeNull();
-    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
-  });
-
-  it("answers the conflict from the keyboard: Enter replaces, Escape goes back to editing", async () => {
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "px-8" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await screen.findByRole("group", { name: "Class conflict" });
-    fireEvent.keyDown(input, { key: "Escape" });
-    expect(screen.queryByRole("group", { name: "Class conflict" })).toBeNull();
-    expect((input as HTMLInputElement).value).toBe("px-8");
-
-    fireEvent.keyDown(input, { key: "Enter" });
-    await screen.findByRole("group", { name: "Class conflict" });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    const operation = (
-      host.calls(CHANNELS.editApply)[0]!.operations as Array<Record<string, unknown>>
-    )[0]!;
-    expect(operation).toMatchObject({ add: ["px-8"], remove: ["px-6"] });
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Add a class" }))
-    );
-  });
-
-  it("answers a conflict about a picked suggestion with Enter, not the typed prefix", async () => {
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "px-" } });
-    fireEvent.click(await screen.findByRole("option", { name: "px-8" }));
-    await screen.findByRole("group", { name: "Class conflict" });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    const operation = (
-      host.calls(CHANNELS.editApply)[0]!.operations as Array<Record<string, unknown>>
-    )[0]!;
-    expect(operation).toMatchObject({ add: ["px-8"], remove: ["px-6"] });
-  });
-
-  it("leaves replace mode on Cancel without writing", async () => {
-    await mountSelected();
-    fireEvent.click(screen.getByRole("button", { name: "Inspect px-6" }));
-    fireEvent.click(await screen.findByRole("button", { name: "Replace…" }));
-    await screen.findByText("Replacing");
-    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
-    await screen.findByRole("combobox", { name: "Add a class" });
-    expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
-  });
-
-  it("says what a text edit changed, keeping line breaks visible", async () => {
-    await mountSelected();
-    const controller = peekBuilderController("preview-1")!;
-    const selectionId = (
-      controller.getSnapshot().selection as { selection: { selectionId: string } }
-    ).selection.selectionId;
-    await act(async () => {
-      await controller.setText(selectionId, "Start\nPro");
-    });
-    const receipt = await screen.findByRole("region", { name: "Last change" });
-    await waitFor(() => expect(receipt.textContent).toContain("“Start Pro” → “Start⏎Pro”"));
-  });
-});
-
 describe("an app inside a monorepo", () => {
   const APP = "/repo/apps/site";
 
@@ -1179,16 +581,6 @@ describe("an app inside a monorepo", () => {
       return { status: "applied", receipt };
     });
   }
-
-  it("keeps editing after a write, although receipt and page count paths from different roots", async () => {
-    openApp();
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve).length).toBeGreaterThan(1));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    expect(screen.queryByText(/select again/i)).toBeNull();
-  });
 
   it("opens and copies a picked component's file inside the app, as the agent prompt names it", async () => {
     openApp();
@@ -1232,315 +624,11 @@ describe("an app inside a monorepo", () => {
   });
 });
 
-describe("editing continuity", () => {
-  it("keeps editing after a write by having the page re-prove the selection", async () => {
-    // The rule: a successful write does not cost the user their selection.
-    // The ranges are spent, so the panel asks the page for the element again,
-    // main resolves the fresh observation, and editing resumes on PROVEN
-    // ranges — never on the old ones.
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    // A second resolve, from the re-observation.
-    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve).length).toBeGreaterThan(1));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    expect(screen.queryByText(/select again/i)).toBeNull();
-  });
-
-  it("keeps the selection through the reload its own write causes", async () => {
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    // HMR lands: a new document. Not a stale banner — a reselect once the
-    // runtime is back, and a fresh proof.
-    await act(async () => host.epochAdvanced(1));
-    await act(async () => host.documentReady(1));
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    expect(screen.queryByText(/select again/i)).toBeNull();
-  });
-
-  it("refuses a re-proof that names a different element, and clears the page's highlight", async () => {
-    // An edit that inserted lines above the element can make the old location
-    // resolve to a different node in the new source. That is not a
-    // continuation: the stale state stands, the page stops highlighting the
-    // wrong element, and the user selects again.
-    await mountSelected();
-    host.handlers.set(CHANNELS.selectionResolve, (args) => {
-      const base = makeSelection({ documentEpoch: args.documentEpoch as number });
-      const node = base.nodes[0]!;
-      return {
-        status: "ok",
-        selection: {
-          ...base,
-          nodes: [
-            {
-              ...node,
-              definition: { ...node.definition!, tagName: "div", revision: host.diskRevision },
-              label: "div",
-            },
-          ],
-        },
-      };
-    });
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await screen.findByText("Saved — select again to keep editing");
-    expect(removeButton().disabled).toBe(true);
-    expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses a re-proof at a revision other than the one the write produced", async () => {
-    // A fresh proof of some element is not a continuation of the one edited:
-    // it has to come back at the revision main just wrote.
-    await mountSelected();
-    host.handlers.set(CHANNELS.selectionResolve, (args) => {
-      const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
-      selection.nodes[0]!.definition!.revision = REVISION; // the pre-write bytes
-      return { status: "ok", selection };
-    });
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await screen.findByText("Saved — select again to keep editing");
-    expect(removeButton().disabled).toBe(true);
-  });
-
-  it("keeps a picked component as the subject through its own write", async () => {
-    await mountBound();
-    await act(async () =>
-      host.pushPreview({
-        kind: "guest-event",
-        sessionId: "session-1",
-        panelId: "preview-1",
-        projectId: "p1",
-        documentEpoch: 0,
-        sequence: 1,
-        event: {
-          type: "selectionChanged",
-          nodes: [OBSERVATION],
-          scope: "component",
-          component: {
-            file: "src/lib/PricingCard.svelte",
-            line: 3,
-            column: 0,
-            name: "PricingCard",
-          },
-        },
-      })
-    );
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    const identity = screen.getByRole("region", { name: "Selected element" });
-    expect(identity.textContent).toContain("Component");
-    // The controls write the root element in its own file, and say so.
-    const edits = screen.getByRole("region", { name: "Edit directly" });
-    expect(edits.textContent).toContain("Root element");
-    expect(edits.textContent).toContain(`<button> ${FILE}:6`);
-
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    // The page is asked to keep the component selected, not just its root.
-    expect(host.sitePreview.reselect.mock.calls[0]![0]).toMatchObject({
-      component: { file: "src/lib/PricingCard.svelte", line: 3, column: 0 },
-    });
-    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve).length).toBeGreaterThan(1));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
-      "Component"
-    );
-  });
-
-  it("doesn't reselect a copy of repeated markup the page couldn't place", async () => {
-    await mountBound();
-    const observation = { ...OBSERVATION };
-    delete observation.locIndex;
-    // Past the page's scan bound the count is a floor: one is not "unique".
-    await act(async () => host.select(0, [{ ...observation, sameLocCount: 1 }]));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    fireEvent.click(removeButton());
-    await screen.findByText("Saved — select again to keep editing");
-    expect(host.sitePreview.reselect).not.toHaveBeenCalled();
-  });
-
-  it("asks for the same rendered occurrence, not the first one", async () => {
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    expect(host.sitePreview.reselect.mock.calls[0]![0]).toMatchObject({ index: 2 });
-  });
-
-  it("keeps the class input mounted and focused through a continuation", async () => {
-    // The acceptance case: add two classes in a row without another click.
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    input.focus();
-    fireEvent.change(input, { target: { value: "shadow-md" } });
-    fireEvent.keyDown(input, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Add a class" }));
-    fireEvent.change(document.activeElement as HTMLInputElement, {
-      target: { value: "shadow-lg" },
-    });
-    fireEvent.keyDown(document.activeElement as HTMLInputElement, { key: "Enter" });
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(2));
-  });
-
-  it("retries once when HMR replaces the node in the same document", async () => {
-    // Same-document HMR: the page drops its disconnected selection and reports
-    // nothing selected a beat after the write. That is not the user
-    // deselecting; ask again once the patch has settled.
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    await act(async () => host.select(0, [], "document"));
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    expect(screen.queryByText(/select again/i)).toBeNull();
-  });
-
-  it("falls back to the stale notice when the page no longer has the element", async () => {
-    // Nothing is shown as editable that the page did not re-highlight.
-    await mountSelected();
-    host.reselectFinds = false;
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await screen.findByText("Saved — select again to keep editing");
-    expect(removeButton().disabled).toBe(true);
-  });
-
-  it("keeps the class input focusable, not disabled, while the re-proof is out", async () => {
-    // A natively disabled input loses focus at the browser's next rendering
-    // opportunity; jsdom does not model that, so the rule itself is pinned:
-    // pending is read-only, never disabled.
-    await mountSelected();
-    host.sitePreview.reselect.mockImplementationOnce(async () => true); // the page never answers
-    const input = screen.getByRole("combobox", { name: "Add a class" }) as HTMLInputElement;
-    input.focus();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(input.readOnly).toBe(true));
-    expect(input.disabled).toBe(false);
-    expect(document.activeElement).toBe(input);
-  });
-
-  it("refuses a re-proof after a successful continuation as stale, never as editable", async () => {
-    // The prior captured after a continuation is an editable selection.
-    // Restored as it was, it would show live controls for ranges the page no
-    // longer has selected.
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    host.handlers.set(CHANNELS.selectionResolve, (args) => {
-      const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
-      selection.nodes[0]!.definition!.revision = REVISION; // not the write's revision
-      return { status: "ok", selection };
-    });
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1));
-    await screen.findByText("Saved — select again to keep editing");
-    expect(removeButton().disabled).toBe(true);
-  });
-
-  it("leaves a refused retry stale, not the editable selection the last continuation made", async () => {
-    // After a continuation the stored prior is an editable selection. An HMR
-    // drop then marks the screen stale and retries; if that re-proof names
-    // something else, the rollback must not put the editable prior back.
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    host.handlers.set(CHANNELS.selectionResolve, (args) => {
-      const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
-      selection.nodes[0]!.definition!.revision = REVISION; // not the write's revision
-      return { status: "ok", selection };
-    });
-    await act(async () => host.select(0, [], "document"));
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
-    await waitFor(() => expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1));
-    await screen.findByText("Saved — select again to keep editing");
-    expect(removeButton().disabled).toBe(true);
-  });
-
-  it("refuses a continuation when the file changed while main was proving it", async () => {
-    // Main read the file at the write's revision; the change landed before its
-    // answer did. A re-proof never shows as `resolving`, so the invalidation
-    // has to watch `reselecting` too.
-    await mountSelected();
-    const resolve = host.handlers.get(CHANNELS.selectionResolve)!;
-    let release: (() => void) | null = null;
-    host.handlers.set(
-      CHANNELS.selectionResolve,
-      (args) =>
-        new Promise((done) => {
-          release = () => done(resolve(args));
-        })
-    );
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(release).not.toBeNull());
-    await act(async () =>
-      host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
-        workspaceSessionId: "ws-1",
-        file: FILE,
-        revision: null,
-      })
-    );
-    await act(async () => release!());
-    await waitFor(() => expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1));
-    await screen.findByText("Select again — the file changed");
-    expect(removeButton().disabled).toBe(true);
-  });
-
-  it("takes Escape inside the recovery window as the answer, not as HMR", async () => {
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
-    await act(async () => host.select(0, [], "user"));
-    await screen.findByText("Click an element to edit it or ask an agent");
-    await act(() => new Promise((done) => setTimeout(done, 250)));
-    expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1);
-  });
-
-  it("refuses a re-proof that comes back at another rendered occurrence", async () => {
-    // Repeated markup: same file, tag and revision. Only the occurrence tells
-    // the cards apart, so a runtime that reports it has to agree.
-    await mountSelected();
-    host.sitePreview.reselect.mockImplementationOnce(async (request) => {
-      setTimeout(
-        () =>
-          host.select(
-            host.currentEpoch,
-            [{ ...OBSERVATION, loc: request.loc, locIndex: 0 }],
-            "reselect"
-          ),
-        0
-      );
-      return true;
-    });
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1));
-    await screen.findByText("Saved — select again to keep editing");
-    expect(removeButton().disabled).toBe(true);
-  });
-});
-
 describe("stale selections", () => {
   it("goes stale when the document epoch advances", async () => {
     await mountSelected();
     await act(async () => host.epochAdvanced(1));
     await screen.findByText("Select again — the page reloaded");
-    expect(removeButton().disabled).toBe(true);
-    expect(
-      (screen.getByRole("button", { name: /^Edit text: / }) as HTMLButtonElement).disabled
-    ).toBe(true);
-    expect(
-      (screen.getByRole("combobox", { name: "Add a class" }) as HTMLInputElement).disabled
-    ).toBe(true);
   });
 
   it("won't send a request about a selection the page has moved past, and keeps the draft", async () => {
@@ -1701,39 +789,6 @@ describe("stale selections", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(screen.queryByText("Couldn't send to the agent")).toBeNull();
     expect(sendButton().disabled).toBe(true);
-  });
-
-  it("activates the first suggestion when Down reopens a dismissed list", async () => {
-    // The rule: Down both opens the list and moves within it, so one press must
-    // leave something highlighted. Reading the pre-keystroke `open` made the
-    // first Down after an Escape a no-op, and Enter then wrote the raw query
-    // instead of the suggestion the user believed was selected.
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.change(input, { target: { value: "shadow" } });
-    await screen.findByRole("listbox", { name: "Class suggestions" });
-
-    fireEvent.keyDown(input, { key: "Escape" });
-    await waitFor(() =>
-      expect(screen.queryByRole("listbox", { name: "Class suggestions" })).toBeNull()
-    );
-
-    fireEvent.keyDown(input, { key: "ArrowDown" });
-    const listbox = await screen.findByRole("listbox", { name: "Class suggestions" });
-    const options = within(listbox).getAllByRole("option");
-    expect(options[0]!.getAttribute("aria-selected")).toBe("true");
-    expect(input.getAttribute("aria-activedescendant")).toBe(options[0]!.id);
-  });
-
-  it("sends an empty-buffer Backspace to the previous class token", async () => {
-    // The rule: the step reaches the CHIPS, which are a sibling of the input.
-    // A search root that contained only the input found nothing at all.
-    await mountSelected();
-    const input = screen.getByRole("combobox", { name: "Add a class" });
-    fireEvent.keyDown(input, { key: "Backspace" });
-    await waitFor(() =>
-      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Remove rounded-lg" }))
-    );
   });
 
   it("names the selection as current in the trail, never an ancestor", async () => {
@@ -1951,7 +1006,8 @@ describe("stale selections", () => {
         revision: REVISION,
       })
     );
-    expect(removeButton().disabled).toBe(false);
+    // A change to another file leaves this selection alone.
+    expect(screen.queryByText("Select again — the file changed")).toBeNull();
     await act(async () =>
       host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
         workspaceSessionId: "ws-1",
@@ -1960,7 +1016,6 @@ describe("stale selections", () => {
       })
     );
     await screen.findByText("Select again — the file changed");
-    expect(removeButton().disabled).toBe(true);
   });
 
   it("keys on the event's epoch when documentReady beats epoch-advanced", async () => {
@@ -1972,12 +1027,12 @@ describe("stale selections", () => {
     await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2));
     expect(host.calls(CHANNELS.selectionResolve)[1]).toMatchObject({ documentEpoch: 1 });
     await waitFor(() => expect(screen.queryByText("Selection changed — select again")).toBeNull());
-    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    await waitFor(() => expect(screen.queryByText("Select again — the page reloaded")).toBeNull());
 
     // The late push for the epoch we are already in must not invalidate anything.
     await act(async () => host.epochAdvanced(1));
     expect(screen.queryByText("Selection changed — select again")).toBeNull();
-    expect(removeButton().disabled).toBe(false);
+    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
   });
 
   it("drops a resolve when the owning file changed while it was out", async () => {
@@ -1998,7 +1053,7 @@ describe("stale selections", () => {
     );
     await act(async () => finish({ status: "ok", selection: makeSelection({ documentEpoch: 0 }) }));
     await screen.findByText("Selection changed — select again");
-    expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
   });
 
   it("takes a newer epoch from a mode switch", async () => {
@@ -2014,7 +1069,6 @@ describe("stale selections", () => {
     }));
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     await screen.findByText("Select again — the page reloaded");
-    expect(removeButton().disabled).toBe(true);
   });
 
   it("refuses to resolve a click on a file that changed moments ago, until HMR can land", async () => {
@@ -2035,7 +1089,7 @@ describe("stale selections", () => {
 
     clock.mockReturnValue(start + 1500);
     await act(async () => host.select(0));
-    await screen.findByRole("button", { name: "Remove px-6" });
+    await screen.findByRole("textbox", { name: "Request for the agent" });
     expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
   });
 
@@ -2051,49 +1105,7 @@ describe("stale selections", () => {
     await act(async () => host.epochAdvanced(1));
     await act(async () => finish({ status: "ok", selection: makeSelection({ documentEpoch: 0 }) }));
     await screen.findByText("Selection changed — select again");
-    expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
-  });
-});
-
-describe("truthful failures and undo", () => {
-  it("reports a conflict as not saved and stops editing", async () => {
-    host.handlers.set(CHANNELS.editApply, () => ({
-      status: "conflict",
-      currentRevision: "a".repeat(64),
-    }));
-    await mountSelected();
-    fireEvent.click(removeButton());
-    await screen.findByText("Not saved — the file changed");
-    expect(text()).not.toMatch(/Saved —/);
-    expect(screen.queryByRole("region", { name: "Last change" })).toBeNull();
-    expect(removeButton().disabled).toBe(true);
-  });
-
-  it("undoes by transaction id and reports the reversal", async () => {
-    await mountSelected();
-    fireEvent.click(removeButton());
-    const undo = await screen.findByRole("button", { name: "Undo" });
-    fireEvent.click(undo);
-    await waitFor(() =>
-      expect(host.calls(CHANNELS.editUndo)).toEqual([
-        { workspaceSessionId: "ws-1", transactionId: "tx-1" },
-      ])
-    );
-    await screen.findByRole("region", { name: "Last change" });
-    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
-  });
-
-  it("reports a superseded undo without claiming the edit was reversed", async () => {
-    host.handlers.set(CHANNELS.editUndo, () => ({
-      status: "superseded",
-      currentRevision: "b".repeat(64),
-    }));
-    await mountSelected();
-    fireEvent.click(removeButton());
-    fireEvent.click(await screen.findByRole("button", { name: "Undo" }));
-    await screen.findByText("Can't undo — the file changed since this edit");
-    expect(text()).not.toContain("Undone");
-    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
   });
 });
 
@@ -2111,7 +1123,7 @@ describe("lifetime", () => {
     });
     await act(async () => host.select(0));
     await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
-    expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
 
     host.handlers.set(CHANNELS.selectionResolve, (args) => ({
       status: "ok",
@@ -2121,7 +1133,7 @@ describe("lifetime", () => {
       },
     }));
     await act(async () => host.select(0));
-    await screen.findByRole("button", { name: "Remove px-6" });
+    await screen.findByRole("textbox", { name: "Request for the agent" });
     expect(host.calls(CHANNELS.selectionResolve).at(-1)).toMatchObject({
       workspaceSessionId: "ws-2",
     });
@@ -2165,35 +1177,10 @@ describe("lifetime", () => {
     await screen.findByRole("button", { name: "Browse" });
     await act(async () => host.documentReady(0));
     await act(async () => host.select(0));
-    await screen.findByRole("button", { name: "Remove px-6" });
+    await screen.findByRole("textbox", { name: "Request for the agent" });
     expect(host.calls(CHANNELS.selectionResolve).at(-1)).toMatchObject({
       workspaceSessionId: "ws-2",
     });
-  });
-
-  it("discards an edit reply that lands after the panel moved to another worktree", async () => {
-    await mountSelected();
-    let finish: (value: unknown) => void = () => {};
-    host.handlers.set(CHANNELS.editApply, () => new Promise((resolve) => (finish = resolve)));
-    fireEvent.click(removeButton());
-    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
-
-    cleanup();
-    host.handlers.set(CHANNELS.workspaceOpen, () => ({
-      status: "ready",
-      workspaceSessionId: "ws-2",
-      appRoot: "/repo-2",
-      support: { level: "full" },
-    }));
-    context.current = { projectId: "p1", worktreeId: "wt-2", worktreePath: "/repo-2" };
-    mount();
-    await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(2));
-    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(2));
-
-    await act(async () => finish({ status: "applied", receipt: makeReceipt() }));
-    await act(async () => {});
-    expect(text()).not.toMatch(/Saved —/);
-    expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
   });
 
   it("keeps the binding across a remount", async () => {
@@ -2201,7 +1188,7 @@ describe("lifetime", () => {
     cleanup();
     expect(host.sitePreview.detach).not.toHaveBeenCalled();
     mount();
-    expect(screen.getByRole("button", { name: "Remove px-6" })).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Selected element" })).toBeTruthy();
     expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
   });
 
@@ -2224,7 +1211,7 @@ describe("lifetime", () => {
     await waitFor(() =>
       expect(host.calls(CHANNELS.workspaceOpen).at(-1)).toMatchObject({ worktreeId: "wt-2" })
     );
-    expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
   });
 });
 
@@ -2296,18 +1283,16 @@ describe("builder lifetime while switched on", () => {
     usePanelStore.setState({ panelsById: {} as never });
   });
 
-  it("keeps the binding and Undo while the preview is hidden, and lets go when switched off", async () => {
+  it("keeps the binding while the preview is hidden, and lets go when switched off", async () => {
     builderOn();
     await mountSelected();
-    fireEvent.click(removeButton());
-    await screen.findByRole("button", { name: "Undo" });
 
     cleanup();
     await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
     expect(host.sitePreview.detach).not.toHaveBeenCalled();
 
     mount();
-    expect(screen.getByRole("button", { name: "Undo" })).toBeTruthy();
+    // Remounted onto the same binding, not a second one.
     expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
 
     cleanup();

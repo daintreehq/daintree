@@ -194,6 +194,8 @@ export interface AgentTarget {
   terminalId: string;
   title: string;
   agentState: AgentState | null;
+  /** Which CLI is running there, for the destination's own mark. Unknown is possible. */
+  agentId: string | null;
 }
 
 export const MAX_INSTRUCTION_CHARS = 4000;

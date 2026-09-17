@@ -1,59 +1,18 @@
-import { useId, useState, type ReactNode } from "react";
-import { AlertTriangle, Check, ChevronRight, Copy, ExternalLink } from "lucide-react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
-import type { EditCapability, SelectedNode } from "../shared/model.js";
-import type { ClassConflicts, ClassDescription } from "../shared/protocol.js";
-import {
-  capabilityFor,
-  editTargetOf,
-  isEditableMapping,
-  worktreeRelative,
-  type ClassCompletion,
-  type EditSurface,
-  type InspectorState,
-  type SelectionState,
-} from "./inspectorController.js";
+import type { SelectedNode } from "../shared/model.js";
+import { worktreeRelative, type SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { scopesFor } from "./agentTask.js";
-import { TextEditor } from "./TextEditor.js";
-import { ClassEditor } from "./ClassEditor.js";
-import { STALE_COPY, SUPPORT_LABEL, UNSUPPORTED_REASON_COPY } from "./copy.js";
+import { STALE_COPY } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor } from "./SelectionTrail.js";
-import { PropertyRow } from "./InspectorSection.js";
-
-export interface SelectionActions {
-  setText: (selectionId: string, text: string) => void;
-  addClasses: (selectionId: string, tokens: string[]) => Promise<boolean>;
-  removeClass: (selectionId: string, token: string) => void;
-  completeClasses: (query: string) => Promise<ClassCompletion>;
-  describeClass: (token: string) => Promise<ClassDescription>;
-  replaceClasses: (selectionId: string, remove: string[], add: string[]) => Promise<boolean>;
-  classConflicts: (existing: string[], candidates: string[]) => Promise<ClassConflicts>;
-}
 
 type ReadySelection = Extract<SelectionState, { status: "ready" }>;
-
-export function SelectionCard({
-  state,
-  selection,
-  actions,
-}: {
-  state: InspectorState;
-  selection: ReadySelection;
-  actions: SelectionActions;
-}) {
-  return (
-    <>
-      <SelectionIdentity selection={selection} />
-      <SelectionEdits state={state} selection={selection} actions={actions} />
-    </>
-  );
-}
 
 /**
  * What was selected and where it comes from.
@@ -262,105 +221,6 @@ function displayLabel(node: SelectedNode): string {
   return label.startsWith(prefix) ? label.slice(prefix.length) : label;
 }
 
-/** Direct source edits for the selected element's literal text and classes. */
-export function SelectionEdits({
-  state,
-  selection,
-  actions,
-}: {
-  state: InspectorState;
-  selection: ReadySelection;
-  actions: SelectionActions;
-}) {
-  const node = selection.selection.nodes[0];
-  if (!node) return null;
-  const occurrences = node.definition?.renderedOccurrences ?? 1;
-  const atLeast = node.definition?.renderedOccurrencesAtLeast === true;
-  // Direct edits write one element. With a component picked, that element is
-  // its root — named here, beside its own file, so the identity above (the
-  // component and its definition) is never read as what these controls change.
-  const rootOfComponent = selection.scope === "component" && selection.selection.nodes.length === 1;
-  return (
-    <section aria-label="Edit directly" className="flex flex-col gap-2">
-      {rootOfComponent ? (
-        <PropertyRow label="Target">
-          <p className="min-w-0 truncate text-xs leading-7 text-text-secondary" title={node.label}>
-            <span className="text-text-primary">Root element</span>
-            {node.definition ? (
-              <span className="font-mono">{` · <${node.definition.tagName}> ${selection.file ?? node.definition.location.file}:${node.definition.location.line}`}</span>
-            ) : null}
-          </p>
-        </PropertyRow>
-      ) : null}
-      {selection.scope === "component" && selection.selection.nodes.length > 1 ? (
-        <InspectorNotice
-          tone="info"
-          title={`This component renders ${selection.selection.nodes.length} root elements`}
-        >
-          Direct edits change one element. Select the one to change in the page, or ask an agent to
-          change the component.
-        </InspectorNotice>
-      ) : null}
-      {occurrences > 1 || atLeast ? (
-        <SharedMarkupRow count={occurrences} atLeast={atLeast} />
-      ) : null}
-      <Surface title="Text" capability={capabilityFor(node, "text")} written={node.written?.text}>
-        <TextSurface state={state} selection={selection} actions={actions} />
-      </Surface>
-      <Surface
-        title="Classes"
-        capability={capabilityFor(node, "classes")}
-        align="start"
-        written={node.written?.classes}
-      >
-        <ClassSurface state={state} selection={selection} actions={actions} />
-      </Surface>
-    </section>
-  );
-}
-
-/**
- * The shared-markup warning as one row rather than an 86px card. It is routine
- * — an `{#each}` draws copies — and the user meets it on most list items, so
- * it says the one fact in a line and keeps the explanation behind a disclosure.
- */
-function SharedMarkupRow({ count, atLeast }: { count: number; atLeast: boolean }) {
-  const [open, setOpen] = useState(false);
-  const bodyId = useId();
-  return (
-    <div className="flex flex-col gap-1">
-      <button
-        type="button"
-        aria-expanded={open}
-        aria-controls={bodyId}
-        onClick={() => setOpen((value) => !value)}
-        className="-mx-1 flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-left text-xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle"
-      >
-        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" aria-hidden="true" />
-        <span className="min-w-0 flex-1 truncate text-text-primary">
-          {atLeast
-            ? count > 1
-              ? `Applies to at least ${count} rendered copies`
-              : "May apply to copies the page was too large to count"
-            : `Applies to all ${count} rendered copies`}
-        </span>
-        <ChevronRight
-          aria-hidden="true"
-          className={cn(
-            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
-            open && "rotate-90"
-          )}
-        />
-      </button>
-      {open ? (
-        <p id={bodyId} className="px-1 text-xs text-text-secondary">
-          {`This markup draws ${count} elements on the page. A change here changes all of them, not just the one you clicked.`}
-        </p>
-      ) : null}
-    </div>
-  );
-}
-
 function tagFromLabel(node: SelectedNode): string {
   return node.label.split(/\s/)[0] || "element";
 }
@@ -378,178 +238,24 @@ function MappingNotice({
   if (nodeCount > 1 && scope !== "component") {
     return (
       <InspectorNotice tone="info" title={`${nodeCount} elements selected`}>
-        Editing works on one element at a time. Select a single element to change it.
+        A request names one element. Select a single one, or pick the component around them.
       </InspectorNotice>
     );
   }
   if (node.mapping === "ambiguous") {
     return (
       <InspectorNotice tone="warning" title="More than one source could own this element">
-        Editing is off so a change can't land in the wrong place.
+        A request about it can't say which file to change. Pick the component around it instead.
       </InspectorNotice>
     );
   }
   if (node.mapping === "visual-only" || !node.definition) {
     return (
       <InspectorNotice tone="info" title="Not traced to source">
-        This content is drawn at runtime — by {"{@html}"}, a canvas or a shadow root — so it has no
-        source location to edit.
+        This content is drawn at runtime — by {"{@html}"}, a canvas or a shadow root — so a request
+        about it has no source location to name.
       </InspectorNotice>
     );
   }
   return null;
-}
-
-function Surface({
-  title,
-  capability,
-  align = "center",
-  written,
-  children,
-}: {
-  title: string;
-  capability: EditCapability | undefined;
-  align?: "center" | "start";
-  /** How the source writes this surface, when it can't be edited here. */
-  written?: string | null;
-  children: ReactNode;
-}) {
-  const support = capability?.support;
-  // The capability badge sits with its explanation in the control column: in
-  // the 64px label column it took the label's room and could run into the
-  // control beside it.
-  return (
-    <PropertyRow label={title} align={align}>
-      {!capability ? (
-        <p className="text-xs leading-7 text-text-secondary">Not available for this element</p>
-      ) : capability.support !== "direct" ? (
-        <div className="flex min-h-7 flex-wrap items-center gap-1.5 text-xs text-text-secondary">
-          <Badge size="xs" tone="neutral">
-            {SUPPORT_LABEL[capability.support]}
-          </Badge>
-          <span>
-            {capability.reason
-              ? UNSUPPORTED_REASON_COPY[capability.reason]
-              : support === "agent-assisted"
-                ? "Changing this safely needs an agent"
-                : "This can be inspected but not edited here"}
-          </span>
-          {written ? (
-            <div role="group" aria-label={`${title} as written in the source`} className="w-full">
-              <code className="block whitespace-pre-wrap break-all rounded-sm bg-surface-inset px-1.5 py-1 font-mono text-3xs leading-relaxed text-text-primary">
-                {written}
-              </code>
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        children
-      )}
-    </PropertyRow>
-  );
-}
-
-function EditOutcome({ state, surface }: { state: InspectorState; surface: EditSurface }) {
-  const edit = state.edit;
-  if (edit.status === "failed" && edit.surface === surface) {
-    return (
-      <InspectorNotice tone="error" title={edit.title} role="alert">
-        {edit.detail}
-      </InspectorNotice>
-    );
-  }
-  if (edit.status === "no-op" && edit.surface === surface) {
-    return <p className="text-xs text-text-secondary">No change — the source already matches</p>;
-  }
-  return null;
-}
-
-/**
- * The current value comes from main, decoded from the compiler's AST — never
- * re-read here. A direct surface without one has nothing trustworthy to edit.
- */
-function NoDecodedValue({ node }: { node: SelectedNode }) {
-  if (!node.definition || !isEditableMapping(node)) {
-    return <p className="text-xs text-text-secondary">No source location to edit</p>;
-  }
-  return (
-    <p className="text-xs text-text-secondary">
-      No literal value here to edit — change it in source
-    </p>
-  );
-}
-
-function TextSurface({
-  state,
-  selection,
-  actions,
-}: {
-  state: InspectorState;
-  selection: ReadySelection;
-  actions: SelectionActions;
-}) {
-  const node = selection.selection.nodes[0]!;
-  const text = node.surfaces.text;
-  const selectionId = selection.selection.selectionId;
-  const editable = editTargetOf(state, "text", selectionId) !== null;
-  const saving = state.edit.status === "applying" && state.edit.surface === "text";
-  return (
-    <>
-      {text ? (
-        <TextEditor
-          // A successful save spends the selection; start the next edit clean.
-          // The generation, not the selection id: a re-proof after a write mints
-          // a new id, and keying on it unmounted the editor mid-loop. The
-          // "saved" suffix still starts the next text edit clean.
-          key={`${state.selectionGeneration}:${selection.stale === "edited" ? "saved" : "open"}`}
-          text={text.text}
-          editable={editable}
-          saving={saving}
-          pending={state.reselecting}
-          onSave={(next) => actions.setText(selectionId, next)}
-        />
-      ) : (
-        <NoDecodedValue node={node} />
-      )}
-      <EditOutcome state={state} surface="text" />
-    </>
-  );
-}
-
-function ClassSurface({
-  state,
-  selection,
-  actions,
-}: {
-  state: InspectorState;
-  selection: ReadySelection;
-  actions: SelectionActions;
-}) {
-  const node = selection.selection.nodes[0]!;
-  const classes = node.surfaces.classes;
-  const selectionId = selection.selection.selectionId;
-  const editable = editTargetOf(state, "classes", selectionId) !== null;
-  const saving = state.edit.status === "applying" && state.edit.surface === "classes";
-  return (
-    <>
-      {classes ? (
-        <ClassEditor
-          key={state.selectionGeneration}
-          tokens={classes.tokens}
-          editable={editable}
-          saving={saving}
-          pending={state.reselecting}
-          onAdd={(tokens) => actions.addClasses(selectionId, tokens)}
-          onRemove={(token) => actions.removeClass(selectionId, token)}
-          onReplace={(remove, add) => actions.replaceClasses(selectionId, remove, add)}
-          complete={actions.completeClasses}
-          describe={actions.describeClass}
-          conflicts={actions.classConflicts}
-        />
-      ) : (
-        <NoDecodedValue node={node} />
-      )}
-      <EditOutcome state={state} surface="classes" />
-    </>
-  );
 }

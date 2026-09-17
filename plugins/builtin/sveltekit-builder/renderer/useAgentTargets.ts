@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { isPtyPanel } from "@shared/types/panel";
 import { usePanelStore } from "@/store/panelStore";
-import { isAgentTerminal } from "@/utils/terminalType";
+import { getRuntimeAgentId, isAgentTerminal } from "@/utils/terminalType";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import type { AgentTarget } from "./agentTask.js";
 
@@ -27,6 +27,9 @@ export function useAgentTargets(worktreeId: string | null): AgentTarget[] {
         terminalId: panel.id,
         title: getTerminalDisplayTitle(panel, "full"),
         agentState: panel.agentState ?? null,
+        // The house resolver, not `launchAgentId`: live detection wins, and a
+        // terminal relaunched into another CLI must not keep the old mark.
+        agentId: getRuntimeAgentId(panel) ?? null,
       });
     }
     return targets;
