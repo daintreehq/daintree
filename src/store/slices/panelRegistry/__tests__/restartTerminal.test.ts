@@ -657,8 +657,8 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     buildAgentLaunchFlagsMock.mockReturnValue([]);
     mockGracefulKill.mockResolvedValue(null);
     const { agentSettingsClient, projectClient } = await import("@/clients");
-    vi.mocked(agentSettingsClient.get).mockResolvedValue({});
-    vi.mocked(projectClient.getSettings).mockResolvedValue(null);
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({ agents: {} });
+    vi.mocked(projectClient.getSettings).mockResolvedValue({ runCommands: [] });
     const { reset } = usePanelStore.getState();
     await reset();
     usePanelStore.setState({

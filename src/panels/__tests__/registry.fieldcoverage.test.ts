@@ -602,10 +602,14 @@ describe("panel serializer field coverage", () => {
   });
 
   it("terminal serializer persists a recovery hold without the process state it replaces (#12434)", () => {
-    const output = getPanelKindConfig("terminal")!.serialize!({
+    const heldFixture: PtySerializeInput = {
       ...terminalFixture,
       restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
-    }) as Record<string, unknown>;
+    };
+    const output = getPanelKindConfig("terminal")!.serialize!(heldFixture) as Record<
+      string,
+      unknown
+    >;
     expect(output.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
     expect(output.conversationCwd).toBe("/home/origin");
     expect(output).not.toHaveProperty("agentSessionId");
