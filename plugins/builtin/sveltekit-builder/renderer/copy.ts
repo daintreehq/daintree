@@ -1,5 +1,6 @@
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { SitePreviewDetachReason } from "@shared/types/ipc/sitePreview";
+import type { SelectionMismatch } from "../shared/protocol.js";
 import type { StaleReason } from "./inspectorController.js";
 
 /**
@@ -96,4 +97,28 @@ function isSchemaError(error: unknown): boolean {
   const name = (error as { name?: unknown }).name;
   if (name === "ZodError" || name === "$ZodError") return true;
   return Array.isArray((error as { issues?: unknown }).issues);
+}
+
+/**
+ * A location the page reported that the file contradicts, with no change to
+ * the file to explain it. Said as what was seen — the page's claim and the
+ * file's answer — because the one thing this must not be is "the page
+ * changed": nothing did, and clicking again gives the same answer. The known
+ * way here is a server-rendered page: Svelte's dev build tags an element with
+ * a neighbour's location when a child component's root precedes it in the
+ * same template (its `add_locations` counts that root while hydrating), and a
+ * client-side navigation re-renders the page without that — which needs
+ * Browse mode, since Select mode keeps the page's links from navigating.
+ */
+export function mismatchMessage(mismatch: SelectionMismatch): string {
+  const where = `${mismatch.file}:${mismatch.line}:${mismatch.column}`;
+  const found =
+    mismatch.found === null
+      ? "no element starts there"
+      : `the file has a <${mismatch.found}> there`;
+  return (
+    `The page places this <${mismatch.reported}> at ${where}, but ${found}. ` +
+    "A server-rendered page can report a neighbour's location — switch to Browse, " +
+    "open this page from a link inside the preview, then select the element again."
+  );
 }

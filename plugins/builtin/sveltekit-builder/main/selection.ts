@@ -11,6 +11,7 @@ import type {
   GuestNodeObservation,
   SelectionResolveArgs,
   SelectionResolveResult,
+  SelectionMismatch,
 } from "../shared/protocol.js";
 import type {
   ResolvedElement,
@@ -129,7 +130,8 @@ interface NodeContext {
   readCached: (absolutePath: string) => Promise<SourceRead>;
 }
 
-type NodeOutcome = { status: "ok"; node: SelectedNode } | { status: "stale" };
+type NodeOutcome =
+  { status: "ok"; node: SelectedNode } | { status: "stale"; mismatch?: SelectionMismatch };
 
 function interpret(model: SourceModel, workspace: Workspace, observation: GuestNodeObservation) {
   const interpreted = model.interpretAncestry(observation.ancestry);
@@ -199,10 +201,16 @@ async function resolveNode(
 
   const parse = await loadParse();
   const resolved = model.resolveElementAtLocation(read.text, loc, parse);
+  const reported = observation.tagName.toLowerCase();
   if (resolved.status !== "resolved") {
     if (resolved.reason === "generated-file") return inspectOnly("generated-file");
     // Out of range, no element starting there, ambiguous, or unparseable: the
     // file is not the one this node was rendered from. Never a nearest match.
+    // Nothing starting there is said as such: the caller can then tell a
+    // location the page got wrong from a document that moved on.
+    if (resolved.reason === "no-element-at-location") {
+      return { status: "stale", mismatch: { ...loc, reported, found: null } };
+    }
     return { status: "stale" };
   }
 
@@ -211,11 +219,11 @@ async function resolveNode(
   // before an HMR update can land exactly on a different element in the new
   // bytes. The tag is the one independent witness available; a mismatch is a
   // stale selection. Same-tag shifts remain undetectable here.
-  if (
-    element.kind === "RegularElement" &&
-    element.tagName.toLowerCase() !== observation.tagName.toLowerCase()
-  ) {
-    return { status: "stale" };
+  if (element.kind === "RegularElement" && element.tagName.toLowerCase() !== reported) {
+    return {
+      status: "stale",
+      mismatch: { ...loc, reported, found: element.tagName.toLowerCase() },
+    };
   }
   const capabilities =
     workspace.support.level === "full"
@@ -456,7 +464,7 @@ export async function resolveSelection(
     const outcome = await resolveNode({ workspace, model, readCached }, observation);
     // One unresolvable node makes the whole selection untrustworthy: a partial
     // selection would silently drop the element the user actually clicked.
-    if (outcome.status === "stale") return { status: "stale" };
+    if (outcome.status === "stale") return outcome;
     nodes.push(outcome.node);
   }
 

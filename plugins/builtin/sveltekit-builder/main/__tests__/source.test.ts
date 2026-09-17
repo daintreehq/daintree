@@ -196,9 +196,18 @@ describe("selectionResolve", () => {
     // the `<section` line, one line up from the heading.
     await fs.writeFile(sandbox.file(NATIVE), `<!-- banner -->\n${original}`);
 
-    expect(await resolve([observation(captured)])).toEqual({ status: "stale" });
-    expect(await resolve([observation({ ...captured, column: captured.column + 1 })])).toEqual({
+    // Stale, and said as what it is — nothing starts where the page pointed —
+    // so the inspector can tell a location the page got wrong from a document
+    // that moved on, rather than reporting both as "the page changed".
+    expect(await resolve([observation(captured, { tagName: "H1" })])).toEqual({
       status: "stale",
+      mismatch: { ...captured, reported: "h1", found: null },
+    });
+    expect(
+      await resolve([observation({ ...captured, column: captured.column + 1 }, { tagName: "H1" })])
+    ).toEqual({
+      status: "stale",
+      mismatch: { ...captured, column: captured.column + 1, reported: "h1", found: null },
     });
   });
 
@@ -244,7 +253,10 @@ describe("selectionResolve", () => {
       sandbox.file(NATIVE),
       original.replace("<p", "<h3").replace("</p>", "</h3>")
     );
-    expect(await resolve([observation(captured, { tagName: "P" })])).toEqual({ status: "stale" });
+    expect(await resolve([observation(captured, { tagName: "P" })])).toEqual({
+      status: "stale",
+      mismatch: { ...captured, reported: "p", found: "h3" },
+    });
   });
 
   it("refuses a generated file", async () => {

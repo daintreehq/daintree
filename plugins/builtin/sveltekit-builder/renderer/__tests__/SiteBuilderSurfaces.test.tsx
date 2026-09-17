@@ -313,6 +313,56 @@ describe("preview binding", () => {
   });
 });
 
+describe("a location the page got wrong", () => {
+  it("says what the file holds there, not that the page changed", async () => {
+    // A hydrated SvelteKit page can tag an element with a neighbour's location
+    // (Svelte's dev `add_locations` counts a child component's root while
+    // hydrating). Main finds a different tag there and says so; the drawer
+    // used to render that as "Selection changed — select again", which is
+    // wrong twice over: nothing changed, and selecting again gives the same
+    // answer.
+    host.handlers.set(CHANNELS.selectionResolve, () => ({
+      status: "stale",
+      mismatch: { file: FILE, line: 6, column: 2, reported: "button", found: "span" },
+    }));
+    await mountBound();
+    await act(async () => host.select(0));
+    const notice = await screen.findByRole("alert");
+    expect(notice.textContent).toContain("Couldn't select this element");
+    expect(notice.textContent).toContain(`<button> at ${FILE}:6:2`);
+    expect(notice.textContent).toContain("<span>");
+    expect(text()).not.toContain("Selection changed");
+  });
+
+  it("reads the disagreement as the page catching up when the file just changed", async () => {
+    // An agent edits the file and the page has not re-rendered yet: the old
+    // location now names a different tag. That is the usual settling case,
+    // not a wrong location, and must not carry the hydration advice.
+    host.handlers.set(CHANNELS.selectionResolve, () => ({
+      status: "stale",
+      mismatch: { file: FILE, line: 6, column: 2, reported: "button", found: "p" },
+    }));
+    await mountBound();
+    await act(async () =>
+      host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
+        workspaceSessionId: "ws-1",
+        file: FILE,
+        revision: REVISION,
+      })
+    );
+    await act(async () => host.select(0));
+    await screen.findByText("This file just changed — select again");
+    expect(text()).not.toContain("neighbour");
+  });
+
+  it("still reports a plain stale resolve as the page having moved on", async () => {
+    host.handlers.set(CHANNELS.selectionResolve, () => ({ status: "stale" }));
+    await mountBound();
+    await act(async () => host.select(0));
+    await screen.findByText("Selection changed — select again");
+  });
+});
+
 describe("selection identity", () => {
   it("resolves a selection and renders owner, line and a breadcrumb without generated frames", async () => {
     await mountSelected();
@@ -911,6 +961,174 @@ describe("stale selections", () => {
       expect(current!.textContent).toContain("Start Pro");
       expect(current!.textContent).not.toBe("PricingCard");
     }
+  });
+
+  it("selects the component a crumb names, as the page would on Option+Up", async () => {
+    // Clicking the page lands on the innermost thing under the pointer, and the
+    // component a request should be about is usually a step or two up. The
+    // trail names those steps, so each one is a control: it asks the page to
+    // re-select the proven element as a member of that invocation — by call
+    // site, never by label, since two nested components can share a name.
+    await mountSelected();
+    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    const identity = screen.getByRole("region", { name: "Selected element" });
+    for (const surface of [strip, identity]) {
+      expect(within(surface).getByRole("button", { name: "PricingCard" })).toBeTruthy();
+    }
+    // The element is where you already are: text, not a control.
+    expect(within(strip).queryByRole("button", { name: 'button "Start Pro"' })).toBeNull();
+
+    fireEvent.click(within(identity).getByRole("button", { name: "PricingCard" }));
+    expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1);
+    expect(host.sitePreview.reselect.mock.calls[0]![0]).toEqual({
+      sessionId: "session-1",
+      loc: { file: FILE, line: 6, column: 2 },
+      index: OBSERVATION.locIndex,
+      component: { file: "src/lib/PricingCard.svelte", line: 3, column: 0 },
+    });
+    // The page's answer is a component selection, and both surfaces follow it:
+    // the drawer names the component, and the strip's trail ends at it. The
+    // identity block is remounted by the resolve, so it is read afresh.
+    const reselected = () => screen.getByRole("region", { name: "Selected element" });
+    await waitFor(() => expect(reselected().textContent).toContain("Component"));
+    expect(within(reselected()).getByText("PricingCard")).toBeTruthy();
+    const trail = within(strip).getByRole("navigation", { name: "Breadcrumb" });
+    expect(trail.textContent).not.toContain("Start Pro");
+    expect(trail.querySelector('[aria-current="true"]')?.textContent).toBe("PricingCard");
+    // Now the selection: no longer a control in either surface.
+    expect(within(strip).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    expect(within(reselected()).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    // And the request is about it: the composer's About control follows the
+    // page's answer, not the crumb, so it names what was actually selected.
+    const about = within(reselected().parentElement!.parentElement!).getAllByRole("button", {
+      name: "PricingCard",
+      pressed: true,
+    });
+    expect(about).toHaveLength(1);
+  });
+
+  it("does not ask the page for a component while nothing is proven", async () => {
+    await mountBound();
+    const controller = peekBuilderController("preview-1")!;
+    await expect(
+      controller.selectComponent({ file: "src/lib/PricingCard.svelte", line: 3, column: 0 })
+    ).resolves.toBe(false);
+    expect(host.sitePreview.reselect).not.toHaveBeenCalled();
+  });
+
+  it("selects the invocation a crumb names when two components share a name, and returns focus", async () => {
+    // Layout > Card > Inner > Card > button: the outer Card is matched by its
+    // call site, never by label; once it is the selection, the crumbs inside
+    // it are the route the element was reached through, not where the
+    // selection is, so they leave both trails. The focused crumb is replaced
+    // by text and the trail unmounts while the source is found; a keyboard
+    // user's focus comes back to the strip's current crumb, not the body.
+    const outer = { file: "src/routes/+layout.svelte", line: 12, column: 0 };
+    host.ancestry = [
+      {
+        kind: "component",
+        location: { file: "src/lib/Inner.svelte", line: 8, column: 2 },
+        componentTag: "Card",
+        generated: false,
+      },
+      {
+        kind: "component",
+        location: { file: "src/lib/Card.svelte", line: 5, column: 4 },
+        componentTag: "Inner",
+        generated: false,
+      },
+      { kind: "component", location: outer, componentTag: "Card", generated: false },
+      {
+        kind: "component",
+        location: { file: ".svelte-kit/generated/root.svelte", line: 1, column: 0 },
+        componentTag: "Layout",
+        generated: false,
+      },
+    ];
+    await mountSelected();
+    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    const cards = within(strip).getAllByRole("button", { name: "Card" });
+    expect(cards).toHaveLength(2);
+    cards[0]!.focus();
+    fireEvent.click(cards[0]!);
+    expect(host.sitePreview.reselect.mock.calls[0]![0]).toMatchObject({ component: outer });
+
+    const trail = () => within(strip).getByRole("navigation", { name: "Breadcrumb" });
+    await waitFor(() => expect(trail().textContent).not.toContain("Inner"));
+    const current = trail().querySelector('[aria-current="true"]')!;
+    expect(current.textContent).toBe("Card");
+    const layout = within(strip).getByRole("button", { name: "Layout" });
+    expect(within(strip).queryByRole("button", { name: "Card" })).toBeNull();
+    // On a control the toolbar's roving keys work from, not on the text that
+    // replaced the button.
+    expect(document.activeElement).toBe(layout);
+    const identity = screen.getByRole("region", { name: "Selected element" });
+    const drawerCrumbs = Array.from(
+      within(identity).getByRole("navigation", { name: "Breadcrumb" }).querySelectorAll("li")
+    )
+      .filter((li) => !li.classList.contains("sr-only"))
+      .map((li) => (li.textContent ?? "").trim());
+    expect(drawerCrumbs).toEqual(["Layout"]);
+  });
+
+  it("offers neither surface a crumb the page could only resolve to the selection", async () => {
+    // A recursive component invoked from one line twice: the page matches a
+    // call site innermost first, so the outer Tree can only ever select the
+    // inner one — which is already the selection. The strip sees that in its
+    // own crumbs; the drawer hides the current crumb and has to be told.
+    const site = { file: "src/lib/Tree.svelte", line: 4, column: 2 };
+    host.ancestry = [
+      { kind: "component", location: site, componentTag: "Tree", generated: false },
+      { kind: "component", location: site, componentTag: "Tree", generated: false },
+      {
+        kind: "component",
+        location: { file: "src/routes/+page.svelte", line: 9, column: 0 },
+        componentTag: "Tree",
+        generated: false,
+      },
+    ];
+    await mountBound();
+    await act(async () => host.select(0, [OBSERVATION], "user", { ...site, name: "Tree" }));
+    const identity = await screen.findByRole("region", { name: "Selected element" });
+    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    for (const surface of [strip, identity]) {
+      const trees = within(surface).getAllByText("Tree");
+      expect(trees.length).toBeGreaterThan(0);
+      // The outermost Tree, at its own call site, is still a step up.
+      expect(within(surface).getAllByRole("button", { name: "Tree" })).toHaveLength(1);
+    }
+  });
+
+  it("leaves the selection alone when the page no longer has the element", async () => {
+    await mountSelected();
+    host.reselectFinds = false;
+    const before = peekBuilderController("preview-1")!.getSnapshot();
+    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    fireEvent.click(within(strip).getByRole("button", { name: "PricingCard" }));
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await act(async () => {});
+    const after = peekBuilderController("preview-1")!.getSnapshot();
+    expect(after.selection).toBe(before.selection);
+    expect(after.selectionGeneration).toBe(before.selectionGeneration);
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
+    expect(within(strip).getByRole("button", { name: "PricingCard" })).toBeTruthy();
+  });
+
+  it("offers no crumb to click while browsing", async () => {
+    // The page only answers a selection request in Select mode. A crumb that
+    // is a button in Browse mode is a button that does nothing.
+    await mountSelected();
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    await waitFor(() =>
+      expect(peekBuilderController("preview-1")!.getSnapshot().mode).toBe("browse")
+    );
+    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    expect(within(strip).getByRole("navigation", { name: "Breadcrumb" }).textContent).toContain(
+      "PricingCard"
+    );
+    expect(within(strip).queryByRole("button", { name: "PricingCard" })).toBeNull();
+    const identity = screen.getByRole("region", { name: "Selected element" });
+    expect(within(identity).queryByRole("button", { name: "PricingCard" })).toBeNull();
   });
 
   it("still allows an immediate retry when nothing was typed into the agent", async () => {

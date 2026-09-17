@@ -162,22 +162,26 @@ export function createFakeHost() {
     setMode: vi.fn(async (request: { sessionId: string; mode: SitePreviewMode }) =>
       state("preview-1", request.mode)
     ),
-    // As the real guest does: find the element compiled from `loc`, select it,
-    // and emit a fresh observation on the next tick. `reselectFinds` lets a
-    // test model a page where the element is gone.
+    // As the real guest does: find the element compiled from `loc`, select it
+    // — as a member of the component invoked at `component`, when one is
+    // named — and emit a fresh observation on the next tick. `reselectFinds`
+    // lets a test model a page where the element is gone.
     reselect: vi.fn(
       async (request: {
         sessionId: string;
         loc: SiteGuestNodeObservation["loc"];
         index?: number;
+        component?: { file: string; line: number; column: number };
       }) => {
         if (!host.reselectFinds) return false;
+        const component = request.component;
         setTimeout(
           () =>
             host.select(
               host.currentEpoch,
               [{ ...OBSERVATION, loc: request.loc, locIndex: request.index ?? 0 }],
-              "reselect"
+              "reselect",
+              component ? { ...component, name: host.componentNameAt(component) } : null
             ),
           0
         );
@@ -202,7 +206,10 @@ export function createFakeHost() {
   // write moved. Without this a re-proof after an edit could never match the
   // revision the write produced, and continuity could never be exercised.
   handlers.set(CHANNELS.selectionResolve, (args) => {
-    const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
+    const selection = makeSelection({
+      documentEpoch: args.documentEpoch as number,
+      ...(host.ancestry ? { node: { ancestry: host.ancestry } } : {}),
+    });
     const node = selection.nodes[0]!;
     if (node.definition) node.definition.revision = host.diskRevision;
     return { status: "ok", selection };
@@ -290,6 +297,8 @@ export function createFakeHost() {
     sitePreview,
     diskRevisions,
     reselectFinds: true,
+    /** The chain main resolves for the fixture element, innermost first; null for the fixture's own. */
+    ancestry: null as SelectedNode["ancestry"] | null,
     currentEpoch: 0,
     /** What main would hash on disk now; each applied write moves it. */
     diskRevision: REVISION,
@@ -331,10 +340,22 @@ export function createFakeHost() {
         },
       });
     },
+    /** What the page calls the component invoked at a call site on the fixture chain. */
+    componentNameAt(site: { file: string; line: number; column: number }): string {
+      const entry = (host.ancestry ?? makeSelection().nodes[0]!.ancestry).find(
+        (candidate) =>
+          candidate.kind === "component" &&
+          candidate.location.file === site.file &&
+          candidate.location.line === site.line &&
+          candidate.location.column === site.column
+      );
+      return entry?.componentTag ?? "Component";
+    },
     select(
       epoch: number,
       nodes: SiteGuestNodeObservation[] = [OBSERVATION],
-      cause: "user" | "document" | "reselect" = "user"
+      cause: "user" | "document" | "reselect" = "user",
+      component: { file: string; line: number; column: number; name: string } | null = null
     ) {
       host.pushPreview({
         kind: "guest-event",
@@ -343,7 +364,12 @@ export function createFakeHost() {
         projectId: "p1",
         documentEpoch: epoch,
         sequence: 1,
-        event: { type: "selectionChanged", nodes, cause },
+        event: {
+          type: "selectionChanged",
+          nodes,
+          cause,
+          ...(component ? { scope: "component", component } : {}),
+        },
       });
     },
     epochAdvanced(epoch: number) {
