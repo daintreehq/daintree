@@ -33,6 +33,7 @@ import { useTerminalVisibilityObserver } from "./useTerminalVisibilityObserver";
 import { FleetDraftingPill } from "@/components/Fleet/FleetDraftingPill";
 import { TerminalRestartStatusBanner } from "./TerminalRestartStatusBanner";
 import { FindCodexSessionAction } from "./FindCodexSessionAction";
+import { RestoreRecoveryGate } from "./RestoreRecoveryGate";
 import { InlineStatusBanner } from "./InlineStatusBanner";
 import { useForceResumeCycleWatchdog } from "@/hooks/terminal/useForceResumeCycleWatchdog";
 import { useContextInjection } from "@/hooks/useContextInjection";
@@ -500,6 +501,7 @@ function TerminalPaneComponent({
         isTrashedOrRemoved: terminal?.location === "trash" || terminal === undefined,
         spawnStatus: pty?.spawnStatus,
         eagerAttach: pty?.eagerAttach ?? false,
+        isHeldForRecovery: pty?.restoreRecovery !== undefined,
       };
     })
   );
@@ -512,7 +514,11 @@ function TerminalPaneComponent({
     isTrashedOrRemoved,
     spawnStatus,
     eagerAttach,
+    isHeldForRecovery,
   } = terminalState;
+  // Keyboard navigation into a held pane lands on its recovery surface, which
+  // has no terminal or input bar to take focus (#12434).
+  const recoveryGateRef = useRef<HTMLDivElement>(null);
   // Fleet-scope mounts pass `isInputLocked: true` to render the panel as a
   // read-only broadcast view. Prop takes precedence over the stored flag so
   // unwinding scope reverts to the user-toggled lock state automatically.
@@ -576,12 +582,14 @@ function TerminalPaneComponent({
           presetColor: livePresetColor,
         });
   const effectiveAgentId = isBuiltInAgentId(chrome.agentId) ? chrome.agentId : undefined;
-  const showHybridInputBar = shouldShowHybridInputBar({
-    hasAgentIdentity: effectiveAgentId !== undefined,
-    hybridInputEnabled,
-    isFleetArmed: isArmed,
-    fleetSize: armedIds.size,
-  });
+  const showHybridInputBar =
+    !isHeldForRecovery &&
+    shouldShowHybridInputBar({
+      hasAgentIdentity: effectiveAgentId !== undefined,
+      hybridInputEnabled,
+      isFleetArmed: isArmed,
+      fleetSize: armedIds.size,
+    });
 
   // Below `showHybridInputBar`/`isHybridInputDisabled` because it needs both:
   // "the bar is rendered" and "the bar can take input" are different questions,
@@ -1012,7 +1020,10 @@ function TerminalPaneComponent({
   useEffect(() => {
     terminalInstanceService.setFocused(id, isFocused);
 
-    if (!isFocused) return;
+    // Selection alone never pulls focus into a held pane — restore selects a
+    // pane on boot, and a recovery surface grabbing the keyboard there is a
+    // focus steal. Explicit navigation goes through the handler below.
+    if (!isFocused || isHeldForRecovery) return;
 
     // Read selection and focus ownership synchronously, before any handoff.
     // Deciding up front (rather than inside the deferred RAF) also keeps focus
@@ -1046,6 +1057,7 @@ function TerminalPaneComponent({
   }, [
     id,
     isFocused,
+    isHeldForRecovery,
     showHybridInputBar,
     hybridInputEnabled,
     preferredTerminalFocusTarget,
@@ -1059,6 +1071,12 @@ function TerminalPaneComponent({
     // forcing the input; that's what the old model did, and tab switching
     // would otherwise yank focus out of xterm against the user's intent.
     return registerPanelFocusHandler(id, () => {
+      if (isHeldForRecovery) {
+        const gate = recoveryGateRef.current;
+        if (!gate) return false;
+        (gate.querySelector<HTMLElement>("button:not([disabled])") ?? gate).focus();
+        return gate.contains(document.activeElement);
+      }
       const action = resolvePaneFocusAction({
         focusTarget: getTerminalFocusTarget({
           preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
@@ -1085,7 +1103,7 @@ function TerminalPaneComponent({
       terminalInstanceService.focus(id);
       return containerRef.current?.contains(document.activeElement) ?? false;
     });
-  }, [id, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]);
+  }, [id, isHeldForRecovery, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]);
 
   // Sync agent state to terminal service for scroll management
   useEffect(() => {
@@ -1496,7 +1514,9 @@ function TerminalPaneComponent({
       </BannerSlot>
 
       <div className="flex-1 min-h-0 bg-surface-canvas flex flex-col">
-        {spawnStatus === "missing-cli" && agentId ? (
+        {isHeldForRecovery ? (
+          <RestoreRecoveryGate panelId={id} containerRef={recoveryGateRef} />
+        ) : spawnStatus === "missing-cli" && agentId ? (
           <MissingCliGate
             agentId={agentId}
             detail={getPanelCliDetail() ?? { state: "missing", resolvedPath: null, via: null }}

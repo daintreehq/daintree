@@ -366,6 +366,15 @@ interface AgentSessionIdResumeBase {
    * `sessionIdPattern` teardown scrape as their sole capture path.
    */
   assignSessionIdArgs?: (sessionId: string) => string[];
+  /**
+   * `args(id)` resumes the conversation in the directory the process is
+   * launched in, even when the conversation began in another one (#12434).
+   * Declare only when that is verified against the real CLI — a pane moved
+   * onto another worktree is cold-launched there on the strength of it, and an
+   * agent whose resume is path-coupled (Claude, Gemini: #4781) would reopen
+   * nothing, or prompt, instead.
+   */
+  crossDirectoryResume?: true;
 }
 
 /**

@@ -650,6 +650,92 @@ describe("restartTerminal resume-latest fallback (#8787)", () => {
   });
 });
 
+describe("restartTerminal and panes that run away from their conversation (#12434)", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    mockGracefulKill.mockResolvedValue(null);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  const movedPane = {
+    ...agentPanelBase,
+    launchAgentId: "codex",
+    cwd: "/worktrees/task-a",
+    worktreeId: "/worktrees/task-a",
+    conversationCwd: "/repo",
+    agentState: "working" as const,
+  };
+
+  it("leaves a pane held for recovery untouched", async () => {
+    const held: PtyPanelData = {
+      ...movedPane,
+      agentState: undefined,
+      hasPty: false,
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+    };
+    usePanelStore.setState({ panelsById: { [held.id]: held }, panelIds: [held.id] });
+    // The store reset in `beforeEach` kills what the previous case left behind.
+    mockKill.mockClear();
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn).not.toHaveBeenCalled();
+    expect(mockKill).not.toHaveBeenCalled();
+    expect(mockGracefulKill).not.toHaveBeenCalled();
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData;
+    expect(after.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(after.isRestarting).toBeFalsy();
+  });
+
+  it("never runs resume-latest from a folder the conversation didn't begin in", async () => {
+    const { buildResumeLatestCommand } = await import("@shared/types");
+    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue("codex resume --last");
+    usePanelStore.setState({
+      panelsById: { [movedPane.id]: movedPane },
+      panelIds: [movedPane.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(buildResumeLatestCommand).not.toHaveBeenCalled();
+    expect(mockSpawn.mock.calls[0]![0].command).not.toBe("codex resume --last");
+    // A new conversation begins where the pane runs.
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData;
+    expect(after.conversationCwd).toBeUndefined();
+  });
+
+  it("keeps pointing at the conversation's folder when it resumes that conversation", async () => {
+    const { buildResumeCommand } = await import("@shared/types");
+    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue("codex resume sess-a -C '.'");
+    const pane = { ...movedPane, agentSessionId: "sess-a" };
+    usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.command).toBe("codex resume sess-a -C '.'");
+    expect(payload.cwd).toBe("/worktrees/task-a");
+    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData;
+    expect(after.conversationCwd).toBe("/repo");
+  });
+});
+
 describe("restartTerminal captured live-session resume", () => {
   beforeEach(async () => {
     vi.clearAllMocks();

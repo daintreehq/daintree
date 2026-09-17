@@ -13,6 +13,7 @@ import type {
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
   TerminalSpawnSource,
+  PanelRestoreRecovery,
 } from "./panel.js";
 import type { PersistedPanelKindRef } from "../config/panelKindRegistry.js";
 import type { CommandOverride } from "./commands.js";
@@ -304,6 +305,16 @@ export interface PanelSnapshot {
   isUsingFallback?: boolean;
   /** How many fallback hops have been consumed from the primary's chain. */
   fallbackChainIndex?: number;
+  /**
+   * Directory the pane's conversation began in, recorded only once the pane
+   * runs somewhere else (#12434). Session lookup searches here.
+   */
+  conversationCwd?: string;
+  /**
+   * The pane was held for recovery rather than launched (#12434), so the next
+   * restore holds it again instead of starting a fresh conversation.
+   */
+  restoreRecovery?: PanelRestoreRecovery;
   /** Last known agent state for crash recovery display */
   agentState?: AgentState;
   /** Timestamp of last agent state change */

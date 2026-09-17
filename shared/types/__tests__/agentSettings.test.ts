@@ -51,7 +51,10 @@ describe("buildResumeCommand", () => {
 
   it("builds codex resume command with subcommand (no dash)", () => {
     const cmd = buildResumeCommand("codex", "abc-123");
-    expect(cmd).toBe("codex resume abc-123");
+    // Pinned to the launch directory (#12434), and still readable by the
+    // `codex resume <id>` scrape when the shell echoes it.
+    expect(cmd).toBe("codex resume abc-123 -C '.'");
+    expect(cmd).toContain("codex resume abc-123");
     expect(cmd).not.toContain("--resume");
   });
 
@@ -100,7 +103,7 @@ describe("buildResumeCommand", () => {
       "--dangerously-bypass-approvals-and-sandbox",
     ]);
     expect(cmd).toBe(
-      "codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume sess-456"
+      "codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox resume sess-456 -C '.'"
     );
   });
 
@@ -1661,9 +1664,9 @@ describe("decorative effects (registry capabilities.decorations)", () => {
   const OFF = ["-c", "tui.whimsy=false"];
 
   describe.each([
-    ["linux", "'tui.whimsy=false'"],
-    ["win32", '"tui.whimsy=false"'],
-  ])("launch commands on %s", (platform, quotedOverride) => {
+    ["linux", "'tui.whimsy=false'", "'.'"],
+    ["win32", '"tui.whimsy=false"', '"."'],
+  ])("launch commands on %s", (platform, quotedOverride, quotedDir) => {
     const originalPlatform = process.platform;
 
     beforeEach(() => {
@@ -1680,7 +1683,7 @@ describe("decorative effects (registry capabilities.decorations)", () => {
       expect(launch).toBe(`codex --no-alt-screen -c ${quotedOverride}`);
       // A `-c` override is a global option, so it must precede the subcommand.
       expect(buildResumeCommand("codex", "abc-123", buildAgentLaunchFlags({}, "codex"))).toBe(
-        `codex --no-alt-screen -c ${quotedOverride} resume abc-123`
+        `codex --no-alt-screen -c ${quotedOverride} resume abc-123 -C ${quotedDir}`
       );
     });
   });

@@ -94,6 +94,7 @@ vi.mock("../statePatcher", async () => {
         allowResumeLatest?: boolean;
         allowSessionIdResume?: boolean;
         resolvedResumeLatestSessionId?: string;
+        coldLaunch?: { cwd: string; conversationCwd?: string; awaitingDestination?: boolean };
       }
     ) => ({
       cwd: s.cwd ?? "/cwd",
@@ -109,6 +110,7 @@ vi.mock("../statePatcher", async () => {
       allowResumeLatest: options?.allowResumeLatest ?? true,
       allowSessionIdResume: options?.allowSessionIdResume ?? true,
       resolvedResumeLatestSessionId: options?.resolvedResumeLatestSessionId,
+      coldLaunch: options?.coldLaunch,
     }),
     // Mirrors the real resolver's title recovery (same agent order) so the
     // election's identity resolution can't silently diverge from production.
@@ -2284,6 +2286,292 @@ describe("restorePanelsPhase — naming the resume-latest session (#12178)", () 
     await restorePanelsPhase([codexPanel("solo", { env: { CODEX_HOME: "/custom/home" } })], ctx);
 
     expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () => {
+  interface RespawnArgs {
+    requestedId?: string;
+    existingId?: string;
+    worktreeId?: string;
+    allowResumeLatest?: boolean;
+    allowSessionIdResume?: boolean;
+    resolvedResumeLatestSessionId?: string;
+    coldLaunch?: { cwd: string; conversationCwd?: string; awaitingDestination?: boolean };
+  }
+
+  function argsById(ctx: MockedContext): Map<string, RespawnArgs> {
+    const byId = new Map<string, RespawnArgs>();
+    for (const [args] of ctx.addPanel.mock.calls as [RespawnArgs][]) {
+      const id = args.requestedId ?? args.existingId;
+      if (id !== undefined) byId.set(id, args);
+    }
+    return byId;
+  }
+
+  function worktree(path: string): WorktreeState {
+    return { ...wtList(path)[0]!, path };
+  }
+
+  const TASKS = ["a", "b", "c", "d", "e"];
+  const worktrees = () =>
+    Promise.resolve([worktree("/repo"), ...TASKS.map((t) => worktree(`/worktrees/task-${t}`))]);
+
+  /** A Codex pane started in /repo and then moved onto task-<name>'s worktree. */
+  const movedPane = (name: string, overrides: Partial<TerminalState> = {}): TerminalState =>
+    panel(name, {
+      kind: "agent",
+      launchAgentId: "codex",
+      cwd: "/repo",
+      worktreeId: `/worktrees/task-${name}`,
+      ...overrides,
+    });
+
+  beforeEach(() => {
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+  });
+
+  it("resumes five panes with their own ids, each in its own worktree", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+
+    await restorePanelsPhase(
+      TASKS.map((t) => movedPane(t, { agentSessionId: `sess-${t}` })),
+      ctx
+    );
+
+    const byId = argsById(ctx);
+    for (const t of TASKS) {
+      expect(byId.get(t)).toMatchObject({
+        allowSessionIdResume: true,
+        worktreeId: `/worktrees/task-${t}`,
+        coldLaunch: { cwd: `/worktrees/task-${t}`, conversationCwd: "/repo" },
+      });
+    }
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps one origin-scoped election when all five ids are missing", async () => {
+    resolveResumeLatestSessionMock.mockResolvedValue(null);
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+
+    await restorePanelsPhase(
+      TASKS.map((t, i) => movedPane(t, { lastActiveAt: 100 + i })),
+      ctx
+    );
+
+    const byId = argsById(ctx);
+    // The destinations differ, but the conversations all live in /repo — one
+    // slot, not five.
+    expect(TASKS.map((t) => byId.get(t)?.allowResumeLatest)).toEqual([
+      false,
+      false,
+      false,
+      false,
+      true,
+    ]);
+    // Only the winner asks, and it asks the folder the conversation began in.
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledTimes(1);
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledWith({ cwd: "/repo" });
+    for (const t of TASKS) {
+      expect(byId.get(t)?.coldLaunch).toEqual({
+        cwd: `/worktrees/task-${t}`,
+        conversationCwd: "/repo",
+      });
+    }
+  });
+
+  it("denies the fallback to four id-less panes when a fifth carries its id", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+
+    await restorePanelsPhase(
+      [movedPane("a", { agentSessionId: "sess-a" }), ...TASKS.slice(1).map((t) => movedPane(t))],
+      ctx
+    );
+
+    const byId = argsById(ctx);
+    expect(byId.get("a")?.allowSessionIdResume).toBe(true);
+    for (const t of TASKS.slice(1)) expect(byId.get(t)?.allowResumeLatest).toBe(false);
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps a live PTY's conversation to itself", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+    ctx.backendTerminalMap.set(
+      "live",
+      backend("live", { launchAgentId: "codex", cwd: "/repo", agentSessionId: "sess-live" })
+    );
+
+    await restorePanelsPhase(
+      [
+        panel("live", { kind: "agent", launchAgentId: "codex", cwd: "/repo" }),
+        movedPane("a", { agentSessionId: "sess-live" }),
+      ],
+      ctx
+    );
+
+    const byId = argsById(ctx);
+    expect(byId.get("a")?.allowSessionIdResume).toBe(false);
+    // The live pane reconnects where it is — no cold-launch decision is made for it.
+    expect(byId.get("live")?.coldLaunch).toBeUndefined();
+  });
+
+  it("drops a looked-up conversation another pane already holds, and the fallback with it", async () => {
+    // Two spellings of one folder are two election scopes, but Codex resolves
+    // both to the same conversation.
+    resolveResumeLatestSessionMock.mockResolvedValue("sess-shared");
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+
+    await restorePanelsPhase(
+      [
+        panel("owner", {
+          kind: "agent",
+          launchAgentId: "codex",
+          cwd: "/repo",
+          agentSessionId: "sess-shared",
+        }),
+        movedPane("a", { cwd: "/link/to/repo", worktreeId: undefined }),
+      ],
+      ctx
+    );
+
+    const a = argsById(ctx).get("a");
+    expect(a?.resolvedResumeLatestSessionId).toBeUndefined();
+    expect(a?.allowResumeLatest).toBe(false);
+  });
+
+  it("gives a conversation two lookups both resolved to only the first to arrive", async () => {
+    resolveResumeLatestSessionMock.mockResolvedValue("sess-same");
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+
+    await restorePanelsPhase(
+      [
+        panel("x", { kind: "agent", launchAgentId: "codex", cwd: "/repo" }),
+        panel("y", { kind: "agent", launchAgentId: "codex", cwd: "/link/to/repo" }),
+      ],
+      ctx
+    );
+
+    const named = [...argsById(ctx).values()].map((args) => args.resolvedResumeLatestSessionId);
+    expect(named.filter((id) => id === "sess-same")).toHaveLength(1);
+    expect(named.filter((id) => id === undefined)).toHaveLength(1);
+  });
+
+  it("holds a pane held last time again, and keeps it out of the election", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+
+    await restorePanelsPhase(
+      [
+        movedPane("held", {
+          cwd: "/worktrees/task-a",
+          worktreeId: "/worktrees/task-a",
+          conversationCwd: "/repo",
+          restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+          lastActiveAt: 900,
+        }),
+        panel("waiting", { kind: "agent", launchAgentId: "codex", cwd: "/repo", lastActiveAt: 1 }),
+      ],
+      ctx
+    );
+
+    const byId = argsById(ctx);
+    // The held pane launches nothing, so it can't cost its sibling the slot.
+    expect(byId.get("waiting")?.allowResumeLatest).toBe(true);
+    expect(byId.get("held")?.coldLaunch).toEqual({
+      cwd: "/worktrees/task-a",
+      conversationCwd: "/repo",
+    });
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledTimes(1);
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledWith({ cwd: "/repo" });
+  });
+
+  it("never turns a held pane's re-home into where it runs", async () => {
+    const ctx = makeContext({
+      worktreesPromise: worktrees(),
+      activeWorktreeId: "/worktrees/task-b",
+    });
+
+    await restorePanelsPhase(
+      [
+        movedPane("held", {
+          worktreeId: "/worktrees/task-b",
+          restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
+        }),
+      ],
+      ctx
+    );
+
+    expect(argsById(ctx).get("held")?.coldLaunch).toEqual({ cwd: "/repo" });
+  });
+
+  it("asks where to run a pane filed under a worktree this project no longer has", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees(), activeWorktreeId: "/repo" });
+
+    await restorePanelsPhase(
+      [movedPane("gone", { worktreeId: "/worktrees/deleted", agentSessionId: "sess-g" })],
+      ctx
+    );
+
+    const gone = argsById(ctx).get("gone");
+    expect(gone?.coldLaunch).toEqual({ cwd: "/repo", awaitingDestination: true });
+    // Placed where it can be seen; that is not where it will run.
+    expect(gone?.worktreeId).toBe("/repo");
+    expect(resolveResumeLatestSessionMock).not.toHaveBeenCalled();
+  });
+
+  it("changes nothing while the worktree list isn't ready (#11234)", async () => {
+    const ctx = makeContext({ worktreesPromise: Promise.resolve([]) });
+
+    await restorePanelsPhase([movedPane("a", { agentSessionId: "sess-a" })], ctx);
+
+    expect(argsById(ctx).get("a")?.coldLaunch).toEqual({ cwd: "/repo" });
+  });
+
+  it("changes nothing in a workspace that can't have worktrees", async () => {
+    const ctx = makeContext({
+      worktreesPromise: worktrees(),
+      workspaceHasWorktreesPromise: Promise.resolve(false),
+    });
+
+    await restorePanelsPhase([movedPane("a", { agentSessionId: "sess-a" })], ctx);
+
+    expect(argsById(ctx).get("a")?.coldLaunch).toEqual({ cwd: "/repo" });
+  });
+
+  it("scopes panes already relaunched elsewhere by the folder their conversations began in", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+
+    await restorePanelsPhase(
+      ["a", "b"].map((t, i) =>
+        movedPane(t, {
+          cwd: `/worktrees/task-${t}`,
+          conversationCwd: "/repo",
+          lastActiveAt: 10 + i,
+        })
+      ),
+      ctx
+    );
+
+    const byId = argsById(ctx);
+    expect([byId.get("a")?.allowResumeLatest, byId.get("b")?.allowResumeLatest]).toEqual([
+      false,
+      true,
+    ]);
+    expect(resolveResumeLatestSessionMock).toHaveBeenCalledWith({ cwd: "/repo" });
+    expect(byId.get("b")?.coldLaunch).toEqual({
+      cwd: "/worktrees/task-b",
+      conversationCwd: "/repo",
+    });
+  });
+
+  it("leaves an agent whose resume is tied to its folder exactly as it was", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees() });
+
+    await restorePanelsPhase(
+      [movedPane("c", { launchAgentId: "claude", agentSessionId: "sess-c" })],
+      ctx
+    );
+
+    expect(argsById(ctx).get("c")?.coldLaunch).toBeUndefined();
   });
 });
 

@@ -1124,6 +1124,18 @@ export function supportsExactSessionCapture(agentId: string | undefined): boolea
 }
 
 /**
+ * Whether an exact-id resume of `agentId` runs in the launch directory even
+ * when the conversation began elsewhere (#12434). The gate for cold-launching a
+ * moved pane in its destination worktree, and for holding it for recovery when
+ * its conversation can't be named.
+ */
+export function supportsCrossDirectoryResume(agentId: string | undefined): boolean {
+  if (!agentId) return false;
+  const resume = getEffectiveAgentConfig(agentId)?.resume;
+  return resume?.kind === "session-id" && resume.crossDirectoryResume === true;
+}
+
+/**
  * Whether `agentId` lets Daintree choose the session id at launch, making the
  * teardown scrape unnecessary for it (#11782).
  */

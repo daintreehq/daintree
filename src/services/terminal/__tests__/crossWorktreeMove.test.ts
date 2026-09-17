@@ -421,6 +421,10 @@ describe("isPanelProcessLive", () => {
     ["an errored runtime", { runtimeStatus: "error" as const }],
     ["a pane carrying an exit code", { exitCode: 0 }],
     ["a pane carrying a non-zero exit code", { exitCode: 137 }],
+    [
+      "a pane restore held for recovery (#12434)",
+      { restoreRecovery: { reason: "session-unresolved" as const } },
+    ],
   ])("rejects %s", (_label, overrides) => {
     expect(isPanelProcessLive(live(overrides))).toBe(false);
   });
@@ -601,5 +605,110 @@ describe("moveTerminalToWorktreeAndFollowRescue — move notice (#11853)", () =>
     expect(terminalClient.submit).not.toHaveBeenCalled();
     expect(terminalInstanceService.addAgentStateListener).not.toHaveBeenCalled();
     expect(terminalInstanceService.captureBufferText).not.toHaveBeenCalled();
+  });
+});
+
+describe("moveTerminalToWorktreeAndFollowRescue — panes held for recovery (#12434)", () => {
+  const WORKTREES = [
+    { id: "wt-a", path: "/repo/wt-a" },
+    { id: "wt-b", path: "/repo/wt-b" },
+  ];
+
+  beforeEach(() => {
+    setWorktreesWithPaths(WORKTREES);
+  });
+
+  function heldPanel(overrides: Partial<PtyPanelData> = {}): PtyPanelData {
+    return {
+      ...panel("t1", "wt-a"),
+      runtimeStatus: undefined,
+      hasPty: false,
+      launchAgentId: "codex",
+      cwd: "/repo/wt-a",
+      restoreRecovery: { reason: "session-unresolved" },
+      ...overrides,
+    };
+  }
+
+  function heldOf(id: string): PtyPanelData | undefined {
+    const p = usePanelStore.getState().panelsById[id];
+    return p && isPtyPanel(p) ? p : undefined;
+  }
+
+  it("takes a move as where the held pane should run, and remembers where it began", () => {
+    seedPanels([heldPanel()]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(cwdOf("t1")).toBe("/repo/wt-b");
+    expect(heldOf("t1")?.conversationCwd).toBe("/repo/wt-a");
+    expect(heldOf("t1")?.restoreRecovery).toEqual({ reason: "session-unresolved" });
+    expect(noticeOf("t1")).toBeUndefined();
+    expect(terminalClient.submit).not.toHaveBeenCalled();
+  });
+
+  it("keeps the folder the conversation began in across a second move", () => {
+    seedPanels([
+      heldPanel({ cwd: "/repo/wt-b", conversationCwd: "/repo/wt-a", worktreeId: "wt-b" }),
+    ]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-a");
+
+    expect(cwdOf("t1")).toBe("/repo/wt-a");
+    // Back where it began, there is nothing separate to remember.
+    expect(heldOf("t1")?.conversationCwd).toBeUndefined();
+  });
+
+  it("settles a destination that restore couldn't, even from a folder under no worktree", () => {
+    seedPanels([
+      heldPanel({
+        cwd: "/somewhere/else",
+        restoreRecovery: {
+          reason: "destination-unavailable",
+          sessionId: "sess-a",
+          awaitingDestination: true,
+        },
+      }),
+    ]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(cwdOf("t1")).toBe("/repo/wt-b");
+    expect(heldOf("t1")?.restoreRecovery).toEqual({
+      reason: "destination-unavailable",
+      sessionId: "sess-a",
+    });
+  });
+
+  it("keeps a subdirectory the pane already runs in inside the destination", () => {
+    seedPanels([
+      heldPanel({
+        cwd: "/repo/wt-b/packages/ui",
+        worktreeId: "wt-a",
+        restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
+      }),
+    ]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(cwdOf("t1")).toBe("/repo/wt-b/packages/ui");
+    expect(heldOf("t1")?.restoreRecovery).toEqual({ reason: "destination-unavailable" });
+  });
+
+  it("leaves a destination it can't resolve for the user to choose", () => {
+    seedPanels([
+      heldPanel({
+        restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
+      }),
+    ]);
+    setWorktreesWithPaths([
+      { id: "wt-a", path: "/repo/wt-a" },
+      { id: "wt-b", path: "" },
+    ]);
+
+    moveTerminalToWorktreeAndFollowRescue("t1", "wt-b");
+
+    expect(cwdOf("t1")).toBe("/repo/wt-a");
+    expect(heldOf("t1")?.restoreRecovery?.awaitingDestination).toBe(true);
   });
 });

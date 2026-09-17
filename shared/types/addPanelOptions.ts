@@ -10,6 +10,7 @@ import type {
   FileBrowserSortKey,
   FileBrowserTreeSnapshot,
   SessionLostReason,
+  PanelRestoreRecovery,
 } from "./panel.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
 import type { BrowserHistory } from "./browser.js";
@@ -186,6 +187,20 @@ export interface AddPanelOptionsBase {
    * `serializePtyPanel` (intentionally omitted).
    */
   sessionLostOnRestore?: SessionLostReason;
+  /** PTY-only. Where the conversation began, when the pane runs elsewhere (#12434). */
+  conversationCwd?: string;
+  /**
+   * PTY-only. Commit the pane held for recovery (#12434): no startup slot, no
+   * prewarm, no spawn. See `PtyPanelData.restoreRecovery`.
+   */
+  restoreRecovery?: PanelRestoreRecovery;
+  /**
+   * PTY-only. This launch replaces a pane held for recovery under the same
+   * `requestedId`. The replacement is dropped when that pane was closed, or
+   * already launched, while this call was awaiting — a late click must never
+   * resurrect a pane or start a second process in it.
+   */
+  replacesRestoreRecovery?: boolean;
   /**
    * User-initiated focus timestamp from the saved snapshot, propagated
    * from the hydration boundary (`statePatcher.ts:buildArgsFor*` →

@@ -30,8 +30,14 @@ import {
   buildArgsForOrphanedTerminal,
   inferWorktreeIdFromCwd,
   resolveRespawnAgentId,
+  type BuildArgsForRespawnOptions,
 } from "./statePatcher";
-import { buildResumeLatestCommand } from "@shared/types/agentSettings";
+import {
+  buildResumeLatestCommand,
+  supportsCrossDirectoryResume,
+} from "@shared/types/agentSettings";
+import { isSameDirectory, resolveColdLaunchTarget } from "./coldLaunchTarget";
+import { sanitizeConversationCwd, sanitizeRestoreRecovery } from "@/utils/restoreRecovery";
 import { normalize as normalizePath } from "@shared/utils/path";
 import type { HydrationOptions } from "./";
 import { getAgentConfig } from "@/config/agents";
@@ -134,6 +140,32 @@ function resumeScopeKey(agentId: string, cwd: string): string {
 }
 
 /**
+ * The folder a saved pane's conversation is filed under. For an agent that
+ * resumes across directories a moved pane runs somewhere else, and both its
+ * resume-latest scope and its session lookup belong to where it began (#12434):
+ * keying them off the destination would give five panes moved out of one
+ * checkout five separate scopes, and defeat the election entirely.
+ */
+function conversationScopeCwd(saved: TerminalState, agentId: string): string | undefined {
+  if (supportsCrossDirectoryResume(agentId)) {
+    const origin = sanitizeConversationCwd(saved.conversationCwd);
+    if (origin) return origin;
+  }
+  return saved.cwd || undefined;
+}
+
+/**
+ * A pane an earlier restore held for recovery is held again as-is (#12434), so
+ * it never launches and takes no part in who resumes what.
+ */
+function isHeldFromSnapshot(saved: TerminalState, agentId: string | undefined): boolean {
+  return (
+    supportsCrossDirectoryResume(agentId) &&
+    sanitizeRestoreRecovery(saved.restoreRecovery) !== undefined
+  );
+}
+
+/**
  * Which panes must be denied which resume on restore, so no two restored panes
  * end up writing into one agent conversation (#11461).
  */
@@ -142,6 +174,12 @@ interface ResumeSuppression {
   resumeLatest: Set<string>;
   /** Panes denied the exact `agentSessionId` they carry, because a sibling owns it. */
   sessionId: Set<string>;
+  /**
+   * Every (agent, session id) a restored pane already holds — live, or carried
+   * into a respawn. A session a lookup resolves for another pane is only usable
+   * when it is absent from here (#12434).
+   */
+  heldSessionKeys: Set<string>;
 }
 
 /**
@@ -264,7 +302,10 @@ function electResumeSuppression(
       const liveAgentId = resolveAgentId(record.launchAgentId, savedAgentId);
       if (liveAgentId === undefined) continue;
       claimedScopes.add(
-        resumeScopeKey(liveAgentId, saved.cwd || record.cwd || context.projectRoot)
+        resumeScopeKey(
+          liveAgentId,
+          conversationScopeCwd(saved, liveAgentId) || record.cwd || context.projectRoot
+        )
       );
       // A live PTY owns its session outright: it is attached NOW, so a cold pane
       // holding the same id has nothing to rank against and must not replay it.
@@ -278,7 +319,11 @@ function electResumeSuppression(
     // Respawning: identity is whatever the respawn itself will resolve.
     const agentId = savedAgentId;
     if (agentId === undefined) continue;
-    const scope = resumeScopeKey(agentId, saved.cwd || context.projectRoot);
+    if (isHeldFromSnapshot(saved, agentId)) continue;
+    const scope = resumeScopeKey(
+      agentId,
+      conversationScopeCwd(saved, agentId) || context.projectRoot
+    );
 
     if (saved.agentSessionId) {
       // Respawning with an exact id: claims the scope, and contends for sole
@@ -328,7 +373,8 @@ function electResumeSuppression(
       resumeLatest.add(id);
     }
   }
-  return { resumeLatest, sessionId };
+  const heldSessionKeys = new Set<string>([...holderIdsBySession.keys(), ...liveOwnedSessions]);
+  return { resumeLatest, sessionId, heldSessionKeys };
 }
 
 /**
@@ -365,7 +411,7 @@ const CODEX_AGENT_ID = "codex";
 async function resolveNamedResumeLatestSession(
   saved: TerminalState,
   kind: PanelKind,
-  projectRoot: string,
+  searchCwd: string,
   allowResumeLatest: boolean
 ): Promise<string | undefined> {
   if (!allowResumeLatest || saved.agentSessionId) return undefined;
@@ -379,7 +425,9 @@ async function resolveNamedResumeLatestSession(
   if (Object.keys(saved.env ?? {}).some((key) => key.toUpperCase() === "CODEX_HOME")) {
     return undefined;
   }
-  const cwd = saved.cwd || projectRoot;
+  // The folder the conversation began in, not where a moved pane will run:
+  // Codex's index files it under the former (#12434).
+  const cwd = searchCwd;
   if (!cwd) return undefined;
 
   try {
@@ -741,6 +789,39 @@ export async function restorePanelsPhase(
       backendTerminalMap,
       prefetchedReconnectResults,
     });
+    // Sessions a lookup resolves are claimed here as they arrive. Restore tasks
+    // run concurrently, so two panes whose folders are spelled differently can
+    // be told the same conversation; the check and the claim sit between two
+    // awaits, so the first one to arrive keeps it and the other stays off it.
+    const claimedSessionKeys = new Set(resumeSuppression.heldSessionKeys);
+
+    /**
+     * Where a respawning pane of an agent that resumes across directories
+     * starts, and where its conversation lives (#12434). Only the respawn path
+     * asks: a surviving PTY is already running wherever it is running.
+     */
+    const resolveColdLaunch = async (
+      saved: TerminalState
+    ): Promise<NonNullable<BuildArgsForRespawnOptions["coldLaunch"]>> => {
+      const conversationCwd = sanitizeConversationCwd(saved.conversationCwd);
+      const launchCwd = saved.cwd || projectRoot || "";
+      // A held pane keeps the directory it was held with. Its filing may be a
+      // re-home onto whatever worktree was active, and that is placement, not a
+      // choice of where to run.
+      if (sanitizeRestoreRecovery(saved.restoreRecovery) !== undefined) {
+        return { cwd: launchCwd, conversationCwd };
+      }
+      const target = workspaceHasWorktrees
+        ? resolveColdLaunchTarget(saved, await worktreesPromise)
+        : ({ kind: "unchanged" } as const);
+      const cwd = target.kind === "moved" ? target.cwd : launchCwd;
+      const origin = conversationCwd || saved.cwd;
+      return {
+        cwd,
+        conversationCwd: origin && cwd && !isSameDirectory(origin, cwd) ? origin : undefined,
+        ...(target.kind === "destination-unavailable" && { awaitingDestination: true }),
+      };
+    };
 
     const panelTasks: PanelRestoreTaskEntry[] = [];
     const restoredIdsByIndex = new Map<number, string>();
@@ -913,7 +994,8 @@ export async function restorePanelsPhase(
                 // not_found on cold app restart means the PTY process was killed
                 // on quit and needs to be respawned.
                 const savedAgentId = resolveAgentId(saved.launchAgentId);
-                const allowResumeLatest = !resumeSuppression.resumeLatest.has(saved.id);
+                const respawnAgentId = resolveRespawnAgentId(saved, kind);
+                let allowResumeLatest = !resumeSuppression.resumeLatest.has(saved.id);
                 // Both are lookups this respawn needs and neither depends on the
                 // other, so they overlap rather than queue. The election already
                 // ran synchronously over the saved array — nothing awaited here
@@ -926,17 +1008,42 @@ export async function restorePanelsPhase(
                       )
                     )
                   : Promise.resolve(undefined);
-                const [resolvedAgentBaseCommand, resolvedResumeLatestSessionId] = await Promise.all(
-                  [
-                    baseCommandPromise,
-                    resolveNamedResumeLatestSession(
-                      saved,
-                      kind,
-                      projectRoot || "",
-                      allowResumeLatest
-                    ),
-                  ]
+                const coldLaunchPromise =
+                  respawnAgentId !== undefined && supportsCrossDirectoryResume(respawnAgentId)
+                    ? resolveColdLaunch(saved)
+                    : Promise.resolve(undefined);
+                const namedSessionPromise = coldLaunchPromise.then((coldLaunch) =>
+                  // A held pane launches nothing, so it has nothing to look up.
+                  coldLaunch?.awaitingDestination || isHeldFromSnapshot(saved, respawnAgentId)
+                    ? undefined
+                    : resolveNamedResumeLatestSession(
+                        saved,
+                        kind,
+                        (respawnAgentId !== undefined &&
+                          conversationScopeCwd(saved, respawnAgentId)) ||
+                          projectRoot ||
+                          "",
+                        allowResumeLatest
+                      )
                 );
+                const [resolvedAgentBaseCommand, coldLaunch, namedSessionId] = await Promise.all([
+                  baseCommandPromise,
+                  coldLaunchPromise,
+                  namedSessionPromise,
+                ]);
+                let resolvedResumeLatestSessionId = namedSessionId;
+                if (resolvedResumeLatestSessionId !== undefined && respawnAgentId !== undefined) {
+                  const sessionKey = resumeKey(respawnAgentId, resolvedResumeLatestSessionId);
+                  if (claimedSessionKeys.has(sessionKey)) {
+                    // Someone else is already on the conversation this pane's
+                    // folder resolves to — and so would the anonymous fallback
+                    // be, so it loses that too.
+                    resolvedResumeLatestSessionId = undefined;
+                    allowResumeLatest = false;
+                  } else {
+                    claimedSessionKeys.add(sessionKey);
+                  }
+                }
                 const respawnArgs = buildArgsForRespawn(
                   saved,
                   kind,
@@ -950,6 +1057,7 @@ export async function restorePanelsPhase(
                     allowResumeLatest,
                     allowSessionIdResume: !resumeSuppression.sessionId.has(saved.id),
                     resolvedResumeLatestSessionId,
+                    coldLaunch,
                   }
                 );
 
@@ -980,6 +1088,7 @@ export async function restorePanelsPhase(
                   savedLocation: saved.location,
                   worktreeId: saved.worktreeId,
                   title: saved.title,
+                  restoreRecovery: respawnArgs.restoreRecovery?.reason,
                 });
 
                 const restoredTerminalId = await addPanel(respawnArgs);

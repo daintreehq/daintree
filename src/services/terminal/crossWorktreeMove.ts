@@ -19,6 +19,8 @@ export function isPanelProcessLive(panel: PanelInstance | undefined): boolean {
   // about and nothing to tell.
   if (!panel || !isPtyPanel(panel)) return false;
   if (panel.location === "trash") return false;
+  // Held for recovery (#12434): restore never started it.
+  if (panel.restoreRecovery) return false;
   if (panel.agentState === "exited") return false;
   if (panel.runtimeStatus === "exited" || panel.runtimeStatus === "error") return false;
   if (typeof panel.exitCode === "number") return false;
@@ -73,6 +75,25 @@ export function alignDeadPanelCwd(panelId: string, worktreeId: string): void {
 }
 
 /**
+ * Moving a pane held for recovery is how the user says where it should run
+ * (#12434), so the destination is taken even when its current directory proves
+ * nothing — unlike `alignDeadPanelCwd`, which only corrects a proven mismatch.
+ * A directory already inside the destination is kept. Its conversation stays
+ * findable where it began.
+ */
+function confirmHeldPanelDestination(panelId: string, worktreeId: string): void {
+  const panel = usePanelStore.getState().panelsById[panelId];
+  if (!panel || !isPtyPanel(panel)) return;
+  const worktrees = readWorktreePaths();
+  const destination = worktrees.find((w) => w.id === worktreeId);
+  if (!destination?.path) return;
+  const aligned = classifyLaunchRootAlignment(panel.cwd, worktrees, worktreeId) === "aligned";
+  usePanelStore
+    .getState()
+    .confirmRestoreRecoveryDestination(panelId, aligned ? undefined : destination.path);
+}
+
+/**
  * Bring one moved panel's after-effects in line with where it now lives.
  *
  * Three outcomes, and the split is the whole point of #11853:
@@ -91,6 +112,12 @@ export function reconcileMovedPanel(panelId: string, destinationWorktreeId: stri
   const store = usePanelStore.getState();
   const panel = store.panelsById[panelId];
   if (!panel || !isPtyPanel(panel)) return;
+
+  if (panel.restoreRecovery) {
+    confirmHeldPanelDestination(panelId, destinationWorktreeId);
+    store.setWorktreeMoveNotice(panelId, undefined);
+    return;
+  }
 
   if (!isPanelProcessLive(panel)) {
     alignDeadPanelCwd(panelId, destinationWorktreeId);

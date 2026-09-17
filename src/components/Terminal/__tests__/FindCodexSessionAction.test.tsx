@@ -289,4 +289,75 @@ describe("FindCodexSessionAction", () => {
     await waitFor(() => expect(screen.queryByText("pick me")).toBeNull());
     expect(addPanel).not.toHaveBeenCalled();
   });
+
+  it("searches the folder a moved pane's conversation began in, and reopens where it runs (#12434)", async () => {
+    findSessions.mockResolvedValue(ok([{ id: "sess-1", preview: "pick me", updatedAt: 1 }]));
+    seed(
+      panel("t-1", {
+        cwd: "/worktrees/task-a",
+        conversationCwd: "/repo",
+        worktreeId: "/worktrees/task-a",
+      })
+    );
+
+    render(<FindCodexSessionAction panelId="t-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+    fireEvent.click(await screen.findByText("pick me"));
+
+    expect(findSessions).toHaveBeenCalledWith({ cwd: "/repo", codexHome: undefined });
+    await waitFor(() => expect(addPanel).toHaveBeenCalledOnce());
+    expect(addPanel.mock.calls[0]?.[0]).toMatchObject({ cwd: "/worktrees/task-a" });
+  });
+
+  it("hands the pick to the caller's own launch instead of opening a new pane (#12434)", async () => {
+    findSessions.mockResolvedValue(ok([{ id: "sess-1", preview: "pick me", updatedAt: 1 }]));
+    seed(panel("t-1"));
+    const onOpenSession = vi.fn().mockResolvedValue("launched");
+
+    render(<FindCodexSessionAction panelId="t-1" onOpenSession={onOpenSession} />);
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+    fireEvent.click(await screen.findByText("pick me"));
+
+    await waitFor(() => expect(onOpenSession).toHaveBeenCalledWith("sess-1"));
+    expect(addPanel).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText("pick me")).toBeNull());
+  });
+
+  it("drops a row the caller's launch found already open elsewhere, and keeps the list up", async () => {
+    findSessions.mockResolvedValue(
+      ok([
+        { id: "sess-1", preview: "taken meanwhile", updatedAt: 2 },
+        { id: "sess-2", preview: "still free", updatedAt: 1 },
+      ])
+    );
+    seed(panel("t-1"));
+    const onOpenSession = vi.fn().mockResolvedValue("held-elsewhere");
+
+    render(<FindCodexSessionAction panelId="t-1" onOpenSession={onOpenSession} />);
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+    fireEvent.click(await screen.findByText("taken meanwhile"));
+
+    await waitFor(() => expect(screen.queryByText("taken meanwhile")).toBeNull());
+    expect(screen.getByText("still free")).toBeTruthy();
+  });
+
+  it("lists again once the pane's conversation folder changes", async () => {
+    findSessions.mockResolvedValue(ok([]));
+    seed(panel("t-1", { cwd: "/repo-a" }));
+
+    render(<FindCodexSessionAction panelId="t-1" />);
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+    await screen.findByText("No other sessions found here");
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+
+    act(() => {
+      usePanelStore.setState((state) => ({
+        panelsById: { ...state.panelsById, "t-1": panel("t-1", { cwd: "/repo-b" }) },
+      }));
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Find session" }));
+
+    await waitFor(() => expect(findSessions).toHaveBeenCalledTimes(2));
+    expect(findSessions).toHaveBeenLastCalledWith({ cwd: "/repo-b", codexHome: undefined });
+  });
 });
