@@ -89,7 +89,9 @@ export type SiteGuestEvent =
       type: "runtimeIssue";
       code: "no-svelte-meta" | "not-dev-build" | "overlay-blocked" | "internal";
       detail: string;
-    };
+    }
+  /** What the page's Svelte dev metadata supports, probed once per document. */
+  | { type: "metadataProbed"; locations: boolean; ancestry: boolean };
 
 /** A dev-preview panel this project could bind to. */
 export interface SitePreviewCandidate {

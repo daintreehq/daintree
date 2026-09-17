@@ -1,5 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createSiteBuilderGuest } from "../../renderer/guest/runtime.js";
 import type { GuestMode, GuestRuntimeHandle } from "../../renderer/guest/types.js";
 import {
@@ -76,6 +79,95 @@ afterEach(() => {
   delete scope[BINDING];
 });
 
+describe("metadata capabilities", () => {
+  const corpus = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../../__fixtures__/svelte-meta"
+  );
+  function stampFrom(fixture: string): Element {
+    const meta = JSON.parse(readFileSync(path.join(corpus, fixture), "utf8")) as {
+      loc: unknown;
+      parent?: unknown;
+    };
+    const node = document.createElement("section");
+    document.body.appendChild(node);
+    setMeta(node, meta.loc, meta.parent);
+    return node;
+  }
+  function probed() {
+    const found = events("metadataProbed");
+    const latest = found[found.length - 1];
+    return latest?.type === "metadataProbed" ? latest : null;
+  }
+
+  it("reports locations and ancestry for the pinned baseline's shape", () => {
+    stampFrom("loc-and-parent.json");
+    install("select");
+    expect(probed()).toEqual({ type: "metadataProbed", locations: true, ancestry: true });
+  });
+
+  it("reports no ancestry for a runtime that stamps locations but keeps no dev stack", () => {
+    stampFrom("loc-only.json");
+    install("select");
+    expect(probed()).toEqual({ type: "metadataProbed", locations: true, ancestry: false });
+  });
+
+  it("reports nothing readable for a shape it cannot follow", () => {
+    stampFrom("malformed.json");
+    install("select");
+    expect(probed()).toEqual({ type: "metadataProbed", locations: false, ancestry: false });
+  });
+
+  it("answers for the page, not its first stamped element", () => {
+    // The root has nothing above it; a deeper element carries the chain.
+    stampFrom("loc-only.json");
+    stampFrom("loc-and-parent.json");
+    install("select");
+    expect(probed()).toEqual({ type: "metadataProbed", locations: true, ancestry: true });
+  });
+
+  it("keeps the shape diagnosis rather than calling readable stamps absent", () => {
+    vi.useFakeTimers();
+    try {
+      stampFrom("malformed.json");
+      install("select");
+      expect(probed()).toEqual({ type: "metadataProbed", locations: false, ancestry: false });
+      vi.advanceTimersByTime(30_000);
+      expect(events("runtimeIssue")).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still answers for a page that hydrated after the missing-mapping verdict", () => {
+    vi.useFakeTimers();
+    try {
+      install("select");
+      vi.advanceTimersByTime(30_000);
+      expect(events("runtimeIssue").map((event) => event.type)).toEqual(["runtimeIssue"]);
+      expect(probed()).toBeNull();
+
+      stampFrom("loc-and-parent.json");
+      handle?.setMode("browse");
+      handle?.setMode("select");
+      expect(probed()).toEqual({ type: "metadataProbed", locations: true, ancestry: true });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says nothing until a stamped element exists, then once", () => {
+    install("select");
+    expect(probed()).toBeNull();
+    stampFrom("loc-and-parent.json");
+    handle?.setMode("browse");
+    handle?.setMode("select");
+    handle?.setMode("browse");
+    handle?.setMode("select");
+    expect(events("metadataProbed")).toHaveLength(1);
+  });
+});
+
 describe("guest envelope", () => {
   it("opens with documentReady and numbers messages from zero within the document", () => {
     document.body.innerHTML = '<p id="a">hi</p>';
@@ -83,8 +175,13 @@ describe("guest envelope", () => {
     install("select");
     click(document.body.querySelector("#a")!);
 
-    expect(envelopes.map((envelope) => envelope.sequence)).toEqual([0, 1]);
-    expect(envelopes[0].event.type).toBe("documentReady");
+    // Ready, then what the metadata supports, then the click.
+    expect(envelopes.map((envelope) => envelope.sequence)).toEqual([0, 1, 2]);
+    expect(envelopes.map((envelope) => envelope.event.type)).toEqual([
+      "documentReady",
+      "metadataProbed",
+      "selectionChanged",
+    ]);
     expect(envelopes.every((envelope) => envelope.documentEpoch === 3)).toBe(true);
     expect(envelopes.every((envelope) => envelope.sessionId === "session-1")).toBe(true);
   });

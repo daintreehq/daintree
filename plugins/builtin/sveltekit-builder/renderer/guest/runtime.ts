@@ -66,6 +66,8 @@ export function createSiteBuilderGuest(
   const MAX_MESSAGE_BYTES = 256 * 1024;
   /** Bounds the "is this a dev build" sweep on a huge document. */
   const AUDIT_SCAN_LIMIT = 20_000;
+  /** Stamped elements the capability probe looks at before it answers. */
+  const METADATA_PROBE_SAMPLE = 64;
   /**
    * How long a finished document has to stay without dev metadata before the
    * guest says so. SvelteKit hydrates after `load`: its entry is a chain of
@@ -106,6 +108,12 @@ export function createSiteBuilderGuest(
   let auditDone = false;
   let auditTimer: ReturnType<typeof setTimeout> | null = null;
   let auditStartedAt = 0;
+  /** Reported once per document, the first time stamped elements are seen. */
+  let metadataProbed = false;
+  /** Stamped elements exist, readable or not — the absence verdict is then wrong. */
+  let stampsSeen = false;
+  /** The page as last reported in `documentReady`; empty until the first report. */
+  let reportedPage = "";
   let hovered: Element | null = null;
   let hoveredMapping: boolean | null = null;
   let lastHit: Element | null = null;
@@ -1084,6 +1092,9 @@ export function createSiteBuilderGuest(
    * selection rather than leaving the host looking at a different one.
    */
   function emitSelection(cause: "user" | "document" | "reselect"): boolean {
+    // A page that hydrated after every audit look still answers the handshake
+    // before its first selection is described.
+    probeMetadata();
     // A client-side navigation or a resize leaves the document in place, so no
     // `documentReady` follows it. The host resolves and describes a selection
     // against the page it last heard about; bring that up to date first.
@@ -1529,6 +1540,42 @@ export function createSiteBuilderGuest(
     return { found: false, complete: all.length <= AUDIT_SCAN_LIMIT };
   }
 
+  /**
+   * What the metadata on this page actually supports. `__svelte_meta` is a
+   * private detail of Svelte's dev runtime, and a major is not a promise about
+   * its shape: a version that stamps elements but names no parent chain, or
+   * stamps a chain the reader cannot follow, must narrow what the host offers
+   * rather than be taken for the version this runtime was written against.
+   *
+   * Probed over the stamped elements found, not the first one alone: the root
+   * of a page has no component above it, so one element cannot speak for the
+   * chain. Reported once per document, the first time a stamp is seen.
+   */
+  function probeMetadata(): void {
+    if (metadataProbed || disposed) return;
+    // The host records capabilities against the document it has been told is
+    // ready; an answer sent before `documentReady` would be dropped, and the
+    // one-shot would be spent.
+    if (reportedPage === "") return;
+    const all = document.getElementsByTagName("*");
+    const limit = Math.min(all.length, AUDIT_SCAN_LIMIT);
+    let stamped = 0;
+    let locations = false;
+    let ancestry = false;
+    for (let index = 0; index < limit && stamped < METADATA_PROBE_SAMPLE; index += 1) {
+      const element = all[index];
+      if (element === undefined || readMeta(element) === null) continue;
+      stamped += 1;
+      if (readLoc(element) !== null) locations = true;
+      if (readAncestry(element).frames.length > 0) ancestry = true;
+      if (locations && ancestry) break;
+    }
+    if (stamped === 0) return;
+    stampsSeen = true;
+    metadataProbed = true;
+    send({ type: "metadataProbed", locations, ancestry });
+  }
+
   const DEV_SERVER_PATHS = [
     "/@vite/client",
     "/@fs/",
@@ -1589,7 +1636,11 @@ export function createSiteBuilderGuest(
    * working selection under it — so the verdict waits for the page to settle.
    */
   function auditMapping(): void {
-    if (auditDone || disposed) return;
+    if (disposed) return;
+    // Capability discovery outlives the missing-mapping verdict: a page that
+    // hydrates after the deadline still gets its handshake on the next look.
+    probeMetadata();
+    if (auditDone) return;
     const scan = scanForSvelteMeta();
     if (scan.found) {
       auditDone = true;
@@ -1607,6 +1658,7 @@ export function createSiteBuilderGuest(
   function confirmMissingMapping(): void {
     auditTimer = null;
     if (auditDone || disposed) return;
+    probeMetadata();
     const scan = scanForSvelteMeta();
     if (scan.found) {
       auditDone = true;
@@ -1619,6 +1671,9 @@ export function createSiteBuilderGuest(
       return;
     }
     auditDone = true;
+    // Stamps that exist but cannot be read were already reported as such; an
+    // absence verdict on top would contradict it.
+    if (stampsSeen) return;
     if (dev) {
       issue(
         "no-svelte-meta",
@@ -1631,8 +1686,6 @@ export function createSiteBuilderGuest(
       );
     }
   }
-
-  let reportedPage = "";
 
   function currentPage() {
     const scale =

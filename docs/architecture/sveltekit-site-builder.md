@@ -47,6 +47,8 @@ The specification explicitly permits this substitution: "replacing comment bound
 
 `__svelte_meta` is attached by the **dev** runtime only. A production build has none, which is correct — the builder is a development tool — but it means a running dev server is the precondition, not a detail: the guest reports `not-dev-build` when the metadata is missing on a page that looks built, and the panel says so rather than tracing nothing.
 
+It is also a private detail, not an API, and a supported major is not a promise about its shape. The guest reads it defensively and probes what the page's metadata actually supports the first time it sees a stamped element — whether elements name their source, and whether the parent chain names the components above them — and reports that once per document (`metadataProbed`). The host narrows what it offers to match: a page whose stamps name no component chain gets a trail of elements and a notice saying why, and a shape the reader cannot follow at all is said up front rather than discovered click by click. The shapes this is tested against live in `__fixtures__/svelte-meta/`; add one when a release changes the shape.
+
 It also does not survive an HMR update as an object identity. A Vite update **replaces the DOM nodes**; `__svelte_meta` is correctly re-attached to the new ones, but any node reference the host was holding is dead. Selection is therefore stored as an identity, never as a node handle, and every document change marks it stale; it is proven again only by a fresh selection or by the host asking the page to re-select that identity. A stale selection goes stale visibly; it is never re-pointed at whatever now occupies the old position.
 
 ## Shape
