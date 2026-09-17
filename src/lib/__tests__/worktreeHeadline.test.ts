@@ -80,6 +80,41 @@ describe("getWorktreeHeadline — PR-originated", () => {
     expect(headline.kind).toBe("pr");
   });
 
+  it("treats sourcePrNumber 0 as no PR at all", () => {
+    // Truthiness, not `!= null`: PR #0 does not exist, and a `!= null` check
+    // here would hijack the headline of a worktree that has a real issue.
+    const headline = getWorktreeHeadline(
+      createWorktree({ sourcePrNumber: 0, issueNumber: 42, issueTitle: "Issue" })
+    );
+    expect(headline).toEqual({ kind: "issue", number: 42, title: "Issue", label: "#42 Issue" });
+  });
+
+  it("wins over an issue even while its own title is still cold", () => {
+    const headline = getWorktreeHeadline(
+      createWorktree({ sourcePrNumber: 7, issueNumber: 42, issueTitle: "Issue" })
+    );
+    expect(headline).toEqual({ kind: "pr", number: 7, title: undefined, label: "#7" });
+  });
+
+  it("wins over the main-on-standard-branch layout", () => {
+    const headline = getWorktreeHeadline(
+      createWorktree({ sourcePrNumber: 7, isMainWorktree: true, name: "daintree", branch: "main" })
+    );
+    expect(headline.kind).toBe("pr");
+  });
+
+  it("uses the flat prTitle when the linked PR has no title field", () => {
+    const headline = getWorktreeHeadline(
+      createWorktree({ sourcePrNumber: 123, prTitle: "Flat title", ...withLinkedPr(123) })
+    );
+    expect(headline).toEqual({
+      kind: "pr",
+      number: 123,
+      title: "Flat title",
+      label: "#123 Flat title",
+    });
+  });
+
   it("does not treat a merely linked PR as PR-originated", () => {
     // `sourcePrNumber` is the discriminator, not the presence of a linked PR.
     const headline = getWorktreeHeadline(
@@ -124,6 +159,13 @@ describe("getWorktreeHeadline — issue", () => {
   it("falls through to the branch when a title has no issue number", () => {
     const headline = getWorktreeHeadline(
       createWorktree({ issueTitle: "Orphan title", branch: "feature/thing" })
+    );
+    expect(headline).toEqual({ kind: "branch", label: "feature/thing" });
+  });
+
+  it("treats issueNumber 0 as no issue at all", () => {
+    const headline = getWorktreeHeadline(
+      createWorktree({ issueNumber: 0, issueTitle: "Title", branch: "feature/thing" })
     );
     expect(headline).toEqual({ kind: "branch", label: "feature/thing" });
   });
@@ -209,6 +251,14 @@ describe("getWorktreeHeadline — branch", () => {
     expect(
       getWorktreeHeadline(createWorktree({ branch: "feature/gone", isDetached: true }))
     ).toEqual({ kind: "branch", label: "feature/gone" });
+  });
+
+  it("supplies the fallback for an empty branch while the raw label stays empty", () => {
+    // The two helpers part ways here on purpose: the card renders an empty
+    // BranchLabel beside the rest of the card, a one-line row cannot.
+    const worktree = createWorktree({ name: "orphan", branch: "" });
+    expect(getWorktreeBranchLabel(worktree)).toBe("");
+    expect(getWorktreeHeadline(worktree)).toEqual({ kind: "branch", label: "Untitled worktree" });
   });
 
   it("supplies the Untitled worktree fallback when the label trims to nothing", () => {

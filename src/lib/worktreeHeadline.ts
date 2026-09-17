@@ -6,6 +6,11 @@ import { isStandardBranch } from "@shared/config/branchPrefixes";
  * renders these four branches through its badges; `label` is the same headline
  * flattened to one line, for a surface too compact to draw a badge. Both come
  * from here so the two cannot drift apart.
+ *
+ * `label` is the one place the two intentionally differ: a row with nothing but
+ * a blank branch reads as `"Untitled worktree"` rather than as empty, matching
+ * the context menu. The card can afford to render nothing there because the
+ * rest of the card still says which worktree it is; a one-line row cannot.
  */
 export type WorktreeHeadline =
   | { kind: "pr"; number: number; title: string | undefined; label: string }

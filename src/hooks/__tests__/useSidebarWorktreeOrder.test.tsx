@@ -4,7 +4,7 @@ import { renderHook } from "@testing-library/react";
 import type { WorktreeState } from "@/types";
 import type { OrderBy } from "@/store/worktreeFilterStore";
 
-const { worktreesRef, prefsRef, emptyWorktrees } = vi.hoisted(() => ({
+const { worktreesRef, prefsRef, emptyWorktrees, seenOptions } = vi.hoisted(() => ({
   worktreesRef: { current: [] as unknown[] },
   prefsRef: {
     current: {
@@ -18,12 +18,17 @@ const { worktreesRef, prefsRef, emptyWorktrees } = vi.hoisted(() => ({
   // mock does too — otherwise the disabled-stability test would pass for the
   // wrong reason.
   emptyWorktrees: [] as unknown[],
+  // Records what the hook actually asked `useWorktrees` for, so the gate is
+  // pinned rather than inferred from the empty result the prefs gate produces
+  // on its own.
+  seenOptions: { current: undefined as { enabled?: boolean } | undefined },
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
-  useWorktrees: (options?: { enabled?: boolean }) => ({
-    worktrees: options?.enabled === false ? emptyWorktrees : worktreesRef.current,
-  }),
+  useWorktrees: (options?: { enabled?: boolean }) => {
+    seenOptions.current = options;
+    return { worktrees: options?.enabled === false ? emptyWorktrees : worktreesRef.current };
+  },
 }));
 
 vi.mock("@/store/worktreeFilterStore", () => ({
@@ -61,7 +66,7 @@ const bugfix = createWorktree({
   createdAt: T + 50,
 });
 
-const ids = (worktrees: WorktreeState[]) => worktrees.map((w) => w.id);
+const ids = (worktrees: readonly WorktreeState[]) => worktrees.map((w) => w.id);
 
 describe("useSidebarWorktreeOrder", () => {
   beforeEach(() => {
@@ -106,6 +111,24 @@ describe("useSidebarWorktreeOrder", () => {
     const first = result.current;
     rerender();
     expect(result.current).toBe(first);
+  });
+
+  it("forwards the gate to useWorktrees so a closed picker stops subscribing", () => {
+    renderHook(() => useSidebarWorktreeOrder({ enabled: false }));
+    expect(seenOptions.current).toEqual({ enabled: false });
+
+    renderHook(() => useSidebarWorktreeOrder());
+    expect(seenOptions.current).toEqual({ enabled: true });
+  });
+
+  it("ignores worktree changes while disabled", () => {
+    const { result, rerender } = renderHook(() => useSidebarWorktreeOrder({ enabled: false }));
+    const first = result.current;
+
+    worktreesRef.current = [main, feature];
+    rerender();
+    expect(result.current).toBe(first);
+    expect(result.current).toEqual([]);
   });
 
   it("short-circuits to a stable empty array when disabled", () => {

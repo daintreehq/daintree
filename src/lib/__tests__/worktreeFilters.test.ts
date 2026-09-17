@@ -1839,6 +1839,9 @@ describe("orderWorktreesLikeSidebar", () => {
   const featureTen = wt("f10", "feature-10", "feature/ten", 80, 50);
   const bugfixOne = wt("b1", "bugfix-1", "bugfix/one", 50, 90);
   const docsOne = wt("d1", "docs-1", "docs/one", 70, 40);
+  // The one worktree whose recent, created and alpha positions all differ, so
+  // grouped mode cannot pass by coincidentally agreeing with the name sort.
+  const featureTwenty = wt("f20", "feature-20", "feature/twenty", 40, 95);
   const outside = wt("x", "aardvark", "feature/outside", 100, 100, { isExternal: true });
 
   // Deliberately scrambled: the helper must not inherit input order.
@@ -1848,6 +1851,7 @@ describe("orderWorktreesLikeSidebar", () => {
     pinnedSecond,
     main,
     featureTen,
+    featureTwenty,
     bugfixOne,
     pinnedFirst,
     featureTwo,
@@ -1872,20 +1876,22 @@ describe("orderWorktreesLikeSidebar", () => {
   // function under test: main, then pins in pin order, then the orderBy
   // comparator with the natural-number name tiebreak, then external.
   const ungrouped: Record<OrderBy, string[]> = {
-    recent: ["m", "p1", "p2", "b1", "f2", "f10", "d1", "x"],
-    created: ["m", "p1", "p2", "f10", "d1", "f2", "b1", "x"],
-    alpha: ["m", "p1", "p2", "b1", "d1", "f2", "f10", "x"],
-    manual: ["m", "p1", "p2", "f10", "b1", "f2", "d1", "x"],
+    recent: ["m", "p1", "p2", "f20", "b1", "f2", "f10", "d1", "x"],
+    created: ["m", "p1", "p2", "f10", "d1", "f2", "b1", "f20", "x"],
+    alpha: ["m", "p1", "p2", "b1", "d1", "f2", "f10", "f20", "x"],
+    manual: ["m", "p1", "p2", "f10", "b1", "f2", "d1", "f20", "x"],
   };
 
   // Grouped re-sorts inside each section *without* `manualOrder`, so manual
   // mode collapses to the name tiebreak there, and TYPE_ORDER (feature,
   // bugfix, docs, then "Outside the project") outranks the pins.
   const grouped: Record<OrderBy, string[]> = {
-    recent: ["m", "p2", "f2", "f10", "p1", "b1", "d1", "x"],
-    created: ["m", "p2", "f10", "f2", "p1", "b1", "d1", "x"],
-    alpha: ["m", "p2", "f2", "f10", "p1", "b1", "d1", "x"],
-    manual: ["m", "p2", "f2", "f10", "p1", "b1", "d1", "x"],
+    recent: ["m", "p2", "f20", "f2", "f10", "p1", "b1", "d1", "x"],
+    created: ["m", "p2", "f10", "f2", "f20", "p1", "b1", "d1", "x"],
+    alpha: ["m", "p2", "f2", "f10", "f20", "p1", "b1", "d1", "x"],
+    // Identical to alpha on purpose: `groupByType` re-sorts each section
+    // without `manualOrder`, so manual mode collapses to the name tiebreak.
+    manual: ["m", "p2", "f2", "f10", "f20", "p1", "b1", "d1", "x"],
   };
 
   it.each(orderings)("matches the sidebar's ungrouped order for %s", (orderBy) => {

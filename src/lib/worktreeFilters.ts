@@ -492,13 +492,19 @@ export interface SidebarOrderPrefs {
 }
 
 /**
- * The sidebar's row order for any set of worktrees: main first, then the list
- * exactly as the sidebar lays it out. Nothing is dropped — callers filter
- * before or after.
+ * The sidebar's row order for any set of worktrees: worktrees flagged
+ * `isMainWorktree` first, then the list exactly as the sidebar lays it out.
+ * Nothing is dropped — callers filter before or after.
  *
  * One function owns the whole "main, external, pinned, orderBy, tiebreak,
  * group" decision, so a compact surface can show the same worktrees in the
  * same order the sidebar shows them without re-deriving any of it.
+ *
+ * What it deliberately does not reproduce is the sidebar's fallback of
+ * promoting its first worktree to the main card when none is flagged. That
+ * choice belongs to a caller holding the whole project; promoting the first
+ * element of an arbitrary subset would invent a main worktree out of whichever
+ * rows a filter happened to leave behind.
  */
 export function orderWorktreesLikeSidebar<T extends Worktree | WorktreeState>(
   worktrees: T[],

@@ -7,8 +7,10 @@ import { useWorktrees } from "./useWorktrees";
 
 // Stable sentinel for the disabled path, mirroring `useWorktrees`: the consumer
 // this exists for is a picker that stays mounted while closed, so a fresh array
-// every render would defeat the gate it asked for.
-const EMPTY_WORKTREE_ORDER: WorktreeState[] = [];
+// every render would defeat the gate it asked for. Frozen because every
+// disabled caller shares this one array — an in-place push would otherwise leak
+// into every other picker for the lifetime of the module.
+const EMPTY_WORKTREE_ORDER: readonly WorktreeState[] = Object.freeze([]);
 
 /**
  * Every worktree in the sidebar's order, for surfaces that need to list them
@@ -18,8 +20,10 @@ const EMPTY_WORKTREE_ORDER: WorktreeState[] = [];
  *
  * `enabled: false` short-circuits to a stable empty array and stops selecting
  * the preferences at all, so a closed picker re-renders for neither.
+ *
+ * The result is memoised and shared, so it is `readonly`: sort or filter a copy.
  */
-export function useSidebarWorktreeOrder(options?: { enabled?: boolean }): WorktreeState[] {
+export function useSidebarWorktreeOrder(options?: { enabled?: boolean }): readonly WorktreeState[] {
   const enabled = options?.enabled ?? true;
   const { worktrees } = useWorktrees({ enabled });
 
