@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import {
   extractSystemPromptArgs,
+  hasSystemPromptOverride,
   normalizeSystemPrompt,
   resolveSystemPromptArgs,
   SYSTEM_PROMPT_MAX_LENGTH,
@@ -69,7 +70,7 @@ describe("resolveSystemPromptArgs", () => {
       "single 'quotes' and $(subshell) `ticks` %PATH%",
     ],
   ])("encodes %j as valid TOML for Codex", (input, expected) => {
-    const result = resolveSystemPromptArgs("codex", input);
+    const result = resolveSystemPromptArgs("codex", input, "posix");
     if (!result.ok) throw new Error(result.reason);
     expect(codexValue(result.args)).toBe(expected);
   });
@@ -99,6 +100,24 @@ describe("resolveSystemPromptArgs", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason).toContain("can't start with '-'");
     expect(resolveSystemPromptArgs("claude", "Use - for bullets").ok).toBe(true);
+  });
+
+  // The command is quoted before the shell that runs it is known, and a
+  // Windows shell expands these even inside the quotes.
+  it.each(["Print $HOME first", "Use $(Get-Date)", "Escape `n here", "Read %USERPROFILE% only"])(
+    "refuses %j on Windows, where the launch shell would expand it",
+    (text) => {
+      const result = resolveSystemPromptArgs("claude", text, "windows");
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.reason).toContain("On Windows");
+      expect(resolveSystemPromptArgs("claude", text, "posix").ok).toBe(true);
+    }
+  );
+
+  it("still accepts percentages and quotes on Windows", () => {
+    expect(
+      resolveSystemPromptArgs("codex", 'Aim for 80% coverage, then say "done" at 100%', "windows")
+    ).toMatchObject({ ok: true });
   });
 
   it("enforces the length limit on the normalized text", () => {
@@ -133,6 +152,32 @@ describe("extractSystemPromptArgs", () => {
   it("returns nothing for agents without the capability or without flags", () => {
     expect(extractSystemPromptArgs(["--append-system-prompt", "x"], "gemini")).toEqual([]);
     expect(extractSystemPromptArgs(undefined, "claude")).toEqual([]);
+  });
+});
+
+describe("hasSystemPromptOverride", () => {
+  it.each([
+    [["--append-system-prompt", "x"]],
+    [["--append-system-prompt=x"]],
+    [["--verbose", "--append-system-prompt"]],
+  ])("sees Claude's instruction in %j", (flags) => {
+    expect(hasSystemPromptOverride(flags, "claude")).toBe(true);
+  });
+
+  it.each([
+    [["-c", "developer_instructions=x"]],
+    [["--config", 'developer_instructions="x"']],
+    [["--config=developer_instructions=x"]],
+    [["-cdeveloper_instructions=x"]],
+  ])("sees Codex's instruction in %j", (flags) => {
+    expect(hasSystemPromptOverride(flags, "codex")).toBe(true);
+  });
+
+  it("ignores unrelated flags and agents without the capability", () => {
+    expect(hasSystemPromptOverride(["--append-system-prompt-file", "x"], "claude")).toBe(false);
+    expect(hasSystemPromptOverride(["-c", "model_reasoning_effort=high"], "codex")).toBe(false);
+    expect(hasSystemPromptOverride(["--append-system-prompt", "x"], "gemini")).toBe(false);
+    expect(hasSystemPromptOverride(undefined, "claude")).toBe(false);
   });
 });
 
@@ -172,8 +217,44 @@ describe("standing instruction through the launch builders", () => {
     );
   });
 
+  it("follows preset args, so the caller's instruction is the one the CLI keeps", () => {
+    const presetPair = ["--append-system-prompt", "preset"];
+    const cmd = generateAgentCommand("claude", {}, "claude", {
+      systemPromptArgs: claudeArgs,
+      presetArgs: presetPair.join(" "),
+    });
+    expect(cmd.indexOf(quoted)).toBeGreaterThan(cmd.indexOf("preset"));
+
+    const flags = buildAgentLaunchFlags({ customFlags: "--verbose" }, "claude", {
+      systemPromptArgs: claudeArgs,
+      presetArgs: presetPair,
+    });
+    expect(flags.slice(-2)).toEqual(claudeArgs);
+    expect(extractSystemPromptArgs(flags, "claude")).toEqual(claudeArgs);
+  });
+
+  it("keeps both halves of the pair through bypass reconciliation", () => {
+    const codex = resolveSystemPromptArgs("codex", "Be terse", "posix");
+    if (!codex.ok) throw new Error(codex.reason);
+    // Config-override bypass args share the instruction's `-c`.
+    const bypass = '-c approval_policy="never"';
+    const codexFlags = ["--no-alt-screen", ...codex.args];
+    expect(reconcileBypassFlags(codexFlags, "codex", false, bypass)).toEqual(codexFlags);
+    expect(reconcileBypassFlags(codexFlags, "codex", true, bypass)).toEqual([
+      ...codexFlags,
+      "-c",
+      'approval_policy="never"',
+    ]);
+
+    // Free text can equal a bypass token's value.
+    const claudeFlags = ["--append-system-prompt", "bypassPermissions"];
+    expect(
+      reconcileBypassFlags(claudeFlags, "claude", false, "--permission-mode bypassPermissions")
+    ).toEqual(claudeFlags);
+  });
+
   it("survives flag reconciliation for Codex, whose decorations share the -c flag", () => {
-    const resolved = resolveSystemPromptArgs("codex", "tui.whimsy=false");
+    const resolved = resolveSystemPromptArgs("codex", "tui.whimsy=false", "posix");
     if (!resolved.ok) throw new Error(resolved.reason);
     const flags = buildAgentLaunchFlags({}, "codex", { systemPromptArgs: resolved.args });
     const reconciled = reconcileDecorationFlags(

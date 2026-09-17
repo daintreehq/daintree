@@ -621,23 +621,13 @@ export function buildArgsForRespawn(
     const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
     const effectiveInline = resolveEffectiveInlineMode(effectiveEntry, agentId, globalUseAltScreen);
     const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
+    const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
     // A stale preset voids the captured flags, but not the caller's standing
-    // instruction (#12431), which no setting can rebuild. When one was
-    // captured, rebuild the snapshot from current settings around it — as
-    // restart does — so both the command and the stored flags keep it.
+    // instruction (#12431), which no setting can rebuild. It is carried into
+    // every command the settings-derived branches below build.
     const staleSystemPromptArgs = presetWasStale
       ? extractSystemPromptArgs(saved.agentLaunchFlags, agentId)
       : [];
-    const rawPersistedFlags = !presetWasStale
-      ? saved.agentLaunchFlags
-      : staleSystemPromptArgs.length > 0
-        ? buildAgentLaunchFlags(effectiveEntry, agentId, {
-            modelId: saved.agentModelId,
-            systemPromptArgs: staleSystemPromptArgs,
-            globalSkipPermissions,
-            globalUseAltScreen,
-          })
-        : undefined;
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
     // Reconcile the persisted snapshot against both live resolutions (#10432 the
     // bypass token, #10876 the `--no-alt-screen` inline flag): a snapshot must
@@ -660,11 +650,25 @@ export function buildArgsForRespawn(
       ? reconcileFlags(rawPersistedFlags as string[])
       : rawPersistedFlags;
     reconciledLaunchFlags = persistedFlags;
+    // Stored in place of the voided snapshot so the next restart still has the
+    // instruction to replay: the same settings-derived set the fresh command
+    // below is built from.
+    if (staleSystemPromptArgs.length > 0) {
+      reconciledLaunchFlags = reconcileFlags(
+        buildAgentLaunchFlags(effectiveEntry, agentId, {
+          modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
+          globalSkipPermissions,
+          globalUseAltScreen,
+        })
+      );
+    }
     // Resume commands prepend launch flags, so the bypass / inline tokens must be
     // injected even when no flags were captured — a session launched before
     // either feature existed should honour the current resolution (#10432, #10876).
-    // Only diverges from persistedFlags in that inject-from-empty case.
-    const injectedFromEmpty = reconcileFlags([]);
+    // Only diverges from persistedFlags in that inject-from-empty case, which is
+    // also where a stale preset's standing instruction rides.
+    const injectedFromEmpty = reconcileFlags([...staleSystemPromptArgs]);
     const resumeFlags =
       !hasPersistedFlags && injectedFromEmpty.length > 0 ? injectedFromEmpty : persistedFlags;
 
@@ -739,6 +743,7 @@ export function buildArgsForRespawn(
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
           modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,
@@ -817,6 +822,7 @@ export function buildArgsForRespawn(
         command = generateAgentCommand(baseCommand, effectiveEntry, agentId, {
           clipboardDirectory,
           modelId: saved.agentModelId,
+          systemPromptArgs: staleSystemPromptArgs,
           presetArgs: preset?.args?.join(" "),
           globalSkipPermissions,
           globalUseAltScreen,

@@ -33,7 +33,7 @@ import {
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import {
-  extractSystemPromptArgs,
+  hasSystemPromptOverride,
   resolveSystemPromptArgs,
   SYSTEM_PROMPT_MAX_LENGTH,
 } from "@shared/utils/agentSystemPrompt";
@@ -352,7 +352,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .max(SYSTEM_PROMPT_MAX_LENGTH)
         .optional()
         .describe(
-          "Standing instruction appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it."
+          "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it."
         ),
       interactive: z
         .boolean()
@@ -377,7 +377,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Whether to open the sidebar dock when the agent is placed there. Only meaningful for a dock placement; it changes what the user sees."
+          "Whether to open the sidebar dock when the agent is placed there, which changes what the user sees."
         ),
       env: z
         .record(z.string(), z.string())
@@ -422,7 +422,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .max(200)
         .optional()
         .describe(
-          'Always provide a short, task-descriptive name for the terminal tab (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
+          'Always provide a short, task-descriptive name for the terminal tab, at most 200 characters (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
         ),
     }),
     // Top-level object, never `.nullable()`: `buildToolOutputSchema` (tierAuth)
@@ -504,10 +504,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // transient miss rather than an instruction this agent can never take.
       const systemPromptArgs = resolveSystemPromptArgs(agentId, systemPrompt);
       if (!systemPromptArgs.ok) throw new UnactionableTargetError(systemPromptArgs.reason);
-      if (
-        systemPromptArgs.args.length > 0 &&
-        extractSystemPromptArgs(agentLaunchFlags, agentId).length > 0
-      ) {
+      if (systemPromptArgs.args.length > 0 && hasSystemPromptOverride(agentLaunchFlags, agentId)) {
         throw new UnactionableTargetError(
           "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
         );

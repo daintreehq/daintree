@@ -324,6 +324,21 @@ describe("agentActions adversarial", () => {
         agentLaunchFlags: ["-c", "developer_instructions=Be verbose"],
       })
     ).rejects.toThrow(/not both/);
+    // Other spellings the CLIs accept set the same instruction.
+    await expect(
+      callAction(actions, "agent.launch", {
+        agentId: "codex",
+        systemPrompt: "Be terse",
+        agentLaunchFlags: ["--config", "developer_instructions=Be verbose"],
+      })
+    ).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(
+      callAction(actions, "agent.launch", {
+        agentId: "claude",
+        systemPrompt: "Be terse",
+        agentLaunchFlags: ["--append-system-prompt=Be verbose"],
+      })
+    ).rejects.toBeInstanceOf(UnactionableTargetError);
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
 
     // Unrelated overrides through the same flag are fine.

@@ -228,7 +228,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         systemPrompt: {
           description:
-            "Standing instruction appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it.",
+            "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it.",
           type: "string",
           maxLength: 2000,
         },
@@ -256,7 +256,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         activateDockOnCreate: {
           description:
-            "Whether to open the sidebar dock when the agent is placed there. Only meaningful for a dock placement; it changes what the user sees.",
+            "Whether to open the sidebar dock when the agent is placed there, which changes what the user sees.",
           type: "boolean",
         },
         env: {
@@ -312,7 +312,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         name: {
           description:
-            'Always provide a short, task-descriptive name for the terminal tab (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.',
+            'Always provide a short, task-descriptive name for the terminal tab, at most 200 characters (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.',
           type: "string",
           maxLength: 200,
         },
