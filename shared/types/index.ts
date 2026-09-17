@@ -472,9 +472,12 @@ export type {
 } from "./terminal.js";
 export {
   isValidTerminalGeometry,
+  isCollapsedTerminalGeometry,
   isPlausibleTerminalGeometry,
   normalizeTerminalGridDimension,
   MAX_TERMINAL_GRID_DIMENSION,
+  COLLAPSED_TERMINAL_COLS,
+  COLLAPSED_TERMINAL_ROWS,
   MIN_PLAUSIBLE_TERMINAL_COLS,
   MIN_PLAUSIBLE_TERMINAL_ROWS,
 } from "./terminal.js";

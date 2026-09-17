@@ -4,7 +4,10 @@ import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 import { logWarn, logError } from "@/utils/logger";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import type { TerminalGeometry } from "@shared/types/terminal";
-import { isPlausibleTerminalGeometry } from "@shared/types/terminal";
+import {
+  isCollapsedTerminalGeometry,
+  isPlausibleTerminalGeometry,
+} from "@shared/types/terminal";
 
 function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
   const timestamp = Date.now();
@@ -104,7 +107,14 @@ export class TerminalRestoreController {
       const target = { cols: managed.targetCols, rows: managed.targetRows };
       return isPlausibleTerminalGeometry(target) ? target : undefined;
     }
-    return { cols: managed.terminal.cols, rows: managed.terminal.rows };
+    // An opened pane's live grid is normally the best evidence there is — but not
+    // when it is collapsed. A pane already at 2x1 would otherwise seed the
+    // restore with that, let `alignToCaptureGeometry` widen it to a healthy
+    // capture grid, and then be resized straight back to 2x1 the moment the
+    // replay closed (#12442). Absent instead, so the pane keeps the capture grid
+    // and the next real fit measures it.
+    const live = { cols: managed.terminal.cols, rows: managed.terminal.rows };
+    return isCollapsedTerminalGeometry(live) ? undefined : live;
   }
 
   /**
@@ -168,6 +178,12 @@ export class TerminalRestoreController {
     managed.pendingRestoreGeometry = undefined;
     managed.isSerializedRestoreInProgress = false;
     if (!target) return;
+    // Below the bookkeeping above on purpose: the write gate and the restore
+    // flag must be released on every exit, so a refused grid can never leave
+    // the pane frozen mid-restore. `resizeTerminal` gates what it parks here,
+    // but this is a direct xterm resize and the seed reaches it without passing
+    // through that (#12442).
+    if (isCollapsedTerminalGeometry(target)) return;
     if (target.cols === managed.terminal.cols && target.rows === managed.terminal.rows) {
       return;
     }

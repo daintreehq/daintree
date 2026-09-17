@@ -30,8 +30,8 @@ import {
 } from "@/lib/layoutTransitionLock";
 import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
 import {
-  MIN_PLAUSIBLE_TERMINAL_COLS,
-  MIN_PLAUSIBLE_TERMINAL_ROWS,
+  COLLAPSED_TERMINAL_COLS,
+  COLLAPSED_TERMINAL_ROWS,
 } from "@shared/types/terminal";
 import type { ManagedTerminal } from "../types";
 
@@ -490,7 +490,7 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     // floor can produce a column count. Without this the refusal below would
     // still hold on a fixture that quietly stopped reaching the floor.
     expect(getEffectiveScrollbarWidth(managed.terminal.options)).toBeGreaterThan(narrow.width);
-    expect(fitAddon.proposeDimensions()!.cols).toBeLessThan(MIN_PLAUSIBLE_TERMINAL_COLS);
+    expect(fitAddon.proposeDimensions()!.cols).toBeLessThanOrEqual(COLLAPSED_TERMINAL_COLS);
 
     const applied = controller.resize("t1", narrow.width, narrow.height);
 
@@ -511,7 +511,7 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     // Same witness on the row axis: one cell is taller than the whole container,
     // so the unclamped quotient is below one and the floor is what answers.
     expect(cell.height).toBeGreaterThan(short.height);
-    expect(fitAddon.proposeDimensions()!.rows).toBeLessThan(MIN_PLAUSIBLE_TERMINAL_ROWS);
+    expect(fitAddon.proposeDimensions()!.rows).toBeLessThanOrEqual(COLLAPSED_TERMINAL_ROWS);
 
     const applied = controller.resize("t1", short.width, short.height);
 

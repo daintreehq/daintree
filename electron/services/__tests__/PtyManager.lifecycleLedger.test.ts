@@ -369,31 +369,77 @@ describe("PtyManager lifecycle ledger", () => {
     ]);
   });
 
-  it("refuses a grid no pane could be showing, on a live PTY and before spawn (#12442)", () => {
+  it("refuses a collapsed grid on a live PTY and holds the geometry it has (#12442)", () => {
     const manager = new PtyManager();
     const results: unknown[] = [];
     manager.on("resize-result", (_id: string, result: unknown) => results.push(result));
 
-    // Before spawn: an implausible grid must not be buffered either, or it
-    // becomes the boot geometry of the terminal that follows — the PTY then
-    // starts life at the collapsed size with no resize to correct it.
+    // Before spawn: a collapsed grid must not be buffered either, or it becomes
+    // the boot geometry of the terminal that follows — the PTY then starts life
+    // collapsed with no resize to correct it.
     manager.resize("t1", 2, 1);
     manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
     expect(shared.created[0]?.options.cols).toBe(80);
     expect(shared.created[0]?.options.rows).toBe(24);
 
-    // On the live PTY: refused, reported, and the PTY keeps the grid it has.
+    const process = shared.created[0]!;
     manager.resize("t1", 120, 40);
-    manager.resize("t1", 2, 1);
-    manager.resize("t1", 3, 90);
-    manager.resize("t1", 120, 4);
+    manager.resize("t1", 2, 90);
+    manager.resize("t1", 120, 1);
+    manager.resize("t1", Number.NaN, 40);
 
+    // Reporting a rejection is not the same as not resizing: assert the PTY
+    // itself only ever moved to the one healthy grid, so an implementation that
+    // resized or clamped and THEN reported "rejected" fails here.
+    expect(process.resize.mock.calls).toEqual([[120, 40]]);
     expect(results).toEqual([
       expect.objectContaining({ outcome: "applied", appliedCols: 120, appliedRows: 40 }),
       expect.objectContaining({ outcome: "rejected", requestedCols: 2, appliedCols: null }),
-      expect.objectContaining({ outcome: "rejected", requestedCols: 3, appliedCols: null }),
-      expect.objectContaining({ outcome: "rejected", requestedRows: 4, appliedRows: null }),
+      expect.objectContaining({ outcome: "rejected", requestedRows: 1, appliedRows: null }),
+      expect.objectContaining({ outcome: "rejected", appliedCols: null }),
     ]);
+
+    // Still live afterwards: a refusal must not latch the boundary shut.
+    manager.resize("t1", 100, 30);
+    expect(process.resize).toHaveBeenLastCalledWith(100, 30);
+  });
+
+  it("applies a grid too small to be plausible but not collapsed (#12442)", () => {
+    // The boundary cannot know a request's provenance: a small visible pane's
+    // real measurement is indistinguishable here from one extrapolated for a
+    // hidden pane. So it enforces only the floor no pane can reach, and the
+    // renderer applies the strict floor where it knows nothing measured the
+    // grid. Refusing this would split xterm from the PTY at every size a
+    // minimum-size pane at the largest font legitimately reaches.
+    const manager = new PtyManager();
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1 }));
+    const process = shared.created[0]!;
+
+    manager.resize("t1", 23, 4);
+
+    expect(process.resize).toHaveBeenCalledWith(23, 4);
+  });
+
+  it("boots at the default when spawn options themselves are collapsed (#12442)", () => {
+    // A separate door from the buffered resize above: the Main handler
+    // normalizes spawn dims with `Math.floor(cols) || 80`, which leaves a
+    // caller-supplied 2 intact, and from here they size the native PTY and both
+    // headless mirrors with no later resize to disagree with them.
+    const manager = new PtyManager();
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1, cols: 2, rows: 1 }));
+
+    expect(shared.created[0]?.options.cols).toBe(80);
+    expect(shared.created[0]?.options.rows).toBe(24);
+  });
+
+  it("boots at a requested small-but-uncollapsed grid untouched", () => {
+    const manager = new PtyManager();
+
+    manager.spawn("t1", spawnOptions({ launchGeneration: 1, cols: 23, rows: 4 }));
+
+    expect(shared.created[0]?.options.cols).toBe(23);
+    expect(shared.created[0]?.options.rows).toBe(4);
   });
 
   it("drops a buffered resize stamped by a previous incarnation", () => {

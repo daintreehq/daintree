@@ -545,6 +545,11 @@ describe("restorePanelsPhase — saved panels", () => {
     const ctx = makeContext({ terminalSizes: { t1: { cols: 2, rows: 1 } } });
     ctx.backendTerminalMap.set("t1", backend("t1"));
     await restorePanelsPhase([panel("t1")], ctx);
+    // The pane is still restored — only its geometry is refused. Asserted
+    // explicitly because `geometryPassedToAddPanel` also reads undefined when
+    // `addPanel` was never called at all, which would be a far worse
+    // regression than the one under test.
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
     expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toBeUndefined();
   });
 
@@ -557,7 +562,22 @@ describe("restorePanelsPhase — saved panels", () => {
     const ctx = makeContext({ terminalSizes: { t1: { cols: 2, rows: 1 } } });
     ctx.backendTerminalMap.set("t1", backend("t1", { ptyCols: 2, ptyRows: 1 }));
     await restorePanelsPhase([panel("t1")], ctx);
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
     expect(geometryPassedToAddPanel(ctx.addPanel, "t1")).toBeUndefined();
+  });
+
+  it("omits a collapsed persisted grid on the dead-PTY respawn path too", async () => {
+    // The third construction path into the same map. The matched-backend case
+    // above proves the resolver; this proves the respawn caller reads the same
+    // resolver rather than the raw entry.
+    const ctx = makeContext({ terminalSizes: { t1: { cols: 2, rows: 1 } } });
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    await restorePanelsPhase([panel("t1")], ctx);
+    const respawnArgs = ctx.addPanel.mock.calls[0]?.[0] as {
+      initialTerminalGeometry?: { cols: number; rows: number };
+    };
+    expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(respawnArgs.initialTerminalGeometry).toBeUndefined();
   });
 
   it("falls back to a healthy persisted size when the live PTY grid is collapsed", async () => {

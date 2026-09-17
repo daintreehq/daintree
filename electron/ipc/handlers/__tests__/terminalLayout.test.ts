@@ -16,7 +16,11 @@ vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
   noteRendererSessionIdentityEdits,
 }));
 
-import { terminalLayoutNamespace, sanitizeFieldEdits } from "../terminalLayout.js";
+import {
+  terminalLayoutNamespace,
+  sanitizeFieldEdits,
+  sanitizeTerminalSizes,
+} from "../terminalLayout.js";
 
 const setTerminals = terminalLayoutNamespace.ops.setTerminals.handler as (payload: {
   projectId: string;
@@ -622,5 +626,41 @@ describe("setDraftInputs merge (#11352)", () => {
       removedIds: [],
     });
     expect(saved()?.draftInputs).toEqual({ t1: "first draft" });
+  });
+});
+
+/**
+ * `terminalSizes` is the grid a restored pane is BORN on, so this sanitizer is
+ * the last thing between a collapsed measurement and a pane that rebuilds into
+ * the collapse on every eviction and restart (#12442).
+ */
+describe("sanitizeTerminalSizes", () => {
+  it("keeps workable grids and drops everything no pane could have measured", () => {
+    const sanitized = sanitizeTerminalSizes({
+      wide: { cols: 302, rows: 90 },
+      ordinary: { cols: 80, rows: 24 },
+      smallest: { cols: 20, rows: 5 },
+      collapsed: { cols: 2, rows: 1 },
+      narrow: { cols: 3, rows: 90 },
+      "one-col-short": { cols: 19, rows: 5 },
+      "one-row-short": { cols: 20, rows: 4 },
+      zero: { cols: 0, rows: 51 },
+      fractional: { cols: 80.5, rows: 24 },
+      "not-finite": { cols: Number.NaN, rows: 24 },
+      infinite: { cols: Number.POSITIVE_INFINITY, rows: 24 },
+      "missing-rows": { cols: 80 },
+      "wrong-type": { cols: "80", rows: "24" },
+      "not-an-object": 80,
+      null: null,
+    } as Record<string, unknown>);
+
+    // Asserted as the whole map rather than per key: a sanitizer is only as good
+    // as what it leaves behind, and an equality catches an entry that survives
+    // for a reason nobody predicted.
+    expect(sanitized).toEqual({
+      wide: { cols: 302, rows: 90 },
+      ordinary: { cols: 80, rows: 24 },
+      smallest: { cols: 20, rows: 5 },
+    });
   });
 });

@@ -49,14 +49,22 @@ import {
 } from "./pty/agentSessionCaptureDelivery.js";
 import type { GracefulKillResult, TerminalResizeResult } from "../../shared/types/pty-host.js";
 import {
-  isPlausibleTerminalGeometry,
+  isCollapsedTerminalGeometry,
   isValidTerminalGeometry,
-  MIN_PLAUSIBLE_TERMINAL_COLS,
-  MIN_PLAUSIBLE_TERMINAL_ROWS,
   type SerializedTerminalSnapshot,
 } from "../../shared/types/terminal.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
+
 import { shouldTrimAnalysisSession } from "../../shared/utils/workerGovernancePolicy.js";
+
+/**
+ * The grid a PTY boots at when its requested geometry is unusable — xterm's own
+ * default, and the same pair the Main spawn handler falls back to. A pane that
+ * boots here is re-sized by its first real fit; one that boots collapsed has no
+ * such correction, because nothing later disagrees with it.
+ */
+const DEFAULT_SPAWN_COLS = 80;
+const DEFAULT_SPAWN_ROWS = 24;
 
 /**
  * PtyManager - Facade for terminal process management.
@@ -465,6 +473,21 @@ export class PtyManager extends EventEmitter {
       }
     }
 
+    // Boot geometry gets the same floor a resize does. A buffered resize can no
+    // longer be collapsed — `resize` refuses one before it is buffered — but the
+    // spawn options are a separate door: the Main handler normalizes them with
+    // `Math.floor(cols) || 80`, which leaves a caller-supplied 2 intact, and
+    // from here they size the native PTY, the pooled process, and both headless
+    // mirrors with no resize to correct them afterwards (#12442). Replaced with
+    // the ordinary default rather than refused: a spawn cannot be declined over
+    // its geometry, and the first real fit re-sizes the pane either way.
+    if (isCollapsedTerminalGeometry({ cols: options.cols, rows: options.rows })) {
+      logWarn(
+        `Terminal ${id} spawn geometry ${options.cols}x${options.rows} is collapsed; booting at ${DEFAULT_SPAWN_COLS}x${DEFAULT_SPAWN_ROWS}`
+      );
+      options = { ...options, cols: DEFAULT_SPAWN_COLS, rows: DEFAULT_SPAWN_ROWS };
+    }
+
     const spawnContext = computeSpawnContext(id, options);
     const acquired = acquirePtyProcess(
       id,
@@ -675,17 +698,26 @@ export class PtyManager extends EventEmitter {
    *
    * Structural validity is not enough: it starts at 1x1, and a hidden pane's
    * zero-size box divides to FitAddon's 2x1 floor, which every layer then
-   * records as a real measurement (#12442). A grid no pane could be showing is
-   * refused here too — the PTY keeps the size it has, which is the last grid
-   * something actually measured. `transport` names the delivery path in the
-   * rejection log; the renderer logs its own call site before sending, so
-   * between the two the next occurrence names its origin.
+   * records as a real measurement (#12442). A collapsed grid is refused here
+   * too — the PTY keeps the size it has, which is the last grid something
+   * actually measured.
+   *
+   * The floor is `isCollapsedTerminalGeometry`, not the stricter plausibility
+   * one, because a request arrives here with no provenance: a genuinely small
+   * visible pane's measurement is indistinguishable from an extrapolated one,
+   * and refusing the former would leave xterm and the PTY split at every size
+   * the renderer can legitimately reach. The renderer applies the strict floor
+   * on the paths where it knows nothing measured the grid.
+   *
+   * `transport` names the delivery path in the rejection log; the renderer logs
+   * its own call site before sending, so between the two the next occurrence
+   * names its origin.
    */
   resize(id: string, cols: number, rows: number, transport = "unknown"): void {
     const terminal = this.registry.get(id);
-    if (!isPlausibleTerminalGeometry({ cols, rows })) {
+    if (isCollapsedTerminalGeometry({ cols, rows })) {
       const reason = isValidTerminalGeometry({ cols, rows })
-        ? `implausible dims ${cols}x${rows} (below ${MIN_PLAUSIBLE_TERMINAL_COLS}x${MIN_PLAUSIBLE_TERMINAL_ROWS})`
+        ? `collapsed dims ${cols}x${rows}`
         : `invalid dims ${cols}x${rows}`;
       const held = terminal?.readPtyGeometry();
       logWarn(

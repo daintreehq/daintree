@@ -264,6 +264,16 @@ describe("terminalSessionPersistence", () => {
       // a healthier grid.
       persistSessionSnapshotSync("term-geo-collapsed", { data: "payload", cols: 2, rows: 1 });
 
+      // Read the bytes rather than only the replay behaviour: a reader that
+      // salvages a poisoned header makes the round trip look correct even when
+      // the WRITER is still emitting one, and the file outlives this process.
+      const written = await fsp.readFile(
+        path.join(userDataDir, "terminal-sessions", "term-geo-collapsed.restore"),
+        "utf8"
+      );
+      expect(written).toBe("DAINTREE_SESSION_v1\npayload");
+      expect(written).not.toContain("2x1");
+
       const headless = createMockHeadless("normal", 170, 40);
       const result = restoreSessionFromFile(headless as never, "term-geo-collapsed");
       await headless.drainWrites();
@@ -271,6 +281,26 @@ describe("terminalSessionPersistence", () => {
       expect(result.restored).toBe(true);
       expect(headless.write).toHaveBeenCalledWith("payload");
       expect(headless.resize).not.toHaveBeenCalled();
+      expect(headless.cols).toBe(170);
+      expect(headless.rows).toBe(40);
+    });
+
+    it("still records a capture header for the smallest workable grid", async () => {
+      // The counterweight: the writer must drop the header only for a grid it
+      // could not honestly describe. Degrading a valid small capture to v1 would
+      // silently cost every such session its width alignment.
+      persistSessionSnapshotSync("term-geo-small", { data: "small payload", cols: 20, rows: 5 });
+
+      const written = await fsp.readFile(
+        path.join(userDataDir, "terminal-sessions", "term-geo-small.restore"),
+        "utf8"
+      );
+      expect(written).toBe("DAINTREE_SESSION_v2\n20x5\nsmall payload");
+
+      const headless = createMockHeadless("normal", 170, 40);
+      expect(restoreSessionFromFile(headless as never, "term-geo-small").restored).toBe(true);
+      expect(headless.resize).toHaveBeenNthCalledWith(1, 20, 5);
+      await headless.drainWrites();
       expect(headless.cols).toBe(170);
       expect(headless.rows).toBe(40);
     });

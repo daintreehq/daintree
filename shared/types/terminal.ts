@@ -115,38 +115,69 @@ export function isValidTerminalGeometry(value: unknown): value is TerminalGeomet
 }
 
 /**
- * Smallest grid a pane a user could actually work in describes.
+ * The grid a container with no layout produces, which is the hole #12442 came
+ * through. A hidden pane measures 0x0; FitAddon's own floor — and the
+ * `colsForWidth`/`rowsForHeight` twins that reproduce it deliberately — answer
+ * exactly 2x1, `normalizeTerminalGridDimension` maps a non-finite measurement to
+ * 1, and `isValidTerminalGeometry` accepts both. Every layer downstream then
+ * recorded that as a real measurement: the PTY, the snapshot header, the
+ * persisted `terminalSizes` map. The CLI painted its frame into a 2-column PTY
+ * and the overflow was in scrollback for good.
  *
- * Structural validity starts at 1x1, which is the hole #12442 came through: a
- * hidden container measures 0x0, FitAddon's own floor (and the `colsForWidth` /
- * `rowsForHeight` twins that reproduce it) answers 2x1, `isValidTerminalGeometry`
- * accepts it, and every layer downstream — the PTY, the snapshot header, the
- * persisted `terminalSizes` map — records it as a real measurement. The CLI then
- * paints its frame into a 2-column PTY and the overflow is in scrollback for
- * good.
+ * Kept this low on purpose. It is the floor no REAL pane can reach, which is
+ * what lets it be enforced unconditionally — including at the PTY boundary,
+ * where a request's provenance is unknowable. A pane at the smallest supported
+ * size (`MIN_TERMINAL_WIDTH_PX` x `MIN_TERMINAL_HEIGHT_PX`) and the largest
+ * supported font measures about 23x4, so a floor that excluded four rows would
+ * clip a pane somebody is looking at, permanently — trading this bug for a worse
+ * one. {@link isPlausibleTerminalGeometry} is the strict floor, and it applies
+ * only where nothing measured the grid at all.
+ */
+export const COLLAPSED_TERMINAL_COLS = 2;
+export const COLLAPSED_TERMINAL_ROWS = 1;
+
+/**
+ * True when `value` is the degenerate grid an unlaid-out box yields rather than
+ * a measurement — at or under {@link COLLAPSED_TERMINAL_COLS} x
+ * {@link COLLAPSED_TERMINAL_ROWS}, or not a structurally valid grid at all.
+ *
+ * Phrased as a rejection test because that is how every call site reads it. A
+ * collapsed grid is refused, never clamped upward: inventing a grid nobody
+ * measured splits xterm from the PTY exactly as thoroughly as a tiny one does,
+ * so callers hold the geometry they already have.
+ */
+export function isCollapsedTerminalGeometry(value: unknown): boolean {
+  if (!isValidTerminalGeometry(value)) return true;
+  return value.cols <= COLLAPSED_TERMINAL_COLS || value.rows <= COLLAPSED_TERMINAL_ROWS;
+}
+
+/**
+ * Smallest grid a pane a user could actually work in describes.
  *
  * 20 columns is the floor `calculateTerminalDimensions` already refuses to
  * estimate below, so it is the number this codebase has long treated as the
  * narrowest pane worth booting. 5 rows is well under that estimator's 10-row
- * floor and still excludes the single-row collapse.
+ * floor and still excludes the collapse.
  */
 export const MIN_PLAUSIBLE_TERMINAL_COLS = 20;
 export const MIN_PLAUSIBLE_TERMINAL_ROWS = 5;
 
 /**
- * True when `value` is a grid a real pane could be showing — structurally valid
- * AND at least {@link MIN_PLAUSIBLE_TERMINAL_COLS} x
- * {@link MIN_PLAUSIBLE_TERMINAL_ROWS}.
+ * True when `value` is a grid a pane could plausibly have been MEASURED at.
  *
- * Deliberately a second predicate rather than a raised floor on
- * `isValidTerminalGeometry`: that one answers "could a terminal have been
- * captured at this?", which xterm-level code and snapshot decoding legitimately
- * ask of grids smaller than any pane. This one answers "did a pane measure
- * this?", which is the question every write boundary should be asking.
+ * The strict floor, and the one that answers what #12442 actually asks. The
+ * three origins it names all produce a number with no measurement behind it: a
+ * grid derived from cached cell metrics with no live layout, a grid scaled for a
+ * detached background view, and a grid replayed out of persistence or a target
+ * cache. There, anything below a workable pane is evidence the box was never
+ * laid out, and refusing costs only staleness — both grids stay put and the
+ * reveal-time fresh measurement corrects them.
  *
- * A rejection is never clamped upward — inventing 20x5 for a pane nobody
- * measured splits xterm from the PTY just as thoroughly as 2x1 did. Callers hold
- * the geometry they already have and let the next real measurement correct it.
+ * It must NOT gate a live measurement of a visible box. A pane at the smallest
+ * supported size and the largest supported font genuinely measures under this
+ * floor, and refusing a real measurement leaves xterm bigger than its container
+ * with its content clipped — permanently, since every later fit of that same
+ * container refuses too. Those paths take {@link isCollapsedTerminalGeometry}.
  */
 export function isPlausibleTerminalGeometry(value: unknown): value is TerminalGeometry {
   if (!isValidTerminalGeometry(value)) return false;

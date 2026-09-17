@@ -1400,17 +1400,33 @@ describe("project:switch outgoing terminalSizes merge", () => {
     // side preserves every one of them, so each restore rebuilds the collapse.
     // `sib` is the guard on over-correcting: sanitizing the stored side must
     // still keep a sibling window's healthy entries.
+    // `t1` is overwritten by the healthy incoming entry, so it proves nothing
+    // on its own — `collapsed` and `narrow` are the subjects: nothing incoming
+    // touches them, so they survive unless the STORED side is sanitized too.
+    // `sib` is the guard against over-correcting: sanitizing the stored side
+    // must still keep a sibling window's healthy entries.
     const sizes = await runSwitchWithSizes(
       {
-        terminals: [sizedPane("t1"), sizedPane("stale"), sizedPane("sib")],
+        terminals: [
+          sizedPane("t1"),
+          sizedPane("collapsed"),
+          sizedPane("narrow"),
+          sizedPane("sib"),
+        ],
         terminalSizes: {
-          t1: { cols: 2, rows: 1 },
-          stale: { cols: 3, rows: 90 },
+          t1: { cols: 80, rows: 24 },
+          collapsed: { cols: 2, rows: 1 },
+          narrow: { cols: 3, rows: 90 },
           sib: { cols: 100, rows: 30 },
         },
       },
       {
-        terminals: [sizedPane("t1"), sizedPane("stale"), sizedPane("sib")],
+        terminals: [
+          sizedPane("t1"),
+          sizedPane("collapsed"),
+          sizedPane("narrow"),
+          sizedPane("sib"),
+        ],
         terminalSizes: { t1: { cols: 203, rows: 51 } },
       }
     );
