@@ -40,6 +40,7 @@ import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
 import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource, HostApprovedRecipeRun } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
@@ -1274,6 +1275,9 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               initialPrompt,
               clipboardDirectory,
               modelId: terminal.agentModelId,
+              // An in-memory recipe's captured flags can carry a standing
+              // instruction; apply it to this launch as well (#12431).
+              systemPromptArgs: extractSystemPromptArgs(terminal.agentLaunchFlags, agentId),
               recipeArgs: terminal.args?.trim() || undefined,
               presetArgs: preset?.args?.join(" "),
               globalSkipPermissions,

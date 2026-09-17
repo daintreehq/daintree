@@ -622,6 +622,11 @@ export interface GenerateAgentCommandOptions {
   clipboardDirectory?: string;
   /** Model ID to pass via --model flag (e.g., "claude-opus-4-6") */
   modelId?: string;
+  /**
+   * Raw argv pair carrying a standing instruction (#12431), from
+   * `resolveSystemPromptArgs` or `extractSystemPromptArgs`. Quoted here.
+   */
+  systemPromptArgs?: readonly string[];
   /** Additional CLI arguments from recipe terminal (whitespace-separated string) */
   recipeArgs?: string;
   /** Additional CLI arguments from agent preset (whitespace-separated string) */
@@ -721,6 +726,12 @@ export function generateAgentCommand(
   // Add --model flag if a specific model was selected for this launch
   if (options?.modelId) {
     parts.push("--model", options.modelId);
+  }
+
+  // The instruction is one argv token even when it holds spaces, so it is
+  // quoted as a whole rather than split like the preset/recipe strings below.
+  for (const arg of options?.systemPromptArgs ?? []) {
+    parts.push(arg.startsWith("-") ? arg : escapeShellArg(arg));
   }
 
   // Add preset-level args (env overrides applied separately via spawn env)
@@ -926,6 +937,7 @@ export function buildAgentLaunchFlags(
   agentId: string,
   options?: {
     modelId?: string;
+    systemPromptArgs?: readonly string[];
     presetArgs?: string[];
     globalSkipPermissions?: boolean;
     globalUseAltScreen?: boolean;
@@ -952,6 +964,12 @@ export function buildAgentLaunchFlags(
   // Model flag for per-panel model selection
   if (options?.modelId) {
     flags.push("--model", options.modelId);
+  }
+
+  // Standing instruction (#12431). The CLI doesn't carry it into a resumed
+  // session on its own, so it is persisted with the rest.
+  if (options?.systemPromptArgs?.length) {
+    flags.push(...options.systemPromptArgs);
   }
 
   // Preset-level args are process-level launch configuration. Persist them so

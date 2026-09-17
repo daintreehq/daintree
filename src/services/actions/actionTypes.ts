@@ -56,6 +56,7 @@ export interface ActionCallbacks {
       cwd?: string;
       worktreeId?: string;
       prompt?: string;
+      systemPromptArgs?: string[];
       interactive?: boolean;
       modelId?: string;
       presetId?: string | null;

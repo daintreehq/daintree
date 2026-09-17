@@ -102,10 +102,16 @@ export function buildAgentLaunchFlagsForRuntimeSettings(
   entry: AgentSettingsEntry,
   agentId: string,
   preset: AgentPreset | undefined,
-  options?: { modelId?: string; globalSkipPermissions?: boolean; globalUseAltScreen?: boolean }
+  options?: {
+    modelId?: string;
+    systemPromptArgs?: readonly string[];
+    globalSkipPermissions?: boolean;
+    globalUseAltScreen?: boolean;
+  }
 ): string[] {
   return buildAgentLaunchFlags(entry, agentId, {
     modelId: options?.modelId,
+    systemPromptArgs: options?.systemPromptArgs,
     presetArgs: preset?.args,
     globalSkipPermissions: options?.globalSkipPermissions,
     globalUseAltScreen: options?.globalUseAltScreen,

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import { UnactionableTargetError } from "../../unactionableTarget";
 
 const panelStoreMock = vi.hoisted(() => ({
   getState: vi.fn(),
@@ -248,6 +249,115 @@ describe("agentActions adversarial", () => {
     expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
       "claude",
       expect.objectContaining({ requestedId: "fresh-id" })
+    );
+  });
+
+  // #12431: one agent-neutral field, mapped per CLI by the registry.
+  it("agent.launch maps systemPrompt onto the agent's own append arguments", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      prompt: "first turn",
+      systemPrompt: "Infer the best option\nfrom context.",
+      agentLaunchFlags: ["--verbose"],
+    });
+    expect(callbacks.onLaunchAgent).toHaveBeenLastCalledWith(
+      "claude",
+      expect.objectContaining({
+        prompt: "first turn",
+        systemPromptArgs: ["--append-system-prompt", "Infer the best option from context."],
+        agentLaunchFlags: ["--verbose"],
+      })
+    );
+
+    await callAction(actions, "agent.launch", { agentId: "codex", systemPrompt: "Be terse" });
+    expect(callbacks.onLaunchAgent).toHaveBeenLastCalledWith(
+      "codex",
+      expect.objectContaining({
+        systemPromptArgs: ["-c", 'developer_instructions="Be terse"'],
+      })
+    );
+  });
+
+  it("agent.launch treats a blank systemPrompt as absent, for any agent", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "gemini", systemPrompt: "  \n " });
+    const options = callbacks.onLaunchAgent.mock.calls[0]?.[1];
+    expect(options?.systemPromptArgs).toBeUndefined();
+  });
+
+  it("agent.launch refuses systemPrompt for an agent that cannot append one, before launching", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    const launch = callAction(actions, "agent.launch", {
+      agentId: "gemini",
+      systemPrompt: "Do not ask multiple-choice questions.",
+    });
+    await expect(launch).rejects.toBeInstanceOf(UnactionableTargetError);
+    await expect(launch).rejects.toThrow(/Gemini has no launch option that appends/);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch refuses a systemPrompt that starts with a dash", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claude", systemPrompt: "--yolo" })
+    ).rejects.toBeInstanceOf(UnactionableTargetError);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch refuses systemPrompt alongside the same instruction in agentLaunchFlags", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await expect(
+      callAction(actions, "agent.launch", {
+        agentId: "codex",
+        systemPrompt: "Be terse",
+        agentLaunchFlags: ["-c", "developer_instructions=Be verbose"],
+      })
+    ).rejects.toThrow(/not both/);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+
+    // Unrelated overrides through the same flag are fine.
+    await callAction(actions, "agent.launch", {
+      agentId: "codex",
+      systemPrompt: "Be terse",
+      agentLaunchFlags: ["-c", "model_reasoning_effort=high"],
+    });
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("agent.launch advertises systemPrompt as an optional, length-bounded string", () => {
+    const actions = setupActions(makeCallbacks());
+    const schema = getDefinition(actions, "agent.launch").argsSchema;
+    if (!schema) throw new Error("agent.launch has no argsSchema");
+    const json = z
+      .object({
+        properties: z.record(
+          z.string(),
+          z.object({
+            type: z.string().optional(),
+            maxLength: z.number().optional(),
+            description: z.string().optional(),
+          })
+        ),
+        required: z.array(z.string()),
+      })
+      .parse(z.toJSONSchema(schema, { io: "input" }));
+    expect(json.properties.systemPrompt).toMatchObject({ type: "string", maxLength: 2000 });
+    expect(json.properties.systemPrompt?.description).toMatch(/Claude and Codex only/);
+    expect(json.required).toContain("agentId");
+    expect(json.required).not.toContain("systemPrompt");
+    expect(schema.safeParse({ agentId: "claude", systemPrompt: "x".repeat(2001) }).success).toBe(
+      false
     );
   });
 

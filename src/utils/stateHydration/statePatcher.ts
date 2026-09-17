@@ -21,6 +21,7 @@ import { getAgentConfig, sanitizeAgentEnv } from "@/config/agents";
 import type { AgentPreset } from "@/config/agents";
 import {
   generateAgentCommand,
+  buildAgentLaunchFlags,
   buildResumeCommand,
   buildResumeLatestCommand,
   buildLaunchCommandFromFlags,
@@ -33,6 +34,7 @@ import {
   resolveKeepDecorations,
 } from "@shared/types";
 import { inferKind as inferKindShared } from "@shared/utils/inferPanelKind";
+import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 // Re-exported rather than defined here: main counts the agent panels a project
 // would restore (#11801) and has to resolve identity by the same rule this
 // respawn path does, so the rule lives somewhere both processes can reach.
@@ -619,7 +621,23 @@ export function buildArgsForRespawn(
     const effectiveBypass = resolveEffectiveBypass(effectiveEntry, agentId, globalSkipPermissions);
     const effectiveInline = resolveEffectiveInlineMode(effectiveEntry, agentId, globalUseAltScreen);
     const dangerousArgs = effectiveEntry.dangerousArgs as string | undefined;
-    const rawPersistedFlags = presetWasStale ? undefined : saved.agentLaunchFlags;
+    // A stale preset voids the captured flags, but not the caller's standing
+    // instruction (#12431), which no setting can rebuild. When one was
+    // captured, rebuild the snapshot from current settings around it — as
+    // restart does — so both the command and the stored flags keep it.
+    const staleSystemPromptArgs = presetWasStale
+      ? extractSystemPromptArgs(saved.agentLaunchFlags, agentId)
+      : [];
+    const rawPersistedFlags = !presetWasStale
+      ? saved.agentLaunchFlags
+      : staleSystemPromptArgs.length > 0
+        ? buildAgentLaunchFlags(effectiveEntry, agentId, {
+            modelId: saved.agentModelId,
+            systemPromptArgs: staleSystemPromptArgs,
+            globalSkipPermissions,
+            globalUseAltScreen,
+          })
+        : undefined;
     const hasPersistedFlags = Boolean(rawPersistedFlags && rawPersistedFlags.length > 0);
     // Reconcile the persisted snapshot against both live resolutions (#10432 the
     // bypass token, #10876 the `--no-alt-screen` inline flag): a snapshot must
@@ -872,7 +890,7 @@ export function buildArgsForRespawn(
     devPreviewConsoleOpen: isDevPreview ? saved.devPreviewConsoleOpen : undefined,
     exitBehavior: isAgentPanel ? undefined : saved.exitBehavior,
     agentLaunchFlags: presetWasStale
-      ? undefined
+      ? reconciledLaunchFlags
       : (reconciledLaunchFlags ?? saved.agentLaunchFlags),
     agentModelId: saved.agentModelId,
     spawnedBy: saved.spawnedBy,

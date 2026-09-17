@@ -909,3 +909,58 @@ describe("inherited worktree cwd resolution (#11854)", () => {
     expect(indexReads).toBe(0);
   });
 });
+
+// A duplicate rebuilds its launch from settings; the source pane's standing
+// instruction came from its launch caller and has to be carried over (#12431).
+describe("duplicating keeps the source pane's standing instruction", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    // Back to the module mocks' defaults: no project presets, no saved settings.
+    const { useProjectPresetsStore } = await import("@/store/projectPresetsStore");
+    vi.mocked(useProjectPresetsStore.getState).mockReset();
+    const { agentSettingsClient } = await import("@/clients");
+    vi.mocked(agentSettingsClient.get).mockReset();
+  });
+
+  it("passes the captured pair to both the command and the persisted flags", async () => {
+    const { buildPanelDuplicateOptions } = await import("../panelDuplicationService");
+    const shared = await import("@shared/types");
+    const pair = ["--append-system-prompt", "Infer the best option"];
+
+    const options = await buildPanelDuplicateOptions(
+      makePanel({
+        kind: "terminal",
+        launchAgentId: "claude",
+        agentLaunchFlags: ["--model", "opus", ...pair],
+      }),
+      "grid"
+    );
+
+    expect(vi.mocked(shared.generateAgentCommand)).toHaveBeenCalledWith(
+      "claude-cmd",
+      expect.anything(),
+      "claude",
+      expect.objectContaining({ systemPromptArgs: pair })
+    );
+    expect(vi.mocked(shared.buildAgentLaunchFlags)).toHaveBeenCalledWith(
+      expect.anything(),
+      "claude",
+      expect.objectContaining({ systemPromptArgs: pair })
+    );
+    expect(options).toMatchObject({ command: "generated-claude-command" });
+  });
+
+  it("passes no pair when the source pane had none", async () => {
+    const { buildPanelDuplicateOptions } = await import("../panelDuplicationService");
+    const shared = await import("@shared/types");
+
+    await buildPanelDuplicateOptions(
+      makePanel({ kind: "terminal", launchAgentId: "claude", agentLaunchFlags: ["--verbose"] }),
+      "grid"
+    );
+
+    const options = vi.mocked(shared.generateAgentCommand).mock.calls[0]?.[3];
+    expect(options?.systemPromptArgs).toEqual([]);
+  });
+});

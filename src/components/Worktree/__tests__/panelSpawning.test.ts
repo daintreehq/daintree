@@ -217,6 +217,29 @@ describe("spawnPanelsFromRecipe", () => {
     );
   });
 
+  // #12431: a cloned layout projects the source pane's flags onto the recipe;
+  // its standing instruction must reach the first launch, not only restarts.
+  it("applies a captured standing instruction to the initial command", async () => {
+    const pair = ["--append-system-prompt", "Infer the best option"];
+    await spawnPanelsFromRecipe({
+      terminals: [makeAgent({ agentLaunchFlags: ["--model", "sonnet", ...pair] })],
+      worktreeId: "wt-1",
+      cwd: "/path/to/wt",
+      agentSettings: { agents: { claude: {} } },
+      clipboardDirectory: "/tmp/daintree/daintree-clipboard",
+    });
+
+    expect(mockGenerateAgentCommand).toHaveBeenCalledWith(
+      "claude",
+      {},
+      "claude",
+      expect.objectContaining({ systemPromptArgs: pair })
+    );
+    expect(mockAddPanel).toHaveBeenCalledWith(
+      expect.objectContaining({ agentLaunchFlags: ["--model", "sonnet", ...pair] })
+    );
+  });
+
   it("produces no blank flag tokens when recipe args are empty (#9650)", async () => {
     await spawnPanelsFromRecipe({
       terminals: [makeAgent({ args: "   " })],

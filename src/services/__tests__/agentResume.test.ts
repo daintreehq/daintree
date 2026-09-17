@@ -147,8 +147,30 @@ describe("buildResumePanelOptions", () => {
       worktreeId: "wt-1",
       command: "claude --resume s-1",
       location: "grid",
+      agentLaunchFlags: ["--dangerously-skip-permissions"],
       agentSessionId: "s-1",
     });
+  });
+
+  // A resumed pane restarts from its stored flags, so dropping them would lose
+  // the standing instruction (and model) on its first restart (#12431).
+  it("stores the reconciled flags on the resumed pane", () => {
+    const flags = ["--append-system-prompt", "Be terse", "--dangerously-skip-permissions"];
+    reconcileBypassFlagsMock.mockReturnValue(flags);
+    const options = buildResumePanelOptions(
+      { ...baseSession, agentLaunchFlags: flags },
+      { cwd: "/active" }
+    );
+    expect(options?.agentLaunchFlags).toEqual(flags);
+  });
+
+  it("leaves agentLaunchFlags unset when reconciliation yields none", () => {
+    reconcileBypassFlagsMock.mockReturnValue([]);
+    const options = buildResumePanelOptions(
+      { ...baseSession, agentLaunchFlags: undefined },
+      { cwd: "/active" }
+    );
+    expect(options?.agentLaunchFlags).toBeUndefined();
   });
 
   it("prefers buildResumeCommand over buildResumeLatestCommand", () => {
