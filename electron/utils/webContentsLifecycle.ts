@@ -38,13 +38,23 @@
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getIsE2EDisableCachedViewCpuThrottle } from "../setup/runtimeFlags.js";
 
-const EXPECTED_CDP_ERRORS = [
+/**
+ * The teardown/navigation vocabulary. A CDP call failing with one of these lost
+ * a race with the guest going away; anything else is worth a warning. Shared so
+ * every CDP caller in main answers "was that expected?" the same way.
+ */
+export const EXPECTED_CDP_ERRORS = [
   "Target closed",
   "Inspected target navigated",
   "Cannot attach",
   "debugger is already attached",
   "No debugger attached",
 ];
+
+export function isExpectedCdpError(err: unknown): boolean {
+  const message = formatErrorMessage(err, "");
+  return EXPECTED_CDP_ERRORS.some((expected) => message.includes(expected));
+}
 
 export function ensureAttached(wc: Electron.WebContents): void {
   if (!wc.debugger.isAttached()) {

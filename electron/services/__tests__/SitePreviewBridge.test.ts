@@ -1,11 +1,12 @@
 import { EventEmitter } from "node:events";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("electron", () => ({
   webContents: { getAllWebContents: () => [], fromId: () => null },
 }));
 
 import { SitePreviewBridge } from "../SitePreviewBridge.js";
+import { __resetCdpLeasesForTests, acquireCdpLease } from "../cdp/WebContentsCdpService.js";
 import { GUEST_PROTOCOL_VERSION } from "../sitePreview/guestProtocol.js";
 import { GUEST_RUNTIME_GLOBAL } from "../sitePreview/guestRuntime.js";
 import type { SitePreviewPushPayload } from "../../../shared/types/ipc/sitePreview.js";
@@ -118,7 +119,14 @@ describe("SitePreviewBridge", () => {
   let harness: ReturnType<typeof makeHarness>;
 
   beforeEach(() => {
+    // Every harness reuses the guest's id, so a lease entry left behind by a
+    // previous test would hand the next one the retired debugger session.
+    __resetCdpLeasesForTests();
     harness = makeHarness();
+  });
+
+  afterEach(() => {
+    __resetCdpLeasesForTests();
   });
 
   it("enables the Page domain before installing the new-document script", async () => {
@@ -356,7 +364,16 @@ describe("SitePreviewBridge", () => {
     expect(harness.pushed.some((p) => p.kind === "detached" && p.reason === "rebound")).toBe(true);
   });
 
-  it("forces a context replay when the Runtime domain was already enabled elsewhere", async () => {
+  it("reads the contexts from the shared snapshot without cycling the Runtime domain", async () => {
+    // The webview console capture enables Runtime for dev-preview panels too,
+    // and only the first enable replays the contexts. The bridge used to force
+    // a second replay with a disable/enable cycle; it now reads the snapshot the
+    // lease service keeps, so the domain is enabled once and never cycled.
+    const consoleLease = await acquireCdpLease(harness.wc as unknown as Electron.WebContents, [
+      "Runtime",
+    ]);
+    announceContexts(harness.wc);
+
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
@@ -364,15 +381,31 @@ describe("SitePreviewBridge", () => {
       mode: "browse",
     });
 
-    // The webview console capture enables Runtime for dev-preview panels, so
-    // our own enable replays nothing and the bridge would otherwise never learn
-    // which context is the main frame's.
     const methods = harness.wc.debugger.methods();
-    expect(methods.filter((m) => m === "Runtime.enable").length).toBe(2);
-    expect(methods).toContain("Runtime.disable");
+    expect(methods.filter((m) => m === "Runtime.enable").length).toBe(1);
+    expect(methods).not.toContain("Runtime.disable");
 
-    // With no context knowledge the filter degrades to unfiltered rather than
-    // discarding every observation.
+    // The snapshot predates the binding, and the main-frame filter still works
+    // off it: the main frame's context is trusted, a sub-frame's is not.
+    callBinding(harness.wc, envelope());
+    expect(harness.pushed.filter((p) => p.kind === "guest-event")).toHaveLength(1);
+    harness.pushed.length = 0;
+    callBinding(harness.wc, envelope({ sequence: 1 }), IFRAME_CONTEXT_ID);
+    expect(harness.pushed.filter((p) => p.kind === "guest-event")).toHaveLength(0);
+
+    await consoleLease.release();
+  });
+
+  it("degrades to unfiltered when nothing has announced a context", async () => {
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      runtimeSource: "",
+      mode: "browse",
+    });
+
+    // A guest whose contexts never arrived must not go silent — the filter is
+    // defence in depth, not the load-bearing boundary.
     callBinding(harness.wc, envelope(), 12345);
     expect(harness.pushed.filter((p) => p.kind === "guest-event")).toHaveLength(1);
   });
@@ -397,7 +430,9 @@ describe("SitePreviewBridge", () => {
     expect(harness.bridge.listCandidates(PROJECT_ID)[0]?.boundSessionId).toBe(second.sessionId);
     expect(harness.bridge.getState(PROJECT_ID, first.sessionId)).toBeNull();
     // One live listener set, not two: the superseded binding removed its own.
-    expect(harness.wc.debugger.listenerCount("message")).toBe(1);
+    // The second message listener is the CDP lease service's context tracker,
+    // one per guest however many consumers it serves.
+    expect(harness.wc.debugger.listenerCount("message")).toBe(2);
     expect(harness.wc.listenerCount("did-navigate")).toBe(1);
   });
 
@@ -600,7 +635,8 @@ describe("SitePreviewBridge", () => {
 
     expect(harness.bridge.getState(PROJECT_ID, rebound.sessionId)).not.toBeNull();
     expect(harness.bridge.listCandidates(PROJECT_ID)[0]?.boundSessionId).toBe(rebound.sessionId);
-    expect(harness.wc.debugger.listenerCount("message")).toBe(1);
+    // The bridge's own listener plus the lease service's context tracker.
+    expect(harness.wc.debugger.listenerCount("message")).toBe(2);
   });
 
   it("refuses new binds once the bridge is shutting down", async () => {

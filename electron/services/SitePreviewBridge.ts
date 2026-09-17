@@ -32,7 +32,8 @@ import type {
   SitePreviewMode,
   SitePreviewPushPayload,
 } from "../../shared/types/ipc/sitePreview.js";
-import { ensureAttached } from "../utils/webContentsLifecycle.js";
+import { isExpectedCdpError } from "../utils/webContentsLifecycle.js";
+import { acquireCdpLease, type CdpLease } from "./cdp/WebContentsCdpService.js";
 import { AppError } from "../utils/errorTypes.js";
 import { getWebviewDialogService } from "./WebviewDialogService.js";
 import { getProjectForWebContents } from "../window/webContentsRegistry.js";
@@ -45,19 +46,6 @@ import {
   buildClearSelectionSource,
   buildReselectSource,
 } from "./sitePreview/guestRuntime.js";
-
-/**
- * The teardown/navigation vocabulary already established by
- * `webContentsLifecycle.ts`. A CDP call that fails with one of these lost a race
- * with the guest going away; anything else is worth a warning.
- */
-const EXPECTED_CDP_ERRORS = [
-  "Target closed",
-  "Inspected target navigated",
-  "Cannot attach",
-  "debugger is already attached",
-  "No debugger attached",
-];
 
 const DEV_PREVIEW_PANEL_KIND = "dev-preview";
 
@@ -94,20 +82,12 @@ const ABUSE_DROP_THRESHOLD = 5_000;
  */
 const ABUSE_WINDOW_MS = 10_000;
 
-/** Ceiling on tracked execution contexts, so a page spawning frames cannot grow the map. */
-const MAX_TRACKED_CONTEXTS = 64;
-
 /**
  * Monotonic across the process. Baked into every installed runtime so a guest
  * that is briefly running two of them can tell which one is current, including
  * across a rebind that resets the document epoch to 0.
  */
 let installCounter = 0;
-
-function isExpectedCdpError(err: unknown): boolean {
-  const message = formatErrorMessage(err, "");
-  return EXPECTED_CDP_ERRORS.some((expected) => message.includes(expected));
-}
 
 interface GuestDescriptor {
   webContentsId: number;
@@ -150,9 +130,12 @@ interface Binding {
   scriptIdentifier: string | null;
   /** Install id of the runtime currently in the guest, for a matched disposal. */
   installId: number;
-  /** Default-world execution contexts, by id, with the frame that owns each. */
-  contextFrames: Map<number, string | undefined>;
-  mainFrameId: string | null;
+  /**
+   * Page + Runtime lease. The bridge does not own those domains — the console
+   * capture instruments the same guest — and the lease is also where the
+   * execution-context snapshot and the main frame id are read from.
+   */
+  lease: CdpLease | null;
   disposers: Array<() => void>;
   detached: boolean;
   /**
@@ -361,8 +344,7 @@ export class SitePreviewBridge {
       abuseWindowDrops: 0,
       scriptIdentifier: null,
       installId: 0,
-      contextFrames: new Map(),
-      mainFrameId: null,
+      lease: null,
       disposers: [],
       detached: false,
       queue: Promise.resolve(),
@@ -536,35 +518,9 @@ export class SitePreviewBridge {
   ): void {
     if (binding.detached) return;
 
-    if (method === "Runtime.executionContextCreated") {
-      const context = params.context as
-        { id?: number; auxData?: { isDefault?: boolean; frameId?: string } } | undefined;
-      if (!context || typeof context.id !== "number") return;
-      if (context.auxData?.isDefault !== true) return;
-      // Recorded with its frame rather than filtered here: `Runtime.enable`
-      // replays existing contexts, and that replay can land before
-      // `Page.getFrameTree` has told us which frame is the main one.
-      binding.contextFrames.set(context.id, context.auxData.frameId);
-      if (binding.contextFrames.size > MAX_TRACKED_CONTEXTS) {
-        // A page spawning frames in a loop must not grow this map. Frames other
-        // than the main one are never trusted anyway, so dropping them costs
-        // nothing; the main frame's entry is kept.
-        for (const [id, frameId] of binding.contextFrames) {
-          if (binding.contextFrames.size <= MAX_TRACKED_CONTEXTS) break;
-          if (frameId !== binding.mainFrameId) binding.contextFrames.delete(id);
-        }
-      }
-      return;
-    }
-    if (method === "Runtime.executionContextDestroyed") {
-      const id = params.executionContextId;
-      if (typeof id === "number") binding.contextFrames.delete(id);
-      return;
-    }
-    if (method === "Runtime.executionContextsCleared") {
-      binding.contextFrames.clear();
-      return;
-    }
+    // Execution contexts are tracked by the CDP lease service, not here: the
+    // `Runtime.enable` that replays them is sent once, by whichever consumer
+    // turned the domain on, and that may not be this binding.
     if (method !== "Runtime.bindingCalled") return;
 
     if (params.name !== binding.bindingName) return;
@@ -649,9 +605,6 @@ export class SitePreviewBridge {
     binding.documentEpoch++;
     binding.lastSequence = -1;
     binding.guestReady = false;
-    // Contexts are NOT cleared here: `did-navigate` can arrive after the new
-    // document's `executionContextCreated`, and clearing would discard the very
-    // context the reinstalled runtime is about to speak from.
 
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (!wc) return;
@@ -712,27 +665,26 @@ export class SitePreviewBridge {
     if (binding.installedEpoch === binding.documentEpoch && binding.scriptIdentifier !== null) {
       return;
     }
-    ensureAttached(wc);
-
-    // `Page.enable` first. Without it `Page.addScriptToEvaluateOnNewDocument`
-    // still returns an identifier and the script silently never installs.
-    await this.send(wc, "Page.enable");
-    // Needed for `Runtime.executionContextCreated`, which is how the main
-    // frame's world is told apart from an iframe's. `Runtime.enable` also
-    // replays the guest's console buffer — the webview console capture keeps
-    // replay watermarks precisely for that.
-    await this.send(wc, "Runtime.enable");
-    if (binding.contextFrames.size === 0) {
-      // The domain was already enabled by the webview console capture, so our
-      // call was a no-op and replayed nothing. One disable/enable cycle forces
-      // the replay; the console capture's replay watermarks absorb the repeat.
-      await this.send(wc, "Runtime.disable");
-      await this.send(wc, "Runtime.enable");
+    // `Page` is what makes `Page.addScriptToEvaluateOnNewDocument` take effect
+    // at all — without the domain enabled it still returns an identifier and the
+    // script silently never installs. `Runtime` carries both the binding calls
+    // and the execution contexts that tell the main frame's world apart from an
+    // iframe's.
+    //
+    // Leased, not enabled: the console capture instruments the same guest, and
+    // whichever of the two enables `Runtime` first is the only one CDP replays
+    // the contexts to — which is why the snapshot is read from the lease rather
+    // than collected here.
+    if (!binding.lease) {
+      binding.lease = await acquireCdpLease(wc, ["Page", "Runtime"], {
+        onInvalidated: () => {
+          void this.teardown(binding, "debugger-detached").catch(() => undefined);
+        },
+      });
     }
-
-    const frameTree = (await this.send(wc, "Page.getFrameTree")) as
-      { frameTree?: { frame?: { id?: string } } } | undefined;
-    binding.mainFrameId = frameTree?.frameTree?.frame?.id ?? null;
+    // Re-read per install, so the main frame id is refreshed on bind and after
+    // every navigation.
+    await binding.lease.refreshMainFrameId();
 
     await this.send(wc, "Runtime.addBinding", { name: binding.bindingName });
 
@@ -875,7 +827,11 @@ export class SitePreviewBridge {
       }
     }
     binding.scriptIdentifier = null;
-    binding.contextFrames.clear();
+    // Released last: `Runtime.removeBinding` and the disposal evaluate above
+    // both need the domain still enabled.
+    const lease = binding.lease;
+    binding.lease = null;
+    await lease?.release().catch(() => undefined);
 
     this.deps.push({
       kind: "detached",
@@ -894,18 +850,20 @@ export class SitePreviewBridge {
  * whole first document.
  */
 function isTrustedContext(binding: Binding, contextId: number): boolean {
-  // No context knowledge at all — the replay did not arrive. Degrade to the
-  // unfiltered behaviour rather than dropping every observation: this check is
-  // defence in depth, not the load-bearing boundary. A sub-frame that forges a
-  // call still has to match the session, epoch and sequence, and the worst it
-  // achieves is desynchronising the inspector for its own page.
-  if (binding.contextFrames.size === 0) return true;
-  if (!binding.contextFrames.has(contextId)) return false;
+  const lease = binding.lease;
+  // No context knowledge at all — nothing has announced a context since the
+  // domain came on. Degrade to the unfiltered behaviour rather than dropping
+  // every observation: this check is defence in depth, not the load-bearing
+  // boundary. A sub-frame that forges a call still has to match the session,
+  // epoch and sequence, and the worst it achieves is desynchronising the
+  // inspector for its own page.
+  if (!lease || lease.contexts.size === 0) return true;
+  if (!lease.contexts.has(contextId)) return false;
   // With the frame tree unread (`Page.getFrameTree` failed), a default world is
   // the best signal available; with it read, the main frame's world is the only
   // one that counts.
-  if (!binding.mainFrameId) return true;
-  return binding.contextFrames.get(contextId) === binding.mainFrameId;
+  if (!lease.mainFrameId) return true;
+  return lease.contexts.get(contextId) === lease.mainFrameId;
 }
 
 function toState(binding: Binding): SitePreviewBindingState {
