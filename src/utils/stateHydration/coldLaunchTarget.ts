@@ -30,13 +30,15 @@ export type ColdLaunchTarget =
 const UNCHANGED: ColdLaunchTarget = { kind: "unchanged" };
 
 /**
- * Separators unified and trailing slashes dropped; drive-letter and UNC paths
- * case-folded, since Windows compares them that way. Lexical only — restore
- * can't wait on the filesystem, so symlinked spellings stay distinct.
+ * Separators unified and trailing slashes dropped; drive-letter and `\\server`
+ * paths case-folded, since Windows compares them that way. A POSIX path that
+ * merely starts with `//` stays case-sensitive. Lexical only — restore can't
+ * wait on the filesystem, so symlinked spellings stay distinct.
  */
 function comparablePath(p: string): string {
+  const windows = /^[A-Za-z]:[\\/]/.test(p) || p.startsWith("\\\\");
   const normalized = p.replace(/\\/g, "/").replace(/\/+$/, "");
-  return /^([A-Za-z]:\/|\/\/)/.test(normalized) ? normalized.toLowerCase() : normalized;
+  return windows ? normalized.toLowerCase() : normalized;
 }
 
 /** The worktree `cwd` runs in: the longest listed path containing it. */
@@ -69,6 +71,18 @@ function findWorktree<T extends { id: string; path: string }>(
   return worktrees.find(
     (w) => comparablePath(w.id) === wanted || (w.path !== "" && comparablePath(w.path) === wanted)
   );
+}
+
+/**
+ * The filing names a worktree an authoritative list doesn't have. An unknown
+ * or empty list proves nothing (#11234).
+ */
+export function isFilingUnavailable(
+  worktreeId: string | undefined,
+  worktrees: readonly { id: string; path: string }[] | null | undefined
+): boolean {
+  if (!worktreeId || !worktrees || worktrees.length === 0) return false;
+  return findWorktree(worktrees, worktreeId) === undefined;
 }
 
 export function resolveColdLaunchTarget(

@@ -38,6 +38,7 @@ import {
 } from "@shared/types/agentSettings";
 import {
   findLaunchRoot,
+  isFilingUnavailable,
   isSameDirectory,
   resolveColdLaunchTarget,
   type ColdLaunchTarget,
@@ -810,16 +811,27 @@ export async function restorePanelsPhase(
     ): Promise<NonNullable<BuildArgsForRespawnOptions["coldLaunch"]>> => {
       const conversationCwd = sanitizeConversationCwd(saved.conversationCwd);
       const launchCwd = saved.cwd || projectRoot || "";
-      // A held pane keeps the directory it was held with. Its filing may be a
-      // re-home onto whatever worktree was active, and that is placement, not a
-      // choice of where to run.
-      if (sanitizeRestoreRecovery(saved.restoreRecovery) !== undefined) {
+      const origin = conversationCwd || saved.cwd;
+      const savedRecovery = sanitizeRestoreRecovery(saved.restoreRecovery);
+      if (savedRecovery !== undefined) {
+        // A held pane keeps the directory it was held with. Its filing may be a
+        // re-home onto whatever worktree was active, and that is placement,
+        // not a choice of where to run — unless the worktree it was filed
+        // under has gone since, which puts the choice back to the user.
+        const filingGone =
+          workspaceHasWorktrees && isFilingUnavailable(saved.worktreeId, await worktreesPromise);
+        if (savedRecovery.awaitingDestination || filingGone) {
+          return {
+            cwd: (filingGone ? origin : saved.cwd) || launchCwd,
+            ...(!filingGone && { conversationCwd }),
+            awaitingDestination: true,
+          };
+        }
         return { cwd: launchCwd, conversationCwd };
       }
       const target: ColdLaunchTarget = workspaceHasWorktrees
         ? resolveColdLaunchTarget({ ...saved, conversationCwd }, await worktreesPromise)
         : { kind: "unchanged" };
-      const origin = conversationCwd || saved.cwd;
       if (target.kind === "destination-unavailable") {
         // Nothing runs until the user picks, and the folder the conversation
         // began in is the one choice that is always theirs to keep — not a
@@ -1076,17 +1088,21 @@ export async function restorePanelsPhase(
                 // worktreeId, or names a deleted one — which also keeps the
                 // respawn's cwd pointing at a directory that still exists.
                 respawnArgs.worktreeId = await resolveRestoredWorktreeId(respawnArgs.worktreeId);
-                if (coldLaunch?.awaitingDestination) {
+                if (respawnArgs.restoreRecovery?.awaitingDestination) {
                   // A pane waiting to be told where to run still has to be seen
                   // to be told. With no live selection to re-home onto, the
                   // filing would keep naming a worktree the grid never shows —
                   // or be swept up as an orphan — so place it under the worktree
-                  // its folder is in. Placement only: where it runs is still
-                  // the user's call.
+                  // its folder is in, or the main one. Placement only: where it
+                  // runs is still the user's call.
                   const known = await getKnownWorktreeIds();
                   const filing = respawnArgs.worktreeId;
                   if (known !== null && (filing === undefined || !known.has(filing))) {
-                    const visible = findLaunchRoot(respawnArgs.cwd, (await worktreesPromise) ?? []);
+                    const list = (await worktreesPromise) ?? [];
+                    const visible =
+                      findLaunchRoot(respawnArgs.cwd, list) ??
+                      list.find((worktree) => worktree.isMainWorktree)?.id ??
+                      list[0]?.id;
                     if (visible !== undefined) respawnArgs.worktreeId = visible;
                   }
                 }

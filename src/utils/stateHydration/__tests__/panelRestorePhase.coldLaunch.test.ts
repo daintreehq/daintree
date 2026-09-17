@@ -103,7 +103,10 @@ function movedPane(name: string, overrides: Partial<TerminalState> = {}): Termin
   };
 }
 
-async function restore(panels: TerminalState[]): Promise<Map<string, RestoredArgs>> {
+async function restore(
+  panels: TerminalState[],
+  overrides: Partial<RestoreContext> = {}
+): Promise<Map<string, RestoredArgs>> {
   const byId = new Map<string, RestoredArgs>();
   await restorePanelsPhase(panels, {
     addPanel: async (options) => {
@@ -127,6 +130,7 @@ async function restore(panels: TerminalState[]): Promise<Map<string, RestoredArg
     ]),
     safeMode: false,
     logHydrationInfo: () => {},
+    ...overrides,
   });
   return byId;
 }
@@ -272,6 +276,46 @@ describe("cold restore of moved Codex panes (#12434)", () => {
     });
     expect(byId.get("a")?.cwd).toBe("/repo");
     // Shown under a worktree that exists, which is not where it will run.
+    expect(byId.get("a")?.worktreeId).toBe("/repo");
+  });
+
+  it("keeps a pane waiting for a destination visible across another restart", async () => {
+    // Saved while waiting, filed under a worktree that's gone, with nothing
+    // selected to re-home onto.
+    const byId = await restore(
+      [
+        movedPane("a", {
+          worktreeId: "/worktrees/deleted",
+          command: "codex",
+          restoreRecovery: { reason: "destination-unavailable", awaitingDestination: true },
+        }),
+      ],
+      { activeWorktreeId: null }
+    );
+
+    expect(byId.get("a")?.restoreRecovery).toEqual({
+      reason: "destination-unavailable",
+      awaitingDestination: true,
+    });
+    expect(byId.get("a")?.cwd).toBe("/repo");
+    expect(byId.get("a")?.worktreeId).toBe("/repo");
+  });
+
+  it("falls back to the main worktree when the pane's folder is under none", async () => {
+    const byId = await restore(
+      [
+        movedPane("a", {
+          cwd: "/elsewhere/gone",
+          worktreeId: "/worktrees/deleted",
+          conversationCwd: "/elsewhere/origin",
+          agentSessionId: "sess-a",
+        }),
+      ],
+      { activeWorktreeId: null }
+    );
+
+    expect(byId.get("a")?.restoreRecovery?.awaitingDestination).toBe(true);
+    expect(byId.get("a")?.cwd).toBe("/elsewhere/origin");
     expect(byId.get("a")?.worktreeId).toBe("/repo");
   });
 

@@ -3854,6 +3854,22 @@ describe("buildArgsForRespawn — cold launch for an agent that resumes across d
     expect(buildResumeCommandMock).not.toHaveBeenCalled();
   });
 
+  it("puts a held pane back to waiting when restore says its destination is gone", () => {
+    const result = respawn(
+      {
+        ...movedPane,
+        restoreRecovery: { reason: "sibling-owns-session-id" },
+      },
+      { coldLaunch: { cwd: "/repo", awaitingDestination: true } }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "sibling-owns-session-id",
+      awaitingDestination: true,
+    });
+    expect(result.cwd).toBe("/repo");
+  });
+
   it("still holds a pane whose saved marker it can't read", () => {
     const result = respawn(
       { ...movedPane, agentSessionId: "sess-a", restoreRecovery: { reason: "unknown" } },

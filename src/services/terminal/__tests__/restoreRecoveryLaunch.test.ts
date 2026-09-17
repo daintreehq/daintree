@@ -110,42 +110,26 @@ describe("buildRestoreRecoveryLaunchOptions (#12434)", () => {
   });
 
   it("starts a new conversation where the pane runs, and forgets the old folder", () => {
-    const options = buildRestoreRecoveryLaunchOptions(
-      heldPane(),
-      { kind: "fresh" },
-      { flags: ["--model", "gpt-5"], baseCommand: "/opt/bin/codex" }
-    );
+    const options = buildRestoreRecoveryLaunchOptions(heldPane(), { kind: "fresh" }, NO_INPUTS);
 
-    expect(options?.command).toMatch(/^\/opt\/bin\/codex --model /);
-    expect(options?.command).not.toContain("resume");
     expect(options?.cwd).toBe("/worktrees/task-a");
     expect(options?.agentSessionId).toBeUndefined();
     expect(options?.conversationCwd).toBeUndefined();
   });
 
-  it("starts new with today's flags, not the ones the pane was held with", () => {
+  it("starts new with the command restore built, preset overrides included", () => {
+    // Restore built this with the pane's preset turning bypass off, which the
+    // agent-level flag reconciliation handed in here knows nothing about.
     const options = buildRestoreRecoveryLaunchOptions(
-      heldPane({
-        command: "codex --dangerously-bypass-approvals-and-sandbox --model gpt-5",
-        agentLaunchFlags: ["--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5"],
-      }),
+      heldPane({ command: "/opt/bin/codex --model gpt-5", agentPresetId: "careful" }),
       { kind: "fresh" },
-      // The bypass was switched off after restore held the pane.
-      { flags: ["--model", "gpt-5"], baseCommand: undefined }
+      {
+        flags: ["--dangerously-bypass-approvals-and-sandbox", "--model", "gpt-5"],
+        baseCommand: "/opt/bin/codex",
+      }
     );
 
-    expect(options?.command).not.toContain("--dangerously-bypass-approvals-and-sandbox");
-    expect(options?.command).toMatch(/^codex --model /);
-  });
-
-  it("falls back to the command restore held the pane with when no flags were captured", () => {
-    const options = buildRestoreRecoveryLaunchOptions(
-      heldPane({ agentLaunchFlags: undefined, command: "codex --generated" }),
-      { kind: "fresh" },
-      { flags: ["--no-alt-screen"], baseCommand: undefined }
-    );
-
-    expect(options?.command).toBe("codex --generated");
+    expect(options?.command).toBe("/opt/bin/codex --model gpt-5");
   });
 
   it("launches nothing while the pane still has no destination", () => {

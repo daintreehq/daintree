@@ -688,7 +688,9 @@ export function buildArgsForRespawn(
             });
 
     if (savedRecovery) {
-      restoreRecovery = savedRecovery;
+      restoreRecovery = coldLaunch?.awaitingDestination
+        ? { ...savedRecovery, awaitingDestination: true }
+        : savedRecovery;
     } else if (coldLaunch?.awaitingDestination) {
       const heldReason: RestoreRecoveryReason = resumeWithheld
         ? "sibling-owns-session-id"

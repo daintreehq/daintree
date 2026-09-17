@@ -105,8 +105,12 @@ vi.mock("../statePatcher", async () => {
       cwd: s.cwd ?? "/cwd",
       kind,
       location: s.location === "dock" ? "dock" : "grid",
-      // The real builder takes the list's spelling of the filing (#12434).
+      // The real builder takes the list's spelling of the filing, and holds a
+      // pane with no destination to run in (#12434).
       worktreeId: options?.coldLaunch?.worktreeId ?? s.worktreeId,
+      restoreRecovery: options?.coldLaunch?.awaitingDestination
+        ? { reason: "destination-unavailable", awaitingDestination: true }
+        : undefined,
       // Mirror the real buildArgsForRespawn: a timed-out reconnect drops the
       // requested id so the store generates a fresh one (#10440).
       requestedId: reconnectTimedOut ? undefined : s.id,
@@ -2513,7 +2517,31 @@ describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () =>
       ctx
     );
 
-    expect(argsById(ctx).get("held")?.coldLaunch).toEqual({ cwd: "/repo" });
+    expect(argsById(ctx).get("held")?.coldLaunch).toEqual({
+      cwd: "/repo",
+      awaitingDestination: true,
+    });
+  });
+
+  it("asks where to run a held pane whose worktree has gone since it was held", async () => {
+    const ctx = makeContext({ worktreesPromise: worktrees(), activeWorktreeId: "/repo" });
+
+    await restorePanelsPhase(
+      [
+        movedPane("held", {
+          cwd: "/worktrees/deleted",
+          worktreeId: "/worktrees/deleted",
+          conversationCwd: "/repo",
+          restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+        }),
+      ],
+      ctx
+    );
+
+    expect(argsById(ctx).get("held")?.coldLaunch).toEqual({
+      cwd: "/repo",
+      awaitingDestination: true,
+    });
   });
 
   it("asks where to run a pane filed under a worktree this project no longer has", async () => {

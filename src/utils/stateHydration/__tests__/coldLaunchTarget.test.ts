@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { findLaunchRoot, isSameDirectory, resolveColdLaunchTarget } from "../coldLaunchTarget";
+import {
+  findLaunchRoot,
+  isFilingUnavailable,
+  isSameDirectory,
+  resolveColdLaunchTarget,
+} from "../coldLaunchTarget";
 
 const WORKTREES = [
   { id: "/repo", path: "/repo" },
@@ -124,12 +129,27 @@ describe("resolveColdLaunchTarget (#12434)", () => {
     ).toEqual({ kind: "unchanged", worktreeId: "C:/repo/WT" });
   });
 
-  it("keeps POSIX paths case-sensitive", () => {
+  it("keeps POSIX paths case-sensitive, even ones that start with two slashes", () => {
     const worktrees = [
       { id: "/repo", path: "/repo" },
       { id: "/repo/WT", path: "/repo/WT" },
     ];
     expect(findLaunchRoot("/repo/wt/src", worktrees)).toBe("/repo");
+    expect(isSameDirectory("//repo/Task", "//repo/task")).toBe(false);
+  });
+
+  it("folds a backslash UNC path like Windows does", () => {
+    expect(isSameDirectory("\\\\Server\\Share\\repo", "\\\\server\\share\\REPO\\")).toBe(true);
+  });
+});
+
+describe("isFilingUnavailable", () => {
+  it("is true only against an authoritative list that lacks the filing", () => {
+    expect(isFilingUnavailable("/worktrees/gone", WORKTREES)).toBe(true);
+    expect(isFilingUnavailable("/worktrees/task-a/", WORKTREES)).toBe(false);
+    expect(isFilingUnavailable("/worktrees/gone", [])).toBe(false);
+    expect(isFilingUnavailable("/worktrees/gone", null)).toBe(false);
+    expect(isFilingUnavailable(undefined, WORKTREES)).toBe(false);
   });
 });
 

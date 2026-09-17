@@ -745,6 +745,13 @@ describe("restartTerminal and panes that run away from their conversation (#1243
   });
 
   it("refuses a fallback hop for a pane held for recovery", async () => {
+    // A resolvable preset, so only the hold can stop the hop.
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
     const held: PtyPanelData = {
       ...movedPane,
       agentState: undefined,
@@ -757,8 +764,10 @@ describe("restartTerminal and panes that run away from their conversation (#1243
       .getState()
       .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
 
-    expect(result.success).toBe(false);
+    expect(result).toEqual({ success: false, error: "panel is held for recovery" });
     expect(mockSpawn).not.toHaveBeenCalled();
+    expect(ptyAfterRestart().restoreRecovery).toEqual({ reason: "session-unresolved" });
+    expect(ptyAfterRestart().isRestarting).toBeFalsy();
   });
 
   it("keeps pointing at the conversation's folder when it resumes that conversation", async () => {
