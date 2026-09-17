@@ -7,8 +7,10 @@ import type {
   SitePreviewMode,
   SitePreviewPushPayload,
 } from "@shared/types/ipc/sitePreview";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
-import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
+import type {
+  DevPreviewToolSession,
+  DevPreviewToolSessionContext,
+} from "@/registry/devPreviewToolRegistry";
 import { cancelAgentRequests } from "./agentRequest.js";
 import {
   callSiteKey,
@@ -24,7 +26,6 @@ import { forgetComposerMemories } from "./composerMemory.js";
 import { mismatchMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
 import {
-  BUILDER_TOOL_ID,
   CHANNELS,
   ComponentDefinitionsResultSchema,
   SourceRevisionsResultSchema,
@@ -81,8 +82,6 @@ export interface InspectorDeps {
   on(channel: string, callback: (payload: unknown) => void): () => void;
   runtimeSource(): Promise<string>;
   now(): number;
-  /** Calls back when this plugin is disabled; main has already closed every workspace. */
-  onPluginDisabled(callback: () => void): () => void;
 }
 
 export interface InspectorContext {
@@ -247,15 +246,6 @@ export function defaultInspectorDeps(previewPanelId: string): InspectorDeps {
       window.electron.plugin.onPanel(PLUGIN_ID, channel, previewPanelId, callback),
     runtimeSource: loadGuestRuntimeBody,
     now: () => Date.now(),
-    onPluginDisabled: (callback) => {
-      const store = usePluginRuntimeStore;
-      store.getState().init();
-      return store.subscribe((state, previous) => {
-        if (state.disabledPluginIds.has(PLUGIN_ID) && !previous.disabledPluginIds.has(PLUGIN_ID)) {
-          callback();
-        }
-      });
-    },
   };
 }
 
@@ -330,10 +320,8 @@ function trimSlash(path: string): string {
 /** How long after a source change a click may still land on the pre-HMR DOM. */
 export const HMR_SETTLE_MS = 1000;
 
-export class InspectorController {
+export class InspectorController implements DevPreviewToolSession {
   readonly panelId: string;
-  /** Set by the registry: a disabled plugin releases the whole controller. */
-  onPluginDisabled: (() => void) | null = null;
   private state: InspectorState = INITIAL_INSPECTOR_STATE;
   private readonly listeners = new Set<() => void>();
   private readonly unsubscribers: Array<() => void> = [];
@@ -362,8 +350,7 @@ export class InspectorController {
     this.unsubscribers.push(
       deps.sitePreview.onEvent((payload) => this.handlePreviewPush(payload)),
       deps.on(PUSH_CHANNELS.sourceChanged, (payload) => this.handleSourceChanged(payload)),
-      deps.on(PUSH_CHANNELS.issue, (payload) => this.handleIssue(payload)),
-      deps.onPluginDisabled(() => this.onPluginDisabled?.())
+      deps.on(PUSH_CHANNELS.issue, (payload) => this.handleIssue(payload))
     );
   }
 
@@ -376,7 +363,7 @@ export class InspectorController {
 
   getSnapshot = (): InspectorState => this.state;
 
-  private update(patch: Partial<InspectorState>): void {
+  private patchState(patch: Partial<InspectorState>): void {
     if (this.disposed) return;
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener();
@@ -385,6 +372,23 @@ export class InspectorController {
   /* ------------------------------------------------------------------------ */
   /* Context and workspace                                                    */
   /* ------------------------------------------------------------------------ */
+
+  /**
+   * {@link DevPreviewToolSession}: the host says what this preview is showing,
+   * for as long as the builder is switched on for it — including while none of
+   * the builder's surfaces are mounted, which is when a bind that failed for
+   * want of a page gets its retry.
+   */
+  update(context: DevPreviewToolSessionContext): void {
+    this.updateContext({
+      projectId: context.projectId,
+      worktreeId: context.worktreeId,
+      worktreePath: context.worktreePath,
+    });
+    if (context.isWebviewReady && context.url && this.state.binding.status === "failed") {
+      void this.connect();
+    }
+  }
 
   updateContext(context: InspectorContext): void {
     const worktreeChanged = context.worktreeId !== this.context.worktreeId;
@@ -415,7 +419,7 @@ export class InspectorController {
     this.closeWorkspace();
     this.workspaceKey = key;
     if (key === null) {
-      this.update({ workspace: { status: "no-worktree" } });
+      this.patchState({ workspace: { status: "no-worktree" } });
       return;
     }
     void this.openWorkspace();
@@ -436,7 +440,7 @@ export class InspectorController {
     const cwd = (usePanelStore.getState().panelsById[this.panelId] as { cwd?: unknown } | undefined)
       ?.cwd;
     if (typeof cwd === "string" && cwd.length > 0 && !isWithin(worktreePath, cwd)) {
-      this.update({
+      this.patchState({
         workspace: {
           status: "failed",
           message:
@@ -445,7 +449,7 @@ export class InspectorController {
       });
       return;
     }
-    this.update({ workspace: { status: "opening" } });
+    this.patchState({ workspace: { status: "opening" } });
     try {
       const raw = await this.deps.invoke(CHANNELS.workspaceOpen, {
         projectId,
@@ -461,7 +465,7 @@ export class InspectorController {
       }
       switch (result.status) {
         case "ready":
-          this.update({
+          this.patchState({
             workspace: {
               status: "ready",
               workspaceSessionId: result.workspaceSessionId,
@@ -482,16 +486,16 @@ export class InspectorController {
             void this.openWorkspace(running);
             return;
           }
-          this.update({ workspace: { status: "ambiguous", appRoots: result.appRoots } });
+          this.patchState({ workspace: { status: "ambiguous", appRoots: result.appRoots } });
           return;
         }
         case "no-app":
-          this.update({ workspace: { status: "no-app" } });
+          this.patchState({ workspace: { status: "no-app" } });
           return;
       }
     } catch (error) {
       if (request !== this.workspaceRequest) return;
-      this.update({
+      this.patchState({
         workspace: {
           status: "failed",
           message: wireFailureMessage(error, "Couldn't open the site source"),
@@ -523,7 +527,7 @@ export class InspectorController {
     const workspace = this.state.workspace;
     if (workspace.status === "ready") this.releaseWorkspace(workspace.workspaceSessionId);
     // Source identity belongs to the workspace that minted it.
-    this.update({
+    this.patchState({
       workspace: { status: "idle" },
       selection: this.state.selection.status === "none" ? this.state.selection : { status: "none" },
     });
@@ -544,7 +548,7 @@ export class InspectorController {
     if (this.recoveringWorkspace === workspaceSessionId) return;
     this.recoveringWorkspace = workspaceSessionId;
     this.selectionRequest++;
-    this.update({ workspace: { status: "idle" }, selection: { status: "none" } });
+    this.patchState({ workspace: { status: "idle" }, selection: { status: "none" } });
     void this.openWorkspace();
   }
 
@@ -567,7 +571,7 @@ export class InspectorController {
       void this.deps.sitePreview.detach({ sessionId: previous.sessionId }).catch(() => undefined);
     }
     this.bufferedEvents = [];
-    this.update({
+    this.patchState({
       binding: { status: "binding", panelId: previewPanelId },
       epoch: null,
       page: null,
@@ -594,7 +598,7 @@ export class InspectorController {
       // the grid is recreating it. Keep trying for a while rather than leaving
       // the user to guess when to press Retry.
       const retrying = this.scheduleConnectRetry(previewPanelId, request);
-      this.update({
+      this.patchState({
         binding: {
           status: "failed",
           message: formatErrorMessage(error, "Couldn't connect to the dev preview"),
@@ -617,7 +621,7 @@ export class InspectorController {
       selection.status === "ready" && selection.stale === "preview-detached"
         ? { selection: { status: "none" } as const }
         : {};
-    this.update({
+    this.patchState({
       binding: {
         status: "bound",
         sessionId: state.sessionId,
@@ -698,7 +702,7 @@ export class InspectorController {
     const binding = this.state.binding;
     this.bindRequest++;
     if (binding.status !== "bound") return;
-    this.update({
+    this.patchState({
       binding: { status: "detached", panelId: binding.panelId, reason: "requested" },
       ...this.staleSelectionPatch("preview-detached"),
     });
@@ -709,15 +713,15 @@ export class InspectorController {
     const binding = this.state.binding;
     if (binding.status !== "bound" || mode === this.state.mode) return;
     const previous = this.state.mode;
-    this.update({ mode, modePending: true });
+    this.patchState({ mode, modePending: true });
     try {
       const next = await this.deps.sitePreview.setMode({ sessionId: binding.sessionId, mode });
       if (!this.isBoundTo(binding.sessionId)) return;
       this.noteEpoch(next.documentEpoch);
-      this.update({ mode: next.mode, modePending: false });
+      this.patchState({ mode: next.mode, modePending: false });
     } catch (error) {
       if (!this.isBoundTo(binding.sessionId)) return;
-      this.update({
+      this.patchState({
         mode: previous,
         modePending: false,
         issue: {
@@ -748,7 +752,7 @@ export class InspectorController {
     switch (payload.kind) {
       case "detached":
         this.bindRequest++;
-        this.update({
+        this.patchState({
           binding: { status: "detached", panelId: binding.panelId, reason: payload.reason },
           ...this.staleSelectionPatch("preview-detached"),
         });
@@ -785,7 +789,7 @@ export class InspectorController {
       patch.selection = { status: "lost" };
     }
     if (this.state.issue) patch.issue = null;
-    this.update(patch);
+    this.patchState(patch);
   }
 
   private handleGuestEvent(
@@ -803,7 +807,7 @@ export class InspectorController {
         };
         const binding = this.state.binding;
         if (binding.status === "bound") patch.binding = { ...binding, url: event.url };
-        this.update(patch);
+        this.patchState(patch);
         return;
       }
       case "selectionChanged":
@@ -816,7 +820,7 @@ export class InspectorController {
         );
         return;
       case "runtimeIssue":
-        this.update({
+        this.patchState({
           issue: {
             severity: event.code === "internal" ? "error" : "warning",
             message: RUNTIME_ISSUE_COPY[event.code] ?? event.detail,
@@ -840,7 +844,7 @@ export class InspectorController {
   private clearDisprovedMappingIssue(nodes: SiteGuestNodeObservation[]): void {
     const code = this.state.issue?.code;
     if (code === undefined || !MAPPING_ISSUES.has(code)) return;
-    if (nodes.some((node) => node.loc !== null)) this.update({ issue: null });
+    if (nodes.some((node) => node.loc !== null)) this.patchState({ issue: null });
   }
 
   /* ------------------------------------------------------------------------ */
@@ -859,7 +863,7 @@ export class InspectorController {
       // The page has nothing selected — the user cleared it (Escape, a click on
       // nothing), or the node it was showing left the document.
       this.continuity = null;
-      this.update({ selection: { status: "none" } });
+      this.patchState({ selection: { status: "none" } });
       return;
     }
     const workspace = this.state.workspace;
@@ -869,13 +873,13 @@ export class InspectorController {
     // agent: the verdict is about which compiler proved the range, not about
     // what the drawer offers.
     if (workspace.status !== "ready" || binding.status !== "bound") {
-      this.update({
+      this.patchState({
         selection: { status: "observed", epoch, node: nodes[0]!, nodeCount: nodes.length },
       });
       return;
     }
     if (!page || page.epoch !== epoch) {
-      this.update({
+      this.patchState({
         selection: { status: "failed", message: "The page is still loading — select again" },
       });
       return;
@@ -890,11 +894,11 @@ export class InspectorController {
         : []
     );
     if (clickedFiles.some((file) => file !== null && this.changedRecently(file))) {
-      this.update({ selection: { status: "settling" } });
+      this.patchState({ selection: { status: "settling" } });
       return;
     }
 
-    this.update({ selection: { status: "resolving", epoch, requestId: request } });
+    this.patchState({ selection: { status: "resolving", epoch, requestId: request } });
     let raw: unknown;
     try {
       raw = await this.deps.invoke(CHANNELS.selectionResolve, {
@@ -912,7 +916,7 @@ export class InspectorController {
         this.recoverClosedWorkspace(workspace.workspaceSessionId);
         return;
       }
-      this.update({
+      this.patchState({
         selection: {
           status: "failed",
           message: formatErrorMessage(error, "Couldn't find the source for this element"),
@@ -923,7 +927,7 @@ export class InspectorController {
     if (!this.isCurrentResolve(request)) return;
     const parsed = SelectionResolveResultSchema.safeParse(raw);
     if (!parsed.success) {
-      this.update({
+      this.patchState({
         selection: { status: "failed", message: "Couldn't find the source for this element" },
       });
       return;
@@ -941,14 +945,14 @@ export class InspectorController {
         result.mismatch.file
       );
       if (changed !== null && this.changedDuringResolve.has(changed)) {
-        this.update({ selection: { status: "lost" } });
+        this.patchState({ selection: { status: "lost" } });
         return;
       }
       if (changed !== null && this.changedRecently(changed)) {
-        this.update({ selection: { status: "settling" } });
+        this.patchState({ selection: { status: "settling" } });
         return;
       }
-      this.update({
+      this.patchState({
         selection: { status: "failed", message: mismatchMessage(result.mismatch) },
       });
       return;
@@ -959,7 +963,7 @@ export class InspectorController {
       result.selection.documentEpoch !== epoch ||
       result.selection.workspaceSessionId !== workspace.workspaceSessionId
     ) {
-      this.update({ selection: { status: "lost" } });
+      this.patchState({ selection: { status: "lost" } });
       return;
     }
     const selection = result.selection;
@@ -967,11 +971,11 @@ export class InspectorController {
     // The observation predates the change, but main resolved it against the
     // newer bytes; the pairing can't be trusted, so the user selects again.
     if (file !== null && this.changedDuringResolve.has(file)) {
-      this.update({ selection: { status: "lost" } });
+      this.patchState({ selection: { status: "lost" } });
       return;
     }
     if (file !== null && this.changedRecently(file)) {
-      this.update({ selection: { status: "settling" } });
+      this.patchState({ selection: { status: "settling" } });
       return;
     }
     const after = selection.nodes[0]?.definition ?? null;
@@ -985,7 +989,7 @@ export class InspectorController {
             occurrence: nodes[0]!.runtimeOccurrenceId,
           }
         : null;
-    this.update({
+    this.patchState({
       selection: {
         status: "ready",
         selection,
@@ -1017,7 +1021,7 @@ export class InspectorController {
     if (current.status !== "ready" || current.selection.selectionId !== selection.selectionId) {
       return;
     }
-    this.update({ selection: { ...current, ...facts } });
+    this.patchState({ selection: { ...current, ...facts } });
   }
 
   /**
@@ -1179,14 +1183,14 @@ export class InspectorController {
     this.noteChanged(push.file);
     const selection = this.state.selection;
     if (selection.status === "ready" && selection.file === push.file) {
-      this.update(this.staleSelectionPatch("source-changed"));
+      this.patchState(this.staleSelectionPatch("source-changed"));
     }
   }
 
   private handleIssue(raw: unknown): void {
     const parsed = IssuePushSchema.safeParse(raw);
     if (!parsed.success) return;
-    this.update({ issue: { severity: parsed.data.severity, message: parsed.data.message } });
+    this.patchState({ issue: { severity: parsed.data.severity, message: parsed.data.message } });
   }
 
   /**
@@ -1240,7 +1244,7 @@ export class InspectorController {
   }
 
   dismissIssue(): void {
-    this.update({ issue: null });
+    this.patchState({ issue: null });
   }
 
   /**
@@ -1289,6 +1293,10 @@ export class InspectorController {
 
   dispose(): void {
     if (this.disposed) return;
+    // The builder is really over for this preview: nothing typed or in flight
+    // for it may outlive it.
+    cancelAgentRequests(this.panelId);
+    forgetComposerMemories(this.panelId);
     this.clearReattach();
     this.clearConnectRetry();
     this.bindRequest++;
@@ -1304,118 +1312,21 @@ export class InspectorController {
   }
 }
 
-const controllers = new Map<string, ControllerEntry>();
-const controllerListeners = new Set<() => void>();
-
-function notifyControllers(): void {
-  for (const listener of [...controllerListeners]) listener();
-}
-
-export function subscribeBuilderControllers(listener: () => void): () => void {
-  controllerListeners.add(listener);
-  return () => controllerListeners.delete(listener);
-}
-
-/** The live controller for a preview, if something holds one. Never creates. */
-export function peekBuilderController(previewPanelId: string): InspectorController | null {
-  return controllers.get(previewPanelId)?.controller ?? null;
-}
-
 /**
- * Hold the builder for one dev preview, creating it on first hold. Shared by
- * the preview's toolbar strip and drawer; disposed — detaching the preview and
- * closing the source workspace — a tick after the last holder lets go, so a
- * remount (or React's development double-mount) keeps the binding.
- *
- * Only effects hold. A controller created during render could be disposed by
- * an idle check before that render committed, and the builder would then keep
- * rendering a dead controller that ignores every update.
+ * The builder for one dev preview, as the host's session for its Site Builder
+ * tool. The host owns its lifetime — created when the builder is switched on,
+ * kept across surface unmounts, disposed when the tool goes off or the preview
+ * or plugin does — so nothing here reconstructs those events.
  */
-export function holdBuilderController(
-  previewPanelId: string,
+export function createBuilderSession(
+  context: DevPreviewToolSessionContext,
   deps: (previewPanelId: string) => InspectorDeps = defaultInspectorDeps
-): () => void {
-  let entry = controllers.get(previewPanelId);
-  if (!entry) {
-    const controller = new InspectorController(previewPanelId, deps(previewPanelId));
-    const created: ControllerEntry = { controller, holders: 0, unwatch: null };
-    entry = created;
-    controllers.set(previewPanelId, created);
-    // Disabling the plugin closes every workspace in main; a controller kept
-    // across that would come back holding dead sessions.
-    controller.onPluginDisabled = () => {
-      if (controllers.get(previewPanelId) === created) releaseBuilderController(previewPanelId);
-    };
-    notifyControllers();
-  }
-  const held = entry;
-  held.holders++;
-  held.unwatch?.();
-  held.unwatch = null;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    held.holders--;
-    setTimeout(() => releaseWhenIdle(previewPanelId, held), 0);
-  };
-}
-
-interface ControllerEntry {
-  controller: InspectorController;
-  holders: number;
-  /** Set while an unheld controller waits for its builder to be switched off. */
-  unwatch: (() => void) | null;
-}
-
-/**
- * The builder's UI unmounts whenever its preview is hidden — another dock tab,
- * a maximised sibling — and that must not cost the user an in-flight request
- * or a draft. So an unheld controller lives on while the builder is
- * still switched on for a preview that still exists, and goes when either
- * stops being true.
- */
-function releaseWhenIdle(previewPanelId: string, entry: ControllerEntry): void {
-  if (entry.holders > 0 || controllers.get(previewPanelId) !== entry) return;
-  const panel = usePanelStore.getState().panelsById[previewPanelId];
-  const panelAlive = panel !== undefined && panel.location !== "trash";
-  const builderOn =
-    useDevPreviewToolStore.getState().activeByPanel[previewPanelId] === BUILDER_TOOL_ID;
-  if (panelAlive && builderOn) {
-    if (entry.unwatch !== null) return;
-    const recheck = () => releaseWhenIdle(previewPanelId, entry);
-    const offTools = useDevPreviewToolStore.subscribe(recheck);
-    const offPanels = usePanelStore.subscribe(recheck);
-    entry.unwatch = () => {
-      offTools();
-      offPanels();
-    };
-    return;
-  }
-  // A removed preview leaves no switched-on tool behind to confuse a later one.
-  if (!panelAlive && builderOn) useDevPreviewToolStore.getState().setActive(previewPanelId, null);
-  releaseBuilderController(previewPanelId);
-}
-
-export function releaseBuilderController(previewPanelId: string): void {
-  const entry = controllers.get(previewPanelId);
-  // The builder is really over for this preview: nothing typed or in flight
-  // for it may outlive it.
-  cancelAgentRequests(previewPanelId);
-  forgetComposerMemories(previewPanelId);
-  if (!entry) return;
-  entry.unwatch?.();
-  entry.unwatch = null;
-  entry.controller.dispose();
-  controllers.delete(previewPanelId);
-  notifyControllers();
-}
-
-export function __resetInspectorControllersForTests(): void {
-  for (const entry of controllers.values()) {
-    entry.unwatch?.();
-    entry.controller.dispose();
-  }
-  controllers.clear();
-  notifyControllers();
+): InspectorController {
+  // The chunk can land after the host let this preview go. Disposing what we
+  // would build here cancels agent requests and forgets composer drafts for the
+  // whole panel — which by then may belong to the next session.
+  if (context.signal.aborted) throw new Error("The Site Builder was switched off while it loaded");
+  const controller = new InspectorController(context.panelId, deps(context.panelId));
+  controller.update(context);
+  return controller;
 }

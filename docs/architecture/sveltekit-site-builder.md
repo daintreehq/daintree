@@ -71,7 +71,7 @@ It also does not survive an HMR update as an object identity. A Vite update **re
 │ BUILT-IN PLUGIN  daintree.sveltekit-builder                        │
 │   main/      workspace lifecycle, host.fs reads, source tracking   │
 │   shared/    protocol + domain model, project model and routes     │
-│   renderer/  dev preview tool: toggle, strip, drawer, composer     │
+│   renderer/  dev preview tool: toggle, session, strip, drawer      │
 └───────────────────────────────┬────────────────────────────────────┘
                                 │
 ┌───────────────────────────────┴────────────────────────────────────┐
@@ -128,7 +128,7 @@ The builder is part of the dev preview, not a panel of its own. A built-in regis
 
 Which tool is on is per preview panel (`src/store/devPreviewToolStore.ts`), toggled by the button, by the plugin's **Toggle Site Builder** command and tray entry (`devPreview.toggleTool`, which opens a dev preview when the worktree has none), or closed from the strip. A tool is hidden until its plugin is known to be loaded and enabled, so a default-off built-in never flashes its button. Turning the builder on binds straight to its own preview in Select mode; there is no candidate picker, because the preview hosting the tool is the only one it can mean.
 
-The controller for a preview is created by the effect that holds it, never during render. Unheld, it lives on while the builder is still switched on for a preview that still exists — so hiding the preview keeps the binding and in-flight state — and is disposed once the builder is switched off or the panel is removed. A bind that fails because the preview has no page yet is retried on a backoff of about two minutes, with **Retry** in the strip. A controller created during render can be disposed by an idle check before that render commits, and the builder then renders a dead controller that ignores every update — in the app that was a strip stuck on "Connecting to the page".
+The controller is the host's **tool session** for that preview: the host creates it when the builder is switched on, keeps it while the tool stays on — so hiding the preview, maximising a sibling or a grid remount keeps the binding and in-flight state — feeds it the preview's worktree, page and visibility, and disposes it when the builder is switched off, the preview is trashed or removed, or the plugin is disabled. The strip and the drawer receive the same session through their props and never own its lifetime; `createSession` is the only thing the plugin registers for it, and disposal is what cancels agent requests, forgets composer drafts, detaches the preview and closes the workspace. A bind that fails because the preview has no page yet is retried on a backoff of about two minutes, with **Retry** in the strip; the session hears about the page from the preview's pane rather than from the strip, so the retry does not depend on the builder's own surfaces being mounted. [Views → Dev preview tools](../plugins/views.md#dev-preview-tools) is the contract.
 
 ## Selecting on the page
 

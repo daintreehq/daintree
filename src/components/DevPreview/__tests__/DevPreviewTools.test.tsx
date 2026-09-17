@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DevPreviewToolButtons,
   DevPreviewToolDrawer,
@@ -11,13 +11,45 @@ import {
   getAvailableDevPreviewTool,
   registerDevPreviewTool,
   type DevPreviewToolButtonProps,
+  type DevPreviewToolSessionContext,
   type DevPreviewToolSurfaceProps,
 } from "@/registry/devPreviewToolRegistry";
+import {
+  __resetDevPreviewToolSessionsForTests,
+  peekDevPreviewToolSession,
+} from "@/services/devPreviewTools/sessionManager";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const PLUGIN = "acme.tools";
 const TOOL = "acme.tools.picker";
+const BROKEN_TOOL = "acme.tools.broken";
+
+/** A stand-in for a tool's session, recording what the host tells it. */
+interface FakeSession {
+  contexts: DevPreviewToolSessionContext[];
+  disposals: number;
+  update: (context: DevPreviewToolSessionContext) => void;
+  dispose: () => void;
+}
+
+function makeSession(context: DevPreviewToolSessionContext): FakeSession {
+  const session: FakeSession = {
+    contexts: [context],
+    disposals: 0,
+    update: (next) => session.contexts.push(next),
+    dispose: () => {
+      session.disposals++;
+    },
+  };
+  return session;
+}
+
+function session(): FakeSession {
+  const live = peekDevPreviewToolSession(host.panelId) as FakeSession | null;
+  if (!live) throw new Error("no session for the active tool");
+  return live;
+}
 
 function Button({ active, onToggle }: DevPreviewToolButtonProps) {
   return (
@@ -80,11 +112,13 @@ beforeEach(() => {
     Button,
     Toolbar,
     Drawer,
+    createSession: makeSession,
   });
 });
 
 afterEach(() => {
   cleanup();
+  __resetDevPreviewToolSessionsForTests();
   __resetDevPreviewToolsForTests();
   _resetPluginRuntimeStoreForTest();
 });
@@ -131,14 +165,76 @@ describe("dev preview tools", () => {
     expect(getAvailableDevPreviewTool(TOOL)?.id).toBe(TOOL);
   });
 
+  it("keeps one session across the surfaces unmounting and remounting", () => {
+    pluginLoaded(true);
+    const view = render(<Preview />);
+    fireEvent.click(screen.getByRole("button", { name: "Picker" }));
+    const live = session();
+    expect(live.contexts.at(-1)?.visible).toBe(true);
+
+    // What a hidden dock tab or a maximised sibling costs the tool: its
+    // surfaces, and nothing else.
+    view.unmount();
+    expect(live.contexts.at(-1)?.visible).toBe(false);
+    expect(live.disposals).toBe(0);
+
+    render(<Preview />);
+    expect(session()).toBe(live);
+    expect(screen.getByRole("toolbar", { name: "Picker strip" })).toBeTruthy();
+    expect(live.contexts.at(-1)?.visible).toBe(true);
+  });
+
+  it("disposes the session when the tool is switched off", () => {
+    pluginLoaded(true);
+    render(<Preview />);
+    fireEvent.click(screen.getByRole("button", { name: "Picker" }));
+    const live = session();
+    fireEvent.click(screen.getByRole("button", { name: "Close picker" }));
+    expect(live.disposals).toBe(1);
+    expect(peekDevPreviewToolSession(host.panelId)).toBeNull();
+  });
+
+  it("does not carry one tool's failed toolbar into the next tool", () => {
+    registerDevPreviewTool({
+      id: BROKEN_TOOL,
+      pluginId: PLUGIN,
+      label: "Broken",
+      Button: ({ onToggle }: DevPreviewToolButtonProps) => (
+        <button type="button" onClick={onToggle}>
+          Broken
+        </button>
+      ),
+      Toolbar: () => {
+        throw new Error("toolbar exploded");
+      },
+    });
+    pluginLoaded(true);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      render(<Preview />);
+      fireEvent.click(screen.getByRole("button", { name: "Broken" }));
+      expect(screen.getByText("Broken toolbar error")).toBeTruthy();
+
+      fireEvent.click(screen.getByRole("button", { name: "Picker" }));
+      expect(screen.queryByText("Broken toolbar error")).toBeNull();
+      expect(screen.getByRole("toolbar", { name: "Picker strip" })).toBeTruthy();
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   it("drops an active tool's surfaces when its plugin is disabled", () => {
     pluginLoaded(true);
     render(<Preview />);
     fireEvent.click(screen.getByRole("button", { name: "Picker" }));
     expect(screen.getByRole("toolbar", { name: "Picker strip" })).toBeTruthy();
 
+    const live = session();
     act(() => pluginLoaded(false));
     expect(screen.queryByRole("toolbar", { name: "Picker strip" })).toBeNull();
     expect(screen.queryByRole("complementary", { name: "Picker drawer" })).toBeNull();
+    // Not just hidden: a disabled plugin ends the tool, session and all.
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+    expect(live.disposals).toBe(1);
   });
 });
