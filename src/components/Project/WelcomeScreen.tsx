@@ -139,22 +139,21 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const progressTotal = CHECKLIST_ITEMS.length + 1; // real items + endowed "Install Daintree"
   const progressDone = 1 + completedCount; // endowed item always complete
 
+  // The welcome surface scales on its own width, not the viewport's: the
+  // Assistant panel takes a variable share of the window (#12438). The query
+  // container wraps the scroller rather than being it, so a scrollbar coming or
+  // going never moves the measured width and can't flip a tier, and it sits
+  // outside the capped column so it can measure past it. From 1800px (above the
+  // default width of every MacBook display) the layout gets more room; from
+  // 1920px the type steps up as well.
   return (
-    <div
-      // The gutter is reserved on both edges so the query container below keeps
-      // one width whether or not the scrollbar is showing; otherwise a surface
-      // sitting on a tier boundary could flip tiers as its content height changes.
-      className="flex flex-col items-center h-full w-full overflow-y-auto [scrollbar-gutter:stable_both-edges] animate-in fade-in duration-500"
-      // Theme-authored wash layered over the existing canvas; `none` = today.
-      style={{ background: "var(--welcome-field-wash, none)" }}
-    >
-      {/* The welcome surface scales on its own width, not the viewport's: the
-          Assistant panel takes a variable share of the window (#12438). The
-          container sits outside the capped column so it can measure past it,
-          and inside the scroller so it never carries the scrollbar itself.
-          At 1536px the layout gets more room; at 1920px the type steps up. */}
-      <div className="@container/welcome w-full shrink-0 flex flex-col items-center">
-        <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10 @min-[1536px]/welcome:max-w-3xl @min-[1536px]/welcome:gap-12 @min-[1920px]/welcome:max-w-4xl">
+    <div className="@container/welcome h-full w-full">
+      <div
+        className="flex flex-col items-center h-full w-full overflow-y-auto animate-in fade-in duration-500"
+        // Theme-authored wash layered over the existing canvas; `none` = today.
+        style={{ background: "var(--welcome-field-wash, none)" }}
+      >
+        <div className="max-w-2xl w-full flex flex-col items-center px-8 py-12 gap-10 @min-[1800px]/welcome:max-w-3xl @min-[1800px]/welcome:gap-12 @min-[1920px]/welcome:max-w-4xl">
           {/* Hero — suppressed for returning users; their recent projects are the relevant first thing */}
           {!hasProjects && (
             <div className="flex flex-col items-center text-center">
@@ -199,7 +198,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               aria-label={hasProjects ? undefined : "Quick actions"}
               aria-labelledby={hasProjects ? "quick-actions-heading" : undefined}
               data-testid="quick-actions"
-              className="grid grid-cols-2 gap-3 @min-[1536px]/welcome:gap-4"
+              className="grid grid-cols-2 gap-3 @min-[1800px]/welcome:gap-4"
             >
               {quickActions.map(({ id, icon: Icon, title, description, onClick, primary }) => {
                 // Subtle surface lift marks the recommended first step for new
@@ -218,7 +217,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                     aria-label={title}
                     aria-describedby={`qa-desc-${id}`}
                     className={cn(
-                      "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1536px]/welcome:p-4",
+                      "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1800px]/welcome:p-4",
                       "transition-colors duration-150",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                       lifted
@@ -256,7 +255,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
                 Keyboard shortcuts
               </h3>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-2 @min-[1536px]/welcome:gap-x-10">
+              <div className="grid grid-cols-2 gap-x-8 gap-y-2 @min-[1800px]/welcome:gap-x-10">
                 {visibleShortcutTips.map(({ label, actionId }) => {
                   const combo = keybindingService.getDisplayCombo(actionId);
                   return (
@@ -390,7 +389,7 @@ function TopProjects({
             type="button"
             onClick={() => void onSelect(project.id)}
             className={cn(
-              "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left transition-colors @min-[1536px]/welcome:px-4 @min-[1536px]/welcome:py-3",
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left transition-colors @min-[1800px]/welcome:px-4 @min-[1800px]/welcome:py-3",
               "hover:bg-overlay-soft",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             )}
@@ -454,7 +453,7 @@ function AgentSetupBannerCard() {
 
   return (
     <div className="w-full" data-testid="agent-setup-banner">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5 @min-[1536px]/welcome:px-5 @min-[1536px]/welcome:py-4">
+      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
         <button
           type="button"
           onClick={handleDismiss}
@@ -478,14 +477,19 @@ function AgentSetupBannerCard() {
               this and come back anytime.
             </p>
             <div className="mt-4 flex items-center gap-2">
-              <Button size="sm" onClick={handleStartSetup} data-testid="agent-setup-banner-cta">
+              <Button
+                size="sm"
+                onClick={handleStartSetup}
+                className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
+                data-testid="agent-setup-banner-cta"
+              >
                 <Sparkles className="h-3.5 w-3.5" />
                 Set up agents
               </Button>
               <button
                 type="button"
                 onClick={handleDismiss}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors @min-[1920px]/welcome:text-sm"
               >
                 Not now
               </button>
@@ -551,7 +555,7 @@ function AgentWelcomeCard() {
 
   return (
     <div className="w-full">
-      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5 @min-[1536px]/welcome:px-5 @min-[1536px]/welcome:py-4">
+      <div className="relative w-full rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-sidebar/40 px-4 py-3.5 @min-[1800px]/welcome:px-5 @min-[1800px]/welcome:py-4">
         <button
           type="button"
           onClick={handleDismiss}
@@ -597,6 +601,7 @@ function AgentWelcomeCard() {
                 size="sm"
                 onClick={() => void handlePinAll()}
                 disabled={busy}
+                className="@min-[1920px]/welcome:h-8 @min-[1920px]/welcome:text-sm"
                 data-testid="welcome-card-pin-all"
               >
                 <Pin className="h-3.5 w-3.5" />
@@ -605,7 +610,7 @@ function AgentWelcomeCard() {
               <button
                 type="button"
                 onClick={handleDismiss}
-                className="text-xs text-text-secondary hover:text-text-primary transition-colors"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors @min-[1920px]/welcome:text-sm"
               >
                 Not now
               </button>
@@ -661,11 +666,11 @@ function InlineChecklist({
 
           return (
             <>
-              <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60 @min-[1536px]/welcome:gap-3 @min-[1536px]/welcome:px-3 @min-[1536px]/welcome:py-2">
-                <div className="h-4 w-4 rounded-full bg-accent-primary border border-accent-primary flex items-center justify-center shrink-0">
+              <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60 @min-[1800px]/welcome:gap-3 @min-[1800px]/welcome:px-3 @min-[1800px]/welcome:py-2">
+                <div className="h-4 w-4 rounded-full bg-accent-primary border border-accent-primary flex items-center justify-center shrink-0 @min-[1920px]/welcome:mt-0.5">
                   <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />
                 </div>
-                <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0 @min-[1920px]/welcome:h-4 @min-[1920px]/welcome:w-4" />
+                <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0 @min-[1920px]/welcome:mt-0.5 @min-[1920px]/welcome:h-4 @min-[1920px]/welcome:w-4" />
                 <span className="text-xs leading-snug text-daintree-text/40 @min-[1920px]/welcome:text-sm">
                   Install Daintree
                 </span>
@@ -679,7 +684,7 @@ function InlineChecklist({
                   <>
                     <div
                       className={cn(
-                        "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150",
+                        "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150 @min-[1920px]/welcome:mt-0.5",
                         done ? "bg-accent-primary border-accent-primary" : "border-daintree-text/30"
                       )}
                     >
@@ -687,7 +692,7 @@ function InlineChecklist({
                     </div>
                     <Icon
                       className={cn(
-                        "h-3.5 w-3.5 shrink-0 @min-[1920px]/welcome:h-4 @min-[1920px]/welcome:w-4",
+                        "h-3.5 w-3.5 shrink-0 @min-[1920px]/welcome:mt-0.5 @min-[1920px]/welcome:h-4 @min-[1920px]/welcome:w-4",
                         done ? "text-daintree-text/40" : "text-daintree-text/70"
                       )}
                     />
@@ -715,7 +720,7 @@ function InlineChecklist({
                 );
 
                 const sharedClasses = cn(
-                  "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 @min-[1536px]/welcome:gap-3 @min-[1536px]/welcome:px-3 @min-[1536px]/welcome:py-2",
+                  "flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 @min-[1800px]/welcome:gap-3 @min-[1800px]/welcome:px-3 @min-[1800px]/welcome:py-2",
                   "transition-colors duration-150",
                   done ? "opacity-60" : "opacity-100"
                 );
