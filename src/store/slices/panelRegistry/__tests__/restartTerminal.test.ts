@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import type { PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
 
 const mockSpawn = vi.fn().mockResolvedValue({ id: "test-1" });
 const mockKill = vi.fn().mockResolvedValue(undefined);
@@ -657,8 +657,8 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     buildAgentLaunchFlagsMock.mockReturnValue([]);
     mockGracefulKill.mockResolvedValue(null);
     const { agentSettingsClient, projectClient } = await import("@/clients");
-    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
-    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    vi.mocked(agentSettingsClient.get).mockResolvedValue({});
+    vi.mocked(projectClient.getSettings).mockResolvedValue(null);
     const { reset } = usePanelStore.getState();
     await reset();
     usePanelStore.setState({
@@ -672,6 +672,12 @@ describe("restartTerminal and panes that run away from their conversation (#1243
       commandQueue: [],
     });
   });
+
+  function ptyAfterRestart(): PtyPanelData {
+    const panel = usePanelStore.getState().panelsById["test-1"];
+    if (!panel || !isPtyPanel(panel)) throw new Error("restarted pane is gone");
+    return panel;
+  }
 
   const movedPane = {
     ...agentPanelBase,
@@ -698,14 +704,14 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     expect(mockSpawn).not.toHaveBeenCalled();
     expect(mockKill).not.toHaveBeenCalled();
     expect(mockGracefulKill).not.toHaveBeenCalled();
-    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData;
+    const after = ptyAfterRestart();
     expect(after.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
     expect(after.isRestarting).toBeFalsy();
   });
 
   it("never runs resume-latest from a folder the conversation didn't begin in", async () => {
     const { buildResumeLatestCommand } = await import("@shared/types");
-    (buildResumeLatestCommand as ReturnType<typeof vi.fn>).mockReturnValue("codex resume --last");
+    vi.mocked(buildResumeLatestCommand).mockReturnValue("codex resume --last");
     usePanelStore.setState({
       panelsById: { [movedPane.id]: movedPane },
       panelIds: [movedPane.id],
@@ -716,13 +722,13 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     expect(buildResumeLatestCommand).not.toHaveBeenCalled();
     expect(mockSpawn.mock.calls[0]![0].command).not.toBe("codex resume --last");
     // A new conversation begins where the pane runs.
-    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData;
+    const after = ptyAfterRestart();
     expect(after.conversationCwd).toBeUndefined();
   });
 
   it("keeps pointing at the conversation's folder when it resumes that conversation", async () => {
     const { buildResumeCommand } = await import("@shared/types");
-    (buildResumeCommand as ReturnType<typeof vi.fn>).mockReturnValue("codex resume sess-a -C '.'");
+    vi.mocked(buildResumeCommand).mockReturnValue("codex resume sess-a -C '.'");
     const pane = { ...movedPane, agentSessionId: "sess-a" };
     usePanelStore.setState({ panelsById: { [pane.id]: pane }, panelIds: [pane.id] });
 
@@ -731,7 +737,7 @@ describe("restartTerminal and panes that run away from their conversation (#1243
     const payload = mockSpawn.mock.calls[0]![0];
     expect(payload.command).toBe("codex resume sess-a -C '.'");
     expect(payload.cwd).toBe("/worktrees/task-a");
-    const after = usePanelStore.getState().panelsById["test-1"] as PtyPanelData;
+    const after = ptyAfterRestart();
     expect(after.conversationCwd).toBe("/repo");
   });
 });

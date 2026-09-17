@@ -84,9 +84,8 @@ beforeEach(() => {
 const { usePanelStore } = await import("../../../panelStore");
 const { usePanelLimitStore } = await import("@/store/panelLimitStore");
 const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
-const { terminalClient } = (await import("@/clients")) as unknown as {
-  terminalClient: { spawn: ReturnType<typeof vi.fn> };
-};
+const { terminalClient } = await import("@/clients");
+const spawn = vi.mocked(terminalClient.spawn);
 const { terminalInstanceService } = await import("@/services/TerminalInstanceService");
 
 async function drainMicrotasks(iterations = 100): Promise<void> {
@@ -133,8 +132,8 @@ function launchOver(id: string) {
 describe("addPanel — recovery holds (#12434)", () => {
   beforeEach(async () => {
     await usePanelStore.getState().reset();
-    terminalClient.spawn.mockReset();
-    terminalClient.spawn.mockImplementation(async ({ id }: { id?: string }) => id ?? "spawn-id");
+    spawn.mockReset();
+    spawn.mockImplementation(async ({ id }) => id ?? "spawn-id");
     vi.mocked(terminalInstanceService.prewarmTerminal).mockReset();
     usePanelLimitStore.setState({ softWarningLimit: 100, confirmationLimit: 200, hardLimit: 300 });
   });
@@ -155,7 +154,7 @@ describe("addPanel — recovery holds (#12434)", () => {
     expect(panel?.startedAt).toBeUndefined();
     expect(usePanelStore.getState().panelIds).toContain("held-1");
 
-    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
     expect(terminalInstanceService.prewarmTerminal).not.toHaveBeenCalled();
     expect(agentLifecycleLedger.getEntry("held-1")).toBeUndefined();
   });
@@ -172,8 +171,8 @@ describe("addPanel — recovery holds (#12434)", () => {
     });
     await drainMicrotasks();
 
-    expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
-    expect(terminalClient.spawn.mock.calls[0]?.[0]).toMatchObject({ id: "plain" });
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.calls[0]?.[0]).toMatchObject({ id: "plain" });
   });
 
   it("launches a held pane in place, keeping its position", async () => {
@@ -191,7 +190,7 @@ describe("addPanel — recovery holds (#12434)", () => {
       bypassLimits: true,
     });
     await drainMicrotasks();
-    terminalClient.spawn.mockClear();
+    spawn.mockClear();
 
     await expect(launchOver("held-1")).resolves.toBe("held-1");
     await drainMicrotasks();
@@ -202,8 +201,8 @@ describe("addPanel — recovery holds (#12434)", () => {
     expect(panel?.hasPty).not.toBe(false);
     expect(panel?.agentSessionId).toBe("sess-1");
     expect(panel?.conversationCwd).toBe("/repo");
-    expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
-    expect(terminalClient.spawn.mock.calls[0]?.[0]).toMatchObject({
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(spawn.mock.calls[0]?.[0]).toMatchObject({
       id: "held-1",
       cwd: "/worktrees/task-a",
       command: "codex resume sess-1 -C '.'",
@@ -220,7 +219,7 @@ describe("addPanel — recovery holds (#12434)", () => {
     await drainMicrotasks();
 
     expect(usePanelStore.getState().panelsById["held-1"]).toBeUndefined();
-    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("launches a held pane only once however many launches race for it", async () => {
@@ -231,7 +230,7 @@ describe("addPanel — recovery holds (#12434)", () => {
 
     expect(results.filter((id) => id === "held-1")).toHaveLength(1);
     expect(results.filter((id) => id === null)).toHaveLength(1);
-    expect(terminalClient.spawn).toHaveBeenCalledTimes(1);
+    expect(spawn).toHaveBeenCalledTimes(1);
   });
 
   it("refuses to treat an ordinary pane as a held one", async () => {
@@ -242,10 +241,10 @@ describe("addPanel — recovery holds (#12434)", () => {
       bypassLimits: true,
     });
     await drainMicrotasks();
-    terminalClient.spawn.mockClear();
+    spawn.mockClear();
 
     await expect(launchOver("plain")).resolves.toBeNull();
-    expect(terminalClient.spawn).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("lets a held pane launch at the panel limit, since it replaces rather than adds", async () => {

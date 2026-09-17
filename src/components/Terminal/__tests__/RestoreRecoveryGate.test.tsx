@@ -8,7 +8,7 @@
 
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PtyPanelData } from "@shared/types/panel";
 
 const findSessions = vi.hoisted(() => vi.fn());
 const launchFromRestoreRecovery = vi.hoisted(() => vi.fn());
@@ -64,7 +64,7 @@ vi.mock("../../../store/slices/panelRegistry/persistence", async () => {
 const { usePanelStore } = await import("@/store/panelStore");
 const { RestoreRecoveryGate } = await import("../RestoreRecoveryGate");
 
-function heldPanel(id: string, overrides: Partial<PtyPanelData> = {}): PanelInstance {
+function heldPanel(id: string, overrides: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     kind: "terminal",
@@ -79,7 +79,7 @@ function heldPanel(id: string, overrides: Partial<PtyPanelData> = {}): PanelInst
     hasPty: false,
     restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
     ...overrides,
-  } as PanelInstance;
+  };
 }
 
 function seed(...panels: PanelInstance[]) {
@@ -90,7 +90,9 @@ function seed(...panels: PanelInstance[]) {
 }
 
 function held(id: string): PtyPanelData {
-  return usePanelStore.getState().panelsById[id] as PtyPanelData;
+  const panel = usePanelStore.getState().panelsById[id];
+  if (!panel || !isPtyPanel(panel)) throw new Error(`${id} is not a terminal pane`);
+  return panel;
 }
 
 beforeEach(() => {

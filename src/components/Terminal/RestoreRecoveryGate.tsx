@@ -126,7 +126,7 @@ export function RestoreRecoveryGate({ panelId, containerRef }: RestoreRecoveryGa
     <div
       ref={containerRef}
       tabIndex={-1}
-      className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto outline-hidden"
+      className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto"
     >
       <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">
         <div className="flex items-center gap-2.5">

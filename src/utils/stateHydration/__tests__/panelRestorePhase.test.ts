@@ -2302,7 +2302,8 @@ describe("restorePanelsPhase — moved panes and recovery holds (#12434)", () =>
 
   function argsById(ctx: MockedContext): Map<string, RespawnArgs> {
     const byId = new Map<string, RespawnArgs>();
-    for (const [args] of ctx.addPanel.mock.calls as [RespawnArgs][]) {
+    for (const call of ctx.addPanel.mock.calls) {
+      const args: RespawnArgs = call[0];
       const id = args.requestedId ?? args.existingId;
       if (id !== undefined) byId.set(id, args);
     }

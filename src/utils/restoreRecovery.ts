@@ -16,6 +16,10 @@ const RESTORE_RECOVERY_REASONS: ReadonlySet<string> = new Set<RestoreRecoveryRea
 // eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\x00-\x1f\x7f]/;
 
+function isRestoreRecoveryReason(value: unknown): value is RestoreRecoveryReason {
+  return typeof value === "string" && RESTORE_RECOVERY_REASONS.has(value);
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -31,10 +35,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  */
 export function sanitizeRestoreRecovery(value: unknown): PanelRestoreRecovery | undefined {
   if (!isPlainObject(value)) return undefined;
-  const reason: RestoreRecoveryReason =
-    typeof value.reason === "string" && RESTORE_RECOVERY_REASONS.has(value.reason)
-      ? (value.reason as RestoreRecoveryReason)
-      : "session-unresolved";
+  const reason = isRestoreRecoveryReason(value.reason) ? value.reason : "session-unresolved";
   const sessionId =
     typeof value.sessionId === "string" &&
     value.sessionId.length > 0 &&
