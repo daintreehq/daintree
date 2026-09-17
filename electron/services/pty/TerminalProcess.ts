@@ -126,6 +126,12 @@ export interface TerminalProcessCallbacks {
    * submits, which complete well inside the threshold and report nothing.
    */
   onSubmitStatus?: (id: string, state: TerminalSubmitStatusState) => void;
+  /**
+   * The graceful-shutdown capture window opening (`true`) and closing
+   * (`false`), paired once per teardown (#12432). The owner keeps this PTY's
+   * reads flowing past its memory and backpressure holds in between.
+   */
+  onGracefulCapture?: (id: string, active: boolean) => void;
 }
 
 export interface TerminalProcessDependencies {
@@ -1459,6 +1465,7 @@ export class TerminalProcess {
         return self.isAgentLive;
       },
       acquireInputLock: () => this.inputController.acquireShutdownInputLock(),
+      enterCaptureMode: () => this.enterGracefulCapture(),
       kill: (reason) => this.kill(reason),
     });
     this.gracefulShutdownInFlight = inFlight;
@@ -1477,6 +1484,29 @@ export class TerminalProcess {
     };
     void inFlight.then(clear, clear);
     return inFlight;
+  }
+
+  private enterGracefulCapture(): () => void {
+    const notify = this.callbacks.onGracefulCapture;
+    if (!notify) return () => {};
+    try {
+      notify(this.id, true);
+    } catch (error) {
+      // Whatever the owner managed to open before throwing must not outlive
+      // the failed attempt.
+      try {
+        notify(this.id, false);
+      } catch {
+        // The original failure is the one worth reporting.
+      }
+      throw error;
+    }
+    let closed = false;
+    return () => {
+      if (closed) return;
+      closed = true;
+      notify(this.id, false);
+    };
   }
 
   kill(

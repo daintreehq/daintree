@@ -496,6 +496,14 @@ export class PtyManager extends EventEmitter {
             }
             this.emit("submit-status", termId, state);
           },
+          onGracefulCapture: (termId, active) => {
+            // Same staleness guard: a replaced incarnation closing its window
+            // must not end the capture its successor may have opened.
+            if (this.registry.get(termId) !== terminalProcess) {
+              return;
+            }
+            this.emit("graceful-capture", termId, active);
+          },
           onPreserved: (termId) => {
             // Preserved terminals retain their full scrollback snapshot in
             // memory and aren't otherwise removed until trash/kill or project

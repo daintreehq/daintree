@@ -23,6 +23,7 @@ interface SpawnOptionsShape extends PtyHostSpawnOptions {
 interface TerminalCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
   onExit: (id: string, exitCode: number) => void;
+  onGracefulCapture?: (id: string, active: boolean) => void;
 }
 
 type MockPtyProcess = Pick<IPty, "kill" | "pid" | "cols" | "rows" | "process">;
@@ -309,6 +310,38 @@ describe("PtyManager adversarial", () => {
 
     expect(exits).toEqual([{ id: "t1", code: 0 }]);
     expect(manager.hasTerminal("t1")).toBe(false);
+  });
+
+  it("GRACEFUL_CAPTURE_FORWARDS_ONLY_THE_CURRENT_INCARNATION", () => {
+    const manager = new PtyManager();
+    const events: Array<[string, boolean]> = [];
+    manager.on("graceful-capture", (id: string, active: boolean) => {
+      events.push([id, active]);
+    });
+
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    const oldTerminal = shared.created[0]!;
+    oldTerminal.callbacks.onGracefulCapture?.("t1", true);
+    expect(events).toEqual([["t1", true]]);
+
+    oldTerminal.info.wasKilled = true;
+    manager.spawn("t1", spawnOptions({ projectId: "project-a" }));
+    const newTerminal = shared.created[1]!;
+    newTerminal.callbacks.onGracefulCapture?.("t1", true);
+
+    // The replaced incarnation's late close must not end its successor's window.
+    oldTerminal.callbacks.onGracefulCapture?.("t1", false);
+    expect(events).toEqual([
+      ["t1", true],
+      ["t1", true],
+    ]);
+
+    newTerminal.callbacks.onGracefulCapture?.("t1", false);
+    expect(events).toEqual([
+      ["t1", true],
+      ["t1", true],
+      ["t1", false],
+    ]);
   });
 
   it("ACTIVE_PROJECT_FILTER_GATES_DATA_EMISSION", () => {
