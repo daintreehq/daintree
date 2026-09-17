@@ -86,6 +86,7 @@ export function buildGuestRuntimeSource(params: GuestRuntimeParams): string {
     mode: ${JSON.stringify(mode)},
     setMode(next) { api.mode = next; },
     reselect() { return false; },
+    clearSelection() {},
     dispose: null,
     post(event) {
       const send = g[BINDING];
@@ -129,10 +130,21 @@ export function buildModeUpdateSource(mode: SitePreviewMode): string {
  * found and selected an element; anything else, including a missing runtime,
  * reads as "not found" and the host keeps its safeguards.
  */
-export function buildReselectSource(loc: { file: string; line: number; column: number }): string {
+export function buildReselectSource(
+  loc: { file: string; line: number; column: number },
+  index: number
+): string {
   return `(() => {
   const api = globalThis[${JSON.stringify(GUEST_RUNTIME_GLOBAL)}];
-  return api && typeof api.reselect === "function" ? api.reselect(${JSON.stringify(loc)}) === true : false;
+  return api && typeof api.reselect === "function" ? api.reselect(${JSON.stringify(loc)}, ${JSON.stringify(index)}) === true : false;
+})();`;
+}
+
+/** Drop the guest's selection and overlay; observes nothing. Host-authored, fixed. */
+export function buildClearSelectionSource(): string {
+  return `(() => {
+  const api = globalThis[${JSON.stringify(GUEST_RUNTIME_GLOBAL)}];
+  if (api && typeof api.clearSelection === "function") api.clearSelection();
 })();`;
 }
 

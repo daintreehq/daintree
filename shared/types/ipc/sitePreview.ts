@@ -48,6 +48,8 @@ export interface SiteGuestNodeObservation {
   ancestry: SiteGuestAncestryEntry[];
   tagName: string;
   sameLocCount: number;
+  /** Which of those this node is, in document order; absent from older runtimes. */
+  locIndex?: number;
   label: string;
   bounds: SiteGuestRect[];
   unmapped: boolean;

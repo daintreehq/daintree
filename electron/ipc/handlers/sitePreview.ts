@@ -58,6 +58,8 @@ const reselectSchema = z
         column: z.number().int().nonnegative(),
       })
       .strict(),
+    /** Which of the elements sharing that location, in document order. */
+    index: z.number().int().nonnegative().max(100_000).optional(),
   })
   .strict();
 
@@ -111,7 +113,19 @@ export const sitePreviewNamespace = defineIpcNamespace({
       SITE_PREVIEW_METHOD_CHANNELS.reselect,
       reselectSchema,
       async (ctx, payload): Promise<boolean> =>
-        getSitePreviewBridge().reselect(requireProject(ctx), payload.sessionId, payload.loc),
+        getSitePreviewBridge().reselect(
+          requireProject(ctx),
+          payload.sessionId,
+          payload.loc,
+          payload.index ?? 0
+        ),
+      { withContext: true }
+    ),
+    clearSelection: opValidated(
+      SITE_PREVIEW_METHOD_CHANNELS.clearSelection,
+      sessionSchema,
+      async (ctx, payload): Promise<void> =>
+        getSitePreviewBridge().clearSelection(requireProject(ctx), payload.sessionId),
       { withContext: true }
     ),
     getState: opValidated(

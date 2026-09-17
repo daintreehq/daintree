@@ -58,7 +58,13 @@ export interface GuestRuntimeHandle {
    * when no such element is in the document. The host uses this to keep a
    * selection through its own write and the reload that follows.
    */
-  reselect(loc: GuestSourceLoc): boolean;
+  reselect(loc: GuestSourceLoc, index?: number): boolean;
+  /**
+   * Drop the selection and its overlay without observing anything. The host
+   * uses this when a re-proof turned out to name a different element, so the
+   * page stops highlighting something the drawer does not show.
+   */
+  clearSelection(): void;
   /** Repaint the overlay now, e.g. after a host-side zoom or fit change. */
   refresh(): void;
   /**

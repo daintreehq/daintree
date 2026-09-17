@@ -34,7 +34,8 @@ export const OBSERVATION: SiteGuestNodeObservation = {
   loc: { file: FILE, line: 6, column: 2 },
   ancestry: [],
   tagName: "BUTTON",
-  sameLocCount: 1,
+  sameLocCount: 3,
+  locIndex: 2,
   label: 'button "Start Pro"',
   bounds: [{ x: 0, y: 0, width: 10, height: 10 }],
   unmapped: false,
@@ -165,12 +166,23 @@ export function createFakeHost() {
     // and emit a fresh observation on the next tick. `reselectFinds` lets a
     // test model a page where the element is gone.
     reselect: vi.fn(
-      async (request: { sessionId: string; loc: SiteGuestNodeObservation["loc"] }) => {
+      async (request: {
+        sessionId: string;
+        loc: SiteGuestNodeObservation["loc"];
+        index?: number;
+      }) => {
         if (!host.reselectFinds) return false;
-        setTimeout(() => host.select(host.currentEpoch, [{ ...OBSERVATION, loc: request.loc }]), 0);
+        setTimeout(
+          () =>
+            host.select(host.currentEpoch, [
+              { ...OBSERVATION, loc: request.loc, locIndex: request.index ?? 0 },
+            ]),
+          0
+        );
         return true;
       }
     ),
+    clearSelection: vi.fn(async (_request: { sessionId: string }) => undefined),
     getState: vi.fn(async (_request: { sessionId: string }) => null),
     onEvent: vi.fn((callback: (payload: SitePreviewPushPayload) => void) => {
       previewListeners.add(callback);
@@ -184,10 +196,15 @@ export function createFakeHost() {
     appRoot: WORKTREE,
     support: { level: "full" },
   }));
-  handlers.set(CHANNELS.selectionResolve, (args) => ({
-    status: "ok",
-    selection: makeSelection({ documentEpoch: args.documentEpoch as number }),
-  }));
+  // As real main does, a resolve reports the revision now on disk — which a
+  // write moved. Without this a re-proof after an edit could never match the
+  // revision the write produced, and continuity could never be exercised.
+  handlers.set(CHANNELS.selectionResolve, (args) => {
+    const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
+    const node = selection.nodes[0]!;
+    if (node.definition) node.definition.revision = host.diskRevision;
+    return { status: "ok", selection };
+  });
   handlers.set(CHANNELS.classComplete, (args) => {
     const query = String(args.query);
     const known = ["shadow-md", "shadow-lg", "px-8"];
@@ -198,7 +215,11 @@ export function createFakeHost() {
         .map((candidate) => ({ candidate, css: `/* ${candidate} */` })),
     };
   });
-  handlers.set(CHANNELS.editApply, () => ({ status: "applied", receipt: makeReceipt() }));
+  handlers.set(CHANNELS.editApply, () => {
+    const receipt = makeReceipt({ beforeRevision: host.diskRevision });
+    host.diskRevision = receipt.afterRevision;
+    return { status: "applied", receipt };
+  });
   handlers.set(CHANNELS.editUndo, () => ({
     status: "reversed",
     receipt: makeReceipt({ transactionId: "tx-2" }),
@@ -245,6 +266,8 @@ export function createFakeHost() {
     diskRevisions,
     reselectFinds: true,
     currentEpoch: 0,
+    /** What main would hash on disk now; each applied write moves it. */
+    diskRevision: REVISION,
     invoke,
     handlers,
     listenerCounts() {

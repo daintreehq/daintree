@@ -1677,6 +1677,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: import("./sitePreview.js").SitePreviewBindingState;
   };
+  "site-preview:clear-selection": {
+    args: [payload: { sessionId: string }];
+    result: void;
+  };
   "site-preview:detach": {
     args: [payload: { sessionId: string }];
     result: void;
@@ -1690,7 +1694,13 @@ export interface GeneratedIpcInvokeMap {
     result: import("./sitePreview.js").SitePreviewCandidate[];
   };
   "site-preview:reselect": {
-    args: [payload: { sessionId: string; loc: { file: string; line: number; column: number } }];
+    args: [
+      payload: {
+        sessionId: string;
+        loc: { file: string; line: number; column: number };
+        index?: number | undefined;
+      },
+    ];
     result: boolean;
   };
   "site-preview:set-mode": {

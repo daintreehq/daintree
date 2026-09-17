@@ -121,6 +121,12 @@ export const GuestNodeObservationSchema = z
     tagName: z.string().min(1).max(64),
     /** Count of live nodes sharing this node's `loc`, computed in the guest. */
     sameLocCount: z.number().int().positive().max(100_000),
+    /**
+     * Which of those this node is, in document order. Lets the host ask for
+     * the same rendered occurrence again after its own write. Optional: an
+     * older runtime does not report it, and the host then asks for the first.
+     */
+    locIndex: z.number().int().nonnegative().max(100_000).optional(),
     label: z.string().max(200),
     bounds: z.array(RectSchema).max(32),
     /** True when the node sits inside `{@html}`, canvas, or a shadow root. */

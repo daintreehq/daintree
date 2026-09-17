@@ -850,6 +850,9 @@ export interface GeneratedElectronAPI {
     bind(
       ...args: IpcInvokeMap["site-preview:bind"]["args"]
     ): Promise<IpcInvokeMap["site-preview:bind"]["result"]>;
+    clearSelection(
+      ...args: IpcInvokeMap["site-preview:clear-selection"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:clear-selection"]["result"]>;
     detach(
       ...args: IpcInvokeMap["site-preview:detach"]["args"]
     ): Promise<IpcInvokeMap["site-preview:detach"]["result"]>;

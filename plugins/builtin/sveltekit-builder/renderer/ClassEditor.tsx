@@ -85,7 +85,7 @@ function ClassChips({
               data-class-remove=""
               disabled={!editable}
               onClick={() => onRemove(token)}
-              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary disabled:pointer-events-none disabled:opacity-50"
+              className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded-xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-raised hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary disabled:pointer-events-none disabled:opacity-50"
             >
               <X className="h-3 w-3" aria-hidden="true" />
             </button>
@@ -153,7 +153,7 @@ function ClassInspector({
         <button
           type="button"
           aria-label={`Inspect ${token}`}
-          className="min-w-0 truncate rounded-xs px-1.5 py-px font-mono text-left transition-colors duration-150 ease-out hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
+          className="min-w-0 truncate rounded-xs py-px pl-1.5 pr-0.5 font-mono text-left transition-colors duration-150 ease-out hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent-primary"
         >
           {token}
         </button>
@@ -338,6 +338,10 @@ function ClassAddField({
             aria-activedescendant={activeId}
             aria-describedby={error ? errorId : undefined}
             placeholder="Add a class"
+            // Enabled placeholder text is text: the shared token is a quieter
+            // tier the theme system calibrates for light themes, and on the
+            // dark ones it measured ~2.7:1. This surface steps it up.
+            className="placeholder:text-text-secondary"
             spellCheck={false}
             autoComplete="off"
             value={query}

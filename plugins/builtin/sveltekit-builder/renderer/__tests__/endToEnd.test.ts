@@ -63,6 +63,7 @@ async function setUp() {
         return bound();
       },
       reselect: async () => false,
+      clearSelection: async () => undefined,
       getState: async () => bound(),
       onEvent: (callback) => {
         emit = callback;

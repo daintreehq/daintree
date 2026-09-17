@@ -113,7 +113,7 @@ export const FIXTURES = {
 
   picking: {
     title: "Select mode, waiting for a click on the page",
-    settled: "text=Select an element to edit it or ask an agent",
+    settled: "text=Click an element to edit it or ask an agent",
     act: async (host) => {
       await bind(host);
     },

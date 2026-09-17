@@ -186,10 +186,17 @@ export function createPreviewHost() {
     },
     detach: async () => undefined,
     setMode: async (request: { mode: SitePreviewMode }) => state("preview-1", request.mode),
-    reselect: async (request: { loc: SiteGuestNodeObservation["loc"] }) => {
-      setTimeout(() => host.select(host.currentEpoch, [{ ...OBSERVATION, loc: request.loc }]), 0);
+    reselect: async (request: { loc: SiteGuestNodeObservation["loc"]; index?: number }) => {
+      setTimeout(
+        () =>
+          host.select(host.currentEpoch, [
+            { ...OBSERVATION, loc: request.loc, locIndex: request.index ?? 0 },
+          ]),
+        0
+      );
       return true;
     },
+    clearSelection: async () => undefined,
     getState: async () => null,
     onEvent: (callback: (payload: SitePreviewPushPayload) => void) => {
       previewListeners.add(callback);
@@ -203,10 +210,22 @@ export function createPreviewHost() {
     appRoot: WORKTREE,
     support: { level: "full" },
   }));
-  handlers.set(CHANNELS.selectionResolve, (args) => ({
-    status: "ok",
-    selection: makeSelection({ documentEpoch: args.documentEpoch as number }),
-  }));
+  // Main remembers what it wrote: a re-proof after a class edit returns the
+  // tokens as they are on disk now, not the fixture's original list. Without
+  // this the continued state photographs a class the user just removed.
+  const removed = new Set<string>();
+  const added: string[] = [];
+  let diskRevision = REVISION;
+  handlers.set(CHANNELS.selectionResolve, (args) => {
+    const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
+    const node = selection.nodes[0]!;
+    if (node.definition) node.definition.revision = diskRevision;
+    const classes = node.surfaces.classes;
+    if (classes) {
+      classes.tokens = [...classes.tokens.filter((token) => !removed.has(token)), ...added];
+    }
+    return { status: "ok", selection };
+  });
   handlers.set(CHANNELS.classComplete, (args) => {
     const query = String(args.query ?? "");
     const known = [
@@ -220,7 +239,15 @@ export function createPreviewHost() {
       candidates: known.filter((entry) => entry.candidate.startsWith(query)),
     };
   });
-  handlers.set(CHANNELS.editApply, () => ({ status: "applied", receipt: makeReceipt() }));
+  handlers.set(CHANNELS.editApply, (args) => {
+    for (const op of (args.operations as Array<Record<string, unknown>> | undefined) ?? []) {
+      for (const token of (op.remove as string[] | undefined) ?? []) removed.add(token);
+      for (const token of (op.add as string[] | undefined) ?? []) added.push(token);
+    }
+    const receipt = makeReceipt({ beforeRevision: diskRevision });
+    diskRevision = receipt.afterRevision;
+    return { status: "applied", receipt };
+  });
   handlers.set(CHANNELS.editUndo, () => ({
     status: "reversed",
     receipt: makeReceipt({ transactionId: "tx-2" }),
