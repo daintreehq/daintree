@@ -194,7 +194,7 @@ describe("preview binding", () => {
     expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(0);
   });
 
-  it("stays preview-only when the support verdict says so", async () => {
+  it("traces and offers the agent on a preview-only app, without direct edits", async () => {
     host.handlers.set(CHANNELS.workspaceOpen, () => ({
       status: "ready",
       workspaceSessionId: "ws-1",
@@ -207,9 +207,23 @@ describe("preview binding", () => {
     // because the notice adds what still works alongside it.
     await screen.findByText("Direct editing unavailable");
     await screen.findByText(/Found svelte 4\.2\.1; editing needs Svelte 5/);
+    // Still traced and still sendable to an agent; only direct edits are gated.
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: makeSelection({
+        documentEpoch: args.documentEpoch as number,
+        capabilities: [
+          { surface: "text", support: "inspect-only", reason: "unsupported-framework-version" },
+          { surface: "classes", support: "inspect-only", reason: "unsupported-framework-version" },
+        ],
+      }),
+    }));
     await act(async () => host.select(0));
-    await screen.findByText("This element couldn't be traced to source");
-    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(0);
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
+      `${FILE}:6`
+    );
     expect(screen.queryByRole("combobox", { name: "Add a class" })).toBeNull();
   });
 });

@@ -872,11 +872,9 @@ export class InspectorController {
     const workspace = this.state.workspace;
     const page = this.state.page;
     const binding = this.state.binding;
-    if (
-      workspace.status !== "ready" ||
-      workspace.support.level !== "full" ||
-      binding.status !== "bound"
-    ) {
+    // A preview-only app is still traced: main marks every surface inspect-only,
+    // and the selection can still go to an agent. Only direct edits are gated.
+    if (workspace.status !== "ready" || binding.status !== "bound") {
       this.update({
         ...base,
         selection: { status: "observed", epoch, node: nodes[0]!, nodeCount: nodes.length },

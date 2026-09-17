@@ -322,7 +322,9 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     );
     const details = window.getByRole("complementary", { name: "Site Builder details" });
     await expect(details).toBeVisible();
-    await panel.getByText("Edit directly").click();
+    // Open by default; opened here only if a remembered preference folded it.
+    const edits = panel.getByRole("button", { name: "Edit directly" });
+    if ((await edits.getAttribute("aria-expanded")) !== "true") await edits.click();
     await expect(panel.getByRole("list", { name: "Classes" })).toContainText("text-4xl");
   });
 

@@ -168,14 +168,20 @@ describe("assessSupport", () => {
     expect(reasons[0]).toMatch(/install/i);
   });
 
-  it("treats an undeclared gated package differently from an uninstalled one", () => {
-    const assessment = assessSupport(
+  it("treats an app without Tailwind as fully supported, and an undeclared Svelte as not", () => {
+    const plainCss = assessSupport(
       { svelte: "5.0.0", kit: "2.0.0", tailwind: null, vite: "7.0.0" },
       { svelte: "^5", "@sveltejs/kit": "^2" }
     );
+    expect(plainCss.missingInstall).toEqual([]);
+    expect(plainCss.verdict.level).toBe("full");
 
-    expect(assessment.missingInstall).toEqual([]);
-    const reasons = assessment.verdict.level === "preview-only" ? assessment.verdict.reasons : [];
+    const noSvelte = assessSupport(
+      { svelte: null, kit: "2.0.0", tailwind: "4.0.0", vite: "7.0.0" },
+      { "@sveltejs/kit": "^2", tailwindcss: "^4" }
+    );
+    expect(noSvelte.missingInstall).toEqual([]);
+    const reasons = noSvelte.verdict.level === "preview-only" ? noSvelte.verdict.reasons : [];
     expect(reasons[0]).toContain("not a dependency");
   });
 
