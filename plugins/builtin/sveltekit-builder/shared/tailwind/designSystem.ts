@@ -3,7 +3,10 @@ import { majorVersion } from "../project/versions.js";
 import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import path from "node:path";
-import { createRequire } from "node:module";
+// Aliased: the main bundle's banner declares `createRequire` at the top of
+// every chunk, and an unaliased import of the same name in a chunk of its own
+// is a SyntaxError the moment the chunk loads.
+import { createRequire as nodeCreateRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { SUPPORTED_BASELINE } from "../model.js";
 
@@ -24,7 +27,7 @@ import { SUPPORTED_BASELINE } from "../model.js";
  * read as data under the bounds below.
  */
 
-type ProjectRequire = ReturnType<typeof createRequire>;
+type ProjectRequire = ReturnType<typeof nodeCreateRequire>;
 
 export interface Declaration {
   property: string;
@@ -178,7 +181,7 @@ export async function loadTailwindDesignSystem(
 
   let require: ProjectRequire;
   try {
-    require = createRequire(path.join(ref.appRoot, "package.json"));
+    require = nodeCreateRequire(path.join(ref.appRoot, "package.json"));
   } catch (error) {
     return unavailable(`could not resolve from ${ref.appRoot}: ${messageOf(error)}`);
   }

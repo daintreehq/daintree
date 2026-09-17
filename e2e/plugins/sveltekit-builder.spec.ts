@@ -317,11 +317,14 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     const panel = inspector(window);
     await selectInPreview(window, "h1");
 
-    await expect(window.getByRole("toolbar", { name: "Site Builder" })).toContainText(
-      `${PAGE_FILE}:2`
-    );
     const details = window.getByRole("complementary", { name: "Site Builder details" });
     await expect(details).toBeVisible();
+    // With the drawer open the strip names the element and the drawer's
+    // identity block owns the source location.
+    await expect(window.getByRole("toolbar", { name: "Site Builder" })).toContainText("h1");
+    await expect(details.getByRole("region", { name: "Selected element" })).toContainText(
+      `${PAGE_FILE}:2`
+    );
     // Open by default; opened here only if a remembered preference folded it.
     const edits = panel.getByRole("button", { name: "Edit directly" });
     if ((await edits.getAttribute("aria-expanded")) !== "true") await edits.click();
@@ -331,15 +334,19 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
   test("Option+Up selects the component that drew an element", async () => {
     const { window } = ctx;
     const strip = window.getByRole("toolbar", { name: "Site Builder" });
+    const identity = window
+      .getByRole("complementary", { name: "Site Builder details" })
+      .getByRole("region", { name: "Selected element" });
     await clickInPreview(ctx, "article h2");
-    await expect(strip).toContainText(`${CARD_FILE}:6`, { timeout: PLUGIN_TIMEOUT });
+    await expect(identity).toContainText(`${CARD_FILE}:6`, { timeout: PLUGIN_TIMEOUT });
 
     await pressInPreview(ctx.app, "Up", ["alt"]);
     await expect(strip).toContainText("FeatureCard", { timeout: PLUGIN_TIMEOUT });
     await expect(strip.getByText("Component", { exact: true })).toBeVisible();
+    // The request's scope follows the pick: the composer's About control.
     const scope = window
-      .getByRole("group", { name: "What the request is about" })
-      .getByRole("button", { name: "FeatureCard" });
+      .getByRole("complementary", { name: "Site Builder details" })
+      .getByRole("button", { name: "FeatureCard", exact: true });
     await expect(scope).toHaveAttribute("aria-pressed", "true");
     await window.screenshot({ path: test.info().outputPath("component-selected.png") });
 
@@ -383,9 +390,16 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     const before = await cardBackgrounds();
     expect(before).toHaveLength(3);
 
-    // Pick the FeatureCard component, the way a user would.
-    await clickInPreview(ctx, "article h2");
-    await expect(strip).toContainText(`${CARD_FILE}:6`, { timeout: PLUGIN_TIMEOUT });
+    // Pick the FeatureCard component, the way a user would. The undo just
+    // before this reloads the page, and a pick made before that update lands
+    // is dropped with the node it named — so pick until the page has settled.
+    const identity = window
+      .getByRole("complementary", { name: "Site Builder details" })
+      .getByRole("region", { name: "Selected element" });
+    await expect(async () => {
+      await clickInPreview(ctx, "article h2");
+      await expect(identity).toContainText(`${CARD_FILE}:6`, { timeout: 3_000 });
+    }).toPass({ timeout: PLUGIN_TIMEOUT });
     await pressInPreview(app, "Up", ["alt"]);
     await expect(strip.getByText("Component", { exact: true })).toBeVisible({
       timeout: PLUGIN_TIMEOUT,
