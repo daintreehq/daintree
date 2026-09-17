@@ -1,11 +1,14 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, Sparkles } from "lucide-react";
+import { ArrowUp, ChevronRight, Lightbulb } from "lucide-react";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { cn } from "@/lib/utils";
+import { PropertyRow } from "./InspectorSection.js";
 import {
   Select,
   SelectContent,
@@ -119,6 +122,7 @@ export function AgentComposer({
   const setChosen = (next: string | null) => updateComposerMemory(memoryKey, { chosen: next });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
+  const [ideasOpen, setIdeasOpen] = useState(false);
 
   const launchable: Destination[] = LAUNCHABLE_AGENTS.flatMap((agentId) => {
     const config = getEffectiveAgentConfig(agentId);
@@ -351,19 +355,9 @@ export function AgentComposer({
   }
 
   return (
-    <section aria-labelledby={`${inputId}-heading`} className="flex flex-col gap-2">
-      <div className="flex h-7 shrink-0 items-center justify-between gap-2">
-        <h2
-          id={`${inputId}-heading`}
-          className="flex items-center gap-1.5 text-2xs font-medium uppercase tracking-wide text-text-secondary"
-        >
-          <Sparkles className="h-3 w-3" aria-hidden="true" />
-          Ask an agent
-        </h2>
-      </div>
+    <div aria-label="Ask an agent" className="flex flex-col gap-2">
       {destinations.length > 0 ? (
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 text-2xs text-text-secondary">To</span>
+        <PropertyRow label="Agent">
           <Select value={destination ? keyOf(destination) : ""} onValueChange={setChosen}>
             {/* Full width, not a 180px stub: the session name is how two claudes
                 in the same worktree are told apart, and it was truncating to
@@ -396,7 +390,7 @@ export function AgentComposer({
               ) : null}
             </SelectContent>
           </Select>
-        </div>
+        </PropertyRow>
       ) : null}
 
       {retargetable && current ? (
@@ -417,27 +411,24 @@ export function AgentComposer({
       ) : null}
 
       {scopes.length > 1 ? (
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="shrink-0 text-2xs text-text-secondary">About</span>
-          <div
-            role="group"
-            aria-label="What the request is about"
-            className="flex min-w-0 flex-wrap gap-1"
-          >
-            {scopes.map((scope, index) => (
-              <Button
-                key={`${scope.kind}:${scope.label}:${index}`}
-                variant={subject.scope === index ? "subtle" : "ghost"}
-                size="xs"
-                aria-pressed={subject.scope === index}
-                title={scope.kind === "component" ? (scope.file ?? undefined) : undefined}
-                onClick={() => chooseScope(index)}
-              >
-                {scope.kind === "element" ? "This element" : scope.label}
-              </Button>
-            ))}
-          </div>
-        </div>
+        <PropertyRow label="About" align="start">
+          {/* The same segmented control the strip uses for Browse/Select: one
+              choice among peers, with the chosen one carried by a thumb rather
+              than by the others going bare. */}
+          <SegmentedToggle
+            density="compact"
+            options={scopes.map((scope, index) => ({
+              value: String(index),
+              label: scope.kind === "element" ? "Element" : scope.label,
+              // The file main resolved for the component, once it has: a scope
+              // is a promise about where the request will land.
+              ...(scope.kind === "component" && scope.file ? { title: scope.file } : {}),
+            }))}
+            value={String(subject.scope)}
+            onChange={(value) => chooseScope(Number(value))}
+            className="max-w-full"
+          />
+        </PropertyRow>
       ) : null}
 
       <div className="relative">
@@ -480,8 +471,37 @@ export function AgentComposer({
         </Button>
       </div>
 
+      {delivery && !deliveryDismissed ? (
+        <DeliveryNotice
+          delivery={delivery}
+          liveTarget={liveTarget}
+          onOpenTerminal={openTerminal}
+          onReviewChanges={reviewChanges}
+          onSendAnyway={sendAnyway}
+          onDismiss={dismissDelivery}
+        />
+      ) : null}
+
       {!draft.trim() ? (
-        <div role="group" aria-label="Suggestions" className="flex flex-wrap gap-1">
+        <button
+          type="button"
+          aria-expanded={ideasOpen}
+          onClick={() => setIdeasOpen((open) => !open)}
+          className="-ml-1 flex h-6 w-fit items-center gap-1 rounded-[var(--radius-sm)] px-1 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+        >
+          <Lightbulb className="h-3 w-3" aria-hidden="true" />
+          Ideas
+          <ChevronRight
+            aria-hidden="true"
+            className={cn(
+              "h-3 w-3 transition-transform duration-150 ease-out",
+              ideasOpen && "rotate-90"
+            )}
+          />
+        </button>
+      ) : null}
+      {!draft.trim() && ideasOpen ? (
+        <div role="group" aria-label="Suggestions" className="grid grid-cols-2 gap-1">
           {/* The shared pill variant, not a hand-rolled one: these sat beside the
               scope chips and the class tokens as a third geometry for the same
               idea. Prose, so proportional — the class tokens stay monospace
@@ -491,10 +511,11 @@ export function AgentComposer({
               key={intent}
               variant="pill"
               size="xs"
-              className="font-normal text-text-secondary"
+              title={intent}
+              className="min-w-0 justify-start font-normal text-text-secondary"
               onClick={() => applyIntent(intent)}
             >
-              {intent}
+              <span className="truncate">{intent}</span>
             </Button>
           ))}
         </div>
@@ -513,18 +534,7 @@ export function AgentComposer({
           {`Activity in ${destination.target.title} — check the terminal before sending`}
         </p>
       ) : null}
-
-      {delivery && !deliveryDismissed ? (
-        <DeliveryNotice
-          delivery={delivery}
-          liveTarget={liveTarget}
-          onOpenTerminal={openTerminal}
-          onReviewChanges={reviewChanges}
-          onSendAnyway={sendAnyway}
-          onDismiss={dismissDelivery}
-        />
-      ) : null}
-    </section>
+    </div>
   );
 }
 
@@ -555,7 +565,7 @@ function DeliveryNotice({
       ) : null}
       {state.status === "sent" ? (
         <Button variant="subtle" size="xs" onClick={onReviewChanges}>
-          Review changes
+          View worktree changes
         </Button>
       ) : null}
       {settled ? (

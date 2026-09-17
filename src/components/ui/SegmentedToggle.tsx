@@ -9,6 +9,11 @@ export interface SegmentedToggleOption<T extends string> {
   disabled?: boolean;
   /** Screen-reader name when the visible label is an abbreviation (S/M/L). */
   ariaLabel?: string;
+  /**
+   * Hover detail for an option whose label is a name rather than a description
+   * — a component's source file, say. Falls back to `ariaLabel`.
+   */
+  title?: string;
 }
 
 /**
@@ -83,7 +88,7 @@ export function SegmentedToggle<T extends string>({
               "disabled:cursor-not-allowed disabled:pointer-events-none",
               isActive ? "text-text-primary" : "text-text-secondary hover:text-text-primary"
             )}
-            title={option.ariaLabel}
+            title={option.title ?? option.ariaLabel}
           >
             {isActive && (
               <m.div
