@@ -152,6 +152,9 @@ export const DefinitionSchema = z
   .strict();
 export type Definition = z.infer<typeof DefinitionSchema>;
 
+/** Longest source excerpt a read-only surface shows; longer ones end in `…`. */
+export const MAX_WRITTEN_CHARS = 240;
+
 export const SelectedNodeSchema = z
   .object({
     /**
@@ -187,6 +190,24 @@ export const SelectedNodeSchema = z
         text: z.object({ text: z.string() }).strict().nullable(),
       })
       .strict(),
+    /**
+     * How a surface that can't be edited here is written, verbatim from the
+     * source: `class={cn(base, active && "on")}`, `{title}`. Shown so the
+     * limitation is understandable, never offered as an editable value.
+     */
+    written: z
+      .object({
+        classes: z
+          .string()
+          .max(MAX_WRITTEN_CHARS + 1)
+          .nullable(),
+        text: z
+          .string()
+          .max(MAX_WRITTEN_CHARS + 1)
+          .nullable(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type SelectedNode = z.infer<typeof SelectedNodeSchema>;

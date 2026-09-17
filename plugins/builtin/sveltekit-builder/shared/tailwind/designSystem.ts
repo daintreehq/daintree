@@ -17,9 +17,11 @@ import { SUPPORTED_BASELINE } from "../model.js";
  * therefore funnelled through the narrow facade below: a future Tailwind that
  * renames or reshapes it is a change to this file and nothing else.
  *
- * It is also deliberately loaded from the *project's* `node_modules`, not from
- * this repo's. Modelling the user's utilities with our copy of Tailwind would
- * silently answer questions about the wrong theme.
+ * The engine is Daintree's own bundled copy — loading the project's would run
+ * repository code in Electron main — held to the project's installed major and
+ * minor so it can't answer for utilities the project's version doesn't have.
+ * The project supplies the theme: its CSS entry and the stylesheets it imports,
+ * read as data under the bounds below.
  */
 
 type ProjectRequire = ReturnType<typeof createRequire>;

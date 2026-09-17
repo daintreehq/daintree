@@ -5,7 +5,11 @@ import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
 import { BUILDER_TOOL_ID } from "../shared/protocol.js";
 import { deliveryFromPhase, launchReadiness, type DeliveryState } from "./agentTask.js";
-import { readComposerMemory, updateComposerMemory } from "./composerMemory.js";
+import {
+  readComposerMemory,
+  updateComposerMemory,
+  type ComposerDelivery,
+} from "./composerMemory.js";
 
 const DELIVERY_POLL_MS = 250;
 const DELIVERY_TIMEOUT_MS = 10_000;
@@ -86,12 +90,10 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
   return panel.location !== "trash" && (panel.worktreeId ?? null) === worktreeId;
 }
 
-function sameDelivery(
-  a: { state: DeliveryState; title: string; terminalId: string | null } | null,
-  b: { state: DeliveryState; title: string; terminalId: string | null }
-): boolean {
+function sameDelivery(a: ComposerDelivery | null, b: ComposerDelivery): boolean {
   return (
     a !== null &&
+    a.request === b.request &&
     a.title === b.title &&
     a.terminalId === b.terminalId &&
     JSON.stringify(a.state) === JSON.stringify(b.state)
@@ -136,9 +138,10 @@ export async function deliverAgentRequest({
     return false;
   };
   const { title } = destination;
+  let request: string | undefined;
   const report = (state: DeliveryState, terminalId: string | null) => {
     if (!current()) return;
-    const next = { state, title, terminalId };
+    const next = { state, title, terminalId, ...(request === undefined ? {} : { request }) };
     if (sameDelivery(readComposerMemory(memoryKey).delivery, next)) return;
     updateComposerMemory(memoryKey, { delivery: next });
   };
@@ -160,6 +163,13 @@ export async function deliverAgentRequest({
         return;
       }
       prompt = await buildPrompt();
+      request = prompt;
+      // Recorded now, not at the next status change: a run cancelled mid-submit
+      // keeps its last record, and that record must carry what was typed.
+      report(
+        readComposerMemory(memoryKey).delivery?.state ?? { status: "sending" },
+        destination.kind === "terminal" ? destination.terminalId : null
+      );
     } catch (error) {
       report(
         { status: "failed", message: formatErrorMessage(error, "Couldn't prepare the request") },

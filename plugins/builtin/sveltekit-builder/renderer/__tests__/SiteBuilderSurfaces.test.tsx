@@ -215,6 +215,57 @@ describe("preview binding", () => {
     ).toBeNull();
   });
 
+  it("keeps a way to switch apps after one was opened, and drops what belonged to the old one", async () => {
+    host.handlers.set(CHANNELS.workspaceOpen, (args) =>
+      args.appRoot
+        ? {
+            status: "ready",
+            workspaceSessionId: `ws-${String(args.appRoot).split("/").pop()}`,
+            appRoot: args.appRoot,
+            support: { level: "full" },
+          }
+        : { status: "ambiguous", appRoots: ["/repo/apps/web", "/repo/apps/docs"] }
+    );
+    usePanelStore.setState({
+      panelsById: {
+        "preview-1": {
+          id: "preview-1",
+          kind: "dev-preview",
+          location: "grid",
+          cwd: "/repo/apps/web",
+        },
+      } as never,
+    });
+    await mountBound();
+    // The drawer opens for a selection; the app it came from is named above it.
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: {
+        ...makeSelection({ documentEpoch: args.documentEpoch as number }),
+        workspaceSessionId: "ws-web",
+        appRoot: "/repo/apps/web",
+      },
+    }));
+    await act(async () => host.select(0));
+    await screen.findByRole("combobox", { name: "Site source app" });
+    const controller = peekBuilderController("preview-1")!;
+    await act(async () => controller.switchApp("/repo/apps/docs"));
+    await waitFor(() =>
+      expect(host.calls(CHANNELS.workspaceOpen).at(-1)).toMatchObject({
+        appRoot: "/repo/apps/docs",
+      })
+    );
+    expect(host.calls(CHANNELS.workspaceClose)).toContainEqual({ workspaceSessionId: "ws-web" });
+    await waitFor(() => {
+      const workspace = controller.getSnapshot().workspace;
+      expect(workspace.status === "ready" && workspace.appRoot).toBe("/repo/apps/docs");
+    });
+    // The selection was proven against the other app's source.
+    expect(controller.getSnapshot().selection.status).toBe("none");
+    // …and with nothing selected, the switcher is still there to switch back.
+    await screen.findByRole("combobox", { name: "Site source app" });
+  });
+
   it("won't trace a preview whose dev server runs from another worktree", async () => {
     usePanelStore.setState({
       panelsById: {
@@ -848,6 +899,101 @@ describe("class inspection", () => {
     await selectWithClasses(["hero"]);
     fireEvent.click(screen.getByRole("button", { name: "Inspect hero" }));
     await screen.findByText(/doesn't use Tailwind/);
+  });
+});
+
+describe("surfaces it won't edit", () => {
+  it("shows how a dynamic class list is written, without offering it as editable", async () => {
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: makeSelection({
+        documentEpoch: args.documentEpoch as number,
+        capabilities: [
+          { surface: "text", support: "direct" },
+          { surface: "classes", support: "agent-assisted", reason: "dynamic-expression" },
+        ],
+        surfaces: { classes: null, text: { text: "Start Pro" } },
+        node: { written: { classes: 'class={["btn", active && "on"]}', text: null } },
+      }),
+    }));
+    await mountBound();
+    await act(async () => host.select(0));
+    const written = await screen.findByLabelText("Classes as written in the source");
+    expect(written.textContent).toBe('class={["btn", active && "on"]}');
+    expect(screen.queryByRole("combobox", { name: "Add a class" })).toBeNull();
+  });
+});
+
+describe("starting a fresh agent", () => {
+  it("offers the agents the host can launch, not a fixed three", async () => {
+    const { useCliAvailabilityStore } = await import("@/store/cliAvailabilityStore");
+    const previous = useCliAvailabilityStore.getState();
+    useCliAvailabilityStore.setState({
+      isInitialized: true,
+      // Blocked is installed but can't launch; Grok launches but can't be seen
+      // waiting at its prompt, so a request can't be typed into it safely.
+      availability: {
+        claude: "blocked",
+        codex: "missing",
+        gemini: "missing",
+        grok: "ready",
+        opencode: "ready",
+      },
+    } as never);
+    try {
+      usePanelStore.setState({
+        panelsById: {
+          "preview-1": {
+            id: "preview-1",
+            kind: "dev-preview",
+            location: "grid",
+            worktreeId: "wt-1",
+          },
+        } as never,
+      });
+      useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": BUILDER_TOOL_ID } });
+      const { actionService } = await import("@/services/ActionService");
+      const dispatch = vi
+        .spyOn(actionService, "dispatch")
+        .mockImplementation((async () => ({ ok: false, error: { message: "stop" } })) as never);
+      await mountSelected();
+      const request = screen.getByRole("textbox", { name: "Request for the agent" });
+      fireEvent.change(request, { target: { value: "Say Upgrade" } });
+      const sendButton = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+      await waitFor(() => expect(sendButton.disabled).toBe(false));
+      fireEvent.click(sendButton);
+      await waitFor(() =>
+        expect(dispatch).toHaveBeenCalledWith(
+          "agent.launch",
+          expect.objectContaining({ agentId: "opencode" }),
+          expect.anything()
+        )
+      );
+    } finally {
+      useCliAvailabilityStore.setState(previous);
+    }
+  });
+});
+
+describe("request scope", () => {
+  it("lists a deep chain with repeated names instead of squeezing it into segments", async () => {
+    const chain = ["Card", "Grid", "Card", "Section", "Layout"].map((name, depth) => ({
+      kind: "component" as const,
+      location: { file: `src/lib/${name}${depth}.svelte`, line: depth + 2, column: 0 },
+      componentTag: name,
+      generated: false,
+    }));
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: makeSelection({
+        documentEpoch: args.documentEpoch as number,
+        node: { ancestry: chain },
+      }),
+    }));
+    await mountBound();
+    await act(async () => host.select(0));
+    await screen.findByRole("combobox", { name: "What the request is about" });
+    expect(screen.queryByRole("button", { name: "Element", pressed: true })).toBeNull();
   });
 });
 
@@ -1786,6 +1932,14 @@ describe("stale selections", () => {
     expect(sent[0]).toContain("(SvelteKit 2.15.0, Svelte 5.2.0, Tailwind 4.1.0)");
     expect(sent[0]).not.toContain("```");
     expect(host.calls(CHANNELS.sourceExcerpt)).toEqual([]);
+
+    // The notice keeps the exact request, one disclosure away.
+    fireEvent.click(await screen.findByRole("button", { name: "View request" }));
+    expect(screen.getByRole("group", { name: "Request text" }).textContent).toBe(sent[0]);
+    // Beside the status region, not inside it: a status is read out whole.
+    expect(
+      screen.getByRole("group", { name: "Request text" }).closest('[role="status"]')
+    ).toBeNull();
   });
 
   it("goes stale when main reports the selected file changed, and only that file", async () => {

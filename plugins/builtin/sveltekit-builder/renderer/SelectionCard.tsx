@@ -304,10 +304,15 @@ export function SelectionEdits({
       {occurrences > 1 || atLeast ? (
         <SharedMarkupRow count={occurrences} atLeast={atLeast} />
       ) : null}
-      <Surface title="Text" capability={capabilityFor(node, "text")}>
+      <Surface title="Text" capability={capabilityFor(node, "text")} written={node.written?.text}>
         <TextSurface state={state} selection={selection} actions={actions} />
       </Surface>
-      <Surface title="Classes" capability={capabilityFor(node, "classes")} align="start">
+      <Surface
+        title="Classes"
+        capability={capabilityFor(node, "classes")}
+        align="start"
+        written={node.written?.classes}
+      >
         <ClassSurface state={state} selection={selection} actions={actions} />
       </Surface>
     </section>
@@ -399,11 +404,14 @@ function Surface({
   title,
   capability,
   align = "center",
+  written,
   children,
 }: {
   title: string;
   capability: EditCapability | undefined;
   align?: "center" | "start";
+  /** How the source writes this surface, when it can't be edited here. */
+  written?: string | null;
   children: ReactNode;
 }) {
   const support = capability?.support;
@@ -426,6 +434,13 @@ function Surface({
                 ? "Changing this safely needs an agent"
                 : "This can be inspected but not edited here"}
           </span>
+          {written ? (
+            <div role="group" aria-label={`${title} as written in the source`} className="w-full">
+              <code className="block whitespace-pre-wrap break-all rounded-sm bg-surface-inset px-1.5 py-1 font-mono text-3xs leading-relaxed text-text-primary">
+                {written}
+              </code>
+            </div>
+          ) : null}
         </div>
       ) : (
         children

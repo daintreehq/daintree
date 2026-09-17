@@ -1,7 +1,8 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { ChevronRight, Lightbulb } from "lucide-react";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
-import { isAgentInstalled } from "@shared/utils/agentAvailability";
+import { isAgentLaunchable } from "@shared/utils/agentAvailability";
+import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import { actionService } from "@/services/ActionService";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,7 @@ import {
   isAgentBusy,
   isUnresolvedScope,
   type AgentTarget,
+  type TaskScope,
 } from "./agentTask.js";
 import { ownerFile, type InspectorController, type SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
@@ -69,8 +71,17 @@ function settlePinnedDefinitions(
     .finally(() => pinnedLookups.delete(lookup));
 }
 
-/** Agents offered for a fresh session, in the order people most often bring them. */
-const LAUNCHABLE_AGENTS = ["claude", "codex", "gemini"] as const;
+/**
+ * A fresh session can be any agent the launcher offers — the host's own list,
+ * not a second one kept here. These lead, in the order people most often bring
+ * them, and are all that's offered until the host knows what's installed.
+ */
+const LEADING_AGENTS = ["claude", "codex", "gemini"];
+
+function launchOrder(ids: readonly string[]): string[] {
+  const leading = LEADING_AGENTS.filter((id) => ids.includes(id));
+  return [...leading, ...ids.filter((id) => !LEADING_AGENTS.includes(id))];
+}
 
 const ELEMENT_INTENTS = [
   "Rewrite this copy to be clearer and more persuasive",
@@ -87,6 +98,25 @@ const COMPONENT_INTENTS = [
 
 type Pinned = ComposerPin;
 
+/** Segments while the chain is short enough to read at a glance in the drawer. */
+const MAX_SEGMENTS = 3;
+const MAX_SEGMENT_CHARS = 30;
+
+function fitsSegments(scopes: TaskScope[]): boolean {
+  if (scopes.length > MAX_SEGMENTS) return false;
+  const labels = scopes.map((scope) => (scope.kind === "element" ? "Element" : scope.label));
+  return (
+    new Set(labels).size === labels.length &&
+    labels.reduce((total, label) => total + label.length, 0) <= MAX_SEGMENT_CHARS
+  );
+}
+
+/** `routes/pricing/+page.svelte:12:4`: enough of the path, and the column, to tell two calls apart. */
+function callSiteHint(site: { file: string; line: number; column: number }): string {
+  const parts = site.file.split("/");
+  return `${parts.slice(-2).join("/")}:${site.line}:${site.column + 1}`;
+}
+
 type Destination =
   { kind: "terminal"; target: AgentTarget } | { kind: "launch"; agentId: string; name: string };
 
@@ -94,7 +124,7 @@ type DeliveryRecord = NonNullable<ComposerMemory["delivery"]>;
 
 /**
  * Hand the selection to an agent — one already running in this worktree, or a
- * fresh Claude Code, Codex or Gemini session on the user's own account — with
+ * fresh session of any agent the launcher offers, on the user's own account — with
  * the source identity the builder resolved. The terminal stays the agent: this
  * composes and delivers one request, then reports what the host can prove.
  */
@@ -125,12 +155,17 @@ export function AgentComposer({
   const inputId = useId();
   const [ideasOpen, setIdeasOpen] = useState(false);
 
-  const launchable: Destination[] = LAUNCHABLE_AGENTS.flatMap((agentId) => {
+  const launchable: Destination[] = launchOrder(
+    availabilityKnown ? LAUNCHABLE_AGENT_IDS : LEADING_AGENTS
+  ).flatMap((agentId) => {
     const config = getEffectiveAgentConfig(agentId);
-    if (!config) return [];
-    // Until availability is known, offer them; launching a missing CLI opens
-    // the host's own setup diagnostic rather than failing silently.
-    if (availabilityKnown && !isAgentInstalled(availability[agentId])) return [];
+    // The request is typed in only once the agent is seen waiting at its own
+    // prompt; an agent with no calibrated prompt detection can't be seen that
+    // way, and a quiet sign-in screen would take the request instead.
+    if (!config || !config.detection?.promptPatterns?.length) return [];
+    // Until availability is known, the leading three are offered; launching a
+    // missing CLI opens the host's own setup diagnostic rather than failing.
+    if (availabilityKnown && !isAgentLaunchable(availability[agentId])) return [];
     return [{ kind: "launch" as const, agentId, name: config.name }];
   });
   const destinations: Destination[] = [
@@ -425,28 +460,67 @@ export function AgentComposer({
 
       {scopes.length > 1 ? (
         <PropertyRow label="About" align="start">
-          {/* The same segmented control the strip uses for Browse/Select: one
-              choice among peers, with the chosen one carried by a thumb rather
-              than by the others going bare. Its thumb needs stable geometry so
-              the control does not shrink; the wrapper keeps any overflow
-              inside the column instead of past the drawer's edge. */}
-          <div className="w-fit min-w-0 max-w-full overflow-hidden">
-            <SegmentedToggle
-              density="compact"
-              options={scopes.map((scope, index) => ({
-                value: String(index),
-                label: scope.kind === "element" ? "Element" : scope.label,
-                // The file main resolved for the component, once it has: a scope
-                // is a promise about where the request will land.
-                ...(scope.kind === "component" && scope.file ? { title: scope.file } : {}),
-              }))}
+          {fitsSegments(scopes) ? (
+            // The same segmented control the strip uses for Browse/Select: one
+            // choice among peers, with the chosen one carried by a thumb rather
+            // than by the others going bare. Its thumb needs stable geometry so
+            // the control does not shrink; the wrapper keeps any overflow
+            // inside the column instead of past the drawer's edge.
+            <div className="w-fit min-w-0 max-w-full overflow-hidden">
+              <SegmentedToggle
+                density="compact"
+                options={scopes.map((scope, index) => ({
+                  value: String(index),
+                  label: scope.kind === "element" ? "Element" : scope.label,
+                  // The file main resolved for the component, once it has: a scope
+                  // is a promise about where the request will land.
+                  ...(scope.kind === "component" && scope.file ? { title: scope.file } : {}),
+                }))}
+                value={String(subject.scope)}
+                onChange={(value) => chooseScope(Number(value))}
+                // The select above it is 28px; a 24px track in the next row read
+                // as a different kind of control.
+                className="h-7 max-w-full"
+              />
+            </div>
+          ) : (
+            // A real component chain runs deeper than a row of segments can
+            // show, and repeats names (two `Card`s): a list, where each scope
+            // carries the call site that tells it apart.
+            <Select
               value={String(subject.scope)}
-              onChange={(value) => chooseScope(Number(value))}
-              // The select above it is 28px; a 24px track in the next row read
-              // as a different kind of control.
-              className="h-7 max-w-full"
-            />
-          </div>
+              onValueChange={(value) => chooseScope(Number(value))}
+            >
+              <SelectTrigger
+                aria-label="What the request is about"
+                className="h-7 min-w-0 flex-1 text-xs"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="w-[var(--radix-select-trigger-width)]">
+                {scopes.map((scope, index) => (
+                  <SelectItem
+                    key={index}
+                    value={String(index)}
+                    title={scope.kind === "component" ? (scope.file ?? undefined) : undefined}
+                  >
+                    {/* Two lines, so the call site that tells two `Card`s apart
+                        is never the part a narrow drawer clips. */}
+                    <span className="flex min-w-0 flex-col">
+                      <span className="truncate">
+                        {scope.kind === "element" ? "Element" : scope.label}
+                      </span>
+                      {scope.kind === "component" && scope.usedAt ? (
+                        <span className="truncate font-mono text-3xs text-text-secondary">
+                          {`${callSiteHint(scope.usedAt)}`}
+                        </span>
+                      ) : null}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
         </PropertyRow>
       ) : null}
 
@@ -564,7 +638,8 @@ export function AgentComposer({
         </p>
       ) : destinations.length === 0 ? (
         <p className="text-xs text-text-secondary">
-          Install Claude Code, Codex or Gemini CLI to send requests with your own account
+          Install an agent CLI, such as Claude Code, Codex or Gemini, to send requests with your own
+          account
         </p>
       ) : busy && destination?.kind === "terminal" ? (
         <p className="text-xs text-text-secondary">
@@ -575,7 +650,60 @@ export function AgentComposer({
   );
 }
 
-function DeliveryNotice({
+function DeliveryNotice(props: {
+  delivery: DeliveryRecord;
+  liveTarget: AgentTarget | undefined;
+  onOpenTerminal: (terminalId: string) => void;
+  onReviewChanges: () => void;
+  onSendAnyway: (() => void) | undefined;
+  onDismiss: () => void;
+}) {
+  const { state, request } = props.delivery;
+  // The record sits beside the notice, not inside it: a status region is read
+  // out whole on every change, and nobody should hear a prompt recited.
+  const recorded =
+    state.status === "sent" ||
+    state.status === "unconfirmed" ||
+    (state.status === "failed" && state.partial === true);
+  return (
+    <>
+      <DeliveryStatus {...props} />
+      {recorded && request !== undefined ? <RequestRecord request={request} /> : null}
+    </>
+  );
+}
+
+/** What the agent was actually told — the words, the files and the route, as typed in. */
+function RequestRecord({ request }: { request: string }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={() => setOpen((value) => !value)}
+        className="-ml-1 flex w-fit items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn("h-3 w-3 transition-transform duration-150 ease-out", open && "rotate-90")}
+        />
+        View request
+      </button>
+      {open ? (
+        <div id={id} role="group" aria-label="Request text">
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-surface-inset px-2 py-1.5 font-mono text-3xs leading-relaxed text-text-secondary">
+            {request}
+          </pre>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DeliveryStatus({
   delivery,
   liveTarget,
   onOpenTerminal,
@@ -615,6 +743,7 @@ function DeliveryNotice({
     </div>
   );
   const dismiss = settled ? onDismiss : undefined;
+
   switch (state.status) {
     case "sending":
       return <WaitingRow label={`Sending to ${title}`} />;

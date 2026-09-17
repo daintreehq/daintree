@@ -31,6 +31,13 @@ import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   INITIAL_INSPECTOR_STATE,
   holdBuilderController,
   peekBuilderController,
@@ -39,7 +46,7 @@ import {
   type InspectorState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
-import { InspectorDisclosure, SectionHeader } from "./InspectorSection.js";
+import { InspectorDisclosure, PropertyRow, SectionHeader } from "./InspectorSection.js";
 import { SelectionEdits, SelectionIdentity, type SelectionActions } from "./SelectionCard.js";
 import { ReceiptView } from "./ReceiptView.js";
 import { AgentComposer } from "./AgentComposer.js";
@@ -447,7 +454,10 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
   return (
     <aside
       aria-label="Site Builder details"
-      className="flex w-[360px] shrink-0 flex-col overflow-hidden border-l border-overlay bg-surface-panel text-text-primary"
+      // 360px where the panel has room; in a tiled layout it gives way down to
+      // 280px rather than taking a fixed bite out of a narrow page — the page's
+      // own width is what decides its responsive layout.
+      className="flex w-[40%] min-w-[280px] max-w-[360px] shrink-0 flex-col overflow-hidden border-l border-overlay bg-surface-panel text-text-primary"
     >
       {/* Pinned. A desktop inspector always says what is selected; a form
           scrolls it away. */}
@@ -549,7 +559,11 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
 
 function workspaceNeedsAttention(state: InspectorState): boolean {
   const workspace = state.workspace;
-  if (workspace.status === "ready") return capabilityGaps(workspace) !== null;
+  // Several apps keep the drawer open for the switcher: choosing the wrong one
+  // must stay fixable before anything is selected, and after a switch clears it.
+  if (workspace.status === "ready") {
+    return capabilityGaps(workspace) !== null || workspace.appRoots.length > 1;
+  }
   return workspace.status !== "idle" && workspace.status !== "opening";
 }
 
@@ -577,7 +591,13 @@ function WorkspaceStatus({
 }) {
   const workspace = state.workspace;
   if (workspace.status === "idle" || workspace.status === "opening") return null;
-  if (workspace.status === "ready" && capabilityGaps(workspace) === null) return null;
+  if (
+    workspace.status === "ready" &&
+    capabilityGaps(workspace) === null &&
+    workspace.appRoots.length < 2
+  ) {
+    return null;
+  }
   // One surface for everything about the project rather than the element, so
   // a setup problem and an element-level limitation never look like the same
   // kind of notice sat in the same column.
@@ -680,30 +700,66 @@ function SiteSourceBody({
       );
     case "ready": {
       const gaps = capabilityGaps(workspace);
-      if (gaps === null) return null;
+      if (gaps === null && workspace.appRoots.length < 2) return null;
       // Suggestions and direct editing are independent capabilities, reported
       // separately by main. Each row says whether it works here and why not,
       // and whatever still works is still offered.
       return (
         <div className="flex flex-col gap-1">
-          <CapabilityRow
-            label="Direct editing"
-            available={gaps.editing === null}
-            reasons={gaps.editing ?? []}
-            note="You can still select elements and ask an agent to change them."
-          />
-          {gaps.suggestions ? (
-            <CapabilityRow
-              label="Class suggestions"
-              available={false}
-              reasons={gaps.suggestions}
-              note={
-                gaps.editing === null
-                  ? "Classes you type are still written exactly as typed."
-                  : "Class names can't be checked for this project."
-              }
-            />
+          {workspace.appRoots.length > 1 ? (
+            // Choosing the wrong app has to be recoverable from where the
+            // choice shows, not by closing the builder to be asked again.
+            <PropertyRow label="App">
+              <Select
+                value={workspace.appRoot}
+                onValueChange={(appRoot) => controller.switchApp(appRoot)}
+              >
+                <SelectTrigger
+                  aria-label="Site source app"
+                  className="h-7 min-w-0 flex-1 font-mono text-xs"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="w-[var(--radix-select-trigger-width)]">
+                  {workspace.appRoots.map((appRoot) => {
+                    const relative = relativeTo(worktreePath, appRoot);
+                    return (
+                      <SelectItem
+                        key={appRoot}
+                        value={appRoot}
+                        title={appRoot}
+                        className="font-mono"
+                      >
+                        {relative === "." ? "./" : relative}
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+            </PropertyRow>
           ) : null}
+          {gaps === null ? null : (
+            <>
+              <CapabilityRow
+                label="Direct editing"
+                available={gaps.editing === null}
+                reasons={gaps.editing ?? []}
+                note="You can still select elements and ask an agent to change them."
+              />
+              {gaps.suggestions ? (
+                <CapabilityRow
+                  label="Class suggestions"
+                  available={false}
+                  reasons={gaps.suggestions}
+                  note={
+                    gaps.editing === null
+                      ? "Classes you type are still written exactly as typed."
+                      : "Class names can't be checked for this project."
+                  }
+                />
+              ) : null}
+            </>
+          )}
         </div>
       );
     }

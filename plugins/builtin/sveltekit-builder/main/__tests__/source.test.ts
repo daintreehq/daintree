@@ -127,6 +127,53 @@ describe("selectionResolve", () => {
     );
   });
 
+  it("shows how a surface it won't edit is written, verbatim and bounded", async () => {
+    const file = "src/lib/dynamic-classes.svelte";
+    const source = await fs.readFile(sandbox.file(file), "utf8");
+    const node = await selectOne(
+      observation(locationOf(source, "<button class={[", file), { tagName: "BUTTON" })
+    );
+    expect(node.capabilities).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ surface: "classes", support: "agent-assisted" }),
+      ])
+    );
+    expect(node.surfaces.classes).toBeNull();
+    expect(node.written?.classes).toBe('class={["btn", active && "bg-accent"]} class:on={active}');
+    // Literal text stays an editable value, not an excerpt.
+    expect(node.written?.text ?? null).toBeNull();
+
+    const mixed = await selectOne(
+      observation(locationOf(source, '<div class="grid', file), { tagName: "DIV" })
+    );
+    expect(mixed.written?.classes).toBe(`class="grid {active ? 'gap-2' : 'gap-8'}"`);
+  });
+
+  it("takes each class attribute on its own, keeps whitespace, and shows dynamic text", async () => {
+    const file = "src/lib/written.svelte";
+    const source = [
+      "<script>let { a, b, name } = $props();</script>",
+      '<p class={a}  data-token="secret" class:on={b}>Hi {name}</p>',
+      '<span class={"x  y"}>Fixed</span>',
+      "",
+    ].join("\n");
+    await fs.writeFile(sandbox.file(file), source);
+    const paragraph = await selectOne(
+      observation(locationOf(source, "<p", file), { tagName: "P" })
+    );
+    expect(paragraph.written?.classes).toBe("class={a} class:on={b}");
+    expect(paragraph.written?.classes).not.toContain("secret");
+    expect(paragraph.written?.text).toBe("Hi {name}");
+
+    const span = await selectOne(
+      observation(locationOf(source, "<span", file), { tagName: "SPAN" })
+    );
+    expect(span.written?.classes).toBe('class={"x  y"}');
+    // Literal text is still an editable value, not an excerpt.
+    expect(span.surfaces.text).toEqual({ text: "Fixed" });
+    expect(span.written?.text).toBeNull();
+  });
+
   it("assembles the selection from the workspace, not from anything ambient", async () => {
     const source = await fs.readFile(sandbox.file(NATIVE), "utf8");
     const result = await resolve([observation(locationOf(source, "<p"), { tagName: "P" })]);
