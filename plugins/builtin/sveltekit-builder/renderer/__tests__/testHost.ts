@@ -174,9 +174,11 @@ export function createFakeHost() {
         if (!host.reselectFinds) return false;
         setTimeout(
           () =>
-            host.select(host.currentEpoch, [
-              { ...OBSERVATION, loc: request.loc, locIndex: request.index ?? 0 },
-            ]),
+            host.select(
+              host.currentEpoch,
+              [{ ...OBSERVATION, loc: request.loc, locIndex: request.index ?? 0 }],
+              "reselect"
+            ),
           0
         );
         return true;
@@ -306,7 +308,11 @@ export function createFakeHost() {
         },
       });
     },
-    select(epoch: number, nodes: SiteGuestNodeObservation[] = [OBSERVATION]) {
+    select(
+      epoch: number,
+      nodes: SiteGuestNodeObservation[] = [OBSERVATION],
+      cause: "user" | "document" | "reselect" = "user"
+    ) {
       host.pushPreview({
         kind: "guest-event",
         sessionId: "session-1",
@@ -314,7 +320,7 @@ export function createFakeHost() {
         projectId: "p1",
         documentEpoch: epoch,
         sequence: 1,
-        event: { type: "selectionChanged", nodes },
+        event: { type: "selectionChanged", nodes, cause },
       });
     },
     epochAdvanced(epoch: number) {

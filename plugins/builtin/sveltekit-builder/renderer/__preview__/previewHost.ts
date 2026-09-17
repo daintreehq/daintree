@@ -152,7 +152,11 @@ export interface PreviewHost {
   handlers: Map<string, Handler>;
   pushPreview(payload: SitePreviewPushPayload): void;
   documentReady(epoch: number): void;
-  select(epoch: number, nodes?: SiteGuestNodeObservation[]): void;
+  select(
+    epoch: number,
+    nodes?: SiteGuestNodeObservation[],
+    cause?: "user" | "document" | "reselect"
+  ): void;
   detach(reason: string): void;
 }
 
@@ -189,9 +193,11 @@ export function createPreviewHost() {
     reselect: async (request: { loc: SiteGuestNodeObservation["loc"]; index?: number }) => {
       setTimeout(
         () =>
-          host.select(host.currentEpoch, [
-            { ...OBSERVATION, loc: request.loc, locIndex: request.index ?? 0 },
-          ]),
+          host.select(
+            host.currentEpoch,
+            [{ ...OBSERVATION, loc: request.loc, locIndex: request.index ?? 0 }],
+            "reselect"
+          ),
         0
       );
       return true;
@@ -320,7 +326,11 @@ export function createPreviewHost() {
         },
       });
     },
-    select(epoch: number, nodes: SiteGuestNodeObservation[] = [OBSERVATION]) {
+    select(
+      epoch: number,
+      nodes: SiteGuestNodeObservation[] = [OBSERVATION],
+      cause: "user" | "document" | "reselect" = "user"
+    ) {
       host.pushPreview({
         kind: "guest-event",
         sessionId: "session-1",
@@ -328,7 +338,7 @@ export function createPreviewHost() {
         projectId: "p1",
         documentEpoch: epoch,
         sequence: 1,
-        event: { type: "selectionChanged", nodes },
+        event: { type: "selectionChanged", nodes, cause },
       });
     },
     /**

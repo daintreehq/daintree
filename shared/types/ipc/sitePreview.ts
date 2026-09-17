@@ -65,6 +65,8 @@ export type SiteGuestEvent =
   | {
       type: "selectionChanged";
       nodes: SiteGuestNodeObservation[];
+      /** Who moved it; absent from older runtimes. */
+      cause?: "user" | "document" | "reselect";
       scope?: "component";
       component?: {
         file: string;

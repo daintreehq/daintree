@@ -21,11 +21,14 @@ export function TextEditor({
   text,
   editable,
   saving,
+  pending = false,
   onSave,
 }: {
   text: string;
   editable: boolean;
   saving: boolean;
+  /** A re-proof is out after a write: no commit, but the field keeps focus. */
+  pending?: boolean;
   onSave: (next: string) => void;
 }) {
   const [editing, setEditing] = useState(false);
@@ -83,7 +86,7 @@ export function TextEditor({
           aria-label={`Edit text: ${text}`}
           onClick={begin}
           className={cn(
-            "-ml-1.5 flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 py-1 text-left text-sm text-text-primary transition-colors duration-150 ease-out",
+            "-mx-1.5 flex min-w-0 flex-1 items-center gap-1.5 rounded-[var(--radius-sm)] px-1.5 py-1 text-left text-sm text-text-primary transition-colors duration-150 ease-out",
             editable ? "hover:bg-overlay-subtle" : "cursor-default opacity-60"
           )}
         >
@@ -104,8 +107,8 @@ export function TextEditor({
           density="compact"
           aria-label="Text"
           value={draft}
-          disabled={!editable && !saving}
-          readOnly={saving}
+          disabled={!editable && !saving && !pending}
+          readOnly={saving || pending}
           invalid={empty}
           aria-describedby={empty ? errorId : undefined}
           autoFocus
@@ -118,8 +121,8 @@ export function TextEditor({
           density="compact"
           aria-label="Text"
           value={draft}
-          disabled={!editable && !saving}
-          readOnly={saving}
+          disabled={!editable && !saving && !pending}
+          readOnly={saving || pending}
           invalid={empty}
           aria-describedby={empty ? errorId : undefined}
           autoFocus

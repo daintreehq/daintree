@@ -749,7 +749,7 @@ export function createSiteBuilderGuest(
     const live = selection.filter((entry) => entry.target.isConnected && entry.hit.isConnected);
     if (live.length !== selection.length) {
       selection = live;
-      emitSelection();
+      emitSelection("document");
     }
     if (hovered !== null && !hovered.isConnected) {
       hovered = null;
@@ -813,7 +813,7 @@ export function createSiteBuilderGuest(
    * and said so, and if even that will not fit the caller keeps its old
    * selection rather than leaving the host looking at a different one.
    */
-  function emitSelection(): boolean {
+  function emitSelection(cause: "user" | "document" | "reselect"): boolean {
     const nodes = selection.map((entry) => observe(entry.hit));
     const primary = selection[0];
     const identity =
@@ -824,9 +824,9 @@ export function createSiteBuilderGuest(
       identity !== null && nodes.length > 0
         ? { scope: "component" as const, component: identity }
         : {};
-    if (send({ type: "selectionChanged", nodes, ...scopeField })) return true;
+    if (send({ type: "selectionChanged", nodes, cause, ...scopeField })) return true;
     const trimmed = nodes.map((node) => ({ ...node, ancestry: node.ancestry.slice(0, 4) }));
-    if (send({ type: "selectionChanged", nodes: trimmed, ...scopeField })) {
+    if (send({ type: "selectionChanged", nodes: trimmed, cause, ...scopeField })) {
       issue("internal", "ancestry shortened to fit the selection into one envelope");
       return true;
     }
@@ -914,7 +914,7 @@ export function createSiteBuilderGuest(
     } else {
       selection = [{ target, hit }];
     }
-    if (!emitSelection()) {
+    if (!emitSelection("user")) {
       selection = previous;
       issue("internal", "selection left unchanged: the observation did not fit one envelope");
     }
@@ -937,7 +937,8 @@ export function createSiteBuilderGuest(
   function selectOnly(
     target: Element,
     scopeNext: "element" | "component",
-    frame: object | null
+    frame: object | null,
+    cause: "user" | "reselect" = "user"
   ): void {
     const previous = selection;
     const previousScope = selectionScope;
@@ -948,7 +949,7 @@ export function createSiteBuilderGuest(
       scopeNext === "component" && frame !== null
         ? componentRoots(frame, target).map((root) => ({ target: root, hit: root }))
         : [{ target, hit: target }];
-    if (!emitSelection()) {
+    if (!emitSelection(cause)) {
       selection = previous;
       selectionScope = previousScope;
       selectedFrame = previousFrame;
@@ -1006,16 +1007,17 @@ export function createSiteBuilderGuest(
   }
 
   /**
-   * The occurrence is the one the host names, or the first when it names
-   * none or the document has fewer than it did — a re-proof of the wrong
-   * card is refused host-side, where the revision check lives.
+   * The occurrence is exactly the one the host names — never the first as a
+   * stand-in. Repeated markup shares a file, a tag and a revision, so the host
+   * could not tell the substitution from the real thing; a missing occurrence
+   * is a failure, and the stale notice is the honest answer.
    */
   function reselect(loc: SourceLoc, index?: number): boolean {
     if (disposed || mode !== "select") return false;
     const wanted = typeof index === "number" && index >= 0 ? Math.floor(index) : 0;
-    const target = elementAt(loc, wanted) ?? (wanted > 0 ? elementAt(loc, 0) : null);
+    const target = elementAt(loc, wanted);
     if (target === null) return false;
-    selectOnly(target, "element", null);
+    selectOnly(target, "element", null, "reselect");
     return true;
   }
 
@@ -1074,7 +1076,7 @@ export function createSiteBuilderGuest(
       selection = [];
       selectionScope = "element";
       selectedFrame = null;
-      emitSelection();
+      emitSelection("user");
       schedulePaint();
       return;
     }

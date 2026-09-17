@@ -389,6 +389,46 @@ describe("reselect", () => {
     expect(runtime.reselect(loc(6))).toBe(false);
     expect(events("selectionChanged")).toHaveLength(0);
   });
+
+  it("fails rather than substituting the first occurrence when the one asked for is gone", () => {
+    // Repeated markup shares file, tag and revision: the host could not tell a
+    // stand-in from the real thing, so a missing occurrence is a failure.
+    document.body.innerHTML = '<b id="a"></b><b id="b"></b><b id="c"></b>';
+    const cards = Array.from(document.body.querySelectorAll("b"));
+    cards.forEach((card) => setMeta(card, loc(40)));
+    const runtime = install("select");
+    expect(runtime.reselect(loc(40), 2)).toBe(true);
+    expect(lastSelection()[0]?.locIndex).toBe(2);
+
+    cards[2]!.remove();
+    const before = events("selectionChanged").length;
+    expect(runtime.reselect(loc(40), 2)).toBe(false);
+    expect(events("selectionChanged")).toHaveLength(before);
+  });
+
+  it("names who moved the selection: the user, the host's reselect, or the document", () => {
+    document.body.innerHTML = '<b id="one"></b><b id="two"></b>';
+    const [one, two] = Array.from(document.body.querySelectorAll("b"));
+    setMeta(one!, loc(40));
+    setMeta(two!, loc(41));
+    const runtime = install("select");
+    const last = () => {
+      const all = events("selectionChanged");
+      return all[all.length - 1];
+    };
+    click(one!);
+    expect(last()).toMatchObject({ cause: "user" });
+    expect(runtime.reselect(loc(41))).toBe(true);
+    expect(last()).toMatchObject({ cause: "reselect" });
+    two!.remove();
+    runtime.refresh();
+    expect(last()).toMatchObject({ cause: "document", nodes: [] });
+    click(one!);
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })
+    );
+    expect(last()).toMatchObject({ cause: "user", nodes: [] });
+  });
 });
 
 describe("hover", () => {

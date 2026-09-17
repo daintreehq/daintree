@@ -366,13 +366,19 @@ export function AgentComposer({
             <SelectTrigger aria-label="Agent to send to" className="h-7 min-w-0 flex-1 text-xs">
               <SelectValue placeholder="Choose an agent" />
             </SelectTrigger>
-            <SelectContent>
+            {/* As wide as its trigger: session titles run long, and a menu
+                sized to them spilled past the drawer's left gutter. */}
+            <SelectContent className="w-[var(--radix-select-trigger-width)]">
               {targets.length > 0 ? (
                 <SelectGroup>
                   <SelectLabel>Running in this worktree</SelectLabel>
                   {targets.map((target) => (
-                    <SelectItem key={target.terminalId} value={`terminal:${target.terminalId}`}>
-                      {target.title}
+                    <SelectItem
+                      key={target.terminalId}
+                      value={`terminal:${target.terminalId}`}
+                      title={target.title}
+                    >
+                      <span className="block truncate">{target.title}</span>
                     </SelectItem>
                   ))}
                 </SelectGroup>
@@ -418,7 +424,7 @@ export function AgentComposer({
               than by the others going bare. Its thumb needs stable geometry so
               the control does not shrink; the wrapper keeps any overflow
               inside the column instead of past the drawer's edge. */}
-          <div className="min-w-0 max-w-full overflow-hidden">
+          <div className="w-fit min-w-0 max-w-full overflow-hidden">
             <SegmentedToggle
               density="compact"
               options={scopes.map((scope, index) => ({
@@ -430,7 +436,9 @@ export function AgentComposer({
               }))}
               value={String(subject.scope)}
               onChange={(value) => chooseScope(Number(value))}
-              className="max-w-full"
+              // The select above it is 28px; a 24px track in the next row read
+              // as a different kind of control.
+              className="h-7 max-w-full"
             />
           </div>
         </PropertyRow>
@@ -493,7 +501,9 @@ export function AgentComposer({
           onClick={send}
           aria-label="Send to agent"
           title="Send to agent (Enter)"
-          className="gap-1.5 disabled:opacity-40"
+          // Disabled is quiet, not faded: a faded contrast fill is still the
+          // heaviest object in the drawer (and white-on-grey on a light theme).
+          className="gap-1.5 disabled:bg-overlay-subtle disabled:text-text-secondary disabled:opacity-100 disabled:shadow-none disabled:ring-0"
         >
           Send
           <kbd className={cn(KBD_COMPACT_CLASS, "bg-transparent text-inherit opacity-70")}>⏎</kbd>
