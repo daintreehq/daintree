@@ -42,6 +42,7 @@ import {
   buildDisposeSource,
   buildGuestRuntimeSource,
   buildModeUpdateSource,
+  buildClearSelectionSource,
   buildReselectSource,
 } from "./sitePreview/guestRuntime.js";
 
@@ -432,7 +433,8 @@ export class SitePreviewBridge {
   async reselect(
     projectId: string,
     sessionId: string,
-    loc: { file: string; line: number; column: number }
+    loc: { file: string; line: number; column: number },
+    index = 0
   ): Promise<boolean> {
     const binding = this.bindings.get(sessionId);
     if (!binding || binding.projectId !== projectId) {
@@ -445,11 +447,29 @@ export class SitePreviewBridge {
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (!wc) return false;
     const result = (await this.send(wc, "Runtime.evaluate", {
-      expression: buildReselectSource(loc),
+      expression: buildReselectSource(loc, index),
       returnByValue: true,
       timeout: GUEST_EVALUATE_TIMEOUT_MS,
     })) as { result?: { value?: unknown } } | undefined;
     return result?.result?.value === true;
+  }
+
+  /** Drop the guest's selection so the page stops highlighting what the drawer refused. */
+  async clearSelection(projectId: string, sessionId: string): Promise<void> {
+    const binding = this.bindings.get(sessionId);
+    if (!binding || binding.projectId !== projectId) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "No site preview binding for that session",
+        context: { sessionId },
+      });
+    }
+    const wc = this.deps.getWebContents(binding.webContentsId);
+    if (!wc) return;
+    await this.send(wc, "Runtime.evaluate", {
+      expression: buildClearSelectionSource(),
+      timeout: GUEST_EVALUATE_TIMEOUT_MS,
+    });
   }
 
   async disposeAll(): Promise<void> {

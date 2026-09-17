@@ -45,6 +45,7 @@ export function createSiteBuilderGuest(
       setMode: () => {},
       getMode: () => config.mode,
       reselect: () => false,
+      clearSelection: () => {},
       refresh: () => {},
       dispose: () => {},
       getOverlayRoot: () => null,
@@ -461,6 +462,7 @@ export function createSiteBuilderGuest(
       ancestry: ancestry.frames,
       tagName: clamp(target.tagName.toLowerCase(), MAX_TAG),
       sameLocCount: loc === null ? 1 : countSameLoc(loc),
+      locIndex: loc === null ? 0 : indexAmongSameLoc(target, loc),
       label: describe(target),
       bounds: boundsOf(target),
       unmapped: isUnmapped(hit),
@@ -963,29 +965,66 @@ export function createSiteBuilderGuest(
    * report — not by a cached node, which a reload has replaced. Bounded by the
    * audit scan limit for the same reason the dev-build sweep is.
    */
-  function elementAt(loc: SourceLoc): Element | null {
+  function elementAt(loc: SourceLoc, index: number): Element | null {
     const key = locKey(loc);
     const root = document.body ?? document.documentElement;
     if (root === null) return null;
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
     let node: Node | null = walker.currentNode;
     let scanned = 0;
+    let seen = 0;
     while (node !== null && scanned++ < AUDIT_SCAN_LIMIT) {
       if (node instanceof Element && !isOverlay(node)) {
         const found = readLoc(node);
-        if (found !== null && locKey(found) === key) return node;
+        if (found !== null && locKey(found) === key) {
+          if (seen === index) return node;
+          seen += 1;
+        }
       }
       node = walker.nextNode();
     }
     return null;
   }
 
-  function reselect(loc: SourceLoc): boolean {
+  /**
+   * Which of the elements sharing this node's `loc` it is, in document order.
+   * Repeated markup — a card per plan — draws several elements from one
+   * location, and "the fourth card" is what the user selected, not "a card".
+   */
+  function indexAmongSameLoc(target: Element, loc: SourceLoc): number {
+    const key = locKey(loc);
+    const all = document.getElementsByTagName("*");
+    let index = 0;
+    for (let cursor = 0; cursor < all.length; cursor += 1) {
+      const element = all[cursor];
+      if (element === undefined) continue;
+      if (element === target) return index;
+      const other = readLoc(element);
+      if (other !== null && locKey(other) === key) index += 1;
+    }
+    return 0;
+  }
+
+  /**
+   * The occurrence is the one the host names, or the first when it names
+   * none or the document has fewer than it did — a re-proof of the wrong
+   * card is refused host-side, where the revision check lives.
+   */
+  function reselect(loc: SourceLoc, index?: number): boolean {
     if (disposed || mode !== "select") return false;
-    const target = elementAt(loc);
+    const wanted = typeof index === "number" && index >= 0 ? Math.floor(index) : 0;
+    const target = elementAt(loc, wanted) ?? (wanted > 0 ? elementAt(loc, 0) : null);
     if (target === null) return false;
     selectOnly(target, "element", null);
     return true;
+  }
+
+  function clearSelection(): void {
+    if (disposed) return;
+    selection = [];
+    selectionScope = "element";
+    selectedFrame = null;
+    schedulePaint();
   }
 
   const CONTROL_ROLES = new Set([
@@ -1278,6 +1317,7 @@ export function createSiteBuilderGuest(
     setMode,
     getMode: () => mode,
     reselect,
+    clearSelection,
     getOverlayRoot: () => overlayRoot,
     refresh: () => {
       if (paintHandle !== 0) {

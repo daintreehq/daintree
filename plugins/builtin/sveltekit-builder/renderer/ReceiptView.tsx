@@ -1,10 +1,10 @@
-import { useId, useState, type ComponentType } from "react";
-import { ChevronRight, Clock, Copy, EyeOff, RefreshCw } from "lucide-react";
+import { useId, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ReceiptState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
-import { basename, plural } from "./copy.js";
+import { basename } from "./copy.js";
 
 const SURFACE_NOUN: Record<ReceiptState["surface"], string> = {
   text: "Text",
@@ -51,7 +51,9 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
         </p>
         {undoable ? (
           <Button
-            variant="subtle"
+            // The footer's one action, for a write to the user's file: the
+            // neutral high-contrast CTA, not a chip.
+            variant="contrast"
             size="xs"
             loading={undo.status === "pending"}
             onClick={onUndo}
@@ -63,22 +65,15 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
       </div>
 
       <div className="flex min-h-0 flex-col gap-1.5 overflow-y-auto">
-        <ul className="flex flex-col gap-1 text-xs text-text-secondary">
-          <Fact icon={previewRefreshed ? RefreshCw : Clock}>
-            {previewRefreshed ? "Preview reloaded" : "Preview not yet refreshed"}
-          </Fact>
-          {state.surface === "classes" ? (
-            // Not observed: nothing here can read the page's computed styles
-            // back. A question mark read as a help button and a dashed circle
-            // as a stalled spinner; an eye that is off says what this is.
-            <Fact icon={EyeOff}>Styles unverified</Fact>
-          ) : null}
-          {copies > 1 ? (
-            <Fact
-              icon={Copy}
-            >{`Affects ${plural(copies, "rendered copy", "rendered copies")}`}</Fact>
-          ) : null}
-        </ul>
+        {/* Label / value rows in the drawer's own grammar, rather than three
+          icon-led lines of equal weight that read as a list of disclaimers. Each
+          value is an observation: "unconfirmed" until a later document proves the
+          reload, "unverified" because nothing here reads computed styles back. */}
+        <dl className="flex flex-col gap-0.5 text-xs">
+          <Fact label="Preview">{previewRefreshed ? "reloaded" : "refresh unconfirmed"}</Fact>
+          {state.surface === "classes" ? <Fact label="Styles">unverified</Fact> : null}
+          {copies > 1 ? <Fact label="Copies">{`${copies} rendered, all changed`}</Fact> : null}
+        </dl>
 
         <div className="flex flex-col gap-1.5">
           <button
@@ -137,17 +132,11 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
   );
 }
 
-function Fact({
-  icon: Icon,
-  children,
-}: {
-  icon: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
-  children: string;
-}) {
+function Fact({ label, children }: { label: string; children: string }) {
   return (
-    <li className="flex items-center gap-1.5 leading-5">
-      <Icon className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-      <span className="truncate">{children}</span>
-    </li>
+    <div className="grid grid-cols-[64px_minmax(0,1fr)] gap-x-2 leading-5">
+      <dt className="text-text-secondary">{label}</dt>
+      <dd className="truncate text-text-primary">{children}</dd>
+    </div>
   );
 }

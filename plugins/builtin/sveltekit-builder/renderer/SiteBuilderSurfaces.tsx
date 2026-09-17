@@ -2,7 +2,9 @@ import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import {
   AlertTriangle,
   ChevronRight,
+  FolderCode,
   PanelRightClose,
+  Pencil,
   PanelRightOpen,
   Sparkles,
   SquareDashedMousePointer,
@@ -105,6 +107,7 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
   // `useToolbarRoving` is the house implementation — four other toolbars use it.
   const stripRef = useRef<HTMLDivElement | null>(null);
   const onStripKeyDown = useToolbarRoving(stripRef);
+  const drawerCollapsed = useDrawerCollapsed(props.panelId);
   if (!controller) {
     return (
       <div
@@ -135,7 +138,12 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
       />
       <div aria-hidden="true" className="toolbar-divider h-4 w-px shrink-0" />
       <div className="flex min-w-0 flex-1 items-center gap-1.5 text-xs text-text-secondary">
-        <StripStatus state={state} controller={controller} bound={bound} />
+        <StripStatus
+          state={state}
+          controller={controller}
+          bound={bound}
+          drawerShowing={!drawerCollapsed}
+        />
       </div>
       <DrawerToggle panelId={props.panelId} />
       <Button
@@ -192,10 +200,13 @@ function StripStatus({
   state,
   controller,
   bound,
+  drawerShowing,
 }: {
   state: InspectorState;
   controller: InspectorController;
   bound: boolean;
+  /** The drawer is open beside the page and already names the source. */
+  drawerShowing: boolean;
 }) {
   const binding = state.binding;
   if (binding.status === "detached") {
@@ -261,13 +272,16 @@ function StripStatus({
             </Badge>
           ) : null}
           <KeyHints />
-          {location ? (
-            <span
-              className="ml-2 min-w-0 shrink truncate font-mono text-3xs text-text-secondary"
-              title={location}
-            >
-              {middleTruncatePath(location, 38)}
-            </span>
+          {location && !drawerShowing ? (
+            <>
+              <div aria-hidden="true" className="toolbar-divider mx-1 h-4 w-px shrink-0" />
+              <span
+                className="min-w-0 shrink truncate font-mono text-3xs text-text-secondary"
+                title={location}
+              >
+                {middleTruncatePath(location, 38)}
+              </span>
+            </>
           ) : null}
         </>
       );
@@ -280,7 +294,7 @@ function StripStatus({
     return (
       <span className="flex min-w-0 items-center gap-1.5">
         <SquareDashedMousePointer className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-        <span className="truncate">Select an element to edit it or ask an agent</span>
+        <span className="truncate">Click an element to edit it or ask an agent</span>
       </span>
     );
   }
@@ -406,7 +420,12 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
           answer the same question ("can I change it, and how"), so they get the
           same weight and the same section grammar. */}
         {selection.status === "ready" ? (
-          <InspectorDisclosure title="Edit directly" open={editsOpen} onOpenChange={setEditsOpen}>
+          <InspectorDisclosure
+            title="Edit directly"
+            icon={Pencil}
+            open={editsOpen}
+            onOpenChange={setEditsOpen}
+          >
             <SelectionEdits state={state} selection={selection} actions={actionsFor(controller)} />
           </InspectorDisclosure>
         ) : null}
@@ -476,7 +495,7 @@ function WorkspaceStatus({
   // kind of notice sat in the same column.
   return (
     <section aria-label="Site source" className="flex flex-col gap-1">
-      <SectionHeader title="Site source" />
+      <SectionHeader title="Site source" icon={FolderCode} />
       <SiteSourceBody state={state} controller={controller} worktreePath={worktreePath} />
     </section>
   );
@@ -522,7 +541,10 @@ function SiteSourceBody({
           </p>
           {/* 28px path rows with a chevron: a choice list, not three bordered
               boxes that read as empty inputs. Every path in the same face. */}
-          <ul className="flex flex-col" aria-label="Choose site source">
+          <ul
+            className="flex flex-col divide-y divide-border-subtle"
+            aria-label="Choose site source"
+          >
             {workspace.appRoots.map((appRoot) => {
               const relative = relativeTo(worktreePath, appRoot);
               return (
@@ -559,10 +581,11 @@ function SiteSourceBody({
             </Button>
           }
         >
-          {/* The message is a runtime diagnostic — EACCES, ENOENT — and it is
-              the one thing the user can act on, so it stays. In its own face,
-              so it reads as a diagnostic rather than as prose that ran on. */}
-          <span className="block break-all font-mono text-3xs">{workspace.message}</span>
+          {/* A sentence first; then the diagnostic — EACCES, ENOENT — which is
+              the one thing the user can act on, in its own face so it reads as
+              a diagnostic rather than as prose that ran on. */}
+          <span className="block">Daintree couldn't read this site's source.</span>
+          <span className="mt-1 block break-all font-mono text-3xs">{workspace.message}</span>
         </InspectorNotice>
       );
     case "ready": {

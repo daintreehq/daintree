@@ -78,7 +78,8 @@ export function buildGuestRuntimeBody(): string {
     ");",
     "const hostSetMode = api.setMode;",
     "api.setMode = (next) => { hostSetMode(next); guest.setMode(next); };",
-    "api.reselect = (loc) => guest.reselect(loc);",
+    "api.reselect = (loc, index) => guest.reselect(loc, index);",
+    "api.clearSelection = () => guest.clearSelection();",
     "api.dispose = () => guest.dispose();",
     "api.guest = guest;",
   ].join("\n");

@@ -224,7 +224,9 @@ export function SourcePath({
       {dir ? <span className="min-w-0 shrink truncate">{middleTruncatePath(dir, 40)}</span> : null}
       <span className="shrink-0">
         {name}
-        {line === null ? null : <span className="text-text-muted">{`:${line}`}</span>}
+        {/* Same tone as the path: `text-muted` has no dark-theme floor and the
+            line number vanished on namib. */}
+        {line === null ? null : <span>{`:${line}`}</span>}
       </span>
     </span>
   );
@@ -293,7 +295,7 @@ function SharedMarkupRow({ count }: { count: number }) {
       >
         <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" aria-hidden="true" />
         <span className="min-w-0 flex-1 truncate text-text-primary">
-          {`Edits affect all ${count} copies`}
+          {`Applies to all ${count} rendered copies`}
         </span>
         <ChevronRight
           aria-hidden="true"
@@ -439,7 +441,10 @@ function TextSurface({
       {text ? (
         <TextEditor
           // A successful save spends the selection; start the next edit clean.
-          key={`${selectionId}:${selection.stale === "edited" ? "saved" : "open"}`}
+          // The generation, not the selection id: a re-proof after a write mints
+          // a new id, and keying on it unmounted the editor mid-loop. The
+          // "saved" suffix still starts the next text edit clean.
+          key={`${state.selectionGeneration}:${selection.stale === "edited" ? "saved" : "open"}`}
           text={text.text}
           editable={editable}
           saving={saving}
@@ -471,7 +476,7 @@ function ClassSurface({
     <>
       {classes ? (
         <ClassEditor
-          key={selectionId}
+          key={state.selectionGeneration}
           tokens={classes.tokens}
           editable={editable}
           saving={saving}

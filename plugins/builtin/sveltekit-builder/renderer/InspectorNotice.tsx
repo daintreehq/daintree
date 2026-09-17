@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { AlertTriangle, Info, XCircle } from "lucide-react";
+import { AlertTriangle, Info, X, XCircle } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type NoticeTone = "info" | "warning" | "error";
@@ -27,6 +27,7 @@ export function InspectorNotice({
   action,
   role,
   className,
+  onDismiss,
   density = "default",
 }: {
   tone: NoticeTone;
@@ -35,6 +36,8 @@ export function InspectorNotice({
   action?: ReactNode;
   role?: "status" | "alert";
   className?: string;
+  /** A corner control that closes the notice. */
+  onDismiss?: () => void;
   /**
    * `compact` for a routine, recoverable state the user will see often — a
    * stale selection, shared markup. Those were spending a full three-line card
@@ -60,7 +63,19 @@ export function InspectorNotice({
       <div
         className={cn("flex min-w-0 flex-1 flex-col", density === "compact" ? "gap-0.5" : "gap-1")}
       >
-        <p className="font-medium text-text-primary">{title}</p>
+        <div className="flex items-start justify-between gap-2">
+          <p className="min-w-0 font-medium text-text-primary">{title}</p>
+          {onDismiss ? (
+            <button
+              type="button"
+              aria-label="Dismiss"
+              onClick={onDismiss}
+              className="-mr-1 -mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-raised hover:text-text-primary"
+            >
+              <X className="h-3 w-3" aria-hidden="true" />
+            </button>
+          ) : null}
+        </div>
         {children ? <div className="text-text-secondary">{children}</div> : null}
         {action ? <div className="pt-1">{action}</div> : null}
       </div>

@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
-import { ArrowUp, ChevronRight, Lightbulb } from "lucide-react";
+import { ChevronRight, Lightbulb } from "lucide-react";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isAgentInstalled } from "@shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
@@ -7,6 +7,7 @@ import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
+import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
 import { PropertyRow } from "./InspectorSection.js";
 import {
@@ -435,43 +436,67 @@ export function AgentComposer({
         </PropertyRow>
       ) : null}
 
-      <div className="relative">
-        <Textarea
-          ref={textareaRef}
-          id={inputId}
-          aria-label="Request for the agent"
-          placeholder={
-            activeScope?.kind === "component"
-              ? `What should change in ${subjectLabel}?`
-              : "What should change?"
-          }
-          density="compact"
-          rows={3}
-          resize="none"
-          maxLength={MAX_INSTRUCTION_CHARS}
-          value={draft}
-          disabled={destinations.length === 0}
-          onChange={(event) => onDraftChange(event.target.value)}
-          onKeyDown={onKeyDown}
-          className="pr-12"
-        />
-        {/* `contrast`, not `default`: the house rule reserves accent for a single
-            load-bearing signal per focus region, and the class input's focus ring
-            is already spending it. A neutral high-contrast fill is also the
-            prescribed primary CTA and stays theme-aware by construction.
-            Inset by 2px more than the field's own border radius so the button
-            sits inside the textarea rather than straddling its edge — which also
-            keeps the global focus ring off the border line. */}
+      <Textarea
+        ref={textareaRef}
+        id={inputId}
+        aria-label="Request for the agent"
+        placeholder={
+          activeScope?.kind === "component"
+            ? `What should change in ${subjectLabel}?`
+            : "What should change?"
+        }
+        density="compact"
+        rows={3}
+        resize="none"
+        maxLength={MAX_INSTRUCTION_CHARS}
+        value={draft}
+        disabled={destinations.length === 0}
+        onChange={(event) => onDraftChange(event.target.value)}
+        onKeyDown={onKeyDown}
+        className="placeholder:text-text-secondary"
+      />
+
+      {/* A footer row rather than a button floating inside the field: the
+          plate overlapped the text, its focus ring met the field's border, and
+          it was the brightest object in the drawer while being its lightest
+          action. Ideas sits at the left of the same row, so the row is always
+          there and the drawer's height no longer jumps as the draft fills.
+          `contrast`, not `default`: the house rule reserves accent for a single
+          load-bearing signal per focus region, and the class input's focus ring
+          is already spending it. */}
+      <div className="flex h-8 items-center justify-between gap-2">
+        {!draft.trim() && !(delivery && !deliveryDismissed) ? (
+          <button
+            type="button"
+            aria-expanded={ideasOpen}
+            aria-controls={`${inputId}-ideas`}
+            onClick={() => setIdeasOpen((open) => !open)}
+            className="-ml-1 flex h-6 items-center gap-1 rounded-[var(--radius-sm)] px-1 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
+          >
+            <Lightbulb className="h-3 w-3" aria-hidden="true" />
+            Ideas
+            <ChevronRight
+              aria-hidden="true"
+              className={cn(
+                "h-3 w-3 transition-transform duration-150 ease-out",
+                ideasOpen && "rotate-90"
+              )}
+            />
+          </button>
+        ) : (
+          <span />
+        )}
         <Button
           variant="contrast"
-          size="icon-sm"
-          aria-label="Send to agent"
-          title="Send to agent (Enter)"
+          size="xs"
           disabled={!canSend}
           onClick={send}
-          className="absolute bottom-3 right-3 disabled:opacity-40"
+          aria-label="Send to agent"
+          title="Send to agent (Enter)"
+          className="gap-1.5 disabled:opacity-40"
         >
-          <ArrowUp aria-hidden="true" />
+          Send
+          <kbd className={cn(KBD_COMPACT_CLASS, "bg-transparent text-inherit opacity-70")}>⏎</kbd>
         </Button>
       </div>
 
@@ -489,25 +514,6 @@ export function AgentComposer({
       {/* Not beside a delivery notice: an "Ideas" prompt under "Sent to claude"
           read as a leftover, and the row appearing and vanishing as the draft
           filled made the panel's height jump. */}
-      {!draft.trim() && !(delivery && !deliveryDismissed) ? (
-        <button
-          type="button"
-          aria-expanded={ideasOpen}
-          aria-controls={`${inputId}-ideas`}
-          onClick={() => setIdeasOpen((open) => !open)}
-          className="-ml-1 flex h-6 w-fit items-center gap-1 rounded-[var(--radius-sm)] px-1 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
-        >
-          <Lightbulb className="h-3 w-3" aria-hidden="true" />
-          Ideas
-          <ChevronRight
-            aria-hidden="true"
-            className={cn(
-              "h-3 w-3 transition-transform duration-150 ease-out",
-              ideasOpen && "rotate-90"
-            )}
-          />
-        </button>
-      ) : null}
       {!draft.trim() && ideasOpen && !(delivery && !deliveryDismissed) ? (
         <div
           id={`${inputId}-ideas`}
@@ -569,6 +575,8 @@ function DeliveryNotice({
   const { state, title, terminalId } = delivery;
   const settled =
     state.status === "sent" || state.status === "unconfirmed" || state.status === "failed";
+  // Dismiss is the notice's own corner control rather than a third button in
+  // the row: three subtle buttons wrapped to two ragged lines in a 360px drawer.
   const open = (
     <div className="flex flex-wrap gap-1">
       {terminalId ? (
@@ -581,13 +589,9 @@ function DeliveryNotice({
           View worktree changes
         </Button>
       ) : null}
-      {settled ? (
-        <Button variant="subtle" size="xs" onClick={onDismiss}>
-          Dismiss
-        </Button>
-      ) : null}
     </div>
   );
+  const dismiss = settled ? onDismiss : undefined;
   switch (state.status) {
     case "sending":
       return <WaitingRow label={`Sending to ${title}`} />;
@@ -633,6 +637,7 @@ function DeliveryNotice({
       const working = liveTarget ? isAgentBusy(liveTarget.agentState) : false;
       return (
         <InspectorNotice
+          onDismiss={dismiss}
           tone="info"
           role="status"
           title={working ? `Sent to ${title} · working` : `Sent to ${title}`}
@@ -644,13 +649,20 @@ function DeliveryNotice({
     }
     case "unconfirmed":
       return (
-        <InspectorNotice tone="warning" role="status" title="Delivery unconfirmed" action={open}>
+        <InspectorNotice
+          onDismiss={dismiss}
+          tone="warning"
+          role="status"
+          title="Delivery unconfirmed"
+          action={open}
+        >
           Check the terminal before sending again, so the agent doesn't get the request twice.
         </InspectorNotice>
       );
     case "failed":
       return (
         <InspectorNotice
+          onDismiss={dismiss}
           tone="error"
           role="alert"
           title="Couldn't send to the agent"
@@ -664,9 +676,6 @@ function DeliveryNotice({
                 ) : null}
                 <Button variant="subtle" size="xs" onClick={onSendAnyway}>
                   Send it again
-                </Button>
-                <Button variant="subtle" size="xs" onClick={onDismiss}>
-                  Dismiss
                 </Button>
               </div>
             ) : (

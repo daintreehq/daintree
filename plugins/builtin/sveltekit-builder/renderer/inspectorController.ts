@@ -70,7 +70,11 @@ export interface SitePreviewApi {
   reselect(request: {
     sessionId: string;
     loc: { file: string; line: number; column: number };
+    /** Which of the elements sharing `loc`, in document order. */
+    index?: number;
   }): Promise<boolean>;
+  /** Drop the page's selection without observing anything. */
+  clearSelection(request: { sessionId: string }): Promise<void>;
   getState(request: { sessionId: string }): Promise<SitePreviewBindingState | null>;
   onEvent(callback: (payload: SitePreviewPushPayload) => void): () => void;
 }
@@ -148,6 +152,24 @@ export type SelectionState =
 
 export type EditSurface = "text" | "classes";
 
+/**
+ * What a re-proof after this panel's own write has to match to count as a
+ * continuation of the selection rather than a new one: the same file, the
+ * same tag, and the revision the write produced. `prior` is what to put back
+ * if it does not, or if the page never answers.
+ */
+interface Continuity {
+  file: string;
+  afterRevision: string;
+  tagName: string;
+  loc: { file: string; line: number; column: number };
+  locIndex: number;
+  prior: Extract<SelectionState, { status: "ready" }> | null;
+  attempts: number;
+  /** When the write landed; empty observations inside the window are HMR, not the user. */
+  at: number;
+}
+
 export type EditState =
   | { status: "idle" }
   | { status: "applying"; surface: EditSurface }
@@ -200,6 +222,13 @@ export interface InspectorState {
    * takes the page to answer.
    */
   reselecting: boolean;
+  /**
+   * Advances on every selection that is NOT a continuation of the previous
+   * one. Editors key on it, so a re-proof after a write keeps them mounted —
+   * and the class input keeps focus — while a genuinely new selection starts
+   * them clean.
+   */
+  selectionGeneration: number;
 }
 
 export type ClassCompletion =
@@ -220,6 +249,7 @@ export const INITIAL_INSPECTOR_STATE: InspectorState = {
   issue: null,
   mutating: false,
   reselecting: false,
+  selectionGeneration: 0,
 };
 
 const MAX_BUFFERED_EVENTS = 64;
@@ -232,6 +262,11 @@ const REATTACH_REASONS: ReadonlySet<SitePreviewDetachReason> = new Set([
 const REATTACH_DELAY_MS = 300;
 /** How long the page gets to answer a reselect before the stale notice shows after all. */
 const RESELECT_SETTLE_MS = 1500;
+/** An empty observation this soon after our write is HMR replacing the node, not the user. */
+const CONTINUITY_WINDOW_MS = 10_000;
+/** HMR patches the DOM a beat after the write lands; asking again immediately finds nothing. */
+const CONTINUITY_RETRY_DELAY_MS = 150;
+const CONTINUITY_MAX_RETRIES = 2;
 /** About two minutes in all: long enough for a cold dev server to serve its first page. */
 const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000, 30000, 60000];
 
@@ -466,7 +501,7 @@ export class InspectorController {
    * writes and the reload they cause. Updated from every proven resolution;
    * consulted only when a write is pending a refresh.
    */
-  private continuityLoc: { file: string; line: number; column: number } | null = null;
+  private continuity: Continuity | null = null;
   private reselectOnReady = false;
   private reselectTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -547,7 +582,7 @@ export class InspectorController {
 
   private closeWorkspace(): void {
     this.workspaceRequest++;
-    this.continuityLoc = null;
+    this.continuity = null;
     this.reselectOnReady = false;
     this.clearReselectTimer();
     const workspace = this.state.workspace;
@@ -819,7 +854,7 @@ export class InspectorController {
       !receipt.previewRefreshed &&
       receipt.epochAtWrite !== null &&
       epoch > receipt.epochAtWrite &&
-      this.continuityLoc !== null;
+      this.continuity !== null;
     if (
       (selection.status === "ready" &&
         selection.selection.documentEpoch < epoch &&
@@ -911,6 +946,21 @@ export class InspectorController {
       edit: this.state.edit.status === "applying" ? this.state.edit : { status: "idle" },
     };
     if (nodes.length === 0) {
+      const continuity = this.continuity;
+      if (
+        continuity !== null &&
+        Date.now() - continuity.at < CONTINUITY_WINDOW_MS &&
+        continuity.attempts < CONTINUITY_MAX_RETRIES &&
+        this.state.selection.status === "ready"
+      ) {
+        // Same-document HMR replaced the selected node a beat after the write
+        // landed and the page dropped its disconnected selection. The element
+        // is back under the same location; ask again after the patch settles.
+        continuity.attempts += 1;
+        this.update({ ...base, ...this.staleSelectionPatch("edited"), reselecting: true });
+        setTimeout(() => void this.reselectNow(), CONTINUITY_RETRY_DELAY_MS);
+        return;
+      }
       this.update({ ...base, selection: { status: "none" } });
       return;
     }
@@ -955,11 +1005,13 @@ export class InspectorController {
 
     // What a reselect would be continuing. Read before the resolving state
     // replaces it, and put back if the re-proof turns out to name something else.
-    const priorReady =
-      this.state.reselecting && this.state.selection.status === "ready"
-        ? this.state.selection
-        : null;
-    this.update({ ...base, selection: { status: "resolving", epoch, requestId: request } });
+    const continuing = this.state.reselecting && this.continuity !== null;
+    // A re-proof keeps the stale selection on screen — its controls are already
+    // disabled — rather than swapping the editors out for a skeleton and back,
+    // which unmounted the class input mid-loop and dropped its focus.
+    if (!continuing) {
+      this.update({ ...base, selection: { status: "resolving", epoch, requestId: request } });
+    }
     let raw: unknown;
     try {
       raw = await this.deps.invoke(CHANNELS.selectionResolve, {
@@ -1021,22 +1073,50 @@ export class InspectorController {
     // above it can make the old location name a different node in the new
     // source. A different tag, or a different file, is not a continuation —
     // the stale state stands and the user selects again.
-    if (priorReady !== null) {
-      const before = priorReady.selection.nodes[0]?.definition;
-      const after = selection.nodes[0]?.definition;
-      if (
-        before &&
-        after &&
-        (before.tagName !== after.tagName || before.location.file !== after.location.file)
-      ) {
+    const after = selection.nodes[0]?.definition ?? null;
+    if (continuing && this.continuity !== null) {
+      const record = this.continuity;
+      const continues =
+        after !== null &&
+        after.location.file === record.file &&
+        after.tagName === record.tagName &&
+        after.revision === record.afterRevision;
+      if (!continues) {
+        // A fresh proof of SOME element is not a continuation of the one that
+        // was edited. Refuse it, and take the page's highlight down with it so
+        // page and drawer agree on what is selected: nothing new.
         this.clearReselectTimer();
-        this.update({ selection: priorReady, reselecting: false });
+        const binding = this.state.binding;
+        if (binding.status === "bound") {
+          void this.deps.sitePreview
+            .clearSelection({ sessionId: binding.sessionId })
+            .catch(() => undefined);
+        }
+        this.update({ selection: record.prior ?? { status: "none" }, reselecting: false });
+        this.continuity = null;
         return;
       }
     }
-    const location = selection.nodes[0]?.definition?.location ?? null;
-    this.continuityLoc = location ? { ...location } : null;
     this.clearReselectTimer();
+    const location = after?.location ?? null;
+    const generation = continuing
+      ? this.state.selectionGeneration
+      : this.state.selectionGeneration + 1;
+    // Every proven selection can be continued through this panel's own writes
+    // and the reload they cause; the record is refreshed by each write.
+    this.continuity =
+      after !== null && location !== null
+        ? {
+            file: location.file,
+            afterRevision: after.revision,
+            tagName: after.tagName,
+            loc: { ...location },
+            locIndex: nodes[0]?.locIndex ?? 0,
+            prior: null,
+            attempts: 0,
+            at: this.continuity?.at ?? 0,
+          }
+        : null;
     this.update({
       selection: {
         status: "ready",
@@ -1049,7 +1129,11 @@ export class InspectorController {
         revisions: null,
       },
       reselecting: false,
+      selectionGeneration: generation,
     });
+    if (this.continuity !== null) {
+      this.continuity.prior = this.state.selection.status === "ready" ? this.state.selection : null;
+    }
     void this.resolveDefinitions(selection, component);
   }
 
@@ -1192,6 +1276,10 @@ export class InspectorController {
   }
 
   private isCurrentResolve(request: number): boolean {
+    if (request !== this.selectionRequest) return false;
+    // A re-proof this controller asked for never entered `resolving`: the
+    // stale selection stayed on screen so its editors stayed mounted.
+    if (this.state.reselecting && this.continuity !== null) return true;
     const selection = this.state.selection;
     return (
       request === this.selectionRequest &&
@@ -1222,20 +1310,33 @@ export class InspectorController {
    * is. A guard timer does the same if the page goes quiet.
    */
   private async reselectNow(): Promise<void> {
-    const loc = this.continuityLoc;
+    const record = this.continuity;
     const binding = this.state.binding;
-    if (loc === null || binding.status !== "bound") {
+    if (record === null || binding.status !== "bound") {
       this.update({ reselecting: false });
       return;
     }
     this.clearReselectTimer();
     this.reselectTimer = setTimeout(() => {
       this.reselectTimer = null;
-      if (this.state.reselecting) this.update({ reselecting: false });
+      if (!this.state.reselecting) return;
+      // The page went quiet. The attempt is over: any late resolve is
+      // rejected, the stale selection is what stands, and it says so.
+      this.selectionRequest++;
+      this.update({
+        ...(record.prior && this.state.selection.status !== "ready"
+          ? { selection: record.prior }
+          : {}),
+        reselecting: false,
+      });
     }, RESELECT_SETTLE_MS);
     let found: boolean;
     try {
-      found = await this.deps.sitePreview.reselect({ sessionId: binding.sessionId, loc });
+      found = await this.deps.sitePreview.reselect({
+        sessionId: binding.sessionId,
+        loc: record.loc,
+        index: record.locIndex,
+      });
     } catch {
       found = false;
     }
@@ -1452,9 +1553,22 @@ export class InspectorController {
             : {}),
           // …and the page is asked for the element again, so main can re-prove
           // it. The stale patch above stands until that proof arrives.
-          reselecting: stillSelected && this.continuityLoc !== null,
+          reselecting: stillSelected && this.continuity !== null,
         });
-        if (stillSelected && this.continuityLoc !== null) void this.reselectNow();
+        if (stillSelected && this.continuity !== null) {
+          // The record is bound to THIS write: a re-proof continues the
+          // selection only if it comes back at the revision main just wrote.
+          const prior = this.state.selection;
+          this.continuity = {
+            ...this.continuity,
+            file: result.receipt.file,
+            afterRevision: result.receipt.afterRevision,
+            prior: prior.status === "ready" ? prior : this.continuity.prior,
+            attempts: 0,
+            at: Date.now(),
+          };
+          void this.reselectNow();
+        }
         return true;
       case "no-op":
         this.update({ edit: stillSelected ? { status: "no-op", surface } : { status: "idle" } });

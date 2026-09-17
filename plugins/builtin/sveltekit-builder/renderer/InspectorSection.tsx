@@ -97,11 +97,20 @@ export function InspectorDisclosure({
  * open disclosure can carry the same label treatment without nesting a second
  * disclosure inside the first.
  */
-export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {
+export function SectionHeader({
+  title,
+  icon: Icon,
+  action,
+}: {
+  title: string;
+  icon?: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
+  action?: ReactNode;
+}) {
   return (
     <div className="flex h-7 shrink-0 items-center justify-between gap-2">
-      <h3 className="min-w-0 truncate text-2xs font-medium uppercase tracking-wide text-text-secondary">
-        {title}
+      <h3 className="flex min-w-0 items-center gap-1 text-2xs font-medium uppercase tracking-wide text-text-secondary">
+        {Icon ? <Icon className="h-3 w-3 shrink-0" aria-hidden="true" /> : null}
+        <span className="truncate">{title}</span>
       </h3>
       {action}
     </div>

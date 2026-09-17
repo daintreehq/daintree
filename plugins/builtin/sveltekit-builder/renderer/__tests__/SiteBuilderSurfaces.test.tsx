@@ -242,10 +242,11 @@ describe("selection identity", () => {
       routeId: "/pricing",
     });
     expect((args!.nodes as unknown[]).length).toBe(1);
-    // Named twice on purpose: in the strip over the page and in the details.
+    // Named once: the drawer's identity block carries the source, and the strip
+    // repeats it only while the drawer is not there to show it.
     const identity = screen.getByRole("region", { name: "Selected element" });
     expect(identity.textContent).toContain(`${FILE}:6`);
-    expect(screen.getByRole("toolbar", { name: "Site Builder" }).textContent).toContain(
+    expect(screen.getByRole("toolbar", { name: "Site Builder" }).textContent).not.toContain(
       `${FILE}:6`
     );
     // The trail names the components this element was reached through, and
@@ -316,7 +317,8 @@ describe("selection identity", () => {
 
     await act(async () => answer("src/lib/Card.svelte"));
     await waitFor(() => expect(identity.textContent).toContain("src/lib/Card.svelte"));
-    expect(strip.textContent).toContain("src/lib/Card.svelte");
+    // The strip defers to the open drawer for the file.
+    expect(strip.textContent).not.toContain("src/lib/Card.svelte");
   });
 
   it("settles a draft pinned before its component was resolved, after the selection moved on", async () => {
@@ -409,7 +411,7 @@ describe("selection identity", () => {
       }),
     }));
     await mountSelected();
-    const warning = screen.getByText(/all 3 copies/);
+    const warning = screen.getByText(/all 3 rendered copies/);
     const firstControl = screen.getByRole("button", { name: /^Edit text: / });
     expect(
       warning.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING
@@ -466,7 +468,7 @@ describe("editing", () => {
     });
 
     await screen.findByRole("region", { name: "Last change" });
-    expect(text()).toMatch(/styles (not verified|unverified)/i);
+    expect(text()).toMatch(/styles\s*(not verified|unverified)/i);
     expect(text()).not.toMatch(/styles (generated|applied|rendered)/i);
     // The write spent the selection's ranges — so editing resumes only once
     // the page has been asked for the element again and main has re-proved it.
@@ -477,9 +479,9 @@ describe("editing", () => {
     // A later document is the only thing that proves the reload, and the
     // receipt starts reporting it once one lands — while still refusing to
     // claim anything about the styles, which nothing here can prove.
-    await waitFor(() => expect(text()).toMatch(/preview reloaded/i));
-    expect(text()).not.toMatch(/preview not yet refreshed/i);
-    expect(text()).toMatch(/styles (not verified|unverified)/i);
+    await waitFor(() => expect(text()).toMatch(/preview\s*reloaded/i));
+    expect(text()).not.toMatch(/refresh unconfirmed/i);
+    expect(text()).toMatch(/styles\s*(not verified|unverified)/i);
   });
 
   it("reports a class main refuses by name and keeps what was typed", async () => {
@@ -678,12 +680,12 @@ describe("editing continuity", () => {
     expect(screen.queryByText(/select again/i)).toBeNull();
   });
 
-  it("refuses a re-proof that names a different element", async () => {
+  it("refuses a re-proof that names a different element, and clears the page's highlight", async () => {
     // An edit that inserted lines above the element can make the old location
     // resolve to a different node in the new source. That is not a
-    // continuation: the stale state stands and the user selects again.
+    // continuation: the stale state stands, the page stops highlighting the
+    // wrong element, and the user selects again.
     await mountSelected();
-    // The next resolve is the re-proof: it names a different element.
     host.handlers.set(CHANNELS.selectionResolve, (args) => {
       const base = makeSelection({ documentEpoch: args.documentEpoch as number });
       const node = base.nodes[0]!;
@@ -691,7 +693,13 @@ describe("editing continuity", () => {
         status: "ok",
         selection: {
           ...base,
-          nodes: [{ ...node, definition: { ...node.definition!, tagName: "div" }, label: "div" }],
+          nodes: [
+            {
+              ...node,
+              definition: { ...node.definition!, tagName: "div", revision: host.diskRevision },
+              label: "div",
+            },
+          ],
         },
       };
     });
@@ -699,6 +707,60 @@ describe("editing continuity", () => {
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
     await screen.findByText("Saved — select again to keep editing");
     expect(removeButton().disabled).toBe(true);
+    expect(host.sitePreview.clearSelection).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses a re-proof at a revision other than the one the write produced", async () => {
+    // A fresh proof of some element is not a continuation of the one edited:
+    // it has to come back at the revision main just wrote.
+    await mountSelected();
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
+      selection.nodes[0]!.definition!.revision = REVISION; // the pre-write bytes
+      return { status: "ok", selection };
+    });
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await screen.findByText("Saved — select again to keep editing");
+    expect(removeButton().disabled).toBe(true);
+  });
+
+  it("asks for the same rendered occurrence, not the first one", async () => {
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    expect(host.sitePreview.reselect.mock.calls[0]![0]).toMatchObject({ index: 2 });
+  });
+
+  it("keeps the class input mounted and focused through a continuation", async () => {
+    // The acceptance case: add two classes in a row without another click.
+    await mountSelected();
+    const input = screen.getByRole("combobox", { name: "Add a class" });
+    input.focus();
+    fireEvent.change(input, { target: { value: "shadow-md" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    expect(document.activeElement).toBe(screen.getByRole("combobox", { name: "Add a class" }));
+    fireEvent.change(document.activeElement as HTMLInputElement, {
+      target: { value: "shadow-lg" },
+    });
+    fireEvent.keyDown(document.activeElement as HTMLInputElement, { key: "Enter" });
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(2));
+  });
+
+  it("retries once when HMR replaces the node in the same document", async () => {
+    // Same-document HMR: the page drops its disconnected selection and reports
+    // nothing selected a beat after the write. That is not the user
+    // deselecting; ask again once the patch has settled.
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    await act(async () => host.select(0, []));
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    expect(screen.queryByText(/select again/i)).toBeNull();
   });
 
   it("falls back to the stale notice when the page no longer has the element", async () => {
