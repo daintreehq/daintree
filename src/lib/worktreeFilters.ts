@@ -483,6 +483,49 @@ export function groupByType<T extends Worktree | WorktreeState>(
   return sections;
 }
 
+/** The sidebar ordering preferences, as `worktreeFilterStore` holds them. */
+export interface SidebarOrderPrefs {
+  orderBy: OrderBy;
+  groupByType: boolean;
+  pinnedWorktrees: string[];
+  manualOrder: string[];
+}
+
+/**
+ * The sidebar's row order for any set of worktrees: main first, then the list
+ * exactly as the sidebar lays it out. Nothing is dropped — callers filter
+ * before or after.
+ *
+ * One function owns the whole "main, external, pinned, orderBy, tiebreak,
+ * group" decision, so a compact surface can show the same worktrees in the
+ * same order the sidebar shows them without re-deriving any of it.
+ */
+export function orderWorktreesLikeSidebar<T extends Worktree | WorktreeState>(
+  worktrees: T[],
+  prefs: SidebarOrderPrefs
+): T[] {
+  // A pin for a worktree that is no longer here must not occupy a slot in the
+  // pin ordering — the sidebar's `validPinnedWorktrees` step.
+  const existingIds = new Set(worktrees.map((worktree) => worktree.id));
+  const validPinned = prefs.pinnedWorktrees.filter((id) => existingIds.has(id));
+
+  const sorted = sortWorktrees(worktrees, prefs.orderBy, validPinned, prefs.manualOrder);
+  if (!prefs.groupByType) return sorted;
+
+  // Main is lifted out before grouping rather than left to `sortWorktrees`:
+  // `groupByType` reads `isExternal` ahead of the branch type, so a main
+  // worktree git reports from outside the project would otherwise sink into the
+  // trailing "Outside the project" section. The sidebar renders main as its own
+  // card above every section, which is what this reproduces.
+  const main = sorted.filter((worktree) => worktree.isMainWorktree);
+  const rest = sorted.filter((worktree) => !worktree.isMainWorktree);
+
+  return [
+    ...main,
+    ...groupByType(rest, prefs.orderBy, validPinned).flatMap((section) => section.worktrees),
+  ];
+}
+
 export function hasAnyFilters(filters: FilterState): boolean {
   return (
     filters.query.length > 0 ||

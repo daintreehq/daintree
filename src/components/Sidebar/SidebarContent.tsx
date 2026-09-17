@@ -75,7 +75,7 @@ import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import {
   matchesFilters,
   matchesQuickStateFilter,
-  sortWorktrees,
+  orderWorktreesLikeSidebar,
   sortWorktreesByRelevance,
   groupByType,
   isExternalWorktree,
@@ -1041,7 +1041,16 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
             validPinnedWorktrees,
             manualOrder
           )
-        : sortWorktrees(filtered, orderBy, validPinnedWorktrees, manualOrder);
+        : // `groupByType: false` on purpose. The sections are built separately
+          // below, because `filteredWorktrees` has to stay the pre-grouping
+          // array: row indices and the deleted-worktree anchors are positions
+          // in it, not in the flattened section order.
+          orderWorktreesLikeSidebar(filtered, {
+            orderBy,
+            groupByType: false,
+            pinnedWorktrees: validPinnedWorktrees,
+            manualOrder,
+          });
 
       if (isGroupedByType && !hasQuery) {
         return {
