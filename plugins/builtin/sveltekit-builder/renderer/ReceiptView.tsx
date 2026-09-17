@@ -1,5 +1,5 @@
 import { useState, type ComponentType } from "react";
-import { ChevronRight, CircleDashed, Clock, Copy, RefreshCw } from "lucide-react";
+import { ChevronRight, Clock, Copy, EyeOff, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ReceiptState } from "./inspectorController.js";
@@ -62,9 +62,10 @@ export function ReceiptView({ state, onUndo }: { state: ReceiptState; onUndo: ()
           {previewRefreshed ? "Preview reloaded" : "Preview not yet refreshed"}
         </Fact>
         {state.surface === "classes" ? (
-          // A dashed circle rather than a question mark: the mark read as a help
-          // button, and this is a status — unproven, not unknown.
-          <Fact icon={CircleDashed}>Styles unverified</Fact>
+          // Not observed: nothing here can read the page's computed styles
+          // back. A question mark read as a help button and a dashed circle
+          // as a stalled spinner; an eye that is off says what this is.
+          <Fact icon={EyeOff}>Styles unverified</Fact>
         ) : null}
         {copies > 1 ? (
           <Fact icon={Copy}>{`Affects ${plural(copies, "rendered copy", "rendered copies")}`}</Fact>

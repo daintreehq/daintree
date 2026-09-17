@@ -205,8 +205,11 @@ describe("preview binding", () => {
     // The rule: the reason main gave is shown, under a heading that scopes it to
     // direct editing rather than to the panel as a whole. Matched as a substring
     // because the notice adds what still works alongside it.
-    await screen.findByText("Direct editing unavailable");
+    // The rule: the project's capabilities are reported under one "Site source"
+    // heading, with the reason main gave scoped to the capability it affects.
+    await screen.findByRole("region", { name: "Site source" });
     await screen.findByText(/Found svelte 4\.2\.1; editing needs Svelte 5/);
+    expect(screen.getAllByText("Unavailable").length).toBeGreaterThan(0);
     // Still traced and still sendable to an agent; only direct edits are gated.
     host.handlers.set(CHANNELS.selectionResolve, (args) => ({
       status: "ok",
