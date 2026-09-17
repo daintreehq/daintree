@@ -327,13 +327,24 @@ const SelectItem = React.forwardRef<
           <Check className="h-3.5 w-3.5" aria-hidden="true" />
         </ItemIndicator>
       </span>
+      {/* `min-w-0` on the text column: as a flex child it otherwise floors at
+          its content's width, so a long label runs out past the popup's padding
+          and is cut by the edge with no ellipsis — a descendant's `truncate`
+          never gets the chance to fire. This only lets the column shrink when
+          something inside it asks to; items that do not truncate are unchanged. */}
       {description ? (
-        <span className="flex flex-col gap-0.5">
+        // No `truncate` on the description: these are full sentences across the
+        // settings tabs and they are meant to wrap. `min-w-0` alone is enough —
+        // it lets the column shrink so a descendant that DOES ask to truncate
+        // can, without deciding for prose that never asked.
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
           <ItemText>{children}</ItemText>
           <span className="text-2xs text-text-secondary">{description}</span>
         </span>
       ) : (
-        <ItemText>{children}</ItemText>
+        <span className="flex min-w-0 flex-1 flex-col">
+          <ItemText>{children}</ItemText>
+        </span>
       )}
     </Item>
   );
