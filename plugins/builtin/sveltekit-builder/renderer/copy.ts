@@ -22,21 +22,26 @@ export const SUPPORT_LABEL: Record<EditSupport, string> = {
   "inspect-only": "Inspect only",
 };
 
+/**
+ * One voice: every reason opens with the action, then says why. Two of these
+ * used to lead with the cause and two with the remedy, so the same panel state
+ * read as two different conditions depending on how it was reached.
+ */
 export const STALE_COPY: Record<StaleReason, { title: string; detail: string }> = {
   "document-changed": {
-    title: "Selection changed — select again",
-    detail: "The page reloaded, so this selection no longer points at a live element.",
+    title: "Select again — the page reloaded",
+    detail: "This selection no longer points at a live element.",
   },
   "source-changed": {
-    title: "Source changed — select again",
-    detail: "The file behind this element changed after you selected it.",
+    title: "Select again — the file changed",
+    detail: "The source behind this element changed after you selected it.",
   },
   edited: {
-    title: "Select again to keep editing",
-    detail: "The saved change moved this element's source.",
+    title: "Select again — the edit moved its source",
+    detail: "The saved change moved this element in the file.",
   },
   "preview-detached": {
-    title: "Preview disconnected — select again",
+    title: "Select again — the preview disconnected",
     detail: "This selection came from a preview that's no longer connected.",
   },
 };

@@ -1,7 +1,16 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import { PanelRightClose, PanelRightOpen, X } from "lucide-react";
+import {
+  PanelRightClose,
+  PanelRightOpen,
+  Sparkles,
+  SquareDashedMousePointer,
+  X,
+} from "lucide-react";
 import type { DevPreviewToolSurfaceProps } from "@/registry/devPreviewToolRegistry";
+import type { SelectedNode } from "../shared/model.js";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import { KBD_COMPACT_CLASS } from "@/components/ui/Kbd";
 import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
@@ -238,19 +247,11 @@ function StripStatus({
               the component when a component was picked, the element otherwise.
               It used to always end at the element, so a component selection was
               presented as though an element were current. */}
-          <SelectionTrail
-            crumbs={trailFor(node, { includeSelf: pickedIndex === 0 })}
-            current={
-              pickedIndex > 0 && picked?.kind === "component"
-                ? picked.label
-                : node.label || node.definition?.tagName || "element"
-            }
-            className="min-w-0 flex-1"
-          />
+          <StripTrail node={node} picked={picked?.kind === "component" ? picked : null} />
           {pickedIndex > 0 ? (
-            <span className="shrink-0 rounded-sm border border-border-subtle px-1 text-3xs">
+            <Badge size="xs" tone="outline">
               Component
-            </span>
+            </Badge>
           ) : null}
           <KeyHints />
           {location ? (
@@ -266,12 +267,43 @@ function StripStatus({
     }
   }
   if (selection.status === "resolving") return <WaitingRow label="Finding the source" />;
+  if (state.mode === "select") {
+    // The armed state has a glyph: without one, "click any element" read as
+    // placeholder text in a disabled field, and nothing said picking was live.
+    return (
+      <span className="flex min-w-0 items-center gap-1.5">
+        <SquareDashedMousePointer className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+        <span className="truncate">Select an element to edit it or ask an agent</span>
+      </span>
+    );
+  }
+  return <span className="truncate">Browsing — switch to Select to pick an element</span>;
+}
+
+/**
+ * The strip's trail ends at what is selected: the component when a component
+ * was picked, the element otherwise. Current is passed by position — a label
+ * match would pick the first of two nested components sharing a name, so the
+ * LAST crumb carrying the picked label is taken, which is the innermost.
+ */
+function StripTrail({ node, picked }: { node: SelectedNode; picked: { label: string } | null }) {
+  const crumbs = trailFor(node, { includeSelf: picked === null });
+  let currentIndex = crumbs.length - 1;
+  if (picked) {
+    for (let index = crumbs.length - 1; index >= 0; index--) {
+      if (crumbs[index]!.label === picked.label) {
+        currentIndex = index;
+        break;
+      }
+    }
+  }
   return (
-    <span className="truncate">
-      {state.mode === "select"
-        ? "Click any element on the page"
-        : "Browsing — switch to Select to pick an element"}
-    </span>
+    <SelectionTrail
+      crumbs={crumbs}
+      currentIndex={currentIndex}
+      currentLabel={picked?.label ?? node.label ?? "element"}
+      className="min-w-0 flex-1"
+    />
   );
 }
 
@@ -291,6 +323,9 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
   // the empty composer held ~280px above it. Collapsing is a preference the
   // user expresses once and this remembers.
   const [editsOpen, setEditsOpen] = useState(true);
+  // Its peer. Two section headers of the same rank, one with a chevron and one
+  // without, left the reader guessing which of them folds.
+  const [agentOpen, setAgentOpen] = useState(true);
   const memoryKey = composerMemoryKey(props.panelId, props.worktreeId);
   // A draft or an agent request outlives the selection it was about; keep
   // both reachable.
@@ -317,11 +352,11 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
           scrolls it away. */}
       {selection.status === "ready" ? (
         <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3">
-          <SelectionIdentity selection={selection} />
+          <SelectionIdentity selection={selection} worktreePath={props.worktreePath} />
         </div>
       ) : null}
 
-      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3">
+      <ScrollShadow className="min-h-0 flex-1" scrollClassName="flex flex-col gap-3 p-3">
         {state.issue ? (
           <InspectorNotice
             tone={state.issue.severity}
@@ -344,18 +379,21 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
           answer the same question ("can I change it, and how"), so they get the
           same weight and the same section grammar. */}
         {selection.status === "ready" ? (
-          <InspectorDisclosure
-            title="Edit directly"
-            open={editsOpen}
-            onOpenChange={setEditsOpen}
-            className="border-t border-border-subtle pt-1"
-          >
+          <InspectorDisclosure title="Edit directly" open={editsOpen} onOpenChange={setEditsOpen}>
             <SelectionEdits state={state} selection={selection} actions={actionsFor(controller)} />
           </InspectorDisclosure>
         ) : null}
 
         {state.workspace.status === "ready" ? (
-          <div className="border-t border-border-subtle pt-3">
+          <InspectorDisclosure
+            title="Ask an agent"
+            icon={Sparkles}
+            open={agentOpen}
+            onOpenChange={setAgentOpen}
+            className={
+              selection.status === "ready" ? "border-t border-border-subtle pt-1" : undefined
+            }
+          >
             <AgentComposer
               memoryKey={memoryKey}
               controller={controller}
@@ -363,9 +401,9 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
               worktreeId={props.worktreeId}
               worktreePath={props.worktreePath}
             />
-          </div>
+          </InspectorDisclosure>
         ) : null}
-      </div>
+      </ScrollShadow>
 
       {/* Pinned to the foot of the drawer, not trailing the content: a write and
           its Undo land in the same place every time. `mt-auto` only
@@ -471,31 +509,31 @@ function WorkspaceStatus({
           {editing.length > 0 ? (
             <InspectorNotice tone="warning" title="Direct editing unavailable" density="compact">
               {editing.length === 1 ? (
-                editing[0]
+                sentence(editing[0]!)
               ) : (
                 <ul className="flex list-disc flex-col gap-0.5 pl-4">
                   {editing.map((reason) => (
                     <li key={reason}>{reason}</li>
                   ))}
                 </ul>
-              )}
-              {" You can still select elements and ask an agent to change them."}
+              )}{" "}
+              {"You can still select elements and ask an agent to change them."}
             </InspectorNotice>
           ) : null}
           {suggestions.length > 0 ? (
             <InspectorNotice tone="info" title="Class suggestions unavailable" density="compact">
               {suggestions.length === 1 ? (
-                suggestions[0]
+                sentence(suggestions[0]!)
               ) : (
                 <ul className="flex list-disc flex-col gap-0.5 pl-4">
                   {suggestions.map((reason) => (
                     <li key={reason}>{reason}</li>
                   ))}
                 </ul>
-              )}
+              )}{" "}
               {editing.length === 0
-                ? " Classes you type are still written exactly as typed."
-                : " Class names can't be checked for this project."}
+                ? "Classes you type are still written exactly as typed."
+                : "Class names can't be checked for this project."}
             </InspectorNotice>
           ) : null}
         </>
@@ -552,6 +590,11 @@ function SelectionBody({ state }: { state: InspectorState }) {
         </InspectorNotice>
       );
     case "ready":
-      return <SelectionIdentity selection={selection} />;
+      return <SelectionIdentity selection={selection} worktreePath={null} />;
   }
+}
+
+/** Main's reasons are clauses; followed by a second sentence they need a stop. */
+function sentence(text: string): string {
+  return /[.!?]$/.test(text.trim()) ? text : `${text}.`;
 }

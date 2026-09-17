@@ -250,7 +250,7 @@ describe("selection identity", () => {
     // `each` is control flow — not a file, not a thing an agent can be pointed
     // at, so never a step. Asserted as that rule rather than as a fixed list,
     // so the trail can be restyled without rewriting this.
-    const trail = screen.getAllByRole("navigation", { name: "Selection" })[0]!;
+    const trail = screen.getAllByRole("navigation", { name: "Breadcrumb" })[0]!;
     const crumbs = Array.from(trail.querySelectorAll("li")).map((li) =>
       (li.textContent ?? "").trim()
     );
@@ -406,8 +406,8 @@ describe("selection identity", () => {
       }),
     }));
     await mountSelected();
-    const warning = screen.getByText("Affects 3 rendered copies");
-    const firstControl = screen.getByRole("button", { name: "Edit text" });
+    const warning = screen.getByText(/all 3 copies/);
+    const firstControl = screen.getByRole("button", { name: /^Edit text: / });
     expect(
       warning.compareDocumentPosition(firstControl) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
@@ -431,7 +431,7 @@ describe("selection identity", () => {
     expect(screen.getByText("Controlled by a class: directive")).toBeTruthy();
     expect(screen.getByText("Needs an agent")).toBeTruthy();
     expect(screen.getByText("Inspect only")).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "Edit text" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Edit text: / })).toBeNull();
     expect(screen.queryByRole("combobox", { name: "Add a class" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Remove px-6" })).toBeNull();
   });
@@ -463,7 +463,7 @@ describe("editing", () => {
     });
 
     await screen.findByRole("region", { name: "Last change" });
-    expect(text()).toContain("Styles not verified");
+    expect(text()).toMatch(/styles (not verified|unverified)/i);
     expect(text()).not.toMatch(/styles (generated|applied|rendered)/i);
     // The write spent the selection's ranges.
     expect(removeButton().disabled).toBe(true);
@@ -474,7 +474,7 @@ describe("editing", () => {
     // claim anything about the styles, which nothing here can prove.
     await waitFor(() => expect(text()).toMatch(/preview reloaded/i));
     expect(text()).not.toMatch(/preview not yet refreshed/i);
-    expect(text()).toContain("Styles not verified");
+    expect(text()).toMatch(/styles (not verified|unverified)/i);
   });
 
   it("reports a class main refuses by name and keeps what was typed", async () => {
@@ -515,7 +515,7 @@ describe("editing", () => {
 
     await act(async () => finish({ status: "applied", receipt: makeReceipt() }));
     await screen.findByRole("region", { name: "Last change" });
-    expect(screen.getByText("Select again to keep editing")).toBeTruthy();
+    expect(screen.getByText("Select again — the edit moved its source")).toBeTruthy();
     expect(removeButton().disabled).toBe(true);
     expect(host.calls(CHANNELS.editApply)).toHaveLength(1);
   });
@@ -551,11 +551,11 @@ describe("editing", () => {
       }),
     }));
     await mountSelected();
-    fireEvent.click(screen.getByRole("button", { name: "Edit text" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit text: / }));
     const field = screen.getByRole("textbox", { name: "Text" });
     fireEvent.keyDown(field, { key: "Enter" });
     expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
-    fireEvent.click(screen.getByRole("button", { name: "Edit text" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit text: / }));
     fireEvent.change(screen.getByRole("textbox", { name: "Text" }), {
       target: { value: " Go Pro " },
     });
@@ -608,14 +608,14 @@ describe("editing", () => {
 
   it("edits literal text on Enter and cancels on Escape without writing", async () => {
     await mountSelected();
-    fireEvent.click(screen.getByRole("button", { name: "Edit text" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit text: / }));
     let field = screen.getByRole("textbox", { name: "Text" }) as HTMLInputElement;
     fireEvent.change(field, { target: { value: "Go Pro" } });
     fireEvent.keyDown(field, { key: "Escape" });
     expect(screen.queryByRole("textbox", { name: "Text" })).toBeNull();
     expect(host.calls(CHANNELS.editApply)).toHaveLength(0);
 
-    fireEvent.click(screen.getByRole("button", { name: "Edit text" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Edit text: / }));
     field = screen.getByRole("textbox", { name: "Text" }) as HTMLInputElement;
     fireEvent.change(field, { target: { value: "Go Pro" } });
     fireEvent.keyDown(field, { key: "Enter" });
@@ -648,11 +648,11 @@ describe("stale selections", () => {
   it("goes stale when the document epoch advances", async () => {
     await mountSelected();
     await act(async () => host.epochAdvanced(1));
-    await screen.findByText("Selection changed — select again");
+    await screen.findByText("Select again — the page reloaded");
     expect(removeButton().disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "Edit text" }) as HTMLButtonElement).disabled).toBe(
-      true
-    );
+    expect(
+      (screen.getByRole("button", { name: /^Edit text: / }) as HTMLButtonElement).disabled
+    ).toBe(true);
     expect(
       (screen.getByRole("combobox", { name: "Add a class" }) as HTMLInputElement).disabled
     ).toBe(true);
@@ -670,7 +670,7 @@ describe("stale selections", () => {
     // The panel says so once, in the identity block, and blocks the send. It
     // used to say it again inside the composer 300px below; the assertion is on
     // the behaviour so removing the repeat is not a test change.
-    await screen.findByText("Selection changed — select again");
+    await screen.findByText("Select again — the page reloaded");
     await waitFor(() => expect(sendButton().disabled).toBe(true));
     expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
   });
@@ -776,7 +776,7 @@ describe("stale selections", () => {
     // element. Marking whatever crumb is left as `aria-current` told screen
     // readers the parent component was the selection.
     await mountSelected();
-    for (const trail of screen.getAllByRole("navigation", { name: "Selection" })) {
+    for (const trail of screen.getAllByRole("navigation", { name: "Breadcrumb" })) {
       const current = trail.querySelector('[aria-current="true"]');
       expect(current).not.toBeNull();
       expect(current!.textContent).toContain("Start Pro");
@@ -944,7 +944,7 @@ describe("stale selections", () => {
         revision: null,
       })
     );
-    await screen.findByText("Source changed — select again");
+    await screen.findByText("Select again — the file changed");
     expect(removeButton().disabled).toBe(true);
   });
 
@@ -952,7 +952,7 @@ describe("stale selections", () => {
     await mountSelected();
     // The reinstalled runtime reports the new document before the bridge's push.
     await act(async () => host.documentReady(1));
-    await screen.findByText("Selection changed — select again");
+    await screen.findByText("Select again — the page reloaded");
     await act(async () => host.select(1));
     await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2));
     expect(host.calls(CHANNELS.selectionResolve)[1]).toMatchObject({ documentEpoch: 1 });
@@ -998,7 +998,7 @@ describe("stale selections", () => {
       droppedMessages: 0,
     }));
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
-    await screen.findByText("Selection changed — select again");
+    await screen.findByText("Select again — the page reloaded");
     expect(removeButton().disabled).toBe(true);
   });
 

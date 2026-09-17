@@ -1,4 +1,9 @@
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { AlertTriangle, Check, ChevronRight, Copy, ExternalLink } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { actionService } from "@/services/ActionService";
+import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import type { EditCapability, SelectedNode } from "../shared/model.js";
 import {
@@ -14,10 +19,10 @@ import { InspectorNotice } from "./InspectorNotice.js";
 import { scopesFor } from "./agentTask.js";
 import { TextEditor } from "./TextEditor.js";
 import { ClassEditor } from "./ClassEditor.js";
-import { STALE_COPY, SUPPORT_LABEL, UNSUPPORTED_REASON_COPY, plural } from "./copy.js";
+import { STALE_COPY, SUPPORT_LABEL, UNSUPPORTED_REASON_COPY } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor } from "./SelectionTrail.js";
-import { SectionHeader } from "./InspectorSection.js";
+import { PropertyRow } from "./InspectorSection.js";
 
 export interface SelectionActions {
   setText: (selectionId: string, text: string) => void;
@@ -56,9 +61,17 @@ export function SelectionCard({
  * control instead of restating the subject, and this block is the only place
  * the selection is named.
  */
-export function SelectionIdentity({ selection }: { selection: ReadySelection }) {
+export function SelectionIdentity({
+  selection,
+  worktreePath = null,
+}: {
+  selection: ReadySelection;
+  /** Needed only for Open in editor, which wants an absolute path. */
+  worktreePath?: string | null;
+}) {
   const nodes = selection.selection.nodes;
   const node = nodes[0];
+  const { copy, copiedText } = useCopyWithFeedback({ announcement: "Path copied" });
   if (!node) return null;
   const definition = node.definition;
   const stale = selection.stale ? STALE_COPY[selection.stale] : null;
@@ -70,17 +83,22 @@ export function SelectionIdentity({ selection }: { selection: ReadySelection }) 
       : null;
   const pickedScope = picked ? picked.scopes[picked.pickedIndex] : null;
   const component = pickedScope?.kind === "component" ? pickedScope.label : null;
-  const source = component
+  const file = component
     ? pickedScope?.kind === "component"
       ? pickedScope.file
       : null
     : definition
-      ? `${selection.file ?? definition.location.file}:${definition.location.line}`
+      ? (selection.file ?? definition.location.file)
       : null;
+  const line = component ? null : (definition?.location.line ?? null);
+  const source = file ? `${file}${line === null ? "" : `:${line}`}` : null;
+  const absolute = file ? absolutePath(worktreePath, file) : null;
+  const crumbs = trailFor(node, { includeSelf: false });
 
   return (
-    <section aria-label="Selected element" className="flex flex-col gap-2">
-      <div className="flex min-w-0 items-center gap-2">
+    <section aria-label="Selected element" className="flex flex-col gap-1">
+      {/* Row 1, 28px: what it is. */}
+      <div className="flex h-7 min-w-0 items-center gap-2">
         <Badge size="sm" tone="neutral" className={component ? undefined : "font-mono"}>
           {component ? "Component" : (definition?.tagName ?? tagFromLabel(node))}
         </Badge>
@@ -92,32 +110,75 @@ export function SelectionIdentity({ selection }: { selection: ReadySelection }) 
         </span>
       </div>
 
-      {source ? (
-        <p className="truncate font-mono text-2xs text-text-secondary" title={source}>
-          {middleTruncatePath(source)}
-        </p>
-      ) : (
-        <p className="text-2xs text-text-secondary">
-          {component
-            ? selection.definitions === null
-              ? "Finding where it's written"
-              : "Couldn't find where it's written"
-            : "Source unknown"}
-        </p>
-      )}
+      {/* Row 2, 24px: where it lives — and two things to do about that. The
+          path used to be inert text with a title. The filename and line are
+          a non-shrinking suffix so a narrow drawer contracts the directories,
+          never the one part the reader came for. */}
+      <div className="flex h-6 min-w-0 items-center gap-1">
+        {source && file ? (
+          <>
+            <SourcePath file={file} line={line} className="min-w-0 flex-1" />
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              aria-label={copiedText === source ? "Path copied" : "Copy path"}
+              title="Copy path"
+              onClick={() => void copy(source)}
+            >
+              {copiedText === source ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+            </Button>
+            {absolute ? (
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                aria-label="Open in editor"
+                title="Open in editor"
+                onClick={() =>
+                  void actionService.dispatch(
+                    "file.openInEditor",
+                    line === null ? { path: absolute } : { path: absolute, line },
+                    { source: "user" }
+                  )
+                }
+              >
+                <ExternalLink aria-hidden="true" />
+              </Button>
+            ) : null}
+          </>
+        ) : (
+          <p className="text-2xs text-text-secondary">
+            {component
+              ? selection.definitions === null
+                ? "Finding where it's written"
+                : "Couldn't find where it's written"
+              : "Source unknown"}
+          </p>
+        )}
+      </div>
 
-      {/* The header above names what is selected, so the trail shows only the
-          route to it — but it still carries that identity as `current`, or the
-          accessibility tree would announce the parent component as the
-          selection. */}
-      <SelectionTrail
-        crumbs={trailFor(node, { includeSelf: false })}
-        current={component ?? displayLabel(node)}
-        className="text-2xs text-text-secondary"
-      />
+      {/* Row 3, 20px: how it was reached. The header names the selection, so
+          the trail shows the route and carries the identity for assistive
+          technology rather than repeating it visibly. */}
+      {crumbs.length > 0 ? (
+        <div className="flex h-5 min-w-0 items-center gap-1 text-2xs text-text-secondary">
+          <span className="shrink-0">in</span>
+          <SelectionTrail
+            crumbs={crumbs}
+            currentIndex={crumbs.length}
+            currentLabel={component ?? displayLabel(node)}
+            className="min-w-0"
+          />
+        </div>
+      ) : null}
 
       {stale ? (
-        <InspectorNotice tone="warning" title={stale.title} role="status" density="compact">
+        <InspectorNotice
+          tone="warning"
+          title={stale.title}
+          role="status"
+          density="compact"
+          className="mt-1"
+        >
           {stale.detail}
         </InspectorNotice>
       ) : null}
@@ -125,6 +186,47 @@ export function SelectionIdentity({ selection }: { selection: ReadySelection }) 
       <MappingNotice node={node} nodeCount={nodes.length} scope={selection.scope} />
     </section>
   );
+}
+
+/**
+ * A source location whose filename and line cannot be truncated away. The
+ * directories are one flex child that shrinks and middle-truncates; the tail
+ * is another that does not shrink at all.
+ */
+export function SourcePath({
+  file,
+  line,
+  className,
+}: {
+  file: string;
+  line: number | null;
+  className?: string;
+}) {
+  const slash = file.lastIndexOf("/");
+  const dir = slash === -1 ? "" : file.slice(0, slash + 1);
+  const name = slash === -1 ? file : file.slice(slash + 1);
+  const full = `${file}${line === null ? "" : `:${line}`}`;
+  return (
+    <span
+      className={cn(
+        "flex min-w-0 items-baseline font-mono text-2xs text-text-secondary",
+        className
+      )}
+      title={full}
+    >
+      {dir ? <span className="min-w-0 shrink truncate">{middleTruncatePath(dir, 40)}</span> : null}
+      <span className="shrink-0">
+        {name}
+        {line === null ? null : <span className="text-text-muted">{`:${line}`}</span>}
+      </span>
+    </span>
+  );
+}
+
+function absolutePath(worktreePath: string | null, file: string): string | null {
+  if (file.startsWith("/")) return file;
+  if (!worktreePath) return null;
+  return `${worktreePath.replace(/\/+$/, "")}/${file}`;
 }
 
 /**
@@ -153,22 +255,51 @@ export function SelectionEdits({
   if (!node) return null;
   const occurrences = node.definition?.renderedOccurrences ?? 1;
   return (
-    <section aria-label="Edit directly" className="flex flex-col gap-3">
-      {occurrences > 1 ? (
-        <InspectorNotice
-          tone="warning"
-          title={`Affects ${plural(occurrences, "rendered copy", "rendered copies")}`}
-        >
-          {`This markup draws ${occurrences} elements on the page. A change here changes all of them, not just the one you clicked.`}
-        </InspectorNotice>
-      ) : null}
+    <section aria-label="Edit directly" className="flex flex-col gap-2">
+      {occurrences > 1 ? <SharedMarkupRow count={occurrences} /> : null}
       <Surface title="Text" capability={capabilityFor(node, "text")}>
         <TextSurface state={state} selection={selection} actions={actions} />
       </Surface>
-      <Surface title="Classes" capability={capabilityFor(node, "classes")}>
+      <Surface title="Classes" capability={capabilityFor(node, "classes")} align="start">
         <ClassSurface state={state} selection={selection} actions={actions} />
       </Surface>
     </section>
+  );
+}
+
+/**
+ * The shared-markup warning as one row rather than an 86px card. It is routine
+ * — an `{#each}` draws copies — and the user meets it on most list items, so
+ * it says the one fact in a line and keeps the explanation behind a disclosure.
+ */
+function SharedMarkupRow({ count }: { count: number }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
+        className="-mx-1 flex h-7 items-center gap-1.5 rounded-[var(--radius-sm)] px-1 text-left text-xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle"
+      >
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-warning" aria-hidden="true" />
+        <span className="min-w-0 flex-1 truncate text-text-primary">
+          {`Edits affect all ${count} copies`}
+        </span>
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+            open && "rotate-90"
+          )}
+        />
+      </button>
+      {open ? (
+        <p className="px-1 text-xs text-text-secondary">
+          {`This markup draws ${count} elements on the page. A change here changes all of them, not just the one you clicked.`}
+        </p>
+      ) : null}
+    </div>
   );
 }
 
@@ -214,29 +345,31 @@ function MappingNotice({
 function Surface({
   title,
   capability,
+  align = "center",
   children,
 }: {
   title: string;
   capability: EditCapability | undefined;
+  align?: "center" | "start";
   children: ReactNode;
 }) {
   const support = capability?.support;
   return (
-    <div className="flex flex-col">
-      <SectionHeader
-        title={title}
-        action={
-          support && support !== "direct" ? (
-            <Badge size="xs" tone="neutral">
-              {SUPPORT_LABEL[support]}
-            </Badge>
-          ) : null
-        }
-      />
+    <PropertyRow
+      label={title}
+      align={align}
+      hint={
+        support && support !== "direct" ? (
+          <Badge size="xs" tone="neutral">
+            {SUPPORT_LABEL[support]}
+          </Badge>
+        ) : null
+      }
+    >
       {!capability ? (
-        <p className="text-xs text-text-secondary">Not available for this element</p>
+        <p className="text-xs leading-7 text-text-secondary">Not available for this element</p>
       ) : support !== "direct" ? (
-        <p className="text-xs text-text-secondary">
+        <p className="text-xs leading-7 text-text-secondary">
           {capability.reason
             ? UNSUPPORTED_REASON_COPY[capability.reason]
             : support === "agent-assisted"
@@ -246,7 +379,7 @@ function Surface({
       ) : (
         children
       )}
-    </div>
+    </PropertyRow>
   );
 }
 

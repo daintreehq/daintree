@@ -288,7 +288,7 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     const strip = window.getByRole("toolbar", { name: "Site Builder" });
     await expect(strip).toBeVisible({ timeout: PLUGIN_TIMEOUT });
     await expect(window.locator("webview")).toBeAttached({ timeout: DEV_SERVER_TIMEOUT });
-    await expect(strip.getByText("Click any element on the page")).toBeVisible({
+    await expect(strip.getByText("Select an element to edit it or ask an agent")).toBeVisible({
       timeout: DEV_SERVER_TIMEOUT,
     });
   });
@@ -303,7 +303,7 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     await expect(toggle).toHaveAttribute("aria-pressed", "false", { timeout: PLUGIN_TIMEOUT });
     await toggle.click();
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
-    await expect(strip.getByText("Click any element on the page")).toBeVisible({
+    await expect(strip.getByText("Select an element to edit it or ask an agent")).toBeVisible({
       timeout: PLUGIN_TIMEOUT,
     });
     await expect(strip.getByRole("button", { name: "Select" })).toHaveAttribute(

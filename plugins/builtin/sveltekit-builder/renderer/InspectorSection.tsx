@@ -1,4 +1,4 @@
-import { useId, type ReactNode } from "react";
+import { useId, type ComponentType, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -46,6 +46,7 @@ export function InspectorSection({
  */
 export function InspectorDisclosure({
   title,
+  icon: Icon,
   open,
   onOpenChange,
   action,
@@ -53,6 +54,8 @@ export function InspectorDisclosure({
   className,
 }: {
   title: string;
+  /** A Lucide glyph beside the title, for a section whose name alone is generic. */
+  icon?: ComponentType<{ className?: string; "aria-hidden"?: boolean | "true" }>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   action?: ReactNode;
@@ -77,6 +80,7 @@ export function InspectorDisclosure({
               open && "rotate-90"
             )}
           />
+          {Icon ? <Icon className="h-3 w-3 shrink-0" aria-hidden="true" /> : null}
           <span className="truncate uppercase">{title}</span>
         </button>
         {action}
@@ -100,6 +104,61 @@ export function SectionHeader({ title, action }: { title: string; action?: React
         {title}
       </h3>
       {action}
+    </div>
+  );
+}
+
+/**
+ * A property row: the inspector's unit of density.
+ *
+ * Text and Classes were each spending a section header ABOVE their value, so
+ * two properties cost four rows and the drawer read as a stacked form. The
+ * reference class puts the label in a fixed column beside the control, at a
+ * height the eye can count — 28px here — so a dozen properties fit where four
+ * did. The label column is 64px: wide enough for "Classes", narrow enough that
+ * the control still gets most of a 360px drawer.
+ *
+ * `align="start"` for a control that grows (a chip wrap, a multi-line field);
+ * the label stays pinned to the first line rather than floating mid-block.
+ */
+export function PropertyRow({
+  label,
+  htmlFor,
+  hint,
+  align = "center",
+  children,
+  className,
+}: {
+  label: string;
+  /** The control's id, when the label names a real form control. */
+  htmlFor?: string;
+  /** A trailing badge or note beside the label — a capability, a count. */
+  hint?: ReactNode;
+  align?: "center" | "start";
+  children: ReactNode;
+  className?: string;
+}) {
+  const Label = htmlFor ? "label" : "span";
+  return (
+    <div
+      className={cn(
+        "grid min-h-7 grid-cols-[64px_minmax(0,1fr)] gap-x-2",
+        align === "center" ? "items-center" : "items-start",
+        className
+      )}
+    >
+      <div
+        className={cn(
+          "flex min-w-0 items-center gap-1 text-xs text-text-secondary",
+          align === "start" && "min-h-7"
+        )}
+      >
+        <Label {...(htmlFor ? { htmlFor } : {})} className="min-w-0 truncate">
+          {label}
+        </Label>
+        {hint}
+      </div>
+      <div className="flex min-w-0 flex-col gap-1.5">{children}</div>
     </div>
   );
 }

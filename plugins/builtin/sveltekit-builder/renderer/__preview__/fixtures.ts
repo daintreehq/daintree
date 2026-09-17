@@ -113,7 +113,7 @@ export const FIXTURES = {
 
   picking: {
     title: "Select mode, waiting for a click on the page",
-    settled: "text=Click any element on the page",
+    settled: "text=Select an element to edit it or ask an agent",
     act: async (host) => {
       await bind(host);
     },
@@ -220,7 +220,7 @@ export const FIXTURES = {
     title: "The source moved under a live selection",
     terminals: AGENT_TERMINALS,
     // Proves the staleness, not merely that the drawer is open.
-    settled: "text=Source changed — select again",
+    settled: "text=Select again — the file changed",
     act: async (host) => {
       await selectElement(host);
       // Plugin main's own push channel, not the preview bridge: this is main

@@ -60,32 +60,31 @@ function elementLabel(node: SelectedNode): string {
  */
 export function SelectionTrail({
   crumbs,
-  current,
+  currentIndex,
+  currentLabel,
   className,
   itemClassName,
 }: {
   crumbs: readonly TrailCrumb[];
   /**
-   * What is actually selected. Required, and deliberately not defaulted to the
-   * last crumb: the drawer hides the terminal crumb because its header already
-   * names the element, and marking whatever is left as `aria-current` told
-   * screen readers the parent component was the selection. When the selected
-   * crumb is not displayed it is carried as visually-hidden text, so the
+   * Which crumb is the selection, by position — never by label, since two
+   * nested components can share a name. An index past the end (the drawer
+   * hides its terminal crumb because the header names it) marks nothing
+   * visible and carries `currentLabel` as visually-hidden text instead, so the
    * accessibility tree and the visible identity always agree.
    */
-  current: string;
+  currentIndex: number;
+  currentLabel: string;
   className?: string;
   itemClassName?: string;
 }) {
-  // By index, not by label: two nested components can share a name, and
-  // matching on the string gave `aria-current` to both of them.
-  const currentIndex = crumbs.findIndex((crumb) => crumb.label === current);
-  if (crumbs.length === 0) return null;
+  if (crumbs.length === 0 && !currentLabel) return null;
+  const shown = currentIndex >= 0 && currentIndex < crumbs.length;
   return (
-    <nav aria-label="Selection" className={cn("min-w-0", className)}>
+    <nav aria-label="Breadcrumb" className={cn("min-w-0", className)}>
       <ol className="flex min-w-0 items-center gap-1">
         {crumbs.map((crumb, index) => {
-          const last = index === currentIndex;
+          const last = shown && index === currentIndex;
           return (
             <li
               key={`${crumb.label}-${index}`}
@@ -104,11 +103,11 @@ export function SelectionTrail({
             </li>
           );
         })}
-        {currentIndex === -1 ? (
+        {shown ? null : (
           <li className="sr-only" aria-current="true">
-            {current}
+            {currentLabel}
           </li>
-        ) : null}
+        )}
       </ol>
     </nav>
   );
