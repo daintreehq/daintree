@@ -13,10 +13,17 @@ export type SystemPromptArgsResult = { ok: true; args: string[] } | { ok: false;
 /**
  * What a Windows launch shell would still expand inside the quoted argument:
  * PowerShell (the default) evaluates `$…` and backtick escapes in a
- * double-quoted string, and cmd.exe expands `%NAME%`. The command string is
- * quoted before the shell that runs it is known, so these are refused there.
+ * double-quoted string, and cmd.exe expands `%NAME%` / `%NAME:…%` and, with
+ * delayed expansion on, `!NAME!`. The command string is quoted before the
+ * shell that runs it is known, so these are refused there.
  */
-const WINDOWS_SHELL_EXPANSION = /[$`]|%[\w()]+%/;
+const WINDOWS_SHELL_EXPANSION = /[$`]|%[^%:\s]+(?::[^%]*)?%|![^!:\s]+(?::[^!]*)?!/;
+
+/**
+ * PowerShell ends a double-quoted string at typographic double quotes too, and
+ * the Windows quoting only doubles the ASCII one, so they are straightened.
+ */
+const TYPOGRAPHIC_DOUBLE_QUOTES = /[\u201c\u201d\u201e]/g;
 
 function isLineBreakOrControl(code: number): boolean {
   return code <= 0x1f || (code >= 0x7f && code <= 0x9f) || code === 0x2028 || code === 0x2029;
@@ -63,8 +70,10 @@ export function resolveSystemPromptArgs(
   systemPrompt: string | undefined,
   platform: "windows" | "posix" = isWindows() ? "windows" : "posix"
 ): SystemPromptArgsResult {
-  const text = normalizeSystemPrompt(systemPrompt);
-  if (!text) return { ok: true, args: [] };
+  const normalized = normalizeSystemPrompt(systemPrompt);
+  if (!normalized) return { ok: true, args: [] };
+  const text =
+    platform === "windows" ? normalized.replace(TYPOGRAPHIC_DOUBLE_QUOTES, '"') : normalized;
   const agentConfig = getEffectiveAgentConfig(agentId);
   const append = agentConfig?.capabilities?.appendSystemPrompt;
   if (!append) {
@@ -89,7 +98,7 @@ export function resolveSystemPromptArgs(
     return {
       ok: false,
       reason:
-        "On Windows, systemPrompt can't contain $, ` or %NAME%, which the launch shell would expand. Reword it without them.",
+        "On Windows, systemPrompt can't contain $, ` or %NAME%/!NAME! references, which the launch shell would expand. Reword it without them.",
     };
   }
   // A JSON string is a valid TOML basic string once the text holds no
@@ -135,16 +144,21 @@ export function hasSystemPromptOverride(
   if (!flags?.length) return false;
   const append = getEffectiveAgentConfig(agentId)?.capabilities?.appendSystemPrompt;
   if (!append) return false;
-  if (append.configKey) {
-    const assignment = `${append.configKey}=`;
+  const { flag: appendFlag, configKey } = append;
+  if (configKey) {
+    // Codex trims the key, so `developer_instructions = "x"` counts too.
+    const assignsKey = (text: string) => {
+      const eq = text.indexOf("=");
+      return eq !== -1 && text.slice(0, eq).trim() === configKey;
+    };
     return flags.some(
       (flag) =>
-        flag.startsWith(assignment) ||
-        flag.startsWith(`${append.flag}${assignment}`) ||
-        flag.includes(`=${assignment}`)
+        assignsKey(flag) ||
+        (flag.startsWith(appendFlag) && assignsKey(flag.slice(appendFlag.length))) ||
+        (flag.startsWith("--") && assignsKey(flag.slice(flag.indexOf("=") + 1)))
     );
   }
-  return flags.some((flag) => flag === append.flag || flag.startsWith(`${append.flag}=`));
+  return flags.some((flag) => flag === appendFlag || flag.startsWith(`${appendFlag}=`));
 }
 
 /**

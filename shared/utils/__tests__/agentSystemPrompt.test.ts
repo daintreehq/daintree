@@ -104,20 +104,40 @@ describe("resolveSystemPromptArgs", () => {
 
   // The command is quoted before the shell that runs it is known, and a
   // Windows shell expands these even inside the quotes.
-  it.each(["Print $HOME first", "Use $(Get-Date)", "Escape `n here", "Read %USERPROFILE% only"])(
-    "refuses %j on Windows, where the launch shell would expand it",
-    (text) => {
-      const result = resolveSystemPromptArgs("claude", text, "windows");
-      expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.reason).toContain("On Windows");
-      expect(resolveSystemPromptArgs("claude", text, "posix").ok).toBe(true);
-    }
-  );
+  it.each([
+    "Print $HOME first",
+    "Use $(Get-Date)",
+    "Escape `n here",
+    "Read %USERPROFILE% only",
+    "Slice %PATH:~0,1% here",
+    "Swap %NAME:old=new% here",
+    "Delayed !TEMP! here",
+  ])("refuses %j on Windows, where the launch shell would expand it", (text) => {
+    const result = resolveSystemPromptArgs("claude", text, "windows");
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toContain("On Windows");
+    expect(resolveSystemPromptArgs("claude", text, "posix").ok).toBe(true);
+  });
 
-  it("still accepts percentages and quotes on Windows", () => {
+  it("still accepts percentages, exclamations and quotes on Windows", () => {
     expect(
-      resolveSystemPromptArgs("codex", 'Aim for 80% coverage, then say "done" at 100%', "windows")
+      resolveSystemPromptArgs("codex", 'Aim for 80% coverage, then say "done" at 100%!', "windows")
     ).toMatchObject({ ok: true });
+    expect(resolveSystemPromptArgs("claude", "Great! Now stop! Really.", "windows").ok).toBe(true);
+  });
+
+  // PowerShell closes a double-quoted string at these too; only the ASCII
+  // quote is doubled by the Windows quoting.
+  it("straightens typographic double quotes on Windows only", () => {
+    const text = "Say \u201cdone\u201d; not \u201eok\u201d";
+    expect(resolveSystemPromptArgs("claude", text, "windows")).toEqual({
+      ok: true,
+      args: ["--append-system-prompt", 'Say "done"; not "ok"'],
+    });
+    expect(resolveSystemPromptArgs("claude", text, "posix")).toEqual({
+      ok: true,
+      args: ["--append-system-prompt", text],
+    });
   });
 
   it("enforces the length limit on the normalized text", () => {
@@ -167,7 +187,9 @@ describe("hasSystemPromptOverride", () => {
   it.each([
     [["-c", "developer_instructions=x"]],
     [["--config", 'developer_instructions="x"']],
+    [["--config", 'developer_instructions = "x"']],
     [["--config=developer_instructions=x"]],
+    [["--config= developer_instructions =x"]],
     [["-cdeveloper_instructions=x"]],
   ])("sees Codex's instruction in %j", (flags) => {
     expect(hasSystemPromptOverride(flags, "codex")).toBe(true);
@@ -176,6 +198,7 @@ describe("hasSystemPromptOverride", () => {
   it("ignores unrelated flags and agents without the capability", () => {
     expect(hasSystemPromptOverride(["--append-system-prompt-file", "x"], "claude")).toBe(false);
     expect(hasSystemPromptOverride(["-c", "model_reasoning_effort=high"], "codex")).toBe(false);
+    expect(hasSystemPromptOverride(["--profile", "developer_instructions"], "codex")).toBe(false);
     expect(hasSystemPromptOverride(["--append-system-prompt", "x"], "gemini")).toBe(false);
     expect(hasSystemPromptOverride(undefined, "claude")).toBe(false);
   });
