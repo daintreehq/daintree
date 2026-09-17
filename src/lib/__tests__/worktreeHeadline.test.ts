@@ -301,6 +301,11 @@ describe("getWorktreeBranchLabel", () => {
         createWorktree({ isMainWorktree: true, name: "daintree", branch: undefined })
       )
     ).toBe("daintree");
+    // An empty branch counts as branchless too — the guard is falsiness, not
+    // `=== undefined`, so main never renders a nameless row.
+    expect(
+      getWorktreeBranchLabel(createWorktree({ isMainWorktree: true, name: "daintree", branch: "" }))
+    ).toBe("daintree");
   });
 
   it("uses the branch for a non-main worktree, detached or not", () => {
