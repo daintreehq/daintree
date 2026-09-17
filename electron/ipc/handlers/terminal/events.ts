@@ -6,7 +6,10 @@ import { CHANNELS } from "../../channels.js";
 import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
-import { acceptCapturedAgentSession } from "../../../services/pty/agentSessionCapturePersistence.js";
+import {
+  acceptCapturedAgentSession,
+  releaseSupersededCapturedSession,
+} from "../../../services/pty/agentSessionCapturePersistence.js";
 import type {
   SpawnResult,
   TerminalResizeResult,
@@ -66,7 +69,11 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
-    if (!result.success) {
+    if (result.success) {
+      // A confirmed relaunch may supersede a session a natural exit left on
+      // the pane (#12433); a refused one leaves the running process's id alone.
+      releaseSupersededCapturedSession(id, result.launchGeneration);
+    } else {
       // Async pty-host spawn rejection (PENDING_SPAWNS_CAPPED, bad shell path,
       // etc.) doesn't throw from ptyClient.spawn(). Revoke any minted pane
       // config so the token doesn't outlive the never-running PTY.

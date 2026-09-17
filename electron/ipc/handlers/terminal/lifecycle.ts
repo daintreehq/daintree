@@ -9,7 +9,7 @@ import { CHANNELS } from "../../channels.js";
 import { waitForBurstRateLimitSlot, consumeRestoreQuota } from "../../utils.js";
 import { defineIpcNamespace, op, opValidated } from "../../define.js";
 import { projectStore } from "../../../services/ProjectStore.js";
-import { releaseSupersededCapturedSession } from "../../../services/pty/agentSessionCapturePersistence.js";
+import { noteTerminalLaunch } from "../../../services/pty/agentSessionCapturePersistence.js";
 import type * as McpServerServiceModule from "../../../services/McpServerService.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { helpSessionService } from "../../../services/HelpSessionService.js";
@@ -980,12 +980,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
         // the parent process and reclaims the foreground when the command exits.
         postSpawnInput,
       });
-      // A relaunch that doesn't resume the session a natural exit left on this
-      // pane is a fresh start; the saved id must not outlive it (#12433).
-      releaseSupersededCapturedSession(id, {
-        command: safeCommand,
-        agentSessionId: spawnAgentSessionId,
-      });
+      // What this launch resumes, if anything, decides whether the session a
+      // natural exit left on the pane survives it — once the host confirms the
+      // spawn (#12433).
+      noteTerminalLaunch(id, { command: safeCommand, agentSessionId: spawnAgentSessionId });
 
       return id;
     } catch (error) {

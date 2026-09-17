@@ -71,6 +71,7 @@ import { disposeLifecycleLedger, getLifecycleLedger } from "../lifecycleLedger.j
 import {
   acceptCapturedAgentSession,
   noteRendererSessionIdentityEdits,
+  noteTerminalLaunch,
   persistCapturedAgentSession,
   releaseSupersededCapturedSession,
   resetCapturedSessionPersistenceForTests,
@@ -162,8 +163,11 @@ function holdQueue(projectId = PROJECT_ID): { release: () => void; settled: Prom
   return { release: () => gate.resolve(), settled };
 }
 
-/** Holds the next project-state save until released. */
-function holdNextSave(): { release: () => void; reached: Promise<void> } {
+/** Holds the next project-state save until released; optionally fails it then. */
+function holdNextSave(options: { fail?: boolean } = {}): {
+  release: () => void;
+  reached: Promise<void>;
+} {
   const manager = stateRef.manager!;
   const save = manager.saveProjectState.bind(manager);
   const gate = deferred();
@@ -171,6 +175,7 @@ function holdNextSave(): { release: () => void; reached: Promise<void> } {
   vi.spyOn(manager, "saveProjectState").mockImplementationOnce(async (id, state) => {
     reached.resolve();
     await gate.promise;
+    if (options.fail) throw new Error("disk full");
     return save(id, state);
   });
   return { release: () => gate.resolve(), reached: reached.promise };
@@ -723,6 +728,16 @@ describe("captured agent session persistence (#12433)", () => {
       return generation;
     }
 
+    /** A renderer-requested spawn: mint the generation, record what it resumes. */
+    function relaunch(
+      intent: { command?: string; agentSessionId?: string } = { command: "codex" },
+      overrides: { projectId?: string } = {}
+    ): number {
+      const generation = launch(overrides);
+      noteTerminalLaunch(TERMINAL_ID, intent);
+      return generation;
+    }
+
     /** The release is queued work; the drain is how a caller waits for it. */
     async function settle(): Promise<void> {
       await expect(sealAndDrainCapturedSessionPersistence(5_000)).resolves.toEqual({
@@ -731,11 +746,11 @@ describe("captured agent session persistence (#12433)", () => {
       });
     }
 
-    it("clears the id a natural exit left once the pane starts over", async () => {
+    it("clears the id a natural exit left once a fresh relaunch is confirmed", async () => {
       await filledByFirstExit();
-      const second = launch();
+      const second = relaunch();
 
-      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      releaseSupersededCapturedSession(TERMINAL_ID, second);
       await settle();
 
       expect((await savedPane())?.agentSessionId).toBeUndefined();
@@ -748,20 +763,49 @@ describe("captured agent session persistence (#12433)", () => {
     it.each([
       ["resumes it by argument", { command: `codex resume ${SESSION_ID}` }],
       ["runs under it by assignment", { command: "codex", agentSessionId: SESSION_ID }],
-    ])("keeps the id when the relaunch %s", async (_label, relaunch) => {
+    ])("keeps the id when the relaunch %s", async (_label, intent) => {
       await filledByFirstExit();
-      launch();
+      const second = relaunch(intent);
 
-      releaseSupersededCapturedSession(TERMINAL_ID, relaunch);
+      releaseSupersededCapturedSession(TERMINAL_ID, second);
       await settle();
 
       expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
     });
 
-    it("waits for an actual relaunch", async () => {
-      await filledByFirstExit();
+    it("ignores a spawn result for any generation but the recorded launch", async () => {
+      const first = await filledByFirstExit();
+      const second = relaunch();
 
-      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      // The previous incarnation's echo, and a launch nobody recorded.
+      releaseSupersededCapturedSession(TERMINAL_ID, first);
+      releaseSupersededCapturedSession(TERMINAL_ID, second + 1);
+      releaseSupersededCapturedSession(TERMINAL_ID, undefined);
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("leaves the pane alone when a later relaunch resumes the id", async () => {
+      await filledByFirstExit();
+      const hold = holdQueue();
+      const fresh = relaunch();
+      releaseSupersededCapturedSession(TERMINAL_ID, fresh);
+      // Queued behind the hold when the pane is relaunched again, into the
+      // same conversation.
+      const resumed = relaunch({ command: `codex resume ${SESSION_ID}` });
+      releaseSupersededCapturedSession(TERMINAL_ID, resumed);
+      hold.release();
+      await settle();
+
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+    });
+
+    it("never clears the id for a relaunch into another project", async () => {
+      await filledByFirstExit();
+      const moved = relaunch({ command: "codex" }, { projectId: OTHER_PROJECT_ID });
+
+      releaseSupersededCapturedSession(TERMINAL_ID, moved);
       await settle();
 
       expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
@@ -770,9 +814,9 @@ describe("captured agent session persistence (#12433)", () => {
     it("never clears an id it did not write", async () => {
       launch();
       await seed([pane({ agentSessionId: SESSION_ID })]);
-      launch();
+      const second = relaunch();
 
-      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      releaseSupersededCapturedSession(TERMINAL_ID, second);
       await settle();
 
       expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
@@ -781,9 +825,9 @@ describe("captured agent session persistence (#12433)", () => {
     it("defers to a renderer that has since claimed the field", async () => {
       await filledByFirstExit();
       noteRendererSessionIdentityEdits([TERMINAL_ID]);
-      launch();
+      const second = relaunch();
 
-      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      releaseSupersededCapturedSession(TERMINAL_ID, second);
       await settle();
 
       expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
@@ -797,12 +841,46 @@ describe("captured agent session persistence (#12433)", () => {
         target.agentSessionId = "graceful-session";
         return state;
       });
-      launch();
+      const second = relaunch();
 
-      releaseSupersededCapturedSession(TERMINAL_ID, { command: "codex" });
+      releaseSupersededCapturedSession(TERMINAL_ID, second);
       await settle();
 
       expect((await savedPane())?.agentSessionId).toBe("graceful-session");
+    });
+
+    it("keeps its claim when the release fails to save", async () => {
+      await filledByFirstExit();
+      const second = relaunch();
+      vi.spyOn(stateRef.manager!, "saveProjectState").mockRejectedValueOnce(new Error("disk full"));
+
+      releaseSupersededCapturedSession(TERMINAL_ID, second);
+      await settle();
+      expect((await savedPane())?.agentSessionId).toBe(SESSION_ID);
+
+      // Still this path's id, so the successor's own exit can replace it.
+      await expect(
+        writeBackCapturedSessionId(capture(second, { record: { sessionId: "second-session" } }))
+      ).resolves.toBe("superseded");
+    });
+
+    it("still releases the older id when a superseding write fails under it", async () => {
+      await filledByFirstExit();
+      const second = launch();
+      const held = holdNextSave({ fail: true });
+      const superseding = writeBackCapturedSessionId(
+        capture(second, { record: { sessionId: "second-session" } })
+      );
+      await held.reached;
+
+      // A fresh relaunch confirmed while that save is still in flight.
+      const third = relaunch();
+      releaseSupersededCapturedSession(TERMINAL_ID, third);
+      held.release();
+
+      await expect(superseding).resolves.toBe("failed");
+      await settle();
+      expect((await savedPane())?.agentSessionId).toBeUndefined();
     });
   });
 });

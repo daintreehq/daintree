@@ -57,6 +57,19 @@ interface AuthoredId {
   generation: number;
   sessionId: string;
   projectId: string;
+  /**
+   * The claim this one replaced, kept until this one's save lands: if that
+   * save fails, the pane still holds the older id, which is still ours.
+   */
+  previous?: AuthoredId;
+}
+
+/** Whether `sessionId` is one this claim — or one it is still replacing — wrote. */
+function claimCovers(claim: AuthoredId, sessionId: string): boolean {
+  for (let link: AuthoredId | undefined = claim; link; link = link.previous) {
+    if (link.sessionId === sessionId) return true;
+  }
+  return false;
 }
 
 /**
@@ -153,8 +166,8 @@ function decidePaneWriteback(
   const authored = authoredIds.get(terminalId);
   if (
     authored !== undefined &&
-    authored.sessionId === pane.agentSessionId &&
-    authored.generation < generation
+    authored.generation < generation &&
+    claimCovers(authored, pane.agentSessionId)
   ) {
     pane.agentSessionId = record.sessionId;
     return "superseded";
@@ -191,8 +204,9 @@ export async function writeBackCapturedSessionId(
         // Claimed at decision time, not after the save: a renderer edit that
         // lands while the save is pending drops this claim, and must stay the
         // last word.
-        const mine = { generation, sessionId: record.sessionId, projectId };
-        claimed = { mine, previous: authoredIds.get(terminalId) };
+        const previous = authoredIds.get(terminalId);
+        const mine: AuthoredId = { generation, sessionId: record.sessionId, projectId, previous };
+        claimed = { mine, previous };
         rememberBounded(authoredIds, terminalId, mine);
       }
       // Returning the state for an identical id lets the answer share the
@@ -213,58 +227,115 @@ export async function writeBackCapturedSessionId(
     });
     return "failed";
   }
+  // Saved: the id this claim replaced is gone from disk.
+  if (claimed) claimed.mine.previous = undefined;
   return outcome;
 }
 
+interface LaunchIntent {
+  generation: number;
+  projectId: string | undefined;
+  command: string | undefined;
+  agentSessionId: string | undefined;
+}
+
+/** The latest renderer-requested launch of each pane, as the ledger minted it. */
+const launchIntents = new Map<string, LaunchIntent>();
+
 /**
- * Release an id this module wrote once its pane relaunches without resuming
- * it (#12433). A fresh restart of a pane whose scraped id the renderer never
- * learned has no way to say "start over"; without this, cold restore would
- * resume the abandoned conversation until the new incarnation's own exit
- * replaced it. A launch that carries the id — resuming it by argument or by
- * assignment — keeps it.
- *
- * Only ever removes the exact id recorded here, through the project's queue,
- * and only while that record is still this module's claim.
+ * Record what a renderer-requested spawn asked for, keyed to the generation
+ * `PtyClient.spawn` just minted. Nothing is released here: the host can still
+ * refuse the spawn, and a pane whose previous process keeps running must keep
+ * its id. See {@link releaseSupersededCapturedSession}.
  */
-export function releaseSupersededCapturedSession(
+export function noteTerminalLaunch(
   terminalId: string,
   launch: { command?: string; agentSessionId?: string }
 ): void {
-  const authored = authoredIds.get(terminalId);
-  if (!authored) return;
-  const generation = getLifecycleLedger().currentGeneration(terminalId);
-  if (generation === undefined || generation <= authored.generation) return;
-  if (
-    launch.agentSessionId === authored.sessionId ||
-    (launch.command?.includes(authored.sessionId) ?? false)
-  ) {
-    return;
-  }
+  const entry = getLifecycleLedger().getEntry(terminalId);
+  if (!entry) return;
+  rememberBounded(launchIntents, terminalId, {
+    generation: entry.generation,
+    projectId: entry.facts.projectId,
+    command: launch.command,
+    agentSessionId: launch.agentSessionId,
+  });
+}
 
+function launchResumes(launch: LaunchIntent, sessionId: string): boolean {
+  return launch.agentSessionId === sessionId || (launch.command?.includes(sessionId) ?? false);
+}
+
+/**
+ * Release an id this module wrote once its pane has actually relaunched
+ * without resuming it (#12433). A fresh restart of a pane whose scraped id the
+ * renderer never learned has no way to say "start over"; without this, cold
+ * restore would resume the abandoned conversation until the new incarnation's
+ * own exit replaced it. A launch that carries the id — resuming it by argument
+ * or by assignment — keeps it.
+ *
+ * Driven by a successful spawn result, and decided only when the queued update
+ * runs, against the latest launch and the current claim: a later relaunch
+ * that resumes the id, a spawn in another project, or a claim the renderer
+ * has since taken over all leave the pane alone. The claim itself survives
+ * until the removal is saved, so a failed save still lets the successor's
+ * capture replace the id.
+ */
+export function releaseSupersededCapturedSession(
+  terminalId: string,
+  spawnedGeneration: number | undefined
+): void {
+  const launch = launchIntents.get(terminalId);
+  const claim = authoredIds.get(terminalId);
+  if (!launch || !claim || spawnedGeneration !== launch.generation) return;
+  if (launch.generation <= claim.generation || launch.projectId !== claim.projectId) return;
+
+  const projectId = claim.projectId;
+  let released: AuthoredId | undefined;
   track(
     projectStore
-      .enqueueProjectStateUpdate(authored.projectId, (state) => {
-        if (authoredIds.get(terminalId) !== authored) return null;
-        authoredIds.delete(terminalId);
+      .enqueueProjectStateUpdate(projectId, (state) => {
+        const current = authoredIds.get(terminalId);
+        const latest = launchIntents.get(terminalId);
+        if (
+          !current ||
+          !latest ||
+          current.projectId !== projectId ||
+          latest.projectId !== projectId ||
+          latest.generation <= current.generation
+        ) {
+          return null;
+        }
         const pane = state?.terminals?.find((t) => t.id === terminalId);
-        if (!state || pane?.agentSessionId !== authored.sessionId) return null;
+        const held = pane?.agentSessionId;
+        if (
+          !state ||
+          !pane ||
+          !held ||
+          !claimCovers(current, held) ||
+          launchResumes(latest, held)
+        ) {
+          return null;
+        }
         delete pane.agentSessionId;
+        released = current;
         return state;
       })
       .then(
         () => {
+          if (!released) return;
+          if (authoredIds.get(terminalId) === released) authoredIds.delete(terminalId);
           logger.info("Released a captured session superseded by a fresh launch", {
             terminalId,
-            projectId: authored.projectId,
-            generation,
+            projectId,
+            generation: spawnedGeneration,
           });
         },
         (error: unknown) => {
           logger.warn("Releasing a superseded captured session failed", {
             terminalId,
-            projectId: authored.projectId,
-            error: describeError(error, "project state update failed", authored.sessionId),
+            projectId,
+            error: describeError(error, "project state update failed", claim.sessionId),
           });
         }
       )
@@ -376,6 +447,7 @@ export async function sealAndDrainCapturedSessionPersistence(
 export function resetCapturedSessionPersistenceForTests(): void {
   authoredIds.clear();
   revokedGenerations.clear();
+  launchIntents.clear();
   inFlight.clear();
   sealed = false;
 }

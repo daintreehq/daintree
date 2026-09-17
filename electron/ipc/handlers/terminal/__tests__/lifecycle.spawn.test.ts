@@ -22,9 +22,9 @@ const waitForRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(unde
 const waitForBurstRateLimitSlotMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const consumeRestoreQuotaMock = vi.hoisted(() => vi.fn(() => false));
 
-const releaseSupersededCapturedSessionMock = vi.hoisted(() => vi.fn());
+const noteTerminalLaunchMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../../services/pty/agentSessionCapturePersistence.js", () => ({
-  releaseSupersededCapturedSession: releaseSupersededCapturedSessionMock,
+  noteTerminalLaunch: noteTerminalLaunchMock,
 }));
 
 vi.mock("../../../../services/ProjectStore.js", () => ({
@@ -340,7 +340,7 @@ describe("terminal spawn handler - projectId resolution", () => {
     expect(spawnArgs.projectId).toBe("project-a-id");
   });
 
-  it("offers each spawned launch to the captured-session release (#12433)", async () => {
+  it("records each spawned launch's resume intent (#12433)", async () => {
     mockGetProjectById.mockReturnValue(projectA);
     registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
 
@@ -351,18 +351,18 @@ describe("terminal spawn handler - projectId resolution", () => {
       command: "codex",
     });
 
-    // After the spawn: the release compares against the generation it minted.
-    expect(releaseSupersededCapturedSessionMock).toHaveBeenCalledTimes(1);
-    expect(releaseSupersededCapturedSessionMock).toHaveBeenCalledWith(id, {
+    // After the spawn, whose generation the intent is keyed to.
+    expect(noteTerminalLaunchMock).toHaveBeenCalledTimes(1);
+    expect(noteTerminalLaunchMock).toHaveBeenCalledWith(id, {
       command: ptyClient.spawn.mock.calls[0][1].command,
       agentSessionId: undefined,
     });
     expect(ptyClient.spawn.mock.invocationCallOrder[0]).toBeLessThan(
-      releaseSupersededCapturedSessionMock.mock.invocationCallOrder[0]!
+      noteTerminalLaunchMock.mock.invocationCallOrder[0]!
     );
   });
 
-  it("releases nothing when the spawn itself throws", async () => {
+  it("records nothing when the spawn itself throws", async () => {
     mockGetProjectById.mockReturnValue(projectA);
     mockRevokePaneConfig.mockResolvedValue(undefined);
     ptyClient.spawn.mockImplementation(() => {
@@ -378,7 +378,7 @@ describe("terminal spawn handler - projectId resolution", () => {
         command: "codex",
       })
     ).rejects.toThrow(/Failed to spawn terminal/);
-    expect(releaseSupersededCapturedSessionMock).not.toHaveBeenCalled();
+    expect(noteTerminalLaunchMock).not.toHaveBeenCalled();
   });
 
   it("falls back to current project when projectId is not provided", async () => {

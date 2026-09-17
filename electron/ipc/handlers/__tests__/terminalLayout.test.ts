@@ -386,20 +386,26 @@ describe("setTerminals — identity edits reach capture writeback (#12433)", () 
     expect(claimed()).toEqual([]);
   });
 
-  it("reports nothing for a claim the merge will not apply", async () => {
+  it.each([
+    ["not marked changed", { terminals: ["1", "2"], changedIds: ["1"], removedIds: [] }],
+    [
+      "changed but tombstoned",
+      { terminals: ["1", "2"], changedIds: ["1", "2"], removedIds: ["2"] },
+    ],
+    [
+      "changed but missing from the snapshot",
+      { terminals: ["1"], changedIds: ["1", "2"], removedIds: [] },
+    ],
+  ])("reports nothing for a claim on a pane %s", async (_label, delta) => {
     onDisk(baseState([term("1"), term("2")]));
 
     await setTerminals({
       projectId: "p1",
-      terminals: [term("1")],
-      changedIds: ["1"],
-      removedIds: ["3"],
-      fieldEdits: [
-        // Not in changedIds: the merge keeps the stored value.
-        { id: "2", fields: ["agentSessionId"] },
-        // Tombstoned, and absent from the snapshot.
-        { id: "3", fields: ["agentSessionId"] },
-      ],
+      terminals: delta.terminals.map((id) => term(id)),
+      changedIds: delta.changedIds,
+      removedIds: delta.removedIds,
+      // The merge ignores this claim, so capture writeback must too.
+      fieldEdits: [{ id: "2", fields: ["agentSessionId"] }],
     });
 
     expect(claimed()).toEqual([]);
