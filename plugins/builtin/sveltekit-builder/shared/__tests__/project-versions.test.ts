@@ -67,6 +67,7 @@ describe("readInstalledVersions", () => {
     const versions = await readInstalledVersions(reader, worktree, worktree);
 
     expect(versions.tailwind).toBeNull();
+    expect(versions.kit).toBeNull();
     expect(versions.svelte).not.toBeNull();
   });
 });
@@ -103,18 +104,18 @@ describe("assessSupport", () => {
     expect(assessment.missingInstall).toEqual([]);
   });
 
-  it("names the package and the version found for every package below the floor", async () => {
+  it("names the package and the version found for every gated package below its major", async () => {
     const worktree = fixtureWorktree("legacy");
     const versions = await readInstalledVersions(reader, worktree, worktree);
     const assessment = assessSupport(versions, await declaredOf(worktree));
 
     expect(assessment.verdict.level).toBe("preview-only");
     const reasons = assessment.verdict.level === "preview-only" ? assessment.verdict.reasons : [];
-    expect(reasons).toHaveLength(3);
+    expect(reasons).toHaveLength(2);
+    expect(reasons.some((text) => text.startsWith("tailwindcss "))).toBe(false);
     for (const [pkg, found] of [
       ["svelte", versions.svelte],
       ["@sveltejs/kit", versions.kit],
-      ["tailwindcss", versions.tailwind],
     ] as const) {
       const reason = reasons.find((text) => text.startsWith(`${pkg} `));
       expect(reason).toBeDefined();
@@ -130,7 +131,7 @@ describe("assessSupport", () => {
     expect(assessment.verdict.level).toBe("full");
   });
 
-  it("gates on each package's own floor", () => {
+  it("gates on each package's supported major, above as well as below", () => {
     const declared = { svelte: "^5", "@sveltejs/kit": "^2", tailwindcss: "^4" };
     const atFloor = assessSupport(
       {
@@ -151,8 +152,46 @@ describe("assessSupport", () => {
       declared
     );
 
+    const oneAbove = assessSupport(
+      {
+        svelte: `${SUPPORTED_BASELINE.svelteMajor + 1}.0.0`,
+        kit: `${SUPPORTED_BASELINE.kitMajor}.0.0`,
+        tailwind: `${SUPPORTED_BASELINE.tailwindMajor}.0.0`,
+        vite: null,
+      },
+      declared
+    );
+    const kitAbove = assessSupport(
+      {
+        svelte: `${SUPPORTED_BASELINE.svelteMajor}.0.0`,
+        kit: `${SUPPORTED_BASELINE.kitMajor + 1}.0.0`,
+        tailwind: null,
+        vite: null,
+      },
+      declared
+    );
+
     expect(atFloor.verdict.level).toBe("full");
     expect(oneBelow.verdict.level).toBe("preview-only");
+    expect(oneAbove.verdict.level).toBe("preview-only");
+    expect(kitAbove.verdict.level).toBe("preview-only");
+    const reasons = oneAbove.verdict.level === "preview-only" ? oneAbove.verdict.reasons : [];
+    expect(reasons[0]).toMatch(/newer than direct editing supports/);
+  });
+
+  it("does not let Tailwind decide direct editing: classes are written exactly as typed", () => {
+    const declared = { svelte: "^5", "@sveltejs/kit": "^2", tailwindcss: "^3" };
+    const tailwind3 = assessSupport(
+      { svelte: "5.0.0", kit: "2.0.0", tailwind: "3.4.17", vite: null },
+      declared
+    );
+    const notInstalled = assessSupport(
+      { svelte: "5.0.0", kit: "2.0.0", tailwind: null, vite: null },
+      declared
+    );
+
+    expect(tailwind3.verdict.level).toBe("full");
+    expect(notInstalled.verdict.level).toBe("full");
   });
 
   it("separates 'not installed' from 'too old', because the remedy differs", async () => {
@@ -162,7 +201,7 @@ describe("assessSupport", () => {
       await declaredOf(worktree)
     );
 
-    expect(assessment.missingInstall).toEqual(["tailwind"]);
+    expect(assessment.missingInstall).toEqual(["kit"]);
     const reasons = assessment.verdict.level === "preview-only" ? assessment.verdict.reasons : [];
     expect(reasons).toHaveLength(1);
     expect(reasons[0]).toMatch(/install/i);
@@ -258,9 +297,9 @@ describe("assessSupport", () => {
     expect(installStyle).toBe("pnp");
     expect(pnp.verdict.level).toBe("preview-only");
     expect(pnp.missingInstall).toEqual([]);
-    expect(plain.missingInstall).toHaveLength(3);
+    expect(plain.missingInstall).toHaveLength(2);
     const reasons = pnp.verdict.level === "preview-only" ? pnp.verdict.reasons : [];
-    expect(reasons).toHaveLength(3);
+    expect(reasons).toHaveLength(2);
     expect(reasons.every((reason) => !/install dependencies/i.test(reason))).toBe(true);
   });
 

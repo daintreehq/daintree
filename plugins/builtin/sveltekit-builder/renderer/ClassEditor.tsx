@@ -7,6 +7,7 @@ import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "@/compon
 import { WaitingRow } from "./WaitingRow.js";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { splitClassTokens, type ClassCompletion } from "./inspectorController.js";
+import type { ClassDescription } from "../shared/protocol.js";
 
 const COMPLETION_DEBOUNCE_MS = 120;
 const MAX_VISIBLE_CANDIDATES = 8;
@@ -30,6 +31,7 @@ export function ClassEditor({
   onAdd,
   onRemove,
   complete,
+  describe,
 }: {
   tokens: string[];
   editable: boolean;
@@ -43,6 +45,7 @@ export function ClassEditor({
   onAdd: (tokens: string[]) => Promise<boolean>;
   onRemove: (token: string) => void;
   complete: (query: string) => Promise<ClassCompletion>;
+  describe: (token: string) => Promise<ClassDescription>;
 }) {
   return (
     // The marker spans BOTH halves: the Backspace step walks from the input to
@@ -51,7 +54,7 @@ export function ClassEditor({
       {tokens.length === 0 ? (
         <p className="text-xs text-text-secondary">No classes yet</p>
       ) : (
-        <ClassChips tokens={tokens} editable={editable} onRemove={onRemove} complete={complete} />
+        <ClassChips tokens={tokens} editable={editable} onRemove={onRemove} describe={describe} />
       )}
       <ClassAddField
         pending={pending}
@@ -69,12 +72,12 @@ function ClassChips({
   tokens,
   editable,
   onRemove,
-  complete,
+  describe,
 }: {
   tokens: string[];
   editable: boolean;
   onRemove: (token: string) => void;
-  complete: (query: string) => Promise<ClassCompletion>;
+  describe: (token: string) => Promise<ClassDescription>;
 }) {
   return (
     <ul className="flex flex-wrap gap-1" aria-label="Classes">
@@ -86,7 +89,7 @@ function ClassChips({
               like one system. The remove control stays a real button with its
               own name and focus ring. */}
           <Badge size="sm" tone="neutral" className="max-w-full pl-0 pr-0.5 text-text-primary">
-            <ClassInspector token={token} complete={complete} />
+            <ClassInspector token={token} describe={describe} />
             <button
               type="button"
               aria-label={`Remove ${token}`}
@@ -106,25 +109,27 @@ function ClassChips({
 
 type Inspection =
   | { status: "loading" }
-  | { status: "declared"; css: string }
-  | { status: "none" }
+  | { status: "declared"; css: string; partial: boolean }
+  /** This project's Tailwind generates nothing for it; `partial` when that model is incomplete. */
+  | { status: "none"; partial: boolean }
+  /** The site doesn't use Tailwind at all: its classes are its own CSS. */
+  | { status: "unused" }
   | { status: "unavailable"; reason: string };
 
 /**
  * What a class does, on request. A token like `bg-indigo-600` carried nothing
  * but its name and a remove control; the reference class lets you look at a
- * style before you decide about it. The declaration comes from main — the
- * project's own Tailwind compiling this exact token — never from a guess at
- * what a Tailwind-looking name usually means, and a token the project
- * generates nothing for says so, which is itself worth knowing before an edit.
- * Fetched once per token, on first open.
+ * style before you decide about it. The declaration comes from main compiling
+ * this exact token — never from a search of the suggestion list, which omits
+ * variants and arbitrary values that compile perfectly well. Fetched once per
+ * token, on first open.
  */
 function ClassInspector({
   token,
-  complete,
+  describe,
 }: {
   token: string;
-  complete: (query: string) => Promise<ClassCompletion>;
+  describe: (token: string) => Promise<ClassDescription>;
 }) {
   const [open, setOpen] = useState(false);
   const [inspection, setInspection] = useState<Inspection | null>(null);
@@ -137,23 +142,26 @@ function ClassInspector({
     requested.current = true;
     let cancelled = false;
     setInspection({ status: "loading" });
-    void complete(token).then((result) => {
+    void describe(token).then((result) => {
       if (cancelled) return;
-      if (result.status !== "ok") {
-        setInspection({ status: "unavailable", reason: result.reason });
+      if (result.status === "unavailable") {
+        setInspection(
+          result.unused ? { status: "unused" } : { status: "unavailable", reason: result.reason }
+        );
         return;
       }
-      const exact = result.candidates.find((candidate) => candidate.candidate === token);
-      setInspection(exact ? { status: "declared", css: exact.css } : { status: "none" });
+      setInspection(
+        result.css !== null
+          ? { status: "declared", css: result.css, partial: result.partial }
+          : { status: "none", partial: result.partial }
+      );
     });
     return () => {
-      // Only an unmount cancels — the token's declaration does not change while
-      // the chip is on screen, so one answer serves every open.
+      // A new `describe` re-asks; an unmount drops the answer.
       cancelled = true;
       requested.current = false;
     };
-    // `open` is deliberately the only trigger: `complete` is stable per controller.
-  }, [open, token, complete]);
+  }, [open, token, describe]);
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -173,13 +181,26 @@ function ClassInspector({
         {inspection === null || inspection.status === "loading" ? (
           <WaitingRow label="Looking up its declaration" />
         ) : inspection.status === "declared" ? (
-          <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-3xs leading-relaxed text-text-secondary">
-            {inspection.css}
-          </pre>
+          <>
+            <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono text-3xs leading-relaxed text-text-secondary">
+              {inspection.css}
+            </pre>
+            {inspection.partial ? (
+              <p className="mt-1.5 text-xs text-text-secondary">
+                Without the Tailwind plugins this project loads, which Daintree doesn't run — they
+                can change what this class does.
+              </p>
+            ) : null}
+          </>
         ) : inspection.status === "none" ? (
           <p className="text-xs text-text-secondary">
-            This project's Tailwind generates no CSS for it. It is still written to the source as
-            typed.
+            {inspection.partial
+              ? "Not a utility Daintree can see — this project loads Tailwind plugins Daintree doesn't run, so one of them may define it."
+              : "Tailwind generates no CSS for it here. Styles for it would come from the site's own CSS."}
+          </p>
+        ) : inspection.status === "unused" ? (
+          <p className="text-xs text-text-secondary">
+            This site doesn't use Tailwind, so the class is styled by its own CSS.
           </p>
         ) : (
           <p className="text-xs text-text-secondary">{inspection.reason}</p>

@@ -60,6 +60,15 @@ const reselectSchema = z
       .strict(),
     /** Which of the elements sharing that location, in document order. */
     index: z.number().int().nonnegative().max(100_000).optional(),
+    /** The component call site the selection was widened to, kept through the reselect. */
+    component: z
+      .object({
+        file: z.string().min(1).max(1024),
+        line: z.number().int().positive(),
+        column: z.number().int().nonnegative(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -117,7 +126,8 @@ export const sitePreviewNamespace = defineIpcNamespace({
           requireProject(ctx),
           payload.sessionId,
           payload.loc,
-          payload.index ?? 0
+          payload.index ?? 0,
+          payload.component ?? null
         ),
       { withContext: true }
     ),

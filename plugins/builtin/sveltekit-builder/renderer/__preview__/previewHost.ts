@@ -218,46 +218,78 @@ export function createPreviewHost() {
   }));
   // Main remembers what it wrote: a re-proof after a class edit returns the
   // tokens as they are on disk now, not the fixture's original list. Without
-  // this the continued state photographs a class the user just removed.
-  const removed = new Set<string>();
-  const added: string[] = [];
+  // this the continued state photographs a class the user just removed. Undo
+  // puts back what the write replaced, as the journal does.
+  const DEFAULT_TOKENS = ["px-6", "py-3", "rounded-lg", "bg-indigo-600", "text-white"];
+  let tokens = [...DEFAULT_TOKENS];
+  const history: Array<{ tokens: string[]; revision: string }> = [];
   let diskRevision = REVISION;
   handlers.set(CHANNELS.selectionResolve, (args) => {
     const selection = makeSelection({ documentEpoch: args.documentEpoch as number });
     const node = selection.nodes[0]!;
     if (node.definition) node.definition.revision = diskRevision;
-    const classes = node.surfaces.classes;
-    if (classes) {
-      classes.tokens = [...classes.tokens.filter((token) => !removed.has(token)), ...added];
-    }
+    if (node.surfaces.classes) node.surfaces.classes.tokens = [...tokens];
     return { status: "ok", selection };
   });
+  // One vocabulary for suggestions and inspection, covering every class the
+  // default selection carries — a harness that knows only shadows photographs
+  // "generates no CSS" for `px-6` and passes it off as product behaviour.
+  const CATALOG: Array<{ candidate: string; css: string }> = [
+    { candidate: "px-6", css: ".px-6 {\n  padding-inline: calc(var(--spacing) * 6);\n}" },
+    { candidate: "px-8", css: ".px-8 {\n  padding-inline: calc(var(--spacing) * 8);\n}" },
+    { candidate: "py-3", css: ".py-3 {\n  padding-block: calc(var(--spacing) * 3);\n}" },
+    { candidate: "rounded-lg", css: ".rounded-lg {\n  border-radius: var(--radius-lg);\n}" },
+    {
+      candidate: "bg-indigo-600",
+      css: ".bg-indigo-600 {\n  background-color: var(--color-indigo-600);\n}",
+    },
+    { candidate: "text-white", css: ".text-white {\n  color: var(--color-white);\n}" },
+    { candidate: "shadow-md", css: "box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1)" },
+    { candidate: "shadow-lg", css: "box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1)" },
+    { candidate: "shadow-xl", css: "box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1)" },
+    { candidate: "shadow-inner", css: "box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.05)" },
+  ];
   handlers.set(CHANNELS.classComplete, (args) => {
     const query = String(args.query ?? "");
-    const known = [
-      { candidate: "shadow-md", css: "box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1)" },
-      { candidate: "shadow-lg", css: "box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1)" },
-      { candidate: "shadow-xl", css: "box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1)" },
-      { candidate: "shadow-inner", css: "box-shadow: inset 0 2px 4px 0 rgb(0 0 0 / 0.05)" },
-    ];
     return {
       status: "ok",
-      candidates: known.filter((entry) => entry.candidate.startsWith(query)),
+      candidates: CATALOG.filter((entry) => entry.candidate.startsWith(query)),
     };
   });
+  handlers.set(CHANNELS.tailwindStatus, () => ({ status: "available", skippedModules: [] }));
+  handlers.set(CHANNELS.classDescribe, (args) => {
+    const token = String(args.token ?? "");
+    const variant = /^(?:hover|focus|md|lg):(.+)$/.exec(token);
+    const base = CATALOG.find((entry) => entry.candidate === (variant?.[1] ?? token));
+    return { status: "ok", css: base ? base.css : null, partial: false };
+  });
   handlers.set(CHANNELS.editApply, (args) => {
+    history.push({ tokens: [...tokens], revision: diskRevision });
     for (const op of (args.operations as Array<Record<string, unknown>> | undefined) ?? []) {
-      for (const token of (op.remove as string[] | undefined) ?? []) removed.add(token);
-      for (const token of (op.add as string[] | undefined) ?? []) added.push(token);
+      const remove = new Set((op.remove as string[] | undefined) ?? []);
+      tokens = tokens.filter((token) => !remove.has(token));
+      for (const token of (op.add as string[] | undefined) ?? []) {
+        if (!tokens.includes(token)) tokens.push(token);
+      }
     }
     const receipt = makeReceipt({ beforeRevision: diskRevision });
     diskRevision = receipt.afterRevision;
     return { status: "applied", receipt };
   });
-  handlers.set(CHANNELS.editUndo, () => ({
-    status: "reversed",
-    receipt: makeReceipt({ transactionId: "tx-2" }),
-  }));
+  handlers.set(CHANNELS.editUndo, () => {
+    const previous = history.pop();
+    const beforeRevision = diskRevision;
+    if (previous) {
+      tokens = previous.tokens;
+      diskRevision = previous.revision;
+    }
+    // A reversal receipt goes from the edited bytes back to the ones restored,
+    // so the next resolve agrees with it.
+    return {
+      status: "reversed",
+      receipt: makeReceipt({ transactionId: "tx-2", beforeRevision, afterRevision: diskRevision }),
+    };
+  });
   handlers.set(CHANNELS.workspaceClose, () => ({ closed: true }));
   handlers.set(CHANNELS.componentDefinitions, (args) => ({
     definitions: (args.callSites as Array<{ file: string; line: number; column: number }>).map(

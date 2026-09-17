@@ -134,11 +134,16 @@ export function majorVersion(version: string | null): number | null {
   return Number.isFinite(major) ? major : null;
 }
 
-/** The three packages whose major decides full support, with their floors. */
-const GATED: ReadonlyArray<{ key: TrackedPackageKey; floor: number }> = [
-  { key: "svelte", floor: SUPPORTED_BASELINE.svelteMajor },
-  { key: "kit", floor: SUPPORTED_BASELINE.kitMajor },
-  { key: "tailwind", floor: SUPPORTED_BASELINE.tailwindMajor },
+/**
+ * The packages whose major decides direct editing. A range, not a floor: source
+ * is parsed with the bundled Svelte compiler and located through the dev
+ * runtime's `__svelte_meta`, so a newer major inherits nothing it was not
+ * tested against. Tailwind is not here — edits write class tokens exactly as
+ * typed, and class awareness is gated on its own, by the Tailwind loader.
+ */
+const GATED: ReadonlyArray<{ key: TrackedPackageKey; major: number }> = [
+  { key: "svelte", major: SUPPORTED_BASELINE.svelteMajor },
+  { key: "kit", major: SUPPORTED_BASELINE.kitMajor },
 ];
 
 export interface SupportAssessment {
@@ -154,8 +159,8 @@ export interface SupportAssessment {
 }
 
 /**
- * The gate. `full` needs all three gated packages installed and at or above
- * their floor; anything else is `preview-only` with a reason per failing
+ * The gate. `full` needs Svelte and Kit installed at the supported major;
+ * anything else is `preview-only` with a reason per failing
  * package that names the package and the version actually found.
  *
  * Vite is read and reported but never gates: the baseline pins no Vite major,
@@ -178,7 +183,7 @@ export function assessSupport(
   const reasons: string[] = [];
   const missingInstall: TrackedPackageKey[] = [];
 
-  for (const { key, floor } of GATED) {
+  for (const { key, major: supported } of GATED) {
     const pkg = TRACKED_PACKAGES[key];
     const installed = versions[key];
     const isDeclared = typeof declared[pkg] === "string";
@@ -202,9 +207,6 @@ export function assessSupport(
     }
 
     if (installed === null) {
-      // Tailwind is optional: without it there are no class suggestions, but
-      // tracing and editing Svelte source don't depend on it.
-      if (key === "tailwind" && !isDeclared) continue;
       if (isDeclared) {
         missingInstall.push(key);
         reasons.push(
@@ -221,9 +223,11 @@ export function assessSupport(
       reasons.push(`${pkg} resolved to "${installed}", which has no readable major version`);
       continue;
     }
-    if (major < floor) {
+    if (major < supported) {
+      reasons.push(`${pkg} ${installed} is installed; direct editing needs ${pkg} ${supported}`);
+    } else if (major > supported) {
       reasons.push(
-        `${pkg} ${installed} is installed; direct editing needs ${pkg} ${floor} or newer`
+        `${pkg} ${installed} is newer than direct editing supports (${pkg} ${supported}); inspecting and asking an agent still work`
       );
     }
   }

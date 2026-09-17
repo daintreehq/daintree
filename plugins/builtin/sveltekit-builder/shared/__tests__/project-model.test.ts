@@ -73,7 +73,7 @@ describe("inspectWorktree", () => {
     const { inspection } = await inspectWorktree(reader, worktree);
 
     expect(inspection?.model.support.level).toBe("preview-only");
-    expect(inspection?.support.missingInstall).toEqual(["tailwind"]);
+    expect(inspection?.support.missingInstall).toEqual(["kit"]);
     expect(inspection?.packageManager.name).toBe("unknown");
   });
 

@@ -6,10 +6,12 @@ import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import type { EditCapability, SelectedNode } from "../shared/model.js";
+import type { ClassDescription } from "../shared/protocol.js";
 import {
   capabilityFor,
   editTargetOf,
   isEditableMapping,
+  worktreeRelative,
   type ClassCompletion,
   type EditSurface,
   type InspectorState,
@@ -29,6 +31,7 @@ export interface SelectionActions {
   addClasses: (selectionId: string, tokens: string[]) => Promise<boolean>;
   removeClass: (selectionId: string, token: string) => void;
   completeClasses: (query: string) => Promise<ClassCompletion>;
+  describeClass: (token: string) => Promise<ClassDescription>;
 }
 
 type ReadySelection = Extract<SelectionState, { status: "ready" }>;
@@ -86,10 +89,14 @@ export function SelectionIdentity({
       : null;
   const pickedScope = picked ? picked.scopes[picked.pickedIndex] : null;
   const component = pickedScope?.kind === "component" ? pickedScope.label : null;
+  // Main answers component definitions relative to the app; everything this
+  // block shows, copies or opens is relative to the worktree.
+  const componentFile =
+    pickedScope?.kind === "component" && pickedScope.file
+      ? worktreeRelative(selection.selection.appRoot, worktreePath, pickedScope.file)
+      : null;
   const file = component
-    ? pickedScope?.kind === "component"
-      ? pickedScope.file
-      : null
+    ? componentFile
     : definition
       ? (selection.file ?? definition.location.file)
       : null;
@@ -266,8 +273,31 @@ export function SelectionEdits({
   const node = selection.selection.nodes[0];
   if (!node) return null;
   const occurrences = node.definition?.renderedOccurrences ?? 1;
+  // Direct edits write one element. With a component picked, that element is
+  // its root — named here, beside its own file, so the identity above (the
+  // component and its definition) is never read as what these controls change.
+  const rootOfComponent = selection.scope === "component" && selection.selection.nodes.length === 1;
   return (
     <section aria-label="Edit directly" className="flex flex-col gap-2">
+      {rootOfComponent ? (
+        <PropertyRow label="Target">
+          <p className="min-w-0 truncate text-xs leading-7 text-text-secondary" title={node.label}>
+            <span className="text-text-primary">Root element</span>
+            {node.definition ? (
+              <span className="font-mono">{` · <${node.definition.tagName}> ${selection.file ?? node.definition.location.file}:${node.definition.location.line}`}</span>
+            ) : null}
+          </p>
+        </PropertyRow>
+      ) : null}
+      {selection.scope === "component" && selection.selection.nodes.length > 1 ? (
+        <InspectorNotice
+          tone="info"
+          title={`This component renders ${selection.selection.nodes.length} root elements`}
+        >
+          Direct edits change one element. Select the one to change in the page, or ask an agent to
+          change the component.
+        </InspectorNotice>
+      ) : null}
       {occurrences > 1 ? <SharedMarkupRow count={occurrences} /> : null}
       <Surface title="Text" capability={capabilityFor(node, "text")}>
         <TextSurface state={state} selection={selection} actions={actions} />
@@ -488,6 +518,7 @@ function ClassSurface({
           onAdd={(tokens) => actions.addClasses(selectionId, tokens)}
           onRemove={(token) => actions.removeClass(selectionId, token)}
           complete={actions.completeClasses}
+          describe={actions.describeClass}
         />
       ) : (
         <NoDecodedValue node={node} />

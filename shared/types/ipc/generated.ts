@@ -1699,6 +1699,7 @@ export interface GeneratedIpcInvokeMap {
         sessionId: string;
         loc: { file: string; line: number; column: number };
         index?: number | undefined;
+        component?: { file: string; line: number; column: number } | undefined;
       },
     ];
     result: boolean;

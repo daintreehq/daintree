@@ -66,6 +66,15 @@ export function createSiteBuilderGuest(
   const MAX_MESSAGE_BYTES = 256 * 1024;
   /** Bounds the "is this a dev build" sweep on a huge document. */
   const AUDIT_SCAN_LIMIT = 20_000;
+  /**
+   * How long a finished document has to stay without dev metadata before the
+   * guest says so. SvelteKit hydrates after `load`: its entry is a chain of
+   * dev-server module fetches, so `readyState === "complete"` arrives while the
+   * server-rendered markup still has no `__svelte_meta`.
+   */
+  const AUDIT_SETTLE_MS = 2_500;
+  /** A page that is visibly served by Vite gets longer to hydrate on a cold start. */
+  const AUDIT_DEV_SETTLE_MS = 15_000;
   /** Parent links walked per observation, however few of them are usable. */
   const MAX_ANCESTRY_LINKS = 512;
   /** Side of the transform probe, in the page's own fixed-position pixels. */
@@ -90,6 +99,8 @@ export function createSiteBuilderGuest(
   let sequence = resumed.sequence;
   let disposed = false;
   let auditDone = false;
+  let auditTimer: ReturnType<typeof setTimeout> | null = null;
+  let auditStartedAt = 0;
   let hovered: Element | null = null;
   let hoveredMapping: boolean | null = null;
   let lastHit: Element | null = null;
@@ -814,6 +825,10 @@ export function createSiteBuilderGuest(
    * selection rather than leaving the host looking at a different one.
    */
   function emitSelection(cause: "user" | "document" | "reselect"): boolean {
+    // A client-side navigation or a resize leaves the document in place, so no
+    // `documentReady` follows it. The host resolves and describes a selection
+    // against the page it last heard about; bring that up to date first.
+    if (pageMoved()) emitDocumentReady();
     const nodes = selection.map((entry) => observe(entry.hit));
     const primary = selection[0];
     const identity =
@@ -1012,12 +1027,27 @@ export function createSiteBuilderGuest(
    * could not tell the substitution from the real thing; a missing occurrence
    * is a failure, and the stale notice is the honest answer.
    */
-  function reselect(loc: SourceLoc, index?: number): boolean {
+  function reselect(loc: SourceLoc, index?: number, component?: SourceLoc | null): boolean {
     if (disposed || mode !== "select") return false;
     const wanted = typeof index === "number" && index >= 0 ? Math.floor(index) : 0;
     const target = elementAt(loc, wanted);
     if (target === null) return false;
-    selectOnly(target, "element", null, "reselect");
+    // A component the user widened to stays the selection: the overlay keeps
+    // naming it, and Option/Alt+Up keeps stepping outward from it rather than
+    // starting again at the innermost component.
+    const frame =
+      component === null || component === undefined
+        ? null
+        : (componentFrames(target).find((candidate) => {
+            const identity = componentIdentity(candidate);
+            return (
+              identity !== null &&
+              identity.file === component.file &&
+              identity.line === component.line &&
+              identity.column === component.column
+            );
+          }) ?? null);
+    selectOnly(target, frame === null ? "element" : "component", frame, "reselect");
     return true;
   }
 
@@ -1217,30 +1247,97 @@ export function createSiteBuilderGuest(
     return { found: false, complete: all.length <= AUDIT_SCAN_LIMIT };
   }
 
+  const DEV_SERVER_PATHS = [
+    "/@vite/client",
+    "/@fs/",
+    "/.svelte-kit/generated/",
+    "/node_modules/.vite/",
+  ];
+
+  function namesDevServerPath(value: string | null | undefined): boolean {
+    return typeof value === "string" && DEV_SERVER_PATHS.some((part) => value.includes(part));
+  }
+
+  /**
+   * SvelteKit's dev page has no `<script src="/@vite/client">`: its inline
+   * start script imports the client runtime through `/@fs/` and the generated
+   * app, and Vite's client arrives as one of those imports. The module fetches
+   * are the dependable evidence, with the markup as a fallback.
+   */
   function looksLikeDevServer(): boolean {
-    if (document.querySelector('script[src*="/@vite/client"]') !== null) return true;
     const scope = globalThis as unknown as Record<string, unknown>;
-    return (
-      scope.__vite_plugin_react_preamble_installed__ !== undefined || scope.__vite__ !== undefined
-    );
+    if (
+      scope.__vite_plugin_react_preamble_installed__ !== undefined ||
+      scope.__vite__ !== undefined
+    )
+      return true;
+    try {
+      const entries =
+        typeof performance !== "undefined" && typeof performance.getEntriesByType === "function"
+          ? performance.getEntriesByType("resource")
+          : [];
+      for (let index = 0; index < entries.length && index < AUDIT_SCAN_LIMIT; index += 1) {
+        if (namesDevServerPath(entries[index]?.name)) return true;
+      }
+    } catch {
+      // Resource timing is evidence, not a requirement.
+    }
+    const scripts = document.getElementsByTagName("script");
+    for (let index = 0; index < scripts.length && index < 200; index += 1) {
+      const script = scripts[index];
+      if (script === undefined) continue;
+      if (namesDevServerPath(script.getAttribute("src"))) return true;
+      if (script.src === "" && namesDevServerPath((script.textContent ?? "").slice(0, 4096)))
+        return true;
+    }
+    return false;
+  }
+
+  function clearAuditTimer(): void {
+    if (auditTimer !== null) {
+      clearTimeout(auditTimer);
+      auditTimer = null;
+    }
   }
 
   /**
    * Without `__svelte_meta` there is nothing to inspect. Saying so is the whole
-   * point: a silent dead inspector reads as a bug in Daintree.
+   * point: a silent dead inspector reads as a bug in Daintree. Saying it while
+   * the page is still hydrating is worse — a warning that contradicts the
+   * working selection under it — so the verdict waits for the page to settle.
    */
   function auditMapping(): void {
     if (auditDone || disposed) return;
     const scan = scanForSvelteMeta();
     if (scan.found) {
       auditDone = true;
+      clearAuditTimer();
       return;
     }
-    // A page that has not finished hydrating, or a document too big to sweep,
+    // A page that has not finished loading, or a document too big to sweep,
     // is not evidence of a production build. Stay silent and look again.
     if (!scan.complete || document.readyState !== "complete") return;
+    if (auditTimer !== null) return;
+    if (auditStartedAt === 0) auditStartedAt = Date.now();
+    auditTimer = setTimeout(confirmMissingMapping, AUDIT_SETTLE_MS);
+  }
+
+  function confirmMissingMapping(): void {
+    auditTimer = null;
+    if (auditDone || disposed) return;
+    const scan = scanForSvelteMeta();
+    if (scan.found) {
+      auditDone = true;
+      return;
+    }
+    if (!scan.complete || document.readyState !== "complete") return;
+    const dev = looksLikeDevServer();
+    if (dev && Date.now() - auditStartedAt < AUDIT_DEV_SETTLE_MS) {
+      auditTimer = setTimeout(confirmMissingMapping, AUDIT_SETTLE_MS);
+      return;
+    }
     auditDone = true;
-    if (looksLikeDevServer()) {
+    if (dev) {
       issue(
         "no-svelte-meta",
         "the dev server is running but no element carries Svelte dev metadata"
@@ -1253,19 +1350,33 @@ export function createSiteBuilderGuest(
     }
   }
 
-  function emitDocumentReady(): void {
+  let reportedPage = "";
+
+  function currentPage() {
     const scale =
       typeof devicePixelRatio === "number" && devicePixelRatio > 0 ? devicePixelRatio : 1;
-    send({
-      type: "documentReady",
-      // The host owns route identity; the guest reports only what it can see.
-      routeId: null,
+    return {
       url: clamp(location.href, MAX_URL),
       viewport: {
         width: Math.max(1, Math.round(innerWidth)),
         height: Math.max(1, Math.round(innerHeight)),
         deviceScaleFactor: scale,
       },
+    };
+  }
+
+  function pageMoved(): boolean {
+    return reportedPage !== "" && reportedPage !== JSON.stringify(currentPage());
+  }
+
+  function emitDocumentReady(): void {
+    const page = currentPage();
+    reportedPage = JSON.stringify(page);
+    send({
+      type: "documentReady",
+      // The host owns route identity; the guest reports only what it can see.
+      routeId: null,
+      ...page,
     });
     auditMapping();
   }
@@ -1298,6 +1409,7 @@ export function createSiteBuilderGuest(
   function dispose(): void {
     if (disposed) return;
     disposed = true;
+    clearAuditTimer();
     detachSelectListeners();
     while (teardown.length > 0) {
       const off = teardown.pop();
@@ -1340,6 +1452,11 @@ export function createSiteBuilderGuest(
       listen(document, "DOMContentLoaded", () => emitDocumentReady(), { once: true }, teardown);
     } else {
       emitDocumentReady();
+    }
+    // The verdict waits for a complete document; a page whose last resource
+    // lands after DOMContentLoaded would otherwise never be judged.
+    if (document.readyState !== "complete") {
+      listen(window, "load", () => auditMapping(), { once: true }, teardown);
     }
     if (mode === "select") attachSelectListeners();
   } catch (error) {

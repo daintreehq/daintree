@@ -25,6 +25,9 @@ import {
   BUILDER_TOOL_ID,
   CHANNELS,
   ClassCompleteResultSchema,
+  ClassDescribeResultSchema,
+  TailwindStatusResultSchema,
+  type ClassDescription,
   ComponentDefinitionsResultSchema,
   SourceRevisionsResultSchema,
   SourceExcerptResultSchema,
@@ -72,6 +75,8 @@ export interface SitePreviewApi {
     loc: { file: string; line: number; column: number };
     /** Which of the elements sharing `loc`, in document order. */
     index?: number;
+    /** The component call site to keep selected, when the user had widened to one. */
+    component?: { file: string; line: number; column: number };
   }): Promise<boolean>;
   /** Drop the page's selection without observing anything. */
   clearSelection(request: { sessionId: string }): Promise<void>;
@@ -101,16 +106,30 @@ export type BindingState =
   | { status: "binding"; panelId: string }
   | { status: "bound"; sessionId: string; panelId: string; url: string | null }
   | { status: "detached"; panelId: string; reason: SitePreviewDetachReason }
-  | { status: "failed"; message: string };
+  /** `retrying`: an automatic attempt is scheduled; false once they have run out. */
+  | { status: "failed"; message: string; retrying: boolean };
 
 export type WorkspaceState =
   | { status: "idle" }
   | { status: "no-worktree" }
   | { status: "opening" }
-  | { status: "ready"; workspaceSessionId: string; appRoot: string; support: SupportVerdict }
+  | {
+      status: "ready";
+      workspaceSessionId: string;
+      appRoot: string;
+      /** Direct editing: decided by the Svelte and Kit versions alone. */
+      support: SupportVerdict;
+      /** Class suggestions and inspection: decided by the Tailwind loader, separately. */
+      tailwind: TailwindAwareness;
+    }
   | { status: "ambiguous"; appRoots: string[] }
   | { status: "no-app" }
   | { status: "failed"; message: string };
+
+export type TailwindAwareness =
+  | { status: "checking" }
+  | { status: "available"; skippedModules: string[] }
+  | { status: "unavailable"; reason: string; unused: boolean };
 
 export interface PageState {
   epoch: number;
@@ -162,6 +181,7 @@ export type EditSurface = "text" | "classes";
  * if it does not, or if the page never answers.
  */
 interface Continuity {
+  /** Worktree-relative, as the write receipt and `ReadySelection.file` are. */
   file: string;
   afterRevision: string;
   tagName: string;
@@ -202,7 +222,15 @@ export interface ReceiptState {
 export interface InspectorIssue {
   severity: "warning" | "error";
   message: string;
+  /** The page's own verdict, when it came from the page. */
+  code?: string;
 }
+
+/** Matches `ClassDescribeArgsSchema`. */
+const MAX_DESCRIBED_TOKEN = 2048;
+
+/** Page verdicts that a traced element disproves. */
+const MAPPING_ISSUES = new Set(["no-svelte-meta", "not-dev-build"]);
 
 export interface InspectorState {
   binding: BindingState;
@@ -505,6 +533,9 @@ export class InspectorController {
    * consulted only when a write is pending a refresh.
    */
   private continuity: Continuity | null = null;
+  /** The document class awareness was last asked about; a different one asks again. */
+  private tailwindCheckedDocument: string | null = null;
+  private tailwindRequest = 0;
   private reselectOnReady = false;
   private reselectTimer: ReturnType<typeof setTimeout> | null = null;
   /** Identity of the reselect in flight; a user action moves it on and orphans late replies. */
@@ -550,8 +581,10 @@ export class InspectorController {
               workspaceSessionId: result.workspaceSessionId,
               appRoot: result.appRoot,
               support: result.support,
+              tailwind: { status: "checking" },
             },
           });
+          void this.checkTailwind(result.workspaceSessionId);
           return;
         case "ambiguous": {
           // The dev server runs in one of them: that is the app this preview shows.
@@ -671,16 +704,17 @@ export class InspectorController {
     } catch (error) {
       if (request !== this.bindRequest) return;
       this.bufferedEvents = [];
+      // Most failures are a preview that has no page yet: it is starting, or
+      // the grid is recreating it. Keep trying for a while rather than leaving
+      // the user to guess when to press Retry.
+      const retrying = this.scheduleConnectRetry(previewPanelId, request);
       this.update({
         binding: {
           status: "failed",
           message: formatErrorMessage(error, "Couldn't connect to the dev preview"),
+          retrying,
         },
       });
-      // Most failures are a preview that has no page yet: it is starting, or
-      // the grid is recreating it. Keep trying for a while rather than leaving
-      // the user to guess when to press Retry.
-      this.scheduleConnectRetry(previewPanelId, request);
       return;
     }
     this.connectAttempts = 0;
@@ -743,8 +777,8 @@ export class InspectorController {
     }, REATTACH_DELAY_MS);
   }
 
-  private scheduleConnectRetry(previewPanelId: string, request: number): void {
-    if (this.disposed || this.connectAttempts >= CONNECT_RETRY_DELAYS_MS.length) return;
+  private scheduleConnectRetry(previewPanelId: string, request: number): boolean {
+    if (this.disposed || this.connectAttempts >= CONNECT_RETRY_DELAYS_MS.length) return false;
     const delay = CONNECT_RETRY_DELAYS_MS[this.connectAttempts]!;
     this.connectAttempts++;
     this.clearConnectRetry();
@@ -754,6 +788,7 @@ export class InspectorController {
       if (this.state.binding.status !== "failed") return;
       void this.bindTo(previewPanelId);
     }, delay);
+    return true;
   }
 
   private clearConnectRetry(): void {
@@ -907,6 +942,17 @@ export class InspectorController {
           patch.receipt = { ...receipt, previewRefreshed: true };
         }
         this.update(patch);
+        // An install or a new stylesheet usually arrives with a dev-server
+        // restart, which is a new document. Class awareness that failed is asked
+        // again then, rather than reported unavailable for the whole session.
+        const workspace = this.state.workspace;
+        if (
+          workspace.status === "ready" &&
+          workspace.tailwind.status === "unavailable" &&
+          this.tailwindCheckedDocument !== this.documentKey()
+        ) {
+          void this.checkTailwind(workspace.workspaceSessionId);
+        }
         if (this.reselectOnReady) {
           this.reselectOnReady = false;
           void this.reselectNow();
@@ -914,6 +960,7 @@ export class InspectorController {
         return;
       }
       case "selectionChanged":
+        this.clearDisprovedMappingIssue(event.nodes);
         void this.handleSelection(
           epoch,
           event.nodes,
@@ -927,13 +974,27 @@ export class InspectorController {
           issue: {
             severity: event.code === "internal" ? "error" : "warning",
             message: RUNTIME_ISSUE_COPY[event.code] ?? event.detail,
+            code: event.code,
           },
         });
         return;
       case "hoverChanged":
+        if (event.node !== null) this.clearDisprovedMappingIssue([event.node]);
+        return;
       case "mappingRevisionSeen":
         return;
     }
+  }
+
+  /**
+   * An element with a source location is proof of dev metadata, whatever the
+   * page concluded earlier — a verdict reached while it was still hydrating
+   * must not sit above a selection that plainly traced.
+   */
+  private clearDisprovedMappingIssue(nodes: SiteGuestNodeObservation[]): void {
+    const code = this.state.issue?.code;
+    if (code === undefined || !MAPPING_ISSUES.has(code)) return;
+    if (nodes.some((node) => node.loc !== null)) this.update({ issue: null });
   }
 
   /* ------------------------------------------------------------------------ */
@@ -1121,7 +1182,9 @@ export class InspectorController {
       const occurrence = nodes[0]?.locIndex;
       const continues =
         after !== null &&
-        after.location.file === record.file &&
+        // Both worktree-relative: the record takes the write's receipt path,
+        // and the page reports locations relative to the app.
+        file === record.file &&
         after.tagName === record.tagName &&
         after.revision === record.afterRevision &&
         (occurrence === undefined || occurrence === record.locIndex);
@@ -1134,6 +1197,14 @@ export class InspectorController {
       }
     }
     this.clearReselectTimer();
+    // The page reselects an element; what the user picked may have been the
+    // component it roots. A continuation keeps that scope rather than quietly
+    // narrowing the identity, and the agent's subject, to the element.
+    const prior = this.state.selection;
+    const keepsComponent = continuing && prior.status === "ready" && prior.scope === "component";
+    const pickedScope = keepsComponent ? "component" : scope;
+    const pickedComponent =
+      keepsComponent && prior.status === "ready" ? prior.component : component;
     const location = after?.location ?? null;
     const generation = continuing
       ? this.state.selectionGeneration
@@ -1143,7 +1214,7 @@ export class InspectorController {
     this.continuity =
       after !== null && location !== null
         ? {
-            file: location.file,
+            file: file ?? location.file,
             afterRevision: after.revision,
             tagName: after.tagName,
             loc: { ...location },
@@ -1159,8 +1230,8 @@ export class InspectorController {
         selection,
         file,
         stale: null,
-        scope,
-        component,
+        scope: pickedScope,
+        component: pickedComponent,
         definitions: null,
         revisions: null,
       },
@@ -1170,7 +1241,7 @@ export class InspectorController {
     if (this.continuity !== null) {
       this.continuity.prior = this.state.selection.status === "ready" ? this.state.selection : null;
     }
-    void this.resolveDefinitions(selection, component);
+    void this.resolveDefinitions(selection, pickedComponent);
   }
 
   private async resolveDefinitions(
@@ -1411,10 +1482,14 @@ export class InspectorController {
     }, RESELECT_SETTLE_MS);
     let found: boolean;
     try {
+      const picked = record.prior?.scope === "component" ? record.prior.component : null;
       found = await this.deps.sitePreview.reselect({
         sessionId: binding.sessionId,
         loc: record.loc,
         index: record.locIndex,
+        ...(picked
+          ? { component: { file: picked.file, line: picked.line, column: picked.column } }
+          : {}),
       });
     } catch {
       found = false;
@@ -1789,6 +1864,78 @@ export class InspectorController {
       return {
         status: "unavailable",
         reason: formatErrorMessage(error, "Class list unavailable"),
+      };
+    }
+  }
+
+  /** Asks main whether class awareness works here; answers only the workspace that asked. */
+  /** Which document of which preview binding the page state describes. */
+  private documentKey(): string {
+    return `${this.boundSessionId() ?? ""}:${this.state.page?.epoch ?? ""}`;
+  }
+
+  private async checkTailwind(workspaceSessionId: string): Promise<void> {
+    const request = ++this.tailwindRequest;
+    const askedFor = this.documentKey();
+    this.tailwindCheckedDocument = askedFor;
+    let tailwind: TailwindAwareness;
+    try {
+      const raw = await this.deps.invoke(CHANNELS.tailwindStatus, { workspaceSessionId });
+      const parsed = TailwindStatusResultSchema.safeParse(raw);
+      tailwind = parsed.success
+        ? parsed.data
+        : { status: "unavailable", reason: "Class awareness didn't answer", unused: false };
+    } catch (error) {
+      tailwind = {
+        status: "unavailable",
+        reason: formatErrorMessage(error, "Class awareness didn't answer"),
+        unused: false,
+      };
+    }
+    const workspace = this.state.workspace;
+    if (request !== this.tailwindRequest) return;
+    if (workspace.status !== "ready" || workspace.workspaceSessionId !== workspaceSessionId) return;
+    this.update({ workspace: { ...workspace, tailwind } });
+    // A new document arrived while this was out — often the restart after an
+    // install. Its answer predates that document, so a failure is asked again.
+    if (tailwind.status === "unavailable" && this.documentKey() !== askedFor) {
+      void this.checkTailwind(workspaceSessionId);
+    }
+  }
+
+  /** What one class token generates in this project, asked exactly rather than searched for. */
+  async describeClass(token: string): Promise<ClassDescription> {
+    const workspace = this.state.workspace;
+    if (workspace.status !== "ready") {
+      return { status: "unavailable", reason: "The site source isn't open", unused: false };
+    }
+    // Never a shortened token: a cut arbitrary value is a different class, and
+    // "generates nothing" about it would be a claim about something else.
+    if (token.length > MAX_DESCRIBED_TOKEN) {
+      return {
+        status: "unavailable",
+        reason: "This class is too long to inspect here",
+        unused: false,
+      };
+    }
+    try {
+      const raw = await this.deps.invoke(CHANNELS.classDescribe, {
+        workspaceSessionId: workspace.workspaceSessionId,
+        token,
+      });
+      const parsed = ClassDescribeResultSchema.safeParse(raw);
+      if (!parsed.success) {
+        return { status: "unavailable", reason: "Class details unavailable", unused: false };
+      }
+      if (parsed.data.status === "unavailable" && isWorkspaceClosed(parsed.data)) {
+        this.recoverClosedWorkspace(workspace.workspaceSessionId);
+      }
+      return parsed.data;
+    } catch (error) {
+      return {
+        status: "unavailable",
+        reason: formatErrorMessage(error, "Class details unavailable"),
+        unused: false,
       };
     }
   }

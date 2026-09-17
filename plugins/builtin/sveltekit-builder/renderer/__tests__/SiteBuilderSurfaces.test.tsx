@@ -13,7 +13,7 @@ import {
   peekBuilderController,
   releaseBuilderController,
 } from "../inspectorController";
-import { CHANNELS, PLUGIN_ID, PUSH_CHANNELS } from "../../shared/protocol";
+import { BUILDER_TOOL_ID, CHANNELS, PLUGIN_ID, PUSH_CHANNELS } from "../../shared/protocol";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import {
@@ -97,6 +97,38 @@ afterEach(() => {
   __resetInspectorControllersForTests();
   __resetComposerMemoryForTests();
   uninstall();
+});
+
+describe("page verdicts", () => {
+  function runtimeIssue(code: "not-dev-build" | "overlay-blocked") {
+    host.pushPreview({
+      kind: "guest-event",
+      sessionId: "session-1",
+      panelId: "preview-1",
+      projectId: "p1",
+      documentEpoch: 0,
+      sequence: 2,
+      event: { type: "runtimeIssue", code, detail: "" },
+    });
+  }
+
+  it("drops a production-build verdict that a traced selection disproves", async () => {
+    await mountBound();
+    await act(async () => runtimeIssue("not-dev-build"));
+    expect(text()).toContain("production build");
+
+    await act(async () => host.select(0));
+    await screen.findByRole("button", { name: "Remove px-6" });
+    expect(text()).not.toContain("production build");
+  });
+
+  it("keeps a verdict that a traced element says nothing about", async () => {
+    await mountBound();
+    await act(async () => runtimeIssue("overlay-blocked"));
+    await act(async () => host.select(0));
+    await screen.findByRole("button", { name: "Remove px-6" });
+    expect(text()).toContain("The page blocked the selection overlay");
+  });
 });
 
 describe("preview binding", () => {
@@ -475,6 +507,11 @@ describe("editing", () => {
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalled());
     await waitFor(() => expect(removeButton().disabled).toBe(false));
 
+    // The page re-reporting itself in the same document (a client-side
+    // navigation, a resize) is not a reload, and must not read as one.
+    await act(async () => host.documentReady(0));
+    expect(text()).toMatch(/refresh unconfirmed/i);
+
     await act(async () => host.documentReady(1));
     // A later document is the only thing that proves the reload, and the
     // receipt starts reporting it once one lands — while still refusing to
@@ -651,6 +688,247 @@ describe("editing", () => {
   });
 });
 
+describe("capabilities", () => {
+  function row(label: string): string {
+    const region = screen.getByRole("region", { name: "Site source" });
+    const line = [...region.querySelectorAll("p")].find((p) => p.textContent?.startsWith(label));
+    return line?.textContent ?? "";
+  }
+
+  it("says direct editing is available when only class awareness is missing", async () => {
+    host.handlers.set(CHANNELS.tailwindStatus, () => ({
+      status: "unavailable",
+      reason:
+        "class awareness is built on tailwindcss 4.3.3, and this project uses 4.1.0; completion is off",
+      unused: false,
+    }));
+    await mountBound();
+    await screen.findByRole("region", { name: "Site source" });
+    expect(row("Direct editing")).toContain("available");
+    expect(row("Direct editing")).not.toContain("unavailable");
+    expect(row("Class suggestions")).toContain("unavailable");
+    expect(text()).toContain("this project uses 4.1.0");
+  });
+
+  it("asks again on a new document, so an install doesn't stay reported as missing", async () => {
+    let installed = false;
+    host.handlers.set(CHANNELS.tailwindStatus, () =>
+      installed
+        ? { status: "available", skippedModules: [] }
+        : { status: "unavailable", reason: "tailwindcss is not installed", unused: false }
+    );
+    await mountBound();
+    await screen.findByText(/tailwindcss is not installed/);
+
+    installed = true;
+    // Same document: nothing to suggest anything changed.
+    await waitFor(() => expect(host.calls(CHANNELS.tailwindStatus).length).toBeGreaterThan(0));
+    const asked = host.calls(CHANNELS.tailwindStatus).length;
+    await act(async () => host.documentReady(0));
+    expect(host.calls(CHANNELS.tailwindStatus)).toHaveLength(asked);
+    // The dev server restarted after the install: a new document.
+    await act(async () => host.epochAdvanced(1));
+    await act(async () => host.documentReady(1));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Site source" })).toBeNull());
+  });
+
+  it("asks again when the recovery document lands while the first answer is still out", async () => {
+    let release: (value: unknown) => void = () => {};
+    let calls = 0;
+    host.handlers.set(CHANNELS.tailwindStatus, () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Promise((resolve) => {
+          release = resolve;
+        });
+      }
+      return { status: "available", skippedModules: [] };
+    });
+    await mountBound();
+    await waitFor(() => expect(calls).toBeGreaterThan(0));
+    await act(async () => host.epochAdvanced(1));
+    await act(async () => host.documentReady(1));
+    await act(async () =>
+      release({ status: "unavailable", reason: "tailwindcss is not installed", unused: false })
+    );
+    await waitFor(() => expect(calls).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Site source" })).toBeNull());
+  });
+
+  it("says nothing about a site that doesn't use Tailwind at all", async () => {
+    host.handlers.set(CHANNELS.tailwindStatus, () => ({
+      status: "unavailable",
+      reason: "no stylesheet in this app imports tailwindcss",
+      unused: true,
+    }));
+    await mountBound();
+    await waitFor(() => expect(host.calls(CHANNELS.tailwindStatus).length).toBeGreaterThan(0));
+    await act(async () => {});
+    expect(screen.queryByRole("region", { name: "Site source" })).toBeNull();
+  });
+
+  it("reports direct editing from the version verdict, and suggestions only if they fail too", async () => {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ready",
+      workspaceSessionId: "ws-1",
+      appRoot: "/repo",
+      support: {
+        level: "preview-only",
+        reasons: ["svelte 6.0.0 is newer than direct editing supports"],
+      },
+    }));
+    await mountBound();
+    await screen.findByRole("region", { name: "Site source" });
+    await waitFor(() => expect(host.calls(CHANNELS.tailwindStatus)).toHaveLength(1));
+    expect(row("Direct editing")).toContain("unavailable");
+    expect(row("Class suggestions")).toBe("");
+  });
+});
+
+describe("class inspection", () => {
+  async function selectWithClasses(tokens: string[]) {
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const selection = makeSelection({
+        documentEpoch: args.documentEpoch as number,
+        surfaces: { classes: { tokens }, text: { text: "Start Pro" } },
+      });
+      selection.nodes[0]!.definition!.revision = host.diskRevision;
+      return { status: "ok", selection };
+    });
+    await mountBound();
+    await act(async () => host.select(0));
+    await screen.findByRole("button", { name: `Inspect ${tokens[0]}` });
+  }
+
+  it("asks for the exact token, so a variant is described rather than called empty", async () => {
+    // `hover:px-8` is not in Tailwind's class list, and never comes back from a
+    // completion search — but it generates CSS.
+    host.handlers.set(CHANNELS.classComplete, () => ({ status: "ok", candidates: [] }));
+    await selectWithClasses(["hover:px-8"]);
+    fireEvent.click(screen.getByRole("button", { name: "Inspect hover:px-8" }));
+    await screen.findByText("/* hover:px-8 */");
+    expect(host.calls(CHANNELS.classDescribe)).toEqual([
+      { workspaceSessionId: "ws-1", token: "hover:px-8" },
+    ]);
+  });
+
+  it("doesn't call a class empty when the model left plugins out", async () => {
+    host.handlers.set(CHANNELS.classDescribe, () => ({ status: "ok", css: null, partial: true }));
+    await selectWithClasses(["prose"]);
+    fireEvent.click(screen.getByRole("button", { name: "Inspect prose" }));
+    await screen.findByText(/plugins Daintree doesn't run/);
+  });
+
+  it("qualifies a declaration read without the project's plugins", async () => {
+    host.handlers.set(CHANNELS.classDescribe, () => ({
+      status: "ok",
+      css: "/* px-6 */",
+      partial: true,
+    }));
+    await selectWithClasses(["px-6"]);
+    fireEvent.click(screen.getByRole("button", { name: "Inspect px-6" }));
+    await screen.findByText("/* px-6 */");
+    await screen.findByText(/they\s+can change what this class does/);
+  });
+
+  it("won't inspect a shortened class in place of a long one", async () => {
+    const long = `bg-[url(${"a".repeat(2100)})]`;
+    await selectWithClasses([long]);
+    fireEvent.click(screen.getByRole("button", { name: `Inspect ${long}` }));
+    await screen.findByText("This class is too long to inspect here");
+    expect(host.calls(CHANNELS.classDescribe)).toEqual([]);
+  });
+
+  it("points a plain CSS class at the site's own CSS", async () => {
+    host.handlers.set(CHANNELS.classDescribe, () => ({
+      status: "unavailable",
+      reason: "no stylesheet in this app imports tailwindcss",
+      unused: true,
+    }));
+    await selectWithClasses(["hero"]);
+    fireEvent.click(screen.getByRole("button", { name: "Inspect hero" }));
+    await screen.findByText(/doesn't use Tailwind/);
+  });
+});
+
+describe("an app inside a monorepo", () => {
+  const APP = "/repo/apps/site";
+
+  function openApp() {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({
+      status: "ready",
+      workspaceSessionId: "ws-1",
+      appRoot: APP,
+      support: { level: "full" },
+    }));
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const selection = {
+        ...makeSelection({ documentEpoch: args.documentEpoch as number }),
+        appRoot: APP,
+      };
+      selection.nodes[0]!.definition!.revision = host.diskRevision;
+      return { status: "ok", selection };
+    });
+    // Main's receipts name files from the worktree; the page names them from the app.
+    host.handlers.set(CHANNELS.editApply, () => {
+      const receipt = makeReceipt({ beforeRevision: host.diskRevision, file: `apps/site/${FILE}` });
+      host.diskRevision = receipt.afterRevision;
+      return { status: "applied", receipt };
+    });
+  }
+
+  it("keeps editing after a write, although receipt and page count paths from different roots", async () => {
+    openApp();
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve).length).toBeGreaterThan(1));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    expect(screen.queryByText(/select again/i)).toBeNull();
+  });
+
+  it("opens and copies a picked component's file inside the app, as the agent prompt names it", async () => {
+    openApp();
+    const site = { file: "src/lib/PricingCard.svelte", line: 3, column: 0 };
+    host.handlers.set(CHANNELS.componentDefinitions, (args) => ({
+      definitions: (args.callSites as (typeof site)[]).map((callSite) => ({
+        ...callSite,
+        name: "PricingCard",
+        definedIn: "src/lib/Card.svelte",
+        revision: REVISION,
+        definedInRevision: REVISION,
+      })),
+    }));
+    const { actionService } = await import("@/services/ActionService");
+    const dispatch = vi.spyOn(actionService, "dispatch").mockResolvedValue({ ok: true } as never);
+    await mountBound();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 1,
+        event: {
+          type: "selectionChanged",
+          nodes: [OBSERVATION],
+          scope: "component",
+          component: { ...site, name: "PricingCard" },
+        },
+      })
+    );
+    const identity = await screen.findByRole("region", { name: "Selected element" });
+    await waitFor(() => expect(identity.textContent).toContain("apps/site/src/lib/Card.svelte"));
+    fireEvent.click(within(identity).getByRole("button", { name: "Open in editor" }));
+    expect(dispatch).toHaveBeenCalledWith(
+      "file.openInEditor",
+      { path: "/repo/apps/site/src/lib/Card.svelte" },
+      { source: "user" }
+    );
+  });
+});
+
 describe("editing continuity", () => {
   it("keeps editing after a write by having the page re-prove the selection", async () => {
     // The rule: a successful write does not cost the user their selection.
@@ -723,6 +1001,50 @@ describe("editing continuity", () => {
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
     await screen.findByText("Saved — select again to keep editing");
     expect(removeButton().disabled).toBe(true);
+  });
+
+  it("keeps a picked component as the subject through its own write", async () => {
+    await mountBound();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 1,
+        event: {
+          type: "selectionChanged",
+          nodes: [OBSERVATION],
+          scope: "component",
+          component: {
+            file: "src/lib/PricingCard.svelte",
+            line: 3,
+            column: 0,
+            name: "PricingCard",
+          },
+        },
+      })
+    );
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    const identity = screen.getByRole("region", { name: "Selected element" });
+    expect(identity.textContent).toContain("Component");
+    // The controls write the root element in its own file, and say so.
+    const edits = screen.getByRole("region", { name: "Edit directly" });
+    expect(edits.textContent).toContain("Root element");
+    expect(edits.textContent).toContain(`<button> ${FILE}:6`);
+
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    // The page is asked to keep the component selected, not just its root.
+    expect(host.sitePreview.reselect.mock.calls[0]![0]).toMatchObject({
+      component: { file: "src/lib/PricingCard.svelte", line: 3, column: 0 },
+    });
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve).length).toBeGreaterThan(1));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
+      "Component"
+    );
   });
 
   it("asks for the same rendered occurrence, not the first one", async () => {
@@ -954,6 +1276,86 @@ describe("stale selections", () => {
     // terminal and is deciding again.
     fireEvent.change(request, { target: { value: "Say Upgrade now" } });
     await waitFor(() => expect(sendButton().disabled).toBe(false));
+  });
+
+  it("won't re-send on Enter when delivery couldn't be confirmed, but sends when asked to", async () => {
+    // The host lost track of the submission: the request may be in the agent
+    // already. The unchanged draft must not go again on a casual Enter — and
+    // the notice's own "Send it again" must actually send, not flag a run that
+    // has already finished.
+    usePanelStore.setState({
+      panelsById: {
+        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
+      } as never,
+    });
+    useDevPreviewToolStore.setState({ activeByPanel: { "preview-1": BUILDER_TOOL_ID } });
+    const { actionService } = await import("@/services/ActionService");
+    const sent: string[] = [];
+    const dispatch = vi.spyOn(actionService, "dispatch").mockImplementation((async (
+      id: string,
+      args: Record<string, unknown>
+    ) => {
+      switch (id) {
+        case "agent.launch":
+          return { ok: true, result: { launched: true, terminalId: "term-9" } };
+        case "terminal.getStatus":
+          return {
+            ok: true,
+            result: {
+              terminals: [
+                {
+                  terminalId: "term-9",
+                  agentState: "waiting",
+                  ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
+                },
+              ],
+            },
+          };
+        case "terminal.sendCommand":
+          sent.push(String(args.command));
+          return { ok: true, result: { submissionToken: `token-${sent.length}` } };
+        default:
+          return { ok: false, error: { message: `unexpected ${id}` } };
+      }
+    }) as never);
+    await mountSelected();
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    const sendButton = () =>
+      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+
+    act(() => {
+      updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
+        delivery: { state: { status: "unconfirmed" }, title: "claude", terminalId: "term-1" },
+      });
+    });
+    await waitFor(() => expect(sendButton().disabled).toBe(true));
+    const before = dispatch.mock.calls.length;
+    fireEvent.keyDown(request, { key: "Enter" });
+    await act(async () => {});
+    expect(dispatch.mock.calls.length).toBe(before);
+    expect(text()).toContain("Delivery unconfirmed");
+
+    expect(sent).toEqual([]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Send it again" }));
+    // A new run, all the way to the terminal: exactly one more submission.
+    await waitFor(() => expect(sent).toHaveLength(1), { timeout: 4000 });
+    expect(sent[0]).toContain("Say Upgrade");
+    await screen.findByText(/^Sent to /);
+  });
+
+  it("doesn't offer to send again when there is nothing it could send", async () => {
+    await mountSelected();
+    act(() => {
+      updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
+        delivery: { state: { status: "unconfirmed" }, title: "claude", terminalId: "term-1" },
+      });
+    });
+    await screen.findByText("Delivery unconfirmed");
+    // No request typed: the button would do nothing, so it isn't there.
+    expect(screen.queryByRole("button", { name: "Send it again" })).toBeNull();
   });
 
   it("keeps the partial-delivery guard when the notice is dismissed", async () => {
@@ -1569,5 +1971,24 @@ describe("builder lifetime while switched on", () => {
     await screen.findByText("Waiting for the page to load");
     await waitFor(() => expect(attempts).toBe(3), { timeout: 3000 });
     await waitFor(() => expect(screen.queryByText("Waiting for the page to load")).toBeNull());
+  });
+
+  it("says it couldn't connect, and why, once it has stopped trying", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      host.sitePreview.bind.mockImplementation(async () => {
+        throw new Error("The preview's page refused the runtime");
+      });
+      mount();
+      await screen.findByText("Waiting for the page to load");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10 * 60_000);
+      });
+      await screen.findByText(
+        "Couldn't connect to the page — The preview's page refused the runtime"
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
