@@ -16,11 +16,12 @@ import {
   componentCallSites,
   type SourceRevisions,
   type ComponentDefinitions,
+  type CallSite,
   type PickedComponent,
   type PagePlace,
 } from "./agentTask.js";
 import { forgetComposerMemories } from "./composerMemory.js";
-import { wireFailureMessage } from "./copy.js";
+import { mismatchMessage, wireFailureMessage } from "./copy.js";
 import { usePanelStore } from "@/store/panelStore";
 import {
   BUILDER_TOOL_ID,
@@ -1177,6 +1178,30 @@ export class InspectorController {
       return;
     }
     const result = parsed.data;
+    // The page's location for the element and the file disagree. When the
+    // file is known to have just changed, that is the page still catching up
+    // and the usual notices apply; otherwise nothing moved, "select again"
+    // would be the same click for the same answer, and the notice says what
+    // was seen instead.
+    if (result.status === "stale" && result.mismatch !== undefined) {
+      const changed = worktreeRelative(
+        workspace.appRoot,
+        this.context.worktreePath,
+        result.mismatch.file
+      );
+      if (changed !== null && this.changedDuringResolve.has(changed)) {
+        this.update({ selection: { status: "lost" } });
+        return;
+      }
+      if (changed !== null && this.changedRecently(changed)) {
+        this.update({ selection: { status: "settling" } });
+        return;
+      }
+      this.update({
+        selection: { status: "failed", message: mismatchMessage(result.mismatch) },
+      });
+      return;
+    }
     if (
       result.status === "stale" ||
       this.state.epoch !== epoch ||
@@ -1592,6 +1617,61 @@ export class InspectorController {
     const parsed = IssuePushSchema.safeParse(raw);
     if (!parsed.success) return;
     this.update({ issue: { severity: parsed.data.severity, message: parsed.data.message } });
+  }
+
+  /**
+   * Whether a component on the trail can be selected right now — the one rule
+   * the crumbs and {@link selectComponent} share, so a crumb is never a button
+   * that does nothing. The page only answers a selection request in Select
+   * mode; a stale trail describes an element the page no longer shows; a
+   * re-proof out for an edit would claim the answer as its own; and a
+   * selection the page could not place (no proven location, or an occurrence
+   * it could not count) cannot be asked for again.
+   */
+  canSelectComponent(): boolean {
+    const state = this.state;
+    return (
+      state.binding.status === "bound" &&
+      state.mode === "select" &&
+      state.selection.status === "ready" &&
+      state.selection.stale === null &&
+      !state.reselecting &&
+      this.continuity !== null
+    );
+  }
+
+  /**
+   * Select the component invoked at `usedAt` — what a crumb in the trail names
+   * — the way Option/Alt+Up would, aimed: the page re-selects the element it
+   * last proved as a member of that invocation and reports it back, and the
+   * answer resolves as any fresh pick does. Clicking the page lands on the
+   * innermost thing under the pointer, and the component a request should be
+   * about is usually a step or two up; the trail names those steps.
+   *
+   * The page answers with `cause: "reselect"`, which only reads as the
+   * continuation of an edited selection while a re-proof is out; the pick is
+   * refused while one is, and any timer of the last one is retired, so the
+   * answer is taken for what it is: the user's choice. False when the pick
+   * can't be made ({@link canSelectComponent}) or the page no longer has the
+   * element.
+   */
+  async selectComponent(usedAt: CallSite): Promise<boolean> {
+    const record = this.continuity;
+    const binding = this.state.binding;
+    if (record === null || binding.status !== "bound" || !this.canSelectComponent()) {
+      return false;
+    }
+    this.retireReselect();
+    try {
+      return await this.deps.sitePreview.reselect({
+        sessionId: binding.sessionId,
+        loc: record.loc,
+        index: record.locIndex,
+        component: { file: usedAt.file, line: usedAt.line, column: usedAt.column },
+      });
+    } catch {
+      return false;
+    }
   }
 
   dismissIssue(): void {

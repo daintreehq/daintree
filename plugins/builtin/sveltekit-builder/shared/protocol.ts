@@ -384,8 +384,33 @@ export type SelectionResolveArgs = z.infer<typeof SelectionResolveArgsSchema>;
 export const SelectionResolveResultSchema = z.discriminatedUnion("status", [
   z.object({ status: z.literal("ok"), selection: SiteSelectionSchema }).strict(),
   /** The document moved on while we resolved — the caller reselects, never retargets. */
-  z.object({ status: z.literal("stale") }).strict(),
+  z
+    .object({
+      status: z.literal("stale"),
+      /**
+       * What the page's location for the node actually holds in the file, when
+       * that is what made it stale: the tag the page reported, and the tag that
+       * starts there in the source — null when nothing does. A page that was
+       * server-rendered can tag an element with a neighbour's location (Svelte's
+       * dev `add_locations` counts a child component's root while hydrating),
+       * and the caller has to be able to say that rather than "the page moved".
+       */
+      mismatch: z
+        .object({
+          file: z.string().min(1),
+          line: z.number().int().positive(),
+          column: z.number().int().nonnegative(),
+          reported: z.string().min(1),
+          found: z.string().min(1).nullable(),
+        })
+        .strict()
+        .optional(),
+    })
+    .strict(),
 ]);
+export type SelectionMismatch = NonNullable<
+  Extract<z.infer<typeof SelectionResolveResultSchema>, { status: "stale" }>["mismatch"]
+>;
 export type SelectionResolveResult = z.infer<typeof SelectionResolveResultSchema>;
 
 export const SourceExcerptArgsSchema = z

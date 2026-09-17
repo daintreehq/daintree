@@ -1,4 +1,11 @@
-import { useEffect, useRef, useSyncExternalStore, type ComponentType, type ReactNode } from "react";
+import {
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+  type ComponentType,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import {
   AlertTriangle,
   ChevronRight,
@@ -50,10 +57,10 @@ import { WaitingRow } from "./WaitingRow.js";
 import { IdentitySkeleton } from "./IdentitySkeleton.js";
 import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
-import { scopesFor } from "./agentTask.js";
+import { scopesFor, type CallSite } from "./agentTask.js";
 import { DETACH_COPY, relativeTo } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
-import { SelectionTrail, trailFor } from "./SelectionTrail.js";
+import { SelectionTrail, trailFor, type PickedCrumb } from "./SelectionTrail.js";
 
 const MODE_OPTIONS = [
   { value: "browse" as const, label: "Browse" },
@@ -97,6 +104,82 @@ function useBuilder(props: DevPreviewToolSurfaceProps): {
 const subscribeNothing = (): (() => void) => () => {};
 const initialSnapshot = (): InspectorState => INITIAL_INSPECTOR_STATE;
 
+/**
+ * Selecting a component from a surface's trail, with focus accounted for.
+ *
+ * The crumb is a button that the page's answer replaces with text — and the
+ * whole trail leaves while the source is being found — so a keyboard user who
+ * pressed Enter on it would be dropped on the document body. When focus was in
+ * the surface at the click, it is put on what `landing` finds in the surface
+ * once the new selection is ready. A mouse click in Safari does not focus a
+ * button, and then nothing is moved.
+ *
+ * The intent is for one answer: it is dropped when the pick is refused, when
+ * the selection ends anywhere but ready, and after a bound wait — so a page
+ * click made after an abandoned pick never has its focus pulled into a
+ * surface the user has left.
+ *
+ * Undefined while a pick can't be made, so the crumbs are plain text rather
+ * than buttons that do nothing.
+ */
+function useSelectCrumb(
+  controller: InspectorController | null,
+  state: InspectorState,
+  root: RefObject<HTMLElement | null>,
+  landing: (root: HTMLElement) => HTMLElement | null
+): ((usedAt: CallSite) => void) | undefined {
+  // The generation the pick was made from; the answer advances it.
+  const pending = useRef<{ generation: number; timer: ReturnType<typeof setTimeout> } | null>(null);
+  const status = state.selection.status;
+  const generation = state.selectionGeneration;
+  const drop = () => {
+    if (pending.current === null) return;
+    clearTimeout(pending.current.timer);
+    pending.current = null;
+  };
+  useEffect(() => {
+    if (pending.current === null || status === "resolving") return;
+    if (status !== "ready") {
+      drop();
+      return;
+    }
+    if (generation === pending.current.generation) return;
+    drop();
+    const target = root.current ? landing(root.current) : null;
+    target?.focus();
+  });
+  useEffect(() => drop, []);
+  if (controller === null || !controller.canSelectComponent()) return undefined;
+  return (usedAt) => {
+    drop();
+    const focused = root.current?.contains(document.activeElement) ?? false;
+    if (focused) {
+      pending.current = { generation, timer: setTimeout(drop, CRUMB_FOCUS_WAIT_MS) };
+    }
+    void controller.selectComponent(usedAt).then((sent) => {
+      if (!sent) drop();
+    });
+  };
+}
+
+/** How long a crumb's answer may take before its focus intent lapses. */
+const CRUMB_FOCUS_WAIT_MS = 3000;
+
+/**
+ * Where focus lands in the strip after a crumb: the innermost crumb still
+ * selectable, else the strip's first control. A button, so the toolbar's
+ * roving keys keep working from there.
+ */
+function stripLanding(root: HTMLElement): HTMLElement | null {
+  const crumbs = root.querySelectorAll<HTMLElement>('nav[aria-label="Breadcrumb"] button');
+  return crumbs[crumbs.length - 1] ?? root.querySelector<HTMLElement>("button");
+}
+
+/** The drawer's identity block, which is there the moment the selection is ready. */
+function drawerLanding(root: HTMLElement): HTMLElement | null {
+  return root.querySelector<HTMLElement>('[aria-label="Selected element"]');
+}
+
 /** The strip under the browser toolbar: mode, what is selected, and close. */
 export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
   const { controller, state } = useBuilder(props);
@@ -108,6 +191,7 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
   const stripRef = useRef<HTMLDivElement | null>(null);
   const onStripKeyDown = useToolbarRoving(stripRef);
   const drawerCollapsed = useDrawerCollapsed(props.panelId);
+  const selectCrumb = useSelectCrumb(controller, state, stripRef, stripLanding);
   if (!controller) {
     return (
       <div
@@ -143,6 +227,7 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps) {
           controller={controller}
           bound={bound}
           drawerShowing={!drawerCollapsed}
+          selectCrumb={selectCrumb}
         />
       </div>
       <DrawerToggle panelId={props.panelId} />
@@ -201,12 +286,15 @@ function StripStatus({
   controller,
   bound,
   drawerShowing,
+  selectCrumb,
 }: {
   state: InspectorState;
   controller: InspectorController;
   bound: boolean;
   /** The drawer is open beside the page and already names the source. */
   drawerShowing: boolean;
+  /** Select a component from the trail; absent while that can't be done. */
+  selectCrumb: ((usedAt: CallSite) => void) | undefined;
 }) {
   const binding = state.binding;
   if (binding.status === "detached") {
@@ -269,6 +357,7 @@ function StripStatus({
             picked={
               picked?.kind === "component" ? { label: picked.label, usedAt: picked.usedAt } : null
             }
+            onSelect={selectCrumb}
           />
           {pickedIndex > 0 ? (
             <Badge size="xs" tone="outline">
@@ -352,40 +441,31 @@ function StripMessage({
 
 /**
  * The strip's trail ends at what is selected: the component when a component
- * was picked, the element otherwise. Current is passed by position — a label
- * match would pick the first of two nested components sharing a name, so the
- * LAST crumb carrying the picked label is taken, which is the innermost.
+ * was picked, the element otherwise. The strip has no header, so the selection
+ * is its terminal crumb; every crumb above it selects that component.
  */
 function StripTrail({
   node,
   picked,
+  onSelect,
 }: {
   node: SelectedNode;
-  picked: { label: string; usedAt: { file: string; line: number; column: number } | null } | null;
+  picked: PickedCrumb | null;
+  onSelect: ((usedAt: CallSite) => void) | undefined;
 }) {
-  // The trail ends at the selection: crumbs inside a picked component are the
-  // route the selection was reached THROUGH, not where it is. The picked
-  // component is matched by its call site, never by label — two nested
-  // components can share a name.
-  const all = trailFor(node, { includeSelf: picked === null });
-  let currentIndex = all.length - 1;
-  if (picked?.usedAt) {
-    const site = picked.usedAt;
-    const index = all.findIndex(
-      (crumb) =>
-        crumb.usedAt !== null &&
-        crumb.usedAt.file === site.file &&
-        crumb.usedAt.line === site.line &&
-        crumb.usedAt.column === site.column
-    );
-    if (index !== -1) currentIndex = index;
-  }
-  const crumbs = all.slice(0, currentIndex + 1);
+  const { above, current } = trailFor(node, picked);
   return (
     <SelectionTrail
-      crumbs={crumbs}
-      currentIndex={currentIndex}
-      currentLabel={picked?.label ?? node.label ?? "element"}
+      crumbs={[...above, current]}
+      currentIndex={above.length}
+      currentLabel={current.label}
+      onSelect={
+        onSelect
+          ? (crumb) => {
+              if (crumb.usedAt) onSelect(crumb.usedAt);
+            }
+          : undefined
+      }
       className="min-w-0 flex-1"
     />
   );
@@ -402,6 +482,8 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
   // both reachable.
   const composer = useComposerMemory(memoryKey);
   const collapsed = useDrawerCollapsed(props.panelId);
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const selectCrumb = useSelectCrumb(controller, state, drawerRef, drawerLanding);
   if (!controller) return null;
   const selection = state.selection;
   const workspaceNotice = workspaceNeedsAttention(state);
@@ -415,6 +497,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
 
   return (
     <aside
+      ref={drawerRef}
       aria-label="Site Builder details"
       // 360px where the panel has room; in a tiled layout it gives way down to
       // 280px rather than taking a fixed bite out of a narrow page — the page's
@@ -433,6 +516,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps) {
             selection={selection}
             worktreePath={props.worktreePath}
             reselecting={state.reselecting}
+            onSelectComponent={selectCrumb}
           />
         </div>
       ) : selection.status === "resolving" ? (

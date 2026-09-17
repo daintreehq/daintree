@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import type { SelectedNode } from "../shared/model.js";
 import { worktreeRelative, type SelectionState } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
-import { scopesFor } from "./agentTask.js";
+import { scopesFor, type CallSite } from "./agentTask.js";
 import { STALE_COPY } from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor } from "./SelectionTrail.js";
@@ -29,12 +29,15 @@ export function SelectionIdentity({
   selection,
   worktreePath = null,
   reselecting = false,
+  onSelectComponent,
 }: {
   selection: ReadySelection;
   /** Needed only for Open in editor, which wants an absolute path. */
   worktreePath?: string | null;
   /** The page is re-observing the element; the stale notice waits for its answer. */
   reselecting?: boolean;
+  /** Select the component invoked at a call site the trail names. Read-only without it. */
+  onSelectComponent?: (usedAt: CallSite) => void;
 }) {
   const nodes = selection.selection.nodes;
   const node = nodes[0];
@@ -64,10 +67,19 @@ export function SelectionIdentity({
   const line = component ? null : (definition?.location.line ?? null);
   const source = file ? `${file}${line === null ? "" : `:${line}`}` : null;
   const absolute = file ? absolutePath(worktreePath, file) : null;
-  const crumbs = trailFor(node, { includeSelf: false });
+  // The header names the selection, so the trail shows only what is above it.
+  const trail = trailFor(
+    node,
+    pickedScope?.kind === "component"
+      ? { label: pickedScope.label, usedAt: pickedScope.usedAt }
+      : null
+  );
+  const crumbs = trail.above;
 
   return (
-    <section aria-label="Selected element" className="flex flex-col gap-1">
+    // Focusable so a crumb activated from the keyboard has somewhere to land
+    // once the answer replaces this block; never in the tab order.
+    <section aria-label="Selected element" tabIndex={-1} className="flex flex-col gap-1">
       {/* Row 1, 28px: what it is. */}
       <div className="flex h-7 min-w-0 items-center gap-2">
         <Badge size="sm" tone="neutral" className={component ? undefined : "font-mono"}>
@@ -141,6 +153,14 @@ export function SelectionIdentity({
               crumbs={crumbs}
               currentIndex={crumbs.length}
               currentLabel={component ?? displayLabel(node)}
+              selectionSite={trail.current.usedAt}
+              onSelect={
+                onSelectComponent
+                  ? (crumb) => {
+                      if (crumb.usedAt) onSelectComponent(crumb.usedAt);
+                    }
+                  : undefined
+              }
               className="min-w-0"
             />
           </>
