@@ -1,11 +1,5 @@
 import { z } from "zod";
-import {
-  RectSchema,
-  SiteSelectionSchema,
-  SourceLocationSchema,
-  SourceRangeSchema,
-  ViewportSchema,
-} from "./model.js";
+import { RectSchema, SiteSelectionSchema, SourceLocationSchema, ViewportSchema } from "./model.js";
 
 /**
  * The Site Builder wire contract. Three boundaries meet here and all three are
@@ -26,9 +20,10 @@ import {
  *
  * - **The renderer view owns the live preview.** It binds, detaches and
  *   switches mode through `window.electron.sitePreview` — which is a renderer
- *   IPC surface and cannot be reached from plugin main — supplies the guest
- *   runtime, and receives guest events. Nothing about the preview binding
- *   crosses `CHANNELS`.
+ *   IPC surface and cannot be reached from plugin main — names the guest
+ *   runtime by its adapter id (`GUEST_ADAPTER_ID`; the host loads the asset),
+ *   and receives guest events. Nothing about the preview binding crosses
+ *   `CHANNELS`.
  * - **Plugin main owns source truth.** It resolves the app, reads and parses
  *   files through the scope-contained `host.fs` and turns guest observations
  *   into source identity. It reads only: the agent the user sends a selection
@@ -64,7 +59,6 @@ export const CHANNELS = {
   /** Turn guest observations into source identity against current file bytes. */
   selectionResolve: "selection-resolve",
   /** Read a bounded source excerpt for the identity card / source peek. */
-  sourceExcerpt: "source-excerpt",
   /** Detected app roots, versions, package manager and route tree. */
   projectModel: "project-model",
   /** Whether a worktree holds a SvelteKit app at all, without opening a workspace. */
@@ -438,28 +432,6 @@ export type SelectionMismatch = NonNullable<
   Extract<z.infer<typeof SelectionResolveResultSchema>, { status: "stale" }>["mismatch"]
 >;
 export type SelectionResolveResult = z.infer<typeof SelectionResolveResultSchema>;
-
-export const SourceExcerptArgsSchema = z
-  .object({
-    workspaceSessionId: z.string().min(1),
-    file: z.string().min(1),
-    range: SourceRangeSchema,
-    /** Lines of surrounding context, capped so this can never stream a file. */
-    contextLines: z.number().int().min(0).max(40).default(4),
-  })
-  .strict();
-
-export const SourceExcerptResultSchema = z.discriminatedUnion("status", [
-  z
-    .object({
-      status: z.literal("ok"),
-      text: z.string(),
-      firstLine: z.number().int().positive(),
-      revision: z.string().regex(/^[0-9a-f]{64}$/),
-    })
-    .strict(),
-  z.object({ status: z.literal("unavailable") }).strict(),
-]);
 
 export const RouteNodeSchema = z
   .object({

@@ -112,6 +112,12 @@ describe("metadata capabilities", () => {
     expect(probed()).toEqual({ type: "metadataProbed", locations: true, ancestry: false });
   });
 
+  it("does not call a chain of block frames ancestry", () => {
+    stampFrom("blocks-only.json");
+    install("select");
+    expect(probed()).toEqual({ type: "metadataProbed", locations: true, ancestry: false });
+  });
+
   it("reports nothing readable for a shape it cannot follow", () => {
     stampFrom("malformed.json");
     install("select");

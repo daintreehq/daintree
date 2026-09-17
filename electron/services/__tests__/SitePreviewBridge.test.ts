@@ -821,6 +821,44 @@ describe("SitePreviewBridge", () => {
     }
   });
 
+  it("adds no binding when teardown stopped waiting during the frame-tree read", async () => {
+    vi.useFakeTimers();
+    try {
+      let release!: () => void;
+      harness.wc.debugger.gates.set(
+        "Page.getFrameTree",
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      );
+      const bound = harness.bridge.bind({
+        projectId: PROJECT_ID,
+        panelId: PANEL_ID,
+        adapterId: ADAPTER_ID,
+        mode: "browse",
+      });
+      await vi.waitFor(() => {
+        expect(harness.wc.debugger.methods()).toContain("Page.getFrameTree");
+      });
+      const shutdown = harness.bridge.disposeAll();
+      await vi.advanceTimersByTimeAsync(10_000);
+      await shutdown;
+
+      harness.wc.debugger.gates.delete("Page.getFrameTree");
+      release();
+      await bound.catch(() => undefined);
+      await vi.runAllTimersAsync();
+
+      // Nothing the resumed install did may outlive the teardown that gave up
+      // on it: no binding registered, no script installed.
+      expect(harness.wc.debugger.methods()).not.toContain("Runtime.addBinding");
+      expect(harness.wc.debugger.methods()).not.toContain("Page.addScriptToEvaluateOnNewDocument");
+      expect(harness.wc.debugger.listenerCount("message")).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("does not install twice for one epoch when a navigation lands mid-install", async () => {
     // Two installs for the same epoch both start the prelude's sequence at 0,
     // so the host drops the second runtime's messages as replays and the

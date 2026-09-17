@@ -738,6 +738,9 @@ export class SitePreviewBridge {
     // Re-read per install, so the main frame id is refreshed on bind and after
     // every navigation.
     await binding.lease.refreshMainFrameId();
+    // Teardown's bounded wait can expire under that read; it has released the
+    // lease by then, and a binding added now would outlive everything else.
+    if (binding.detached || this.closed) return;
 
     await this.send(wc, "Runtime.addBinding", { name: binding.bindingName });
 

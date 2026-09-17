@@ -13,8 +13,6 @@ import {
   SelectionResolveArgsSchema,
   SelectionResolveResultSchema,
   SourceChangedPushSchema,
-  SourceExcerptArgsSchema,
-  SourceExcerptResultSchema,
   ProjectModelArgsSchema,
   WorkspaceCloseArgsSchema,
   WorkspaceCloseResultSchema,
@@ -36,10 +34,8 @@ import {
   containsRealPath,
   isGeneratedPath,
   MAX_SOURCE_BYTES,
-  offsetToLocation,
   readSource,
   resolveReportedPath,
-  resolveWorktreePath,
 } from "./source.js";
 import { SourceTracker } from "./tracker.js";
 import { WorkspaceRegistry, type Workspace } from "./workspace.js";
@@ -55,11 +51,6 @@ import { WorkspaceRegistry, type Workspace } from "./workspace.js";
  * compiler and the source model all load on first use inside a handler, so
  * activation stays well inside its five-second window.
  */
-
-const MAX_EXCERPT_LINES = 200;
-const MAX_EXCERPT_CHARS = 64 * 1024;
-/** Source the excerpt may show. Not `.env`, not lockfiles: only what a component is made of. */
-const EXCERPTABLE = /\.(svelte|ts|js|mjs|cjs|css|pcss|html)$/;
 
 /** Thrown for a session id main does not hold, so the view can reopen rather than retry. */
 function workspaceClosed(): Error {
@@ -311,44 +302,6 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
         model.isGeneratedSourceFile
       );
       return { definitions };
-    }
-  );
-
-  await host.registerHandler(
-    CHANNELS.sourceExcerpt,
-    {
-      args: SourceExcerptArgsSchema,
-      result: SourceExcerptResultSchema,
-      requires: ["fs:project-read"],
-    },
-    async (ctx, { workspaceSessionId, file, range, contextLines }) => {
-      const unavailable = { status: "unavailable" as const };
-      const workspace = ownedWorkspace(registry, ctx, workspaceSessionId);
-      if (!workspace) return unavailable;
-      const target = resolveWorktreePath(workspace, file);
-      if (!target.ok || !EXCERPTABLE.test(target.appRelative)) return unavailable;
-      const { isGeneratedSourceFile } = await import("@daintreehq/svelte-source-model");
-      if (isGeneratedPath(isGeneratedSourceFile, target.appRelative)) return unavailable;
-      if (!(await containsRealPath(workspace.appRoot, target.absolute))) return unavailable;
-
-      const read = await readSource(workspace.fs, target.absolute);
-      if (read.status !== "ok" || range.end > read.text.length) return unavailable;
-      workspace.tracker.observe(target.absolute, target.worktreeRelative, read.revision);
-
-      const lines = read.text.split("\n");
-      const startLine = offsetToLocation(read.text, range.start).line;
-      const endLine = offsetToLocation(read.text, range.end).line;
-      const firstLine = Math.max(1, startLine - contextLines);
-      const lastLine = Math.min(
-        lines.length,
-        endLine + contextLines,
-        firstLine + MAX_EXCERPT_LINES - 1
-      );
-      const text = lines
-        .slice(firstLine - 1, lastLine)
-        .join("\n")
-        .slice(0, MAX_EXCERPT_CHARS);
-      return { status: "ok" as const, text, firstLine, revision: read.revision };
     }
   );
 

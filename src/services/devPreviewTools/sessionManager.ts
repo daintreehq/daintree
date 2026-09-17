@@ -176,13 +176,14 @@ function failEntry(panelId: string, entry: SessionEntry, error: unknown): void {
   logError(`Dev preview tool "${entry.toolId}" failed to start`, error);
   // Only a selection that is still this tool's is cleared: a factory that
   // switched the preview to another tool before failing must not take that
-  // tool down with it. Decided before the abort fires, since an abort listener
-  // may move the selection too.
-  const mine = useDevPreviewToolStore.getState().activeByPanel[panelId] === entry.toolId;
+  // tool down with it. Cleared before the abort fires, since an abort listener
+  // may select a replacement that must then stand.
+  if (useDevPreviewToolStore.getState().activeByPanel[panelId] === entry.toolId) {
+    useDevPreviewToolStore.getState().setActive(panelId, null);
+  }
   entry.abort.abort();
   notify();
-  if (mine) useDevPreviewToolStore.getState().setActive(panelId, null);
-  else reconcile();
+  reconcile();
 }
 
 function disposeEntry(panelId: string, entry: SessionEntry): void {
@@ -296,6 +297,17 @@ export function startDevPreviewToolSessions(): void {
   };
   enforceLifetime();
   reconcile();
+}
+
+/**
+ * A context for a preview nothing has published for yet — what a command
+ * resolved on its way to switching a tool on, so the session it creates starts
+ * with a worktree rather than waiting for a pane to mount and say so. A pane's
+ * own, newer snapshot is never overwritten.
+ */
+export function seedDevPreviewToolContext(context: DevPreviewToolContext): void {
+  if (contexts.has(context.panelId)) return;
+  publishDevPreviewToolContext(context);
 }
 
 /**

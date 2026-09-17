@@ -86,6 +86,11 @@ export interface DevPreviewTool<TSession extends DevPreviewToolSession = DevPrev
    * Asked again whenever the preview's worktree, page or readiness changes, so a
    * project that grows an app while the preview is open starts offering the tool.
    * A tool already switched on stays reachable while this is unanswered.
+   *
+   * Decide on the project and worktree, not the page: a command asks with the
+   * panel's last recorded URL and `isWebviewReady: false`, because it runs
+   * wherever it was dispatched from, so a predicate that turns on the live page
+   * would show a button whose command always refuses.
    */
   isAvailable?: (context: DevPreviewToolContext) => boolean | Promise<boolean>;
   /**
