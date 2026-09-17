@@ -121,6 +121,12 @@ export interface PageState {
   routeId: string | null;
   url: string;
   viewport: Viewport;
+  /**
+   * What the page's Svelte dev metadata turned out to support, or null until
+   * the page has probed it. `ancestry` false means the trail can name elements
+   * but never the components above them, so a component cannot be picked.
+   */
+  metadata: { locations: boolean; ancestry: boolean } | null;
 }
 
 export type StaleReason = "document-changed" | "source-changed" | "preview-detached";
@@ -179,7 +185,9 @@ export interface InspectorIssue {
 const PAGE_PLACE_TIMEOUT_MS = 3_000;
 
 /** Page verdicts that a traced element disproves. */
-const MAPPING_ISSUES = new Set(["no-svelte-meta", "not-dev-build"]);
+const MAPPING_ISSUES = new Set(["no-svelte-meta", "not-dev-build", "metadata-shape"]);
+/** Cleared by a selection whose page reported a component chain after all. */
+const ANCESTRY_ISSUE = "no-ancestry";
 
 export interface InspectorState {
   binding: BindingState;
@@ -225,6 +233,10 @@ const RUNTIME_ISSUE_COPY: Record<string, string> = {
   "not-dev-build": "This preview is a production build, so elements can't be traced to source",
   "overlay-blocked": "The page blocked the selection overlay",
   internal: "The inspector hit a problem inside the page",
+  "metadata-shape":
+    "This page's Svelte metadata has a shape the builder doesn't recognise, so elements can't be traced to source. Check the Svelte version against the supported baseline.",
+  [ANCESTRY_ISSUE]:
+    "This Svelte version reports where elements come from but not the components above them, so the trail names elements only.",
 };
 
 /**
@@ -793,8 +805,18 @@ export class InspectorController implements DevPreviewToolSession {
     const event = payload.event;
     switch (event.type) {
       case "documentReady": {
+        // The page reports itself again on a client-side navigation or a
+        // resize, within the same document; its metadata has not changed and
+        // the probe that described it will not run again.
+        const current = this.state.page;
         const patch: Partial<InspectorState> = {
-          page: { epoch, routeId: event.routeId, url: event.url, viewport: event.viewport },
+          page: {
+            epoch,
+            routeId: event.routeId,
+            url: event.url,
+            viewport: event.viewport,
+            metadata: current !== null && current.epoch === epoch ? current.metadata : null,
+          },
         };
         const binding = this.state.binding;
         if (binding.status === "bound") patch.binding = { ...binding, url: event.url };
@@ -824,6 +846,30 @@ export class InspectorController implements DevPreviewToolSession {
         return;
       case "mappingRevisionSeen":
         return;
+      case "metadataProbed": {
+        const page = this.state.page;
+        if (page === null || page.epoch !== epoch) return;
+        const metadata = { locations: event.locations, ancestry: event.ancestry };
+        const patch: Partial<InspectorState> = { page: { ...page, metadata } };
+        // A shape the runtime could not read is said once, up front, rather
+        // than discovered click by click; a chain it could not follow narrows
+        // the trail and says why.
+        if (!event.locations) {
+          patch.issue = {
+            severity: "warning",
+            message: RUNTIME_ISSUE_COPY["metadata-shape"]!,
+            code: "metadata-shape",
+          };
+        } else if (!event.ancestry) {
+          patch.issue = {
+            severity: "warning",
+            message: RUNTIME_ISSUE_COPY[ANCESTRY_ISSUE]!,
+            code: ANCESTRY_ISSUE,
+          };
+        }
+        this.patchState(patch);
+        return;
+      }
     }
   }
 
@@ -833,9 +879,29 @@ export class InspectorController implements DevPreviewToolSession {
    * must not sit above a selection that plainly traced.
    */
   private clearDisprovedMappingIssue(nodes: SiteGuestNodeObservation[]): void {
+    const traced = nodes.some((node) => node.loc !== null);
+    const chained = nodes.some((node) => node.ancestry.length > 0);
+    const patch: Partial<InspectorState> = {};
+    // What the page shows outranks what its probe sampled: a chain the sample
+    // lacked can turn up on a deeper element, whether or not the notice about
+    // it is still on screen.
+    const page = this.state.page;
+    const metadata = page?.metadata ?? null;
+    if (metadata && ((traced && !metadata.locations) || (chained && !metadata.ancestry))) {
+      patch.page = {
+        ...page!,
+        metadata: {
+          locations: metadata.locations || traced,
+          ancestry: metadata.ancestry || chained,
+        },
+      };
+    }
     const code = this.state.issue?.code;
-    if (code === undefined || !MAPPING_ISSUES.has(code)) return;
-    if (nodes.some((node) => node.loc !== null)) this.patchState({ issue: null });
+    if (code !== undefined) {
+      if (MAPPING_ISSUES.has(code) && traced) patch.issue = null;
+      if (code === ANCESTRY_ISSUE && chained) patch.issue = null;
+    }
+    if (Object.keys(patch).length > 0) this.patchState(patch);
   }
 
   /* ------------------------------------------------------------------------ */
@@ -1199,6 +1265,9 @@ export class InspectorController implements DevPreviewToolSession {
       state.mode === "select" &&
       state.selection.status === "ready" &&
       state.selection.stale === null &&
+      // A page whose metadata names no component chain has no component to
+      // hand the crumb to; the crumbs stay text.
+      state.page?.metadata?.ancestry !== false &&
       this.continuity !== null
     );
   }

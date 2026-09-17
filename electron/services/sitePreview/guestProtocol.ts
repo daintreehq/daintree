@@ -156,6 +156,22 @@ export const GuestEventSchema = z.discriminatedUnion("type", [
       detail: z.string().max(512),
     })
     .strict(),
+  /**
+   * What the page's Svelte dev metadata turned out to support, probed once per
+   * document from the first stamped elements found. `locations` is whether an
+   * element names its source; `ancestry` whether the parent chain names the
+   * component invocations above it. A shape the runtime does not recognise
+   * reports false rather than nothing, so the host narrows what it offers
+   * instead of assuming the whole major behaves like the version it was built
+   * against.
+   */
+  z
+    .object({
+      type: z.literal("metadataProbed"),
+      locations: z.boolean(),
+      ancestry: z.boolean(),
+    })
+    .strict(),
 ]);
 
 export const GuestEnvelopeSchema = z

@@ -174,6 +174,112 @@ describe("page verdicts", () => {
     expect(text()).not.toContain("production build");
   });
 
+  function metadataProbed(locations: boolean, ancestry: boolean) {
+    host.pushPreview({
+      kind: "guest-event",
+      sessionId: "session-1",
+      panelId: "preview-1",
+      projectId: "p1",
+      documentEpoch: 0,
+      sequence: 3,
+      event: { type: "metadataProbed", locations, ancestry },
+    });
+  }
+
+  it("names elements only, and says why, when the page reports no component chain", async () => {
+    await mountBound();
+    await act(async () => metadataProbed(true, false));
+    expect(text()).toContain("not the components above them");
+
+    await act(async () => host.select(0));
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    // The selection still traces; only the component pick is withheld, so
+    // every crumb in the trail stays text.
+    expect(text()).toContain("not the components above them");
+    for (const trail of screen.getAllByRole("navigation", { name: "Breadcrumb" })) {
+      expect(within(trail).queryAllByRole("button")).toHaveLength(0);
+    }
+  });
+
+  it("offers the component pick again once a selection carries a chain after all", async () => {
+    await mountBound();
+    await act(async () => metadataProbed(true, false));
+    await act(async () => host.select(0));
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    expect(text()).toContain("not the components above them");
+
+    await act(async () =>
+      host.select(0, [
+        {
+          ...OBSERVATION,
+          ancestry: [
+            {
+              type: "component",
+              file: "src/routes/+page.svelte",
+              line: 8,
+              column: 4,
+              componentTag: "PricingCard",
+            },
+          ],
+        },
+      ])
+    );
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    expect(text()).not.toContain("not the components above them");
+    // And the crumbs are controls again, not text.
+    await waitFor(() => {
+      const trails = screen.getAllByRole("navigation", { name: "Breadcrumb" });
+      expect(trails.some((trail) => within(trail).queryAllByRole("button").length > 0)).toBe(true);
+    });
+  });
+
+  it("recovers the component pick even after the notice about it was dismissed", async () => {
+    await mountBound();
+    await act(async () => metadataProbed(true, false));
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    expect(text()).not.toContain("not the components above them");
+
+    await act(async () =>
+      host.select(0, [
+        {
+          ...OBSERVATION,
+          ancestry: [
+            {
+              type: "component",
+              file: "src/routes/+page.svelte",
+              line: 8,
+              column: 4,
+              componentTag: "PricingCard",
+            },
+          ],
+        },
+      ])
+    );
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    await waitFor(() => {
+      const trails = screen.getAllByRole("navigation", { name: "Breadcrumb" });
+      expect(trails.some((trail) => within(trail).queryAllByRole("button").length > 0)).toBe(true);
+    });
+  });
+
+  it("keeps what the page's metadata supports through a same-document readiness update", async () => {
+    await mountBound();
+    await act(async () => metadataProbed(true, false));
+    // A client-side navigation reports the page again without a new document.
+    await act(async () => host.documentReady(0));
+    await act(async () => host.select(0));
+    await screen.findByRole("textbox", { name: "Request for the agent" });
+    for (const trail of screen.getAllByRole("navigation", { name: "Breadcrumb" })) {
+      expect(within(trail).queryAllByRole("button")).toHaveLength(0);
+    }
+  });
+
+  it("warns up front when the page's metadata cannot be read at all", async () => {
+    await mountBound();
+    await act(async () => metadataProbed(false, false));
+    expect(text()).toContain("shape the builder doesn't recognise");
+  });
+
   it("keeps a verdict that a traced element says nothing about", async () => {
     await mountBound();
     await act(async () => runtimeIssue("overlay-blocked"));
