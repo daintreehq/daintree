@@ -16,12 +16,16 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
   // the pane would come back failing to launch at all. The id itself is
   // persisted separately below, which is what restore actually resumes from.
   const command = stripAssignedSessionIdArgs(t.command?.trim() || "", t.launchAgentId);
+  // A held pane has no process, so nothing about one is written for it — a
+  // stale session id or agent state would let the next restore launch what the
+  // hold is keeping back (#12434).
+  const held = t.restoreRecovery !== undefined;
   return {
     launchAgentId: t.launchAgentId,
     cwd: t.cwd,
     command: command || undefined,
     ...(t.exitBehavior !== undefined && { exitBehavior: t.exitBehavior }),
-    ...(t.agentSessionId && { agentSessionId: t.agentSessionId }),
+    ...(t.agentSessionId && !held && { agentSessionId: t.agentSessionId }),
     ...(t.agentLaunchFlags?.length && { agentLaunchFlags: t.agentLaunchFlags }),
     ...(env && { env }),
     ...(t.agentModelId && { agentModelId: t.agentModelId }),
@@ -31,6 +35,8 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
+    ...(t.conversationCwd && { conversationCwd: t.conversationCwd }),
+    ...(held && { restoreRecovery: t.restoreRecovery }),
     // worktreeMoveNotice intentionally omitted — it's a live prompt to tell a
     // running agent where to go (#11853). Persisting it would resurface the
     // banner for a process that no longer exists after a restart.
@@ -40,7 +46,7 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     // "directing" is a renderer-only ephemeral state owned by
     // TerminalAgentStateController; persisting it could resurrect a stuck
     // indicator on the next reload (issue #5832).
-    ...(t.agentState && t.agentState !== "directing" && { agentState: t.agentState }),
-    ...(t.lastStateChange !== undefined && { lastStateChange: t.lastStateChange }),
+    ...(t.agentState && t.agentState !== "directing" && !held && { agentState: t.agentState }),
+    ...(t.lastStateChange !== undefined && !held && { lastStateChange: t.lastStateChange }),
   };
 }

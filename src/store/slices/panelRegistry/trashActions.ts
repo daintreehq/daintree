@@ -11,7 +11,12 @@ import {
   normalizeDockLocation,
   normalizeGroupDockLocation,
 } from "@shared/config/panelKindRegistry";
-import { isDevPreviewPanel, isPtyPanel, type PanelKind } from "@shared/types/panel";
+import {
+  isDevPreviewPanel,
+  isPtyPanel,
+  type PanelInstance,
+  type PanelKind,
+} from "@shared/types/panel";
 import { TRASH_TTL_MS } from "@shared/config/trash";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
@@ -25,6 +30,22 @@ import {
 import { logError } from "@/utils/logger";
 import { transferBetweenWorktreeIndex } from "./worktreeIndex";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
+
+/**
+ * Restoring a pane held for recovery (#12434) onto a worktree the user picked
+ * says where it should run, just as moving it does — so it goes through the
+ * same reconciliation. Loaded lazily: the move service reads the panel store,
+ * which this slice is part of.
+ */
+function settleHeldPanelDestination(panel: PanelInstance): void {
+  if (!isPtyPanel(panel) || !panel.restoreRecovery || !panel.worktreeId) return;
+  const { id, worktreeId } = panel;
+  void import("@/services/terminal/crossWorktreeMove")
+    .then(({ reconcileMovedPanel }) => reconcileMovedPanel(id, worktreeId))
+    .catch((error: unknown) => {
+      logError("Failed to settle a restored pane's destination", error);
+    });
+}
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
@@ -301,6 +322,7 @@ export const createTrashActions = (
         const restored = get().panelsById[id];
         if (restored && restored.worktreeId !== terminal.worktreeId) {
           syncWorktreeAttributionToHost(id, restored.worktreeId ?? null);
+          if (targetWorktreeId !== undefined) settleHeldPanelDestination(restored);
         }
 
         if (restoreLocation === "dock") {
@@ -413,6 +435,7 @@ export const createTrashActions = (
         if (!restored || !panelKindHasPty(restored.kind ?? "terminal")) continue;
         if (restored.worktreeId === previous) continue;
         syncWorktreeAttributionToHost(pid, restored.worktreeId ?? null);
+        if (targetWorktreeId !== undefined) settleHeldPanelDestination(restored);
       }
 
       // Recreate the tab group if we have multiple panels

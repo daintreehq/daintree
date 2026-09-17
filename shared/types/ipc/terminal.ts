@@ -1,4 +1,10 @@
-import type { PanelKind, PanelLocation, PanelTitleMode, TerminalSpawnSource } from "../panel.js";
+import type {
+  PanelKind,
+  PanelLocation,
+  PanelRestoreRecovery,
+  PanelTitleMode,
+  TerminalSpawnSource,
+} from "../panel.js";
 import type { AgentId } from "../agent.js";
 import type { AgentState, WaitingReason } from "../agent.js";
 import type { BuiltInAgentId } from "../../config/agentIds.js";
@@ -147,6 +153,10 @@ export interface TerminalState {
   isUsingFallback?: boolean;
   /** How many fallback hops have been consumed */
   fallbackChainIndex?: number;
+  /** Where the conversation began, when the pane runs elsewhere (#12434) */
+  conversationCwd?: string;
+  /** Held for recovery instead of launched (#12434). Untrusted until sanitized. */
+  restoreRecovery?: PanelRestoreRecovery;
   /**
    * Extension ID of the plugin that registered this panel's kind, if applicable.
    * Preserved across save/restore so the placeholder can name the missing plugin

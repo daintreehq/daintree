@@ -22,6 +22,7 @@ import {
   resolveEffectiveBypass,
   resolveEffectiveInlineMode,
 } from "@shared/types";
+import { supportsCrossDirectoryResume } from "@shared/types/agentSettings";
 import type { AgentSettingsEntry } from "@shared/types/agentSettings";
 import type { AgentState } from "@/types";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -149,6 +150,22 @@ function updateTerminal(
   return { panelsById: { ...state.panelsById, [id]: updater(terminal) } };
 }
 
+/**
+ * Keep a pane's conversation findable when its directory changes under it
+ * (#12434). Only for agents that resume across directories — the others can't
+ * reopen a conversation anywhere but where it began, so there is nothing to
+ * point back at.
+ */
+function conversationOriginPatch(
+  panel: PanelInstance,
+  nextCwd: string
+): { conversationCwd?: string } {
+  if (!isPtyPanel(panel) || panel.cwd === nextCwd) return {};
+  if (!supportsCrossDirectoryResume(panel.launchAgentId)) return {};
+  const origin = panel.conversationCwd || panel.cwd;
+  return { conversationCwd: origin && origin !== nextCwd ? origin : undefined };
+}
+
 export const createRestartActions = (
   set: Set,
   get: Get
@@ -157,6 +174,7 @@ export const createRestartActions = (
   | "restartTerminal"
   | "clearTerminalError"
   | "updateTerminalCwd"
+  | "confirmRestoreRecoveryDestination"
   | "moveTerminalToWorktree"
   | "moveToNewWorktree"
   | "setWorktreeMoveNotice"
@@ -226,6 +244,14 @@ export const createRestartActions = (
     }
 
     if (!isPtyPanel(terminal)) return;
+
+    // A pane held for recovery has no process to restart, and a restart would
+    // pick its conversation by itself — the choice the hold exists to leave to
+    // the user (#12434). The pane's own actions launch it.
+    if (terminal.restoreRecovery) {
+      logWarn("[TerminalStore] Cannot restart a pane held for recovery", { id });
+      return;
+    }
 
     // Guard against concurrent restart attempts
     if (terminal.isRestarting) {
@@ -686,7 +712,10 @@ export const createRestartActions = (
             commandToRun = resumeCmd;
             consumedSessionId = sessionId;
           }
-        } else if (allowResumeLatest) {
+        } else if (allowResumeLatest && !currentTerminal.conversationCwd) {
+          // Resume-latest reads the launch directory, and a pane whose
+          // conversation began somewhere else would reopen nothing — or another
+          // pane's conversation — from here (#12434).
           const resumeLatestCmd = resolvedAgentBaseCommand
             ? buildResumeLatestCommand(effectiveAgentId, resumeFlags, resolvedAgentBaseCommand)
             : buildResumeLatestCommand(effectiveAgentId, resumeFlags);
@@ -757,6 +786,8 @@ export const createRestartActions = (
           agentPresetColor: nextAgentPresetColor,
           originalPresetId: nextOriginalPresetId,
           agentSessionId: nextSessionId,
+          // A fresh conversation begins where this pane runs.
+          conversationCwd: consumedSessionId ? t.conversationCwd : undefined,
           isRestarting: true,
           restartError: undefined,
           exitCode: undefined,
@@ -926,7 +957,37 @@ export const createRestartActions = (
       if (!t) return state;
       const newById = {
         ...state.panelsById,
-        [id]: { ...t, cwd, restartError: undefined, spawnError: undefined },
+        [id]: {
+          ...t,
+          cwd,
+          ...conversationOriginPatch(t, cwd),
+          restartError: undefined,
+          spawnError: undefined,
+        },
+      };
+      saveNormalized(newById, state.panelIds);
+      return { panelsById: newById };
+    });
+  },
+
+  confirmRestoreRecoveryDestination: (id, cwd) => {
+    set((state) => {
+      const t = state.panelsById[id];
+      if (!t || !isPtyPanel(t) || !t.restoreRecovery) return state;
+      if (!t.restoreRecovery.awaitingDestination && (cwd === undefined || cwd === t.cwd)) {
+        return state;
+      }
+      const { reason, sessionId } = t.restoreRecovery;
+      const recovery = sessionId !== undefined ? { reason, sessionId } : { reason };
+      const nextCwd = cwd ?? t.cwd;
+      const newById = {
+        ...state.panelsById,
+        [id]: {
+          ...t,
+          cwd: nextCwd,
+          ...conversationOriginPatch(t, nextCwd),
+          restoreRecovery: recovery,
+        },
       };
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
@@ -1192,6 +1253,10 @@ export const createRestartActions = (
     if (!effectiveAgentId) {
       return { success: false, error: "panel is not an agent" };
     }
+    // Held for recovery (#12434): nothing ran, so nothing failed over.
+    if (terminal.restoreRecovery) {
+      return { success: false, error: "panel is held for recovery" };
+    }
 
     markTerminalRestarting(id);
     set((state) =>
@@ -1215,6 +1280,7 @@ export const createRestartActions = (
       isUsingFallback: terminal.isUsingFallback,
       fallbackChainIndex: terminal.fallbackChainIndex,
       agentLaunchFlags: terminal.agentLaunchFlags,
+      conversationCwd: terminal.conversationCwd,
     };
 
     try {
@@ -1305,6 +1371,8 @@ export const createRestartActions = (
           fallbackChainIndex: nextChainIndex,
           agentLaunchFlags: nextLaunchFlags,
           agentSessionId: undefined,
+          // The fallback starts a new conversation where the pane runs.
+          conversationCwd: undefined,
           isRestarting: true,
           restartError: undefined,
           exitCode: undefined,

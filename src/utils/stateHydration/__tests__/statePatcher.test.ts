@@ -3693,6 +3693,260 @@ describe("buildArgsForRespawn — a named resume-latest session (#12178)", () =>
   });
 });
 
+describe("buildArgsForRespawn — cold launch for an agent that resumes across directories (#12434)", () => {
+  // A Codex pane that began in /repo and was moved onto the task-a worktree.
+  const movedPane = {
+    id: "pane-a",
+    kind: "terminal" as const,
+    launchAgentId: "codex",
+    cwd: "/repo",
+    worktreeId: "/worktrees/task-a",
+    location: "grid" as const,
+    title: "Task A",
+  };
+  const moved = { cwd: "/worktrees/task-a", conversationCwd: "/repo" };
+  const settings = { agents: { codex: {} } };
+  const respawn = (
+    snapshot: SavedSnapshot,
+    options: Parameters<typeof buildArgsForRespawn>[7]
+  ): AddTerminalArgs =>
+    buildArgsForRespawn(snapshot, "terminal", "/repo", settings, false, "/tmp", undefined, options);
+
+  it("resumes an uncontested exact id in the destination worktree", () => {
+    buildResumeCommandMock.mockImplementation(
+      (_agentId: string, sessionId: string) => `codex resume ${sessionId} -C '.'`
+    );
+
+    const result = respawn({ ...movedPane, agentSessionId: "sess-a" }, { coldLaunch: moved });
+
+    expect(result.command).toBe("codex resume sess-a -C '.'");
+    expect(result.cwd).toBe("/worktrees/task-a");
+    expect(result.worktreeId).toBe("/worktrees/task-a");
+    expect(result.agentSessionId).toBe("sess-a");
+    expect(result.conversationCwd).toBe("/repo");
+    expect(result.restoreRecovery).toBeUndefined();
+    expect(result.sessionLostOnRestore).toBeUndefined();
+  });
+
+  it("resumes a conversation the origin folder's lookup named, in the destination", () => {
+    buildResumeCommandMock.mockImplementation(
+      (_agentId: string, sessionId: string) => `codex resume ${sessionId} -C '.'`
+    );
+
+    const result = respawn(movedPane, {
+      coldLaunch: moved,
+      resolvedResumeLatestSessionId: "sess-named",
+    });
+
+    expect(result.command).toBe("codex resume sess-named -C '.'");
+    expect(result.cwd).toBe("/worktrees/task-a");
+    expect(result.agentSessionId).toBe("sess-named");
+    expect(result.restoreRecovery).toBeUndefined();
+  });
+
+  it("holds a moved pane whose conversation couldn't be named, rather than running --last there", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = respawn(movedPane, { coldLaunch: moved });
+
+    expect(result.restoreRecovery).toEqual({ reason: "session-unresolved" });
+    expect(result.command).not.toContain("resume");
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.sessionLostOnRestore).toBeUndefined();
+    expect(result.cwd).toBe("/worktrees/task-a");
+    expect(result.conversationCwd).toBe("/repo");
+    expect(buildResumeLatestCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("holds an election loser instead of starting a blank conversation", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = respawn(movedPane, { coldLaunch: moved, allowResumeLatest: false });
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(result.command).toBe("codex --generated");
+    expect(result.sessionLostOnRestore).toBeUndefined();
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("holds a loser even when it never moved", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = respawn(
+      { ...movedPane, worktreeId: "/repo" },
+      { coldLaunch: { cwd: "/repo" }, allowResumeLatest: false }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(result.cwd).toBe("/repo");
+    expect(result.conversationCwd).toBeUndefined();
+  });
+
+  it("holds a pane denied the id it carries, and drops that id and its old resume command", () => {
+    const result = respawn(
+      { ...movedPane, agentSessionId: "sess-dup", command: "codex resume sess-dup" },
+      { coldLaunch: moved, allowSessionIdResume: false }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-session-id" });
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.command).toBe("codex --generated");
+    expect(buildResumeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps today's --last for a winner that runs where its conversation began", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+
+    const result = respawn({ ...movedPane, worktreeId: "/repo" }, { coldLaunch: { cwd: "/repo" } });
+
+    expect(result.command).toBe("codex resume --last");
+    expect(result.restoreRecovery).toBeUndefined();
+  });
+
+  it("holds an exact id without launching it while the destination is unresolved", () => {
+    const result = respawn(
+      { ...movedPane, agentSessionId: "sess-a" },
+      { coldLaunch: { cwd: "/repo", awaitingDestination: true } }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "destination-unavailable",
+      sessionId: "sess-a",
+      awaitingDestination: true,
+    });
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.cwd).toBe("/repo");
+    expect(buildResumeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("offers no candidate an unresolved pane lost to a sibling", () => {
+    const result = respawn(
+      { ...movedPane, agentSessionId: "sess-dup" },
+      {
+        coldLaunch: { cwd: "/repo", awaitingDestination: true },
+        allowSessionIdResume: false,
+      }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "sibling-owns-session-id",
+      awaitingDestination: true,
+    });
+  });
+
+  it("holds a pane held last time again as-is, whatever id the snapshot carries", () => {
+    const result = respawn(
+      {
+        ...movedPane,
+        cwd: "/worktrees/task-a",
+        conversationCwd: "/repo",
+        agentSessionId: "sess-stale",
+        command: "codex resume sess-stale",
+        restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+      },
+      { coldLaunch: moved, resolvedResumeLatestSessionId: "sess-named" }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(result.agentSessionId).toBeUndefined();
+    expect(result.command).toBe("codex --generated");
+    expect(result.conversationCwd).toBe("/repo");
+    expect(buildResumeCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("puts a held pane back to waiting when restore says its destination is gone", () => {
+    const result = respawn(
+      {
+        ...movedPane,
+        restoreRecovery: { reason: "sibling-owns-session-id" },
+      },
+      { coldLaunch: { cwd: "/repo", awaitingDestination: true } }
+    );
+
+    expect(result.restoreRecovery).toEqual({
+      reason: "sibling-owns-session-id",
+      awaitingDestination: true,
+    });
+    expect(result.cwd).toBe("/repo");
+  });
+
+  it("still holds a pane whose saved marker it can't read", () => {
+    const result = respawn(
+      { ...movedPane, agentSessionId: "sess-a", restoreRecovery: { reason: "unknown" } },
+      { coldLaunch: moved }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "session-unresolved" });
+    expect(result.agentSessionId).toBeUndefined();
+  });
+
+  it("builds the held command from captured flags, never from a stored resume", () => {
+    buildResumeLatestCommandMock.mockReturnValue("codex resume --last");
+    const result = buildArgsForRespawn(
+      {
+        ...movedPane,
+        agentLaunchFlags: ["--model", "gpt-5"],
+        command: "codex --model gpt-5 resume --last",
+      },
+      "terminal",
+      "/repo",
+      undefined,
+      false,
+      "/tmp",
+      undefined,
+      { coldLaunch: moved, allowResumeLatest: false }
+    );
+
+    expect(result.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(result.command).toMatch(/^codex --model ['"]gpt-5['"]/);
+    expect(result.command).not.toContain("resume");
+  });
+
+  it("ignores a recovery marker for an agent restore has no cold-launch decision for", () => {
+    const result = buildArgsForRespawn(
+      {
+        id: "t1",
+        kind: "terminal",
+        launchAgentId: "claude",
+        cwd: "/repo",
+        location: "grid",
+        agentSessionId: "sess-c",
+        restoreRecovery: { reason: "sibling-owns-session-id" },
+      },
+      "terminal",
+      "/repo",
+      { agents: { claude: {} } },
+      false,
+      "/tmp"
+    );
+
+    expect(result.restoreRecovery).toBeUndefined();
+    expect(result.command).toBe("claude --resume sess-c");
+  });
+});
+
+describe("reconnect builders keep a pane's conversation folder (#12434)", () => {
+  it("carries a valid folder and drops a malformed one", () => {
+    const backend = { id: "t1", cwd: "/worktrees/task-a", kind: "terminal" as const };
+    const withOrigin = {
+      id: "t1",
+      kind: "terminal" as const,
+      cwd: "/worktrees/task-a",
+      conversationCwd: "/repo",
+    };
+
+    expect(buildArgsForBackendTerminal(backend, withOrigin, "/repo").conversationCwd).toBe("/repo");
+    expect(
+      buildArgsForReconnectedFallback({ id: "t1", cwd: "/worktrees/task-a" }, withOrigin, "/repo")
+        .conversationCwd
+    ).toBe("/repo");
+    expect(
+      buildArgsForBackendTerminal(backend, { ...withOrigin, conversationCwd: 42 }, "/repo")
+        .conversationCwd
+    ).toBeUndefined();
+  });
+});
+
 describe("extension state and its version travel together (#12280)", () => {
   // Every restore path must carry the bag AND the version that describes it. A
   // builder that forwards only the bag leaves `addPanel` reading the absent

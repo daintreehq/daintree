@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useState, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { Search, RefreshCw } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -6,7 +6,7 @@ import { Spinner } from "@/components/ui/Spinner";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { cn } from "@/lib/utils";
 import { usePanelStore } from "@/store/panelStore";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isPtyPanel } from "@shared/types/panel";
 import { buildResumeCommand } from "@shared/types";
 import { reconcileResumeLaunchFlags } from "@/services/agentResume";
 import { formatTimeAgo } from "@/utils/timeAgo";
@@ -19,6 +19,12 @@ import type {
   CodexFolderSessionsResult,
 } from "@shared/types/ipc/agentSubagents";
 import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
+import { resolveConversationSearchCwd } from "@/utils/restoreRecovery";
+import { Button } from "@/components/ui/button";
+import {
+  siblingHeldSessionIds,
+  type RestoreRecoveryLaunchResult,
+} from "@/services/terminal/restoreRecoveryLaunch";
 
 // Only the reasons `listCodexSessionsForCwd` can actually surface: it queries
 // the app-server directly rather than resolving a terminal, so the
@@ -38,29 +44,22 @@ function firstLine(value: string): string {
   return value.trim().split("\n")[0]?.trim() ?? "";
 }
 
-/**
- * Codex session ids already held by a sibling pane, excluding `panelId`
- * itself. Shared by the initial fetch filter and by `openSession`'s
- * just-before-opening recheck (#11461) — a sibling can claim one of these
- * conversations in the gap between listing and picking, and reopening it
- * anyway would put two writers on the same transcript.
- */
-function siblingHeldSessionIds(
-  panelsById: Record<string, PanelInstance>,
-  panelId: string
-): Set<string> {
-  const held = new Set<string>();
-  for (const panel of Object.values(panelsById)) {
-    if (panel.id === panelId || !isPtyPanel(panel)) continue;
-    const heldAgentId = panel.runtimeIdentity?.agentId ?? panel.launchAgentId;
-    if (heldAgentId === "codex" && panel.agentSessionId) held.add(panel.agentSessionId);
-  }
-  return held;
+export interface FindCodexSessionActionProps {
+  panelId: string;
+  /**
+   * Replace "open in a new pane" with the caller's own launch — a pane held for
+   * recovery opens the pick in place (#12434). Answering `held-elsewhere` drops
+   * that row from the list.
+   */
+  onOpenSession?: (sessionId: string) => Promise<RestoreRecoveryLaunchResult>;
+  /** `gate` renders the trigger as a regular button, for an in-pane surface. */
+  variant?: "banner" | "gate";
 }
 
 /**
- * "Find session" action on the lost-session banner (#12182): lists this
- * pane's folder's Codex sessions and reopens the chosen one in a new pane.
+ * "Find session" action on the lost-session banner (#12182): lists the Codex
+ * sessions filed under this pane's conversation folder and reopens the chosen
+ * one in a new pane.
  *
  * Codex-only — the other agents have no equivalent read-only index to ask,
  * so this renders nothing for them. Read-only throughout: picking a session
@@ -69,9 +68,19 @@ function siblingHeldSessionIds(
  * config, and a session's `preview` (conversation text) never leaves this
  * component — it is rendered, not logged.
  */
-export function FindCodexSessionAction({ panelId }: { panelId: string }) {
+export function FindCodexSessionAction({
+  panelId,
+  onOpenSession,
+  variant = "banner",
+}: FindCodexSessionActionProps) {
   const [isOpen, setIsOpen] = useState(false);
-  const [result, setResult] = useState<CodexFolderSessionsResult | null>(null);
+  // Keyed by the folder it was listed for: a held pane moved onto another
+  // worktree keeps its conversation folder, but one whose folder did change
+  // must not keep offering the old folder's list.
+  const [listing, setListing] = useState<{
+    searchCwd: string;
+    result: CodexFolderSessionsResult;
+  } | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   // Sibling-held session ids at the moment sessions were last fetched — see
   // the load() callback below for why this is computed there rather than
@@ -83,6 +92,7 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
   const {
     agentId,
     cwd,
+    searchCwd,
     codexHome,
     worktreeId,
     env,
@@ -107,6 +117,9 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         // offering this the same way it stops answering for the old one.
         agentId: pty?.runtimeIdentity?.agentId ?? pty?.launchAgentId,
         cwd: pty?.cwd,
+        // Where the conversation began, which a moved pane no longer runs in —
+        // Codex files it under that folder (#12434).
+        searchCwd: pty ? resolveConversationSearchCwd(pty) : undefined,
         codexHome: codexHomeKey ? env?.[codexHomeKey] : undefined,
         // The reopened pane inherits this pane's launch shape: `worktreeId`
         // because the grid only renders the active worktree's bucket, so a
@@ -129,13 +142,16 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
     })
   );
 
+  const result = listing !== null && listing.searchCwd === searchCwd ? listing.result : null;
+
   const load = useCallback(() => {
-    if (!cwd || isLoading) return;
+    if (!searchCwd || isLoading) return;
+    const listedFor = searchCwd;
     setIsLoading(true);
     void codexClient
-      .findSessions({ cwd, codexHome })
+      .findSessions({ cwd: listedFor, codexHome })
       .then((response) => {
-        setResult(response);
+        setListing({ searchCwd: listedFor, result: response });
         // A sibling pane already holding one of these conversations isn't
         // worth offering back — reopening it would put two writers on one
         // transcript, exactly the collision restore's own suppression exists
@@ -147,16 +163,21 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         // background. `openSession` below re-checks right before opening, so
         // this snapshot going stale only ever costs a still-listed row, never
         // a duplicate resume.
-        setHeldElsewhere(siblingHeldSessionIds(usePanelStore.getState().panelsById, panelId));
+        setHeldElsewhere(
+          siblingHeldSessionIds(usePanelStore.getState().panelsById, panelId, "codex")
+        );
       })
       .catch((error: unknown) => {
         logWarn(
           `[FindCodexSessionAction] query failed: ${formatErrorMessage(error, "unknown error")}`
         );
-        setResult({ status: "unavailable", reason: "protocol-error" });
+        setListing({
+          searchCwd: listedFor,
+          result: { status: "unavailable", reason: "protocol-error" },
+        });
       })
       .finally(() => setIsLoading(false));
-  }, [cwd, codexHome, isLoading, panelId]);
+  }, [searchCwd, codexHome, isLoading, panelId]);
 
   if (agentId !== "codex") return null;
 
@@ -171,8 +192,19 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
     // loading and the user picking a row — the popover can sit open for a
     // while. Re-check right before opening rather than trusting the snapshot
     // the list was filtered against (#11461).
-    if (siblingHeldSessionIds(usePanelStore.getState().panelsById, panelId).has(session.id)) {
+    if (
+      siblingHeldSessionIds(usePanelStore.getState().panelsById, panelId, "codex").has(session.id)
+    ) {
       setHeldElsewhere((prev) => new Set(prev).add(session.id));
+      return;
+    }
+    if (onOpenSession) {
+      const outcome = await onOpenSession(session.id);
+      if (outcome === "held-elsewhere") {
+        setHeldElsewhere((prev) => new Set(prev).add(session.id));
+      } else {
+        setIsOpen(false);
+      }
       return;
     }
     const command = buildResumeCommand(
@@ -189,6 +221,9 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         worktreeId,
         launchAgentId: "codex",
         agentSessionId: session.id,
+        // The picked conversation was filed under the folder it was listed
+        // from; keep pointing there if it runs somewhere else (#12434).
+        conversationCwd: searchCwd && searchCwd !== cwd ? searchCwd : undefined,
         command,
         agentLaunchFlags,
         agentModelId,
@@ -204,6 +239,22 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
     }
   };
 
+  const trigger: ReactNode =
+    variant === "gate" ? (
+      <Button size="sm" variant="ghost">
+        <Search aria-hidden="true" />
+        Find session
+      </Button>
+    ) : (
+      <button
+        type="button"
+        className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-border-default/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
+      >
+        <Search className="w-3 h-3" aria-hidden="true" />
+        Find session
+      </button>
+    );
+
   return (
     <Popover
       open={isOpen}
@@ -212,15 +263,7 @@ export function FindCodexSessionAction({ panelId }: { panelId: string }) {
         if (open && result === null) load();
       }}
     >
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 px-2 py-1 text-xs font-medium text-text-secondary hover:text-text-primary hover:bg-border-default/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
-        >
-          <Search className="w-3 h-3" aria-hidden="true" />
-          Find session
-        </button>
-      </PopoverTrigger>
+      <PopoverTrigger asChild>{trigger}</PopoverTrigger>
       <PopoverContent align="end" className="w-80 p-0">
         <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
           <span className="text-xs font-medium text-text-primary">

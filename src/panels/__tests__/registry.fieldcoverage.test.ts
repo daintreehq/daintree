@@ -67,6 +67,10 @@ const PTY_FIELD_CLASSIFICATION = {
   fallbackChainIndex: true,
   agentState: true,
   lastStateChange: true,
+  // Conversation origin and the recovery hold (#12434) — a held pane must stay
+  // held across a restart instead of launching fresh.
+  conversationCwd: true,
+  restoreRecovery: true,
   // PtyPanelData runtime-only fields
   pid: false,
   hasPty: false,
@@ -413,6 +417,7 @@ const terminalFixture: PtySerializeInput = {
   fallbackChainIndex: 1,
   agentState: "idle",
   lastStateChange: 1_700_000_000_000,
+  conversationCwd: "/home/origin",
   worktreeMoveNotice: { destinationWorktreeId: "wt-feature" },
   createdAt: 1_700_000_000_000,
   lastActiveAt: 1_700_000_000_001,
@@ -589,7 +594,27 @@ describe("panel serializer field coverage", () => {
       string,
       unknown
     >;
-    assertCovers("terminal serializer", output, persistedKeys(PTY_FIELD_CLASSIFICATION));
+    // A held pane writes no process state, so the hold is covered by its own
+    // fixture below rather than alongside a live session.
+    assertCovers("terminal serializer", output, persistedKeys(PTY_FIELD_CLASSIFICATION), {}, [
+      "restoreRecovery",
+    ]);
+  });
+
+  it("terminal serializer persists a recovery hold without the process state it replaces (#12434)", () => {
+    const heldFixture: PtySerializeInput = {
+      ...terminalFixture,
+      restoreRecovery: { reason: "sibling-owns-resume-latest-slot" },
+    };
+    const output = getPanelKindConfig("terminal")!.serialize!(heldFixture) as Record<
+      string,
+      unknown
+    >;
+    expect(output.restoreRecovery).toEqual({ reason: "sibling-owns-resume-latest-slot" });
+    expect(output.conversationCwd).toBe("/home/origin");
+    expect(output).not.toHaveProperty("agentSessionId");
+    expect(output).not.toHaveProperty("agentState");
+    expect(output).not.toHaveProperty("lastStateChange");
   });
 
   it("browser serializer covers every persisted browser field", () => {

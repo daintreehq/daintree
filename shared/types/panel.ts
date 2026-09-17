@@ -395,6 +395,34 @@ export type SessionLostReason =
   /** No session id was ever captured and no resume-latest fallback exists for this agent. */
   | "no-resume-path";
 
+/**
+ * Why restore held a pane instead of launching it (#12434). The first two are
+ * the resume election's losers ({@link SessionLostReason}); the rest only occur
+ * for an agent that can resume across directories.
+ */
+export type RestoreRecoveryReason =
+  | "sibling-owns-session-id"
+  | "sibling-owns-resume-latest-slot"
+  /** Filed under another worktree than it began in, with no conversation it could name. */
+  | "session-unresolved"
+  /** Filed under a worktree this project no longer has. */
+  | "destination-unavailable";
+
+export interface PanelRestoreRecovery {
+  reason: RestoreRecoveryReason;
+  /**
+   * The exact conversation restore had in hand but could not launch, because
+   * only the destination was in doubt. A candidate, not a claim: it is checked
+   * against sibling panes again before it is resumed.
+   */
+  sessionId?: string;
+  /**
+   * No directory has been chosen to run in yet. Cleared by moving the pane onto
+   * a worktree or by keeping the original folder — never by a guess.
+   */
+  awaitingDestination?: true;
+}
+
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
   /**
@@ -619,6 +647,22 @@ export interface PtyPanelData extends BasePanelData {
    * `serializePtyPanel`.
    */
   sessionLostOnRestore?: SessionLostReason;
+  /**
+   * Directory this pane's conversation began in, recorded only once the pane
+   * runs somewhere else (#12434) — a pane moved onto another worktree resumes
+   * there, but its conversation is still filed under the folder it started in.
+   * Session lookup and the resume election key off this, never off `cwd`. Only
+   * set for agents that resume across directories; cleared when a new
+   * conversation starts. Persisted.
+   */
+  conversationCwd?: string;
+  /**
+   * Restore held this pane instead of launching it (#12434): the pane exists,
+   * with its title, placement and launch settings, but has no process until
+   * the user picks a conversation or starts a new one. Persisted, so a restart
+   * before that choice holds it again rather than launching fresh.
+   */
+  restoreRecovery?: PanelRestoreRecovery;
 }
 
 export interface BrowserPanelData extends BasePanelData {
