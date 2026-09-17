@@ -44,6 +44,7 @@ export function createSiteBuilderGuest(
     return {
       setMode: () => {},
       getMode: () => config.mode,
+      reselect: () => false,
       refresh: () => {},
       dispose: () => {},
       getOverlayRoot: () => null,
@@ -957,6 +958,36 @@ export function createSiteBuilderGuest(
     schedulePaint();
   }
 
+  /**
+   * The element compiled from `loc`, found by the same identity a click would
+   * report — not by a cached node, which a reload has replaced. Bounded by the
+   * audit scan limit for the same reason the dev-build sweep is.
+   */
+  function elementAt(loc: SourceLoc): Element | null {
+    const key = locKey(loc);
+    const root = document.body ?? document.documentElement;
+    if (root === null) return null;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+    let node: Node | null = walker.currentNode;
+    let scanned = 0;
+    while (node !== null && scanned++ < AUDIT_SCAN_LIMIT) {
+      if (node instanceof Element && !isOverlay(node)) {
+        const found = readLoc(node);
+        if (found !== null && locKey(found) === key) return node;
+      }
+      node = walker.nextNode();
+    }
+    return null;
+  }
+
+  function reselect(loc: SourceLoc): boolean {
+    if (disposed || mode !== "select") return false;
+    const target = elementAt(loc);
+    if (target === null) return false;
+    selectOnly(target, "element", null);
+    return true;
+  }
+
   const CONTROL_ROLES = new Set([
     "textbox",
     "searchbox",
@@ -1246,6 +1277,7 @@ export function createSiteBuilderGuest(
   const handle: GuestRuntimeHandle = {
     setMode,
     getMode: () => mode,
+    reselect,
     getOverlayRoot: () => overlayRoot,
     refresh: () => {
       if (paintHandle !== 0) {

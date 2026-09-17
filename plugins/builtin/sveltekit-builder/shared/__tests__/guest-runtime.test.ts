@@ -351,6 +351,46 @@ describe("selection interaction", () => {
   });
 });
 
+describe("reselect", () => {
+  it("selects the element compiled from a location and observes it, as a click would", () => {
+    const runtime = install("select");
+    const root = document.createElement("div");
+    setMeta(root, loc(4));
+    const target = document.createElement("button");
+    setMeta(target, loc(6), { type: "component", file: "src/lib/Card.svelte", line: 1, column: 0 });
+    root.appendChild(target);
+    document.body.appendChild(root);
+    const before = events("selectionChanged").length;
+
+    expect(runtime.reselect(loc(6))).toBe(true);
+
+    const observed = lastSelection();
+    expect(events("selectionChanged")).toHaveLength(before + 1);
+    expect(observed[0]?.loc).toEqual(loc(6));
+    expect(observed[0]?.tagName).toBe("button");
+  });
+
+  it("changes nothing and says so when no element carries that location", () => {
+    const runtime = install("select");
+    const target = document.createElement("button");
+    setMeta(target, loc(6));
+    document.body.appendChild(target);
+    const before = events("selectionChanged").length;
+
+    expect(runtime.reselect(loc(99))).toBe(false);
+    expect(events("selectionChanged")).toHaveLength(before);
+  });
+
+  it("does nothing in browse mode", () => {
+    const runtime = install("browse");
+    const target = document.createElement("button");
+    setMeta(target, loc(6));
+    document.body.appendChild(target);
+    expect(runtime.reselect(loc(6))).toBe(false);
+    expect(events("selectionChanged")).toHaveLength(0);
+  });
+});
+
 describe("hover", () => {
   it("reports each new target once and nothing while the pointer stays on it", () => {
     document.body.innerHTML = '<p id="one">a</p><p id="two">b</p>';

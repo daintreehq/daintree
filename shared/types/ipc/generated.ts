@@ -1665,6 +1665,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./sitePreview.js").SitePreviewCandidate[];
   };
+  "site-preview:reselect": {
+    args: [payload: { sessionId: string; loc: { file: string; line: number; column: number } }];
+    result: boolean;
+  };
   "site-preview:set-mode": {
     args: [payload: { sessionId: string; mode: "browse" | "select" }];
     result: import("./sitePreview.js").SitePreviewBindingState;

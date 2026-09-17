@@ -161,6 +161,16 @@ export function createFakeHost() {
     setMode: vi.fn(async (request: { sessionId: string; mode: SitePreviewMode }) =>
       state("preview-1", request.mode)
     ),
+    // As the real guest does: find the element compiled from `loc`, select it,
+    // and emit a fresh observation on the next tick. `reselectFinds` lets a
+    // test model a page where the element is gone.
+    reselect: vi.fn(
+      async (request: { sessionId: string; loc: SiteGuestNodeObservation["loc"] }) => {
+        if (!host.reselectFinds) return false;
+        setTimeout(() => host.select(host.currentEpoch, [{ ...OBSERVATION, loc: request.loc }]), 0);
+        return true;
+      }
+    ),
     getState: vi.fn(async (_request: { sessionId: string }) => null),
     onEvent: vi.fn((callback: (payload: SitePreviewPushPayload) => void) => {
       previewListeners.add(callback);
@@ -233,6 +243,8 @@ export function createFakeHost() {
   const host = {
     sitePreview,
     diskRevisions,
+    reselectFinds: true,
+    currentEpoch: 0,
     invoke,
     handlers,
     listenerCounts() {
@@ -255,6 +267,7 @@ export function createFakeHost() {
       for (const listener of [...(pluginListeners.get(channel) ?? [])]) listener(payload);
     },
     documentReady(epoch: number, sessionId = "session-1") {
+      host.currentEpoch = epoch;
       host.pushPreview({
         kind: "guest-event",
         sessionId,

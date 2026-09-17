@@ -839,6 +839,9 @@ export interface GeneratedElectronAPI {
     listCandidates(
       ...args: IpcInvokeMap["site-preview:list-candidates"]["args"]
     ): Promise<IpcInvokeMap["site-preview:list-candidates"]["result"]>;
+    reselect(
+      ...args: IpcInvokeMap["site-preview:reselect"]["args"]
+    ): Promise<IpcInvokeMap["site-preview:reselect"]["result"]>;
     setMode(
       ...args: IpcInvokeMap["site-preview:set-mode"]["args"]
     ): Promise<IpcInvokeMap["site-preview:set-mode"]["result"]>;

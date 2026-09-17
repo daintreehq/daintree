@@ -62,6 +62,7 @@ async function setUp() {
         mode = request.mode;
         return bound();
       },
+      reselect: async () => false,
       getState: async () => bound(),
       onEvent: (callback) => {
         emit = callback;

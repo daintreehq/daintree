@@ -85,6 +85,7 @@ export function buildGuestRuntimeSource(params: GuestRuntimeParams): string {
     documentEpoch: DOCUMENT_EPOCH,
     mode: ${JSON.stringify(mode)},
     setMode(next) { api.mode = next; },
+    reselect() { return false; },
     dispose: null,
     post(event) {
       const send = g[BINDING];
@@ -118,6 +119,20 @@ export function buildModeUpdateSource(mode: SitePreviewMode): string {
   return `(() => {
   const api = globalThis[${JSON.stringify(GUEST_RUNTIME_GLOBAL)}];
   if (api && typeof api.setMode === "function") api.setMode(${JSON.stringify(mode)});
+})();`;
+}
+
+/**
+ * Ask the runtime to select the element compiled from `loc`. Host-authored,
+ * with one validated object interpolated — the handler bounds the strings and
+ * the numbers before they get here. Evaluates to `true` only when the runtime
+ * found and selected an element; anything else, including a missing runtime,
+ * reads as "not found" and the host keeps its safeguards.
+ */
+export function buildReselectSource(loc: { file: string; line: number; column: number }): string {
+  return `(() => {
+  const api = globalThis[${JSON.stringify(GUEST_RUNTIME_GLOBAL)}];
+  return api && typeof api.reselect === "function" ? api.reselect(${JSON.stringify(loc)}) === true : false;
 })();`;
 }
 

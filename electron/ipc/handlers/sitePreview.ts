@@ -45,6 +45,22 @@ const setModeSchema = z
   .object({ sessionId: z.string().min(1).max(128), mode: modeSchema })
   .strict();
 
+// A compiled source location: worktree-relative file, 1-based line, 0-based
+// column. Bounded here because the value is interpolated into host-authored
+// guest source, and the guest treats it as identity, not display text.
+const reselectSchema = z
+  .object({
+    sessionId: z.string().min(1).max(128),
+    loc: z
+      .object({
+        file: z.string().min(1).max(1024),
+        line: z.number().int().positive(),
+        column: z.number().int().nonnegative(),
+      })
+      .strict(),
+  })
+  .strict();
+
 function requireProject(ctx: IpcContext): string {
   if (!ctx.projectId) {
     throw new AppError({
@@ -89,6 +105,13 @@ export const sitePreviewNamespace = defineIpcNamespace({
       setModeSchema,
       async (ctx, payload): Promise<SitePreviewBindingState> =>
         getSitePreviewBridge().setMode(requireProject(ctx), payload.sessionId, payload.mode),
+      { withContext: true }
+    ),
+    reselect: opValidated(
+      SITE_PREVIEW_METHOD_CHANNELS.reselect,
+      reselectSchema,
+      async (ctx, payload): Promise<boolean> =>
+        getSitePreviewBridge().reselect(requireProject(ctx), payload.sessionId, payload.loc),
       { withContext: true }
     ),
     getState: opValidated(

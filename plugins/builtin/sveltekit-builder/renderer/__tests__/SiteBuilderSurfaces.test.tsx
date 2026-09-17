@@ -468,8 +468,10 @@ describe("editing", () => {
     await screen.findByRole("region", { name: "Last change" });
     expect(text()).toMatch(/styles (not verified|unverified)/i);
     expect(text()).not.toMatch(/styles (generated|applied|rendered)/i);
-    // The write spent the selection's ranges.
-    expect(removeButton().disabled).toBe(true);
+    // The write spent the selection's ranges — so editing resumes only once
+    // the page has been asked for the element again and main has re-proved it.
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalled());
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
 
     await act(async () => host.documentReady(1));
     // A later document is the only thing that proves the reload, and the
@@ -644,6 +646,69 @@ describe("editing", () => {
     fireEvent.keyDown(input, { key: "s" });
     fireEvent.keyDown(input, { key: "Escape" });
     expect(panelKeys).not.toHaveBeenCalled();
+  });
+});
+
+describe("editing continuity", () => {
+  it("keeps editing after a write by having the page re-prove the selection", async () => {
+    // The rule: a successful write does not cost the user their selection.
+    // The ranges are spent, so the panel asks the page for the element again,
+    // main resolves the fresh observation, and editing resumes on PROVEN
+    // ranges — never on the old ones.
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.calls(CHANNELS.editApply)).toHaveLength(1));
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    // A second resolve, from the re-observation.
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve).length).toBeGreaterThan(1));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    expect(screen.queryByText(/select again/i)).toBeNull();
+  });
+
+  it("keeps the selection through the reload its own write causes", async () => {
+    await mountSelected();
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    // HMR lands: a new document. Not a stale banner — a reselect once the
+    // runtime is back, and a fresh proof.
+    await act(async () => host.epochAdvanced(1));
+    await act(async () => host.documentReady(1));
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(removeButton().disabled).toBe(false));
+    expect(screen.queryByText(/select again/i)).toBeNull();
+  });
+
+  it("refuses a re-proof that names a different element", async () => {
+    // An edit that inserted lines above the element can make the old location
+    // resolve to a different node in the new source. That is not a
+    // continuation: the stale state stands and the user selects again.
+    await mountSelected();
+    // The next resolve is the re-proof: it names a different element.
+    host.handlers.set(CHANNELS.selectionResolve, (args) => {
+      const base = makeSelection({ documentEpoch: args.documentEpoch as number });
+      const node = base.nodes[0]!;
+      return {
+        status: "ok",
+        selection: {
+          ...base,
+          nodes: [{ ...node, definition: { ...node.definition!, tagName: "div" }, label: "div" }],
+        },
+      };
+    });
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await screen.findByText("Saved — select again to keep editing");
+    expect(removeButton().disabled).toBe(true);
+  });
+
+  it("falls back to the stale notice when the page no longer has the element", async () => {
+    // Nothing is shown as editable that the page did not re-highlight.
+    await mountSelected();
+    host.reselectFinds = false;
+    fireEvent.click(removeButton());
+    await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
+    await screen.findByText("Saved — select again to keep editing");
+    expect(removeButton().disabled).toBe(true);
   });
 });
 

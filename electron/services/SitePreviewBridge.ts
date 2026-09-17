@@ -42,6 +42,7 @@ import {
   buildDisposeSource,
   buildGuestRuntimeSource,
   buildModeUpdateSource,
+  buildReselectSource,
 } from "./sitePreview/guestRuntime.js";
 
 /**
@@ -423,6 +424,34 @@ export class SitePreviewBridge {
    * matters: a bind already queued behind a resolved lock would otherwise
    * install into a guest nothing owns any more.
    */
+  /**
+   * Select the element compiled from `loc` in the guest, as a click would, so
+   * the runtime re-observes it and the view re-resolves it with fresh proof.
+   * False when the runtime found nothing — the caller keeps its stale state.
+   */
+  async reselect(
+    projectId: string,
+    sessionId: string,
+    loc: { file: string; line: number; column: number }
+  ): Promise<boolean> {
+    const binding = this.bindings.get(sessionId);
+    if (!binding || binding.projectId !== projectId) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "No site preview binding for that session",
+        context: { sessionId },
+      });
+    }
+    const wc = this.deps.getWebContents(binding.webContentsId);
+    if (!wc) return false;
+    const result = (await this.send(wc, "Runtime.evaluate", {
+      expression: buildReselectSource(loc),
+      returnByValue: true,
+      timeout: GUEST_EVALUATE_TIMEOUT_MS,
+    })) as { result?: { value?: unknown } } | undefined;
+    return result?.result?.value === true;
+  }
+
   async disposeAll(): Promise<void> {
     // Set before any await: `bindLocked` and `installRuntime` both check it, so
     // a bind already queued behind a resolved lock cannot install into a guest
