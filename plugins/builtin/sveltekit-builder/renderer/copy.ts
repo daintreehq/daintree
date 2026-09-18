@@ -135,9 +135,9 @@ export function untestedToolchainDetail(reasons: readonly string[]): string {
 
 /**
  * The prompt's line. The agent has the versions listed above it already, so
- * this says the one thing they don't carry: which of them the source it is
- * about was parsed by a compiler that never saw.
+ * this says the one thing they don't carry: which of them sit outside the
+ * majors the bundled compiler was tested against.
  */
 export function untestedToolchainPromptLine(notes: readonly string[]): string {
-  return `- Toolchain note: ${notes.join("; ")} — the locations above come from a compiler that never saw this version, so verify the source before relying on them`;
+  return `- Toolchain note: ${notes.join("; ")} — the referenced locations come from a compiler tested against other majors, so verify the source before relying on them`;
 }
