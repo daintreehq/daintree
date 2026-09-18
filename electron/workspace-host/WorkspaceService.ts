@@ -1778,6 +1778,12 @@ export class WorkspaceService {
     if (this.agentActiveWorktreeIds.has(wt.id)) {
       monitor.agentActive = true;
       monitor.setGitWatchBudgetAllowed(true);
+      // Recursive coverage waits for applyWatcherBudget() to rank it against
+      // the agent cap. Batched installs (syncMonitors) defer that pass until
+      // every monitor has started, so a default grant would let each newcomer
+      // arm recursive first and overshoot the cap; this one starts git-only
+      // and is promoted if it earns a slot.
+      monitor.setRecursiveWatchBudgetAllowed(false);
     }
 
     this.monitors.set(wt.id, monitor);

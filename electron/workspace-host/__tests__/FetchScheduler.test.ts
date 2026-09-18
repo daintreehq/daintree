@@ -533,6 +533,7 @@ describe("FetchScheduler", () => {
       await scheduler.triggerNow();
       expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
       expect(host.onExecuteFetch).toHaveBeenCalledWith(true, undefined);
+      expect(vi.getTimerCount()).toBe(0);
 
       await vi.advanceTimersByTimeAsync(15 * 60_000);
       expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);

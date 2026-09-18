@@ -169,6 +169,10 @@ export class WorktreeMonitor {
   // Set when a pause tore down a recursive watcher, so resume can tell the
   // file browser its listings may have missed writes in the meantime.
   private recursiveLostToPause: boolean = false;
+  // A resume catch-up is waiting for (or holding) a poll-queue slot. Rapid
+  // background/foreground flips while the queue is busy reuse it rather than
+  // stacking one forced pass per resume.
+  private resumeCatchUpQueued: boolean = false;
   private _hasInitialStatus: boolean = false;
 
   // File watcher state — owned by `watcherController`. The remaining fields
@@ -451,7 +455,11 @@ export class WorktreeMonitor {
         // captured before this event.
         monitor.lastWatcherEventAt = Date.now();
         monitor.pollingStrategy.recordStateChange();
-        void monitor.updateGitStatus(true);
+        // GitStatusPass reflects a failure as mood=error and then rethrows;
+        // detached, that rethrow would reach the host's exit-on-unhandled-
+        // rejection guard. This path also drains requests parked with
+        // `markPending()` (resume catch-up, heartbeat-gap recovery).
+        void monitor.updateGitStatus(true).catch(() => {});
       },
       onInotifyLimitReached: (worktreeId: string) =>
         monitor.callbacks.onInotifyLimitReached?.(worktreeId),
@@ -1659,11 +1667,16 @@ export class WorktreeMonitor {
     if (wasSuspended) {
       this.watcherController.ensureState();
       this.reportWritesMissedWhilePaused();
-      // Back under recursive coverage, the stat pre-check would trust the
-      // watcher to have reported every working-tree write — and it wasn't
-      // listening. Everything else goes through the pre-check, which reads
-      // the same .git/ files a git-only watcher would have reported.
-      void this.queueStatusPassThenPoll(this.isElevated);
+      if (!this.resumeCatchUpQueued) {
+        this.resumeCatchUpQueued = true;
+        // Back under recursive coverage, the stat pre-check would trust the
+        // watcher to have reported every working-tree write — and it wasn't
+        // listening. Everything else goes through the pre-check, which reads
+        // the same .git/ files a git-only watcher would have reported.
+        void this.queueStatusPassThenPoll(() => this.isElevated).finally(() => {
+          this.resumeCatchUpQueued = false;
+        });
+      }
     } else if (!this.pollingStrategy.isCircuitBreakerTripped()) {
       const jitter = Math.random() * 2000;
       this.resumeTimer = setTimeout(() => {
@@ -1684,7 +1697,12 @@ export class WorktreeMonitor {
   private reportWritesMissedWhilePaused(): void {
     if (!this.recursiveLostToPause) return;
     this.recursiveLostToPause = false;
-    this.handleWorktreeFilesChanged(null);
+    try {
+      this.handleWorktreeFilesChanged(null);
+    } catch {
+      // A throwing update listener must not abort the resume (or the agent
+      // flip) that is re-arming this worktree's watcher and polling.
+    }
   }
 
   /**
@@ -1823,8 +1841,15 @@ export class WorktreeMonitor {
     if (!this._isRunning || !this._agentActive || this._isCurrent) return;
     const before = this.watcherController.currentMode;
     this.watcherController.ensureState();
-    if (this.watcherController.currentMode !== before) {
+    const after = this.watcherController.currentMode;
+    if (after !== before) {
       this.reschedulePolling();
+    }
+    if (after === "recursive" && before !== "recursive" && this._hasInitialStatus) {
+      // An edit made under git-only coverage since the last elevated poll was
+      // never reported, and the stat pre-check trusts a recursive watcher from
+      // here on — reconcile now, as every other upgrade path does.
+      this.triggerRefreshIfUpdating();
     }
   }
 
@@ -1921,7 +1946,7 @@ export class WorktreeMonitor {
         if (elapsedMs > threshold) {
           this.mood = "stale";
           this.emitUpdate();
-          void this.queueStatusPassThenPoll(true);
+          void this.queueStatusPassThenPoll(() => true);
           return;
         }
       }
@@ -1936,7 +1961,7 @@ export class WorktreeMonitor {
    * N monitors waking or resuming together are serialized across its slots
    * instead of all forking git at once.
    */
-  private async queueStatusPassThenPoll(forceRefresh: boolean): Promise<void> {
+  private async queueStatusPassThenPoll(forceRefresh: () => boolean): Promise<void> {
     const run = (): Promise<void> => {
       // Paused again while this sat in the queue — the next resume queues its own.
       if (!this.statusWorkAllowed) return Promise.resolve();
@@ -1947,7 +1972,9 @@ export class WorktreeMonitor {
         this.watcherController.markPending();
         return Promise.resolve();
       }
-      return this.updateGitStatus(forceRefresh).catch(() => {
+      // Read at run time: a worktree that gained or lost elevation while the
+      // request waited for its slot gets the pass it needs now.
+      return this.updateGitStatus(forceRefresh()).catch(() => {
         // updateGitStatus's own error path emits "error" mood; nothing to do here.
       });
     };

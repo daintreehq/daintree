@@ -195,6 +195,7 @@ describe("ResourcePollTimer", () => {
     const timer = new ResourcePollTimer(host as ResourcePollTimerHost);
 
     timer.schedule();
+    expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(host.onResourceStatusPoll).not.toHaveBeenCalled();

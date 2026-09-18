@@ -306,15 +306,57 @@ describe("WorkspaceService agent-activity elevation", () => {
     it("arms an over-cap newcomer git-only directly, never recursive first", () => {
       service["agentRecursiveWatcherCap"] = 1;
       const a = registerMonitor("a");
-      const b = registerMonitor("b");
       service["applyWatcherBudget"]();
       service.setAgentActivity([a.id]);
+      // Registered after the last budget pass, so it still carries the default
+      // recursive grant going into its activation.
+      const b = registerMonitor("b");
       watcherArms.length = 0;
 
       service.setAgentActivity([a.id, b.id]);
 
       expect(modeOf(b)).toBe("git-only");
       expect(watcherArms).not.toContainEqual({ watchWorktree: true });
+    });
+
+    it("a batched install never arms an over-cap agent recursive before the budget pass", async () => {
+      service["agentRecursiveWatcherCap"] = 1;
+      service.setAgentActivity([wtPath("x"), wtPath("y")]);
+
+      // syncMonitors defers the budget until every monitor has started.
+      await service["addNewWorktreeMonitor"](createTestWorktree("x"), false, true, true);
+      await service["addNewWorktreeMonitor"](createTestWorktree("y"), false, true, true);
+      expect(watcherArms.filter((arm) => arm.watchWorktree)).toHaveLength(0);
+
+      service["applyWatcherBudget"]();
+
+      const x = service["monitors"].get(wtPath("x"))!;
+      const y = service["monitors"].get(wtPath("y"))!;
+      expect(modeOf(x)).toBe("recursive");
+      expect(modeOf(y)).toBe("git-only");
+      expect(watcherArms.filter((arm) => arm.watchWorktree)).toHaveLength(1);
+    });
+
+    it("a non-agent losing focus keeps the 3s downgrade settle under the agent cap", () => {
+      vi.useFakeTimers();
+      try {
+        service["agentRecursiveWatcherCap"] = 0;
+        const x = registerMonitor("x", true);
+        const y = registerMonitor("y");
+        setActive("x");
+        service["applyWatcherBudget"]();
+        expect(modeOf(x)).toBe("recursive");
+
+        service.setActiveWorktree("req", y.id);
+
+        expect(modeOf(y)).toBe("recursive");
+        vi.advanceTimersByTime(2_999);
+        expect(modeOf(x)).toBe("recursive");
+        vi.advanceTimersByTime(1);
+        expect(modeOf(x)).toBe("git-only");
+      } finally {
+        vi.useRealTimers();
+      }
     });
 
     it("a newcomer never evicts an established agent's recursive stream, whatever the broadcast order", () => {
@@ -404,6 +446,30 @@ describe("WorkspaceService agent-activity elevation", () => {
       // b's agent started: it gets the recursive watcher back.
       expect(b.hasWatcher).toBe(true);
       expect(modeOf(b)).toBe("recursive");
+    });
+
+    it("switching worktrees while paused arms nothing for non-agent worktrees", () => {
+      const x = registerMonitor("x", true);
+      const y = registerMonitor("y");
+      setActive("x");
+      service["applyWatcherBudget"]();
+      service.setPollingEnabled(false);
+
+      service.setActiveWorktree("req", y.id);
+
+      expect(x.hasWatcher).toBe(false);
+      expect(y.hasWatcher).toBe(false);
+    });
+
+    it("an agent-active worktree added while paused arms its recursive watcher", async () => {
+      service.setAgentActivity([wtPath("agent-late")]);
+      service.setPollingEnabled(false);
+
+      await service["addNewWorktreeMonitor"](createTestWorktree("agent-late"), false, true);
+
+      const monitor = service["monitors"].get(wtPath("agent-late"));
+      expect(monitor!.hasWatcher).toBe(true);
+      expect(modeOf(monitor!)).toBe("recursive");
     });
 
     it("a worktree added while paused joins paused", async () => {

@@ -1272,9 +1272,12 @@ describe("WatcherController", () => {
       ctrl.start();
       await settle();
       const armsBeforeSuspend = watcherStartCallCount;
+      expect(vi.getTimerCount()).toBe(1);
 
       host.suspended = true;
       ctrl.ensureState();
+      // Cancelled outright, not merely a timer that declines when it fires.
+      expect(vi.getTimerCount()).toBe(0);
       mockRecursiveStartResult = true;
       await vi.advanceTimersByTimeAsync(120_000);
       await settle();
