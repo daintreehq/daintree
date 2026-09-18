@@ -36,6 +36,12 @@ const CONTINUATION_GUTTER_RE = /^[\s\u2500-\u259f\u23bf\u23fa|>›❯•●◦·
 /** Right-hand borders and cell padding at the end of any row. */
 const TRAILING_BORDER_RE = /[\s\u2500-\u259f|]+$/u;
 
+/**
+ * Stands in for cells a raw stream moved past without writing. A private-use
+ * character, which agent output has no reason to contain.
+ */
+const RAW_CELLS_SKIPPED = "\u{E000}";
+
 export interface HandbackMatch {
   /** Captured text, normalized; `null` for a bare handback. */
   message: string | null;
@@ -90,10 +96,14 @@ function capMessage(message: string): HandbackMatch {
 /**
  * The most recent complete, non-echo marker pair for `code` in `text`, which
  * must already be plain text (no ANSI) with rows separated by `\n`.
+ *
+ * `rendered` says the rows are the screen's own. Only then is a row break a
+ * real wrap point, so only then are markers split at a hyphen rejoined — in a
+ * raw stream a newline can sit between fragments painted anywhere.
  */
-export function detectHandback(rawText: string, code: string): HandbackMatch | null {
-  if (!rawText) return null;
-  const text = rawText.replace(HYPHEN_ROW_BREAK_RE, "-");
+export function detectHandback(input: string, code: string, rendered = true): HandbackMatch | null {
+  if (!input) return null;
+  const text = rendered ? input.replace(HYPHEN_ROW_BREAK_RE, "-") : input;
   const start = handbackStartMarker(code);
   const end = handbackEndMarker(code);
 
@@ -114,7 +124,10 @@ export function detectHandback(rawText: string, code: string): HandbackMatch | n
   }
 
   for (const capture of captures.reverse()) {
+    // Bytes the capture never saw — cut by the semantic buffer, or cells a
+    // repaint skipped over — could have held the placeholder.
     if (capture.includes(SEMANTIC_BUFFER_TRUNCATION_MARKER)) continue;
+    if (capture.includes(RAW_CELLS_SKIPPED)) continue;
     const message = normalizeCapture(capture);
     // Checked on both forms: normalizing rejoins a placeholder wrapped across a
     // `>` gutter, while the raw capture keeps a `>` that closes the placeholder
@@ -125,15 +138,26 @@ export function detectHandback(rawText: string, code: string): HandbackMatch | n
   return null;
 }
 
-// Cursor-forward (CUF). TUIs — Claude Code pervasively — paint the gap between
-// words by moving the cursor rather than writing a space, so stripping it as a
-// plain escape would run the words of a message together.
+// Cursor movement: up/down/forward/back, next/previous line, column, row and
+// absolute position.
 // eslint-disable-next-line no-control-regex -- intentional ESC in the CSI form
-const CURSOR_FORWARD_RE = /\x1b\[\d*C/g;
+const CURSOR_MOVE_RE = /\x1b\[(\d*)(?:;\d*)?([A-Gdf]|H)/g;
 
-/** The raw semantic buffer as plain text, cursor-forward gaps kept as spaces. */
+/**
+ * The raw semantic buffer as plain text. A one-cell cursor-forward is kept as a
+ * space — TUIs, Claude Code pervasively, paint the gap between words that way.
+ * Any other movement means the stream skipped cells it had painted before, so
+ * it becomes {@link RAW_CELLS_SKIPPED} and no capture spanning it is trusted:
+ * a cell-diff repaint of the echoed instruction can leave out the unchanged
+ * `<summary>` between two markers it does rewrite.
+ */
 export function rawHandbackText(semanticBuffer: readonly string[]): string {
-  return stripAnsiCodes(semanticBuffer.join("\n").replace(CURSOR_FORWARD_RE, " "));
+  const moves = semanticBuffer
+    .join("\n")
+    .replace(CURSOR_MOVE_RE, (_sequence, count: string, op: string) =>
+      op === "C" && Number(count || "1") <= 1 ? " " : RAW_CELLS_SKIPPED
+    );
+  return stripAnsiCodes(moves);
 }
 
 export interface HandbackHit {
@@ -150,18 +174,24 @@ export interface HandbackHit {
  * has not caught up with the last chunk. Neither can manufacture a false hit —
  * the code is fresh — so reading both only adds recall.
  */
+export interface HandbackTextSource {
+  read: () => string;
+  /** The rows are rendered screen rows, not a raw stream. */
+  rendered: boolean;
+}
+
 export function findHandback(
-  texts: ReadonlyArray<() => string>,
+  sources: readonly HandbackTextSource[],
   requests: readonly HandbackRequest[],
   observedAt: number
 ): HandbackHit | undefined {
   if (requests.length === 0) return undefined;
-  for (const read of texts) {
-    const text = read();
+  for (const source of sources) {
+    const text = source.read();
     if (!text) continue;
     // Latest request first: it is the one the agent is answering.
     for (const request of [...requests].reverse()) {
-      const match = detectHandback(text, request.code);
+      const match = detectHandback(text, request.code, source.rendered);
       if (!match) continue;
       return {
         code: request.code,

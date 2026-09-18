@@ -323,6 +323,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     }
   };
 
+  /** Launch ids the launcher always turns into a panel, never an agent. */
+  const HANDBACK_PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
+
   actions.set("agent.launch", () => ({
     id: "agent.launch",
     title: "Launch Agent",
@@ -532,8 +535,13 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           "handback asks the agent to mark the end of its reply to `prompt`, so it needs a non-empty `prompt`. Pass one, or launch without handback."
         );
       }
-      // A plain shell, a non-terminal panel or an unknown id has no agent to answer it.
-      if (handback === true && !isRegisteredAgent(agentId)) {
+      // A plain shell, a non-terminal panel or an unknown id has no agent to
+      // answer it. The panel ids are checked by name: the launcher opens their
+      // panel even when a registry entry happens to share the id.
+      if (
+        handback === true &&
+        (HANDBACK_PANEL_LAUNCH_IDS.has(agentId) || !isRegisteredAgent(agentId))
+      ) {
         throw new UnactionableTargetError(
           "handback needs an agent to answer it, and this id is not a registered agent: a plain shell or panel never prints the marker. Launch a registered agent, or launch without handback."
         );

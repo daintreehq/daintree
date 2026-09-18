@@ -479,7 +479,10 @@ export class AgentStateService {
     const delivered = tracker.deliveredRequests();
     if (delivered.length === 0) return undefined;
     return findHandback(
-      [() => tracker.screenText(), () => rawHandbackText(terminal.semanticBuffer)],
+      [
+        { read: () => tracker.screenText(), rendered: true },
+        { read: () => rawHandbackText(terminal.semanticBuffer), rendered: false },
+      ],
       delivered,
       timestamp
     );

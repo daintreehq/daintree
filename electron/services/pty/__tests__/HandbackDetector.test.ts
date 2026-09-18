@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { detectHandback } from "../HandbackDetector.js";
+import { detectHandback, rawHandbackText } from "../HandbackDetector.js";
 import { buildHandbackInstruction } from "../../../../shared/utils/handback.js";
 import { HANDBACK_MESSAGE_MAX_CHARS } from "../../../../shared/types/handback.js";
 
@@ -152,5 +152,25 @@ describe("detectHandback", () => {
 
   it("returns null for empty text", () => {
     expect(detectHandback("", CODE)).toBeNull();
+  });
+});
+
+describe("detectHandback over the raw stream", () => {
+  const raw = (...rows: string[]) => detectHandback(rawHandbackText(rows), CODE, false);
+
+  it("keeps one-cell cursor-forward gaps as spaces", () => {
+    expect(raw("⏺ DAINTREE-DONE-k7f3qa:\x1b[1Cfixed\x1b[Cit END-k7f3qa")?.message).toBe("fixed it");
+  });
+
+  it("does not trust a capture a repaint skipped cells inside", () => {
+    // A cell-diff repaint of the echo rewrites both markers and moves past the
+    // unchanged `<summary>` between them.
+    expect(raw("DAINTREE-DONE-k7f3qa:\x1b[11CEND-k7f3qa")).toBeNull();
+    expect(raw("DAINTREE-DONE-k7f3qa:\x1b[5;20HEND-k7f3qa")).toBeNull();
+    expect(raw("DAINTREE-DONE-k7f3qa: \x1b[2Aok END-k7f3qa")).toBeNull();
+  });
+
+  it("never rejoins a hyphen across raw rows, which may not be neighbours on screen", () => {
+    expect(raw("DAINTREE-DONE-", "k7f3qa: done END-k7f3qa")).toBeNull();
   });
 });

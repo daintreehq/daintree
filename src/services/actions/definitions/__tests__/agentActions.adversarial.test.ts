@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildHandbackInstruction } from "@shared/utils/handback";
+import { isRegisteredAgent } from "@/config/agents";
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
@@ -84,7 +85,11 @@ vi.mock("@/store/projectPresetsStore", () => projectPresetsStoreMock);
 // module also means the preset-identity merge under test here is the real one.
 vi.mock("@/config/agents", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/config/agents")>();
-  return { ...actual, ...agentRegistryMock };
+  return {
+    ...actual,
+    ...agentRegistryMock,
+    isRegisteredAgent: vi.fn(actual.isRegisteredAgent),
+  };
 });
 vi.mock("@/clients/userAgentRegistryClient", () => ({
   userAgentRegistryClient: clientsMock.userAgentRegistryClient,
@@ -323,12 +328,28 @@ describe("agentActions adversarial", () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);
 
-    for (const agentId of ["terminal", "browser", "dev-preview"]) {
+    for (const agentId of ["terminal", "browser", "dev-preview", "not-an-agent"]) {
       await expect(
         callAction(actions, "agent.launch", { agentId, prompt: "do it", handback: true })
       ).rejects.toBeInstanceOf(UnactionableTargetError);
     }
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch refuses handback for a panel id even when a registry entry shares it", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+    const actual = await vi.importActual<typeof import("@/config/agents")>("@/config/agents");
+    vi.mocked(isRegisteredAgent).mockImplementation(() => true);
+
+    try {
+      await expect(
+        callAction(actions, "agent.launch", { agentId: "browser", prompt: "do it", handback: true })
+      ).rejects.toBeInstanceOf(UnactionableTargetError);
+      expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+    } finally {
+      vi.mocked(isRegisteredAgent).mockImplementation(actual.isRegisteredAgent);
+    }
   });
 
   it("agent.launch leaves the prompt alone when handback is not asked for", async () => {
