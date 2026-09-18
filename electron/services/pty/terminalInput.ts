@@ -5,6 +5,7 @@ import {
   PASTE_THRESHOLD_CHARS,
   getSoftNewlineSequence as getSoftNewlineSequenceShared,
   containsFullBracketedPaste,
+  neutralizeControlCharacters,
 } from "../../../shared/utils/terminalInputProtocol.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 
@@ -19,8 +20,25 @@ export function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * The submission text boundary: every path that puts a *body* into a terminal
+ * goes through here, and nothing downstream of it may assume the text is safe.
+ *
+ * Line endings fold to `\n` first — the submission paths re-encode that into
+ * whichever newline protocol the destination speaks — and then every remaining
+ * control character is neutralised. Doing it here rather than per branch is the
+ * point: bracketed paste already defended itself, but the soft-newline branch
+ * (agents that declare no bracketed paste, Gemini among them) and the plain
+ * short-text branch wrote the body through untouched, so page-derived text —
+ * DOM ids and class names the Site Builder quotes into a prompt — could reach
+ * the agent as terminal input rather than as prompt text.
+ *
+ * Trusted protocol bytes are added AFTER this runs, by the caller that means
+ * them. Raw keystrokes never come through here at all.
+ */
 export function normalizeSubmitText(text: string): string {
-  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  const folded = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return neutralizeControlCharacters(folded);
 }
 
 export function splitTrailingNewlines(text: string): { body: string; enterCount: number } {
