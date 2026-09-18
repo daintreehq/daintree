@@ -481,6 +481,7 @@ describe("FetchScheduler", () => {
 
       scheduler.schedule(true);
       scheduler.reschedule(false);
+      expect(vi.getTimerCount()).toBe(0);
       await vi.advanceTimersByTimeAsync(15 * 60_000);
 
       expect(host.onExecuteFetch).not.toHaveBeenCalled();
@@ -516,9 +517,12 @@ describe("FetchScheduler", () => {
 
       host.pollingEnabled = false;
       resolveFetch();
-      await vi.advanceTimersByTimeAsync(15 * 60_000);
+      await vi.advanceTimersByTimeAsync(0);
 
       expect(scheduler.isFetchInFlight).toBe(false);
+      // Nothing armed at all — not merely a timer that declines when it fires.
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(15 * 60_000);
       expect(host.onExecuteFetch).toHaveBeenCalledTimes(1);
     });
 

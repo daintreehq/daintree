@@ -219,6 +219,8 @@ describe("ResourcePollTimer", () => {
 
     host.pollingEnabled = false;
     resolvePoll();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(10_000);
 
     expect(host.onResourceStatusPoll).toHaveBeenCalledTimes(1);
