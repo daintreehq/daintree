@@ -439,7 +439,8 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // raw output time, and spinner redraws are exactly what it leaves out. It was
   // trimmed from 152 B before raising.
   //
-  // 56_400 → PLACEHOLDER for the `closed` idle reason on both wait tools. A terminal
+  // 56_400 → 56_800 for the `closed` idle reason on both wait tools, measured at
+  // 56_786 B — 386 B over the 56_400 before it. A terminal
   // the user closes only goes hidden and is killed `TRASH_TTL_MS` later, so without it
   // a waiter reads the user's own close as an ordinary exit up to 20 s after the fact.
   // Nearly all of it is the `idleReason` caveat on `terminal.waitUntilIdle` saying
@@ -447,7 +448,7 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // kind of honesty text the entry above refused to trade. The batch description was
   // rewritten shorter in the same change, so the enum arms cost less than they
   // otherwise would.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_400;
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_800;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -542,16 +543,17 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 214_300 → 214_900 for #12428, measured at 214_853 B: the same 567 B as the
   // external ceiling above, since all three tools are on both surfaces.
   //
-  // 214_900 → PLACEHOLDER for this branch's `closed` idle reason, the same spend the
-  // external ceiling above carries. Both wait tools are on the external tier, so this
-  // is that spend seen from the full surface.
+  // 214_900 → 216_200 for this branch, measured at 216_145 B — 1_245 B over the
+  // 214_900 before it, across two spends. The `closed` idle reason on both wait
+  // tools, which is the same 386 B the external ceiling above carries seen from the
+  // full surface.
   //
   // Then again for `agentCapabilities.search`: its 272 B description and 665 B input
   // schema. It does not opt into `mcpOutputSchema`, so it advertises no output schema.
   // It shipped with a published contract but on no tier, so `tools/list` never offered
   // the lookup the assistant was told to use. Workbench only, beside
   // `slashCommands.list`, so the external ceiling does not move.
-  const MAX_COHORT_PAYLOAD_BYTES = 214_900;
+  const MAX_COHORT_PAYLOAD_BYTES = 216_200;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
