@@ -40,6 +40,7 @@ import {
   getHardenedGitConfig,
   selectUserDataDir,
   toGitConfigPath,
+  GIT_BLOCK_TIMEOUT_MS,
 } from "../hardenedGit.js";
 import { simpleGit } from "simple-git";
 
@@ -58,6 +59,39 @@ function soleHooksPath(config: readonly string[]): string {
   const values = hooksPathValues(config);
   expect(values).toHaveLength(1);
   return values[0];
+}
+
+/** Values of every `-o Key=value` pair for `key`, in argv order. */
+function sshOptionValues(argv: readonly string[], key: string): string[] {
+  return argv.flatMap((arg, i) =>
+    argv[i - 1] === "-o" && arg.startsWith(`${key}=`) ? [arg.slice(key.length + 1)] : []
+  );
+}
+
+/**
+ * What an ssh invocation handed to headless git must guarantee: it names ssh
+ * itself, and it can never stop on a prompt. A blank value fails the first
+ * (issue #12475) and a bare `ssh` fails the second — its host-key prompt hangs
+ * a process with no terminal, which `GIT_TERMINAL_PROMPT=0` does not cover.
+ * The connect timeout sits below simple-git's block timeout so an unreachable
+ * host is reported by ssh as a connection timeout, not as a generic stall.
+ */
+function expectNonInteractiveSsh(command: unknown): void {
+  expect(typeof command).toBe("string");
+  const argv = String(command).split(/\s+/);
+  expect(argv[0]).toBe("ssh");
+  expect(sshOptionValues(argv, "BatchMode")).toEqual(["yes"]);
+  expect(sshOptionValues(argv, "StrictHostKeyChecking")).toEqual(["accept-new"]);
+  const timeouts = sshOptionValues(argv, "ConnectTimeout").map(Number);
+  expect(timeouts).toHaveLength(1);
+  expect(timeouts[0]).toBeGreaterThan(0);
+  expect(timeouts[0] * 1000).toBeLessThan(GIT_BLOCK_TIMEOUT_MS);
+}
+
+function sshCommandValues(config: readonly string[]): string[] {
+  return config
+    .filter((entry) => entry.startsWith("core.sshCommand="))
+    .map((entry) => entry.slice("core.sshCommand=".length));
 }
 
 function capturedConfig(callIndex = 0): string[] {
@@ -136,11 +170,16 @@ describe("createHardenedGit", () => {
     expect(options.config).toContain("protocol.ext.allow=never");
   });
 
-  it("disables core.sshCommand via config", async () => {
+  // A blank `core.sshCommand=` is not "unset" to git — it forks the empty
+  // string as the transport and every ssh URL fails with `cannot run :`
+  // (issue #12475). Exactly one entry, so no later blank can undo the pin.
+  it("pins core.sshCommand to a non-interactive ssh via config", async () => {
     await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(options.config).toContain("core.sshCommand=");
+    const values = sshCommandValues(options.config);
+    expect(values).toHaveLength(1);
+    expectNonInteractiveSsh(values[0]);
   });
 
   it("disables credential.helper via config", async () => {
@@ -178,7 +217,6 @@ describe("createHardenedGit", () => {
       "core.askpass=",
       "credential.helper=",
       "protocol.ext.allow=never",
-      "core.sshCommand=",
       "core.gitProxy=",
       "core.quotepath=false",
       "core.precomposeunicode=true",
@@ -186,13 +224,15 @@ describe("createHardenedGit", () => {
     for (const key of expectedKeys) {
       expect(options.config).toContain(key);
     }
-    // Count the static entries on their own; the generated hooks entry has its
-    // own coverage below, and folding it into this total would hide a change to
-    // either half behind one number.
+    // Count the static entries on their own; the generated hooks entry and the
+    // pinned ssh command have their own coverage, and folding them into this
+    // total would hide a change to either behind one number.
     const staticEntries = options.config.filter(
-      (entry: string) => !entry.startsWith("core.hooksPath=")
+      (entry: string) =>
+        !entry.startsWith("core.hooksPath=") && !entry.startsWith("core.sshCommand=")
     );
     expect(staticEntries).toHaveLength(expectedKeys.length);
+    expect(sshCommandValues(options.config)).toHaveLength(1);
   });
 
   it("passes abort signal when provided", async () => {
@@ -244,7 +284,7 @@ describe("createHardenedGit", () => {
     }
   });
 
-  it("does not apply hardened SSH command (blocked via config instead)", async () => {
+  it("leaves GIT_SSH_COMMAND unset (ssh is pinned via config instead)", async () => {
     const origSsh = process.env.GIT_SSH_COMMAND;
     delete process.env.GIT_SSH_COMMAND;
     try {
@@ -392,7 +432,7 @@ describe("createAuthenticatedGit", () => {
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(options.config).not.toContain("credential.helper=");
-    expect(options.config).not.toContain("core.sshCommand=");
+    expect(sshCommandValues(options.config)).toEqual([]);
     expect(options.config).not.toContain("core.askpass=");
   });
 
@@ -416,11 +456,10 @@ describe("createAuthenticatedGit", () => {
     expect(mockGitInstance.env).toHaveBeenCalledWith(
       expect.objectContaining({
         GIT_TERMINAL_PROMPT: "0",
-        GIT_SSH_COMMAND:
-          "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15",
         GIT_OPTIONAL_LOCKS: "0",
       })
     );
+    expectNonInteractiveSsh(mockGitInstance.env.mock.calls[0][0].GIT_SSH_COMMAND);
   });
 
   it("sets GIT_OPTIONAL_LOCKS=0 to suppress incidental lock writes", async () => {
@@ -514,9 +553,7 @@ describe("createAuthenticatedGit", () => {
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.GIT_TERMINAL_PROMPT).toBe("0");
-      expect(envArg.GIT_SSH_COMMAND).toBe(
-        "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15"
-      );
+      expectNonInteractiveSsh(envArg.GIT_SSH_COMMAND);
       expect(envArg.GIT_PAGER).toBeUndefined();
       expect(envArg.LC_MESSAGES).toBe("C");
       expect(envArg.LANGUAGE).toBe("");
@@ -958,8 +995,15 @@ describe("config profiles", () => {
 
   it("hardened profile includes credential-blocking entries", async () => {
     expect(getHardenedGitConfig()).toContain("credential.helper=");
-    expect(getHardenedGitConfig()).toContain("core.sshCommand=");
     expect(getHardenedGitConfig()).toContain("core.askpass=");
+  });
+
+  it("hardened config pins the same ssh invocation the authenticated env sets", async () => {
+    await createAuthenticatedGit("/test/repo");
+
+    const envArg = mockGitInstance.env.mock.calls[0][0];
+    expectNonInteractiveSsh(envArg.GIT_SSH_COMMAND);
+    expect(sshCommandValues(getHardenedGitConfig())).toEqual([envArg.GIT_SSH_COMMAND]);
   });
 
   it("authenticated profile excludes credential-blocking entries", async () => {
@@ -967,7 +1011,7 @@ describe("config profiles", () => {
 
     const config = capturedConfig();
     expect(config).not.toContain("credential.helper=");
-    expect(config).not.toContain("core.sshCommand=");
+    expect(sshCommandValues(config)).toEqual([]);
     expect(config).not.toContain("core.askpass=");
   });
 
