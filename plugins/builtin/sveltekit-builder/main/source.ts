@@ -36,7 +36,49 @@ export type SourceRead =
   | { status: "too-large" }
   | { status: "not-utf8"; revision: string };
 
+/**
+ * What a stat can settle before a byte is read.
+ *
+ * The cap used to be applied to `bytes.byteLength` — after a complete
+ * `readFileBytes`, which is to say after the whole file was in main's heap. The
+ * limit bounded *parsing* and nothing else, so a 400 MB file in the project
+ * still cost 400 MB to refuse, and main is where the app and every other
+ * plugin live.
+ *
+ * `not-a-file` is the case worth naming: `something.svelte` can be a directory
+ * or a named pipe, and a FIFO's `size` is 0 while its read need never end — the
+ * cap would be satisfied by a stream that blocks or supplies as much as it
+ * likes. Only a regular file gets as far as a read.
+ *
+ * A stat is not a complete bound on a regular file: it can grow between this
+ * call and the read, and the post-read check in {@link readSource} is what
+ * catches that. Closing the window entirely needs a read that stops at
+ * limit-plus-one bytes, which `host.fs` does not offer — adding it is a change
+ * to the published plugin API rather than something to slip in here. This turns
+ * the ordinary case from "allocate it all, then refuse" into "refuse", and
+ * leaves one read of a file that was under the cap a moment ago.
+ */
+async function preflight(
+  fs: PluginFsApi,
+  absolutePath: string
+): Promise<"ok" | "too-large" | "not-a-file"> {
+  try {
+    const stat = await fs.stat(absolutePath);
+    if (!stat.isFile) return "not-a-file";
+    return stat.size > MAX_SOURCE_BYTES ? "too-large" : "ok";
+  } catch {
+    // An unreadable stat is not evidence of anything; the read reports the
+    // truth, including whether the file is there at all.
+    return "ok";
+  }
+}
+
 export async function readSource(fs: PluginFsApi, absolutePath: string): Promise<SourceRead> {
+  const before = await preflight(fs, absolutePath);
+  if (before === "too-large") return { status: "too-large" };
+  // Nothing readable as source is there, which is what `missing` means to
+  // every caller: there is no text to parse and no revision to hold it to.
+  if (before === "not-a-file") return { status: "missing" };
   let bytes: Uint8Array;
   try {
     bytes = await fs.readFileBytes(absolutePath);
@@ -44,6 +86,7 @@ export async function readSource(fs: PluginFsApi, absolutePath: string): Promise
     // `host.fs` cannot tell missing from denied; neither is readable source.
     return { status: "missing" };
   }
+  // Still checked after the read: the file may have grown since the stat.
   if (bytes.byteLength > MAX_SOURCE_BYTES) return { status: "too-large" };
   const revision = sha256Hex(bytes);
   try {
@@ -52,6 +95,28 @@ export async function readSource(fs: PluginFsApi, absolutePath: string): Promise
     return { status: "ok", text: bom ? decoded.slice(1) : decoded, revision };
   } catch {
     return { status: "not-utf8", revision };
+  }
+}
+
+/**
+ * The revision of a file the tracker is watching, under the same size cap
+ * every other read here obeys.
+ *
+ * `null` means "not readable source", which covers a deleted file and one that
+ * has grown past the cap. The tracker used to hash an uncapped
+ * `readFileBytes`, so a watched file growing to any size was read and hashed in
+ * full on every change the watcher reported — repeatedly, and in main. A file
+ * this returns `null` for is one {@link readSource} would refuse anyway, so
+ * reporting no revision is what the rest of the builder already expects.
+ */
+export async function readRevision(fs: PluginFsApi, absolutePath: string): Promise<string | null> {
+  if ((await preflight(fs, absolutePath)) !== "ok") return null;
+  try {
+    const bytes = await fs.readFileBytes(absolutePath);
+    if (bytes.byteLength > MAX_SOURCE_BYTES) return null;
+    return sha256Hex(bytes);
+  } catch {
+    return null;
   }
 }
 
