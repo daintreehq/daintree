@@ -237,6 +237,12 @@ const PERMISSIVE_ALLOWLIST: ReadonlyArray<{ actionId: string; pointer: string; r
     pointer: "/properties/status/anyOf/0/properties/meta/additionalProperties",
     reason: "open by nature: provider-supplied status metadata",
   },
+  {
+    actionId: "terminal.readLastMessageOwned",
+    pointer: "/oneOf/0/properties/unansweredToolUses/items/properties/input/additionalProperties",
+    reason:
+      "open by nature: the agent CLI's own, uncontracted question input (#12479) — returned only for a question to the user and size-bounded in main, which builds this result without passing through the schema parse at all",
+  },
 
   // --- deliberate escape, documented at the definition ---------------------
   {

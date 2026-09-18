@@ -1027,6 +1027,11 @@ describe("McpServerService", () => {
         description: "Stop the turn an agent this MCP session created is running",
       }),
       createManifestEntry({
+        id: "terminal.readLastMessageOwned" as ActionId,
+        title: "Read Owned Agent's Last Message",
+        description: "Read the last reply an agent this MCP session created wrote",
+      }),
+      createManifestEntry({
         id: "terminal.sendCommandOwned" as ActionId,
         title: "Submit Text to Owned Terminal",
         description: "Submit text to a terminal this MCP session created",
@@ -1629,6 +1634,7 @@ describe("McpServerService", () => {
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "system.getResourceProfileSnapshot")!,
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "cliAvailability.get")!,
       WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "hibernation.getConfig")!,
+      WORKBENCH_TIER_TOOLS_LIST.find((id) => id === "terminal.readLastMessageOwned")!,
     ] as const;
 
     // terminal.bulkCommand (the one-shot broadcast-send) is renderer-only — it

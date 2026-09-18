@@ -176,6 +176,9 @@ function fakeDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
     handleTerminalGetStatusViewless: vi
       .fn()
       .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
+    handleTerminalReadLastMessageOwned: vi
+      .fn()
+      .mockResolvedValue({ status: "unavailable", reason: "no-message" }),
     isTerminalIdInUse: vi.fn(() => false),
     appendAuditRecord: vi.fn(),
     getCachedManifest: vi.fn(() => null),
@@ -5568,7 +5571,12 @@ describe("workspace-bound external sessions (#11789)", () => {
       // production set below rather than restated beside it.
       const MAIN_PROCESS_CALLS: Record<
         string,
-        { args: Record<string, unknown>; handler?: keyof SessionServerDeps }
+        {
+          args: Record<string, unknown>;
+          handler?: keyof SessionServerDeps;
+          /** An owned tool answers only for a panel the session created. */
+          ownsTerminal?: string;
+        }
       > = {
         "terminal.waitUntilIdle": {
           args: { terminalId: "t-1" },
@@ -5586,7 +5594,21 @@ describe("workspace-bound external sessions (#11789)", () => {
           args: { projectId: "p-1", runnerId: "test" },
           handler: "handleProjectRunCheck",
         },
+        "terminal.readLastMessageOwned": {
+          args: { terminalId: "t-1" },
+          handler: "handleTerminalReadLastMessageOwned",
+          ownsTerminal: "t-1",
+        },
       };
+
+      function viewlessDepsFor(name: string): SessionServerDeps {
+        const deps = viewlessDeps();
+        const owned = MAIN_PROCESS_CALLS[name]!.ownsTerminal;
+        if (owned !== undefined) {
+          deps.sessionStore.resourceOwnership.record(SESSION, [{ kind: "terminal", id: owned }]);
+        }
+        return deps;
+      }
 
       it("covers every tool the production bypass set names", () => {
         // The guard below is only a drift guard if the cases come from the set
@@ -5608,7 +5630,7 @@ describe("workspace-bound external sessions (#11789)", () => {
 
       eachMainProcessTool("does not need a live view to settle %s", async (name) => {
         const { args, handler } = MAIN_PROCESS_CALLS[name]!;
-        const deps = viewlessDeps();
+        const deps = viewlessDepsFor(name);
         const server = createSessionServer(SESSION, deps);
         await server.connect(makeMockTransport());
 
@@ -5632,7 +5654,7 @@ describe("workspace-bound external sessions (#11789)", () => {
       eachMainProcessTool("does not resolve the bound manifest to admit %s", async (name) => {
         // The ceiling asked the manifest a question about renderer dispatch.
         // A tool that never reaches a renderer should not pay for the answer.
-        const deps = viewlessDeps();
+        const deps = viewlessDepsFor(name);
         const server = createSessionServer(SESSION, deps);
         await server.connect(makeMockTransport());
 
@@ -7211,6 +7233,162 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
+  describe("terminal.readLastMessageOwned (#12479)", () => {
+    const READ_RESULT = {
+      status: "ok",
+      provider: "claude",
+      message: {
+        id: "msg_1",
+        text: "Verdict: ship it.",
+        truncated: false,
+        recordedAt: 1,
+        stopReason: "end_turn",
+      },
+      unansweredToolUses: [],
+      newerRecordsFollow: false,
+      fileUpdatedAt: 1,
+    };
+
+    function readHarness(
+      sessionId: string,
+      read: () => Promise<unknown> = () => Promise.resolve(READ_RESULT)
+    ) {
+      const handleTerminalReadLastMessageOwned = vi.fn(read);
+      const h = harness(sessionId, {}, { handleTerminalReadLastMessageOwned });
+      h.store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: "terminal-1" }]);
+      return { ...h, handleTerminalReadLastMessageOwned };
+    }
+
+    it("runs in main on the checked id and the call's signal, never reaching a renderer", async () => {
+      const { server, deps, dispatchAction, handleTerminalReadLastMessageOwned } =
+        readHarness("s-read");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toEqual(READ_RESULT);
+      expect(payloadOf(result)).toEqual(READ_RESULT);
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
+        "terminal-1",
+        expect.any(AbortSignal)
+      );
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(deps.requestManifest).not.toHaveBeenCalled();
+    });
+
+    // No path, session id or agent crosses from the caller: the host resolves
+    // all of it, so there is nothing else for an argument to steer.
+    it("hands the executor the id and nothing else the caller sent", async () => {
+      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-strip");
+
+      await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: {
+          terminalId: "terminal-1",
+          sessionId: "someone-elses",
+          path: "/etc/passwd",
+        },
+      });
+
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(1);
+      expect(handleTerminalReadLastMessageOwned.mock.calls[0]).toEqual([
+        "terminal-1",
+        expect.any(AbortSignal),
+      ]);
+    });
+
+    it("refuses a panel the session did not create, without reading anything", async () => {
+      const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-foreign");
+      store.resourceOwnership.record("other-session", [{ kind: "terminal", id: "terminal-theirs" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-theirs" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+    });
+
+    it("refuses a call that names no panel", async () => {
+      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-blank");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "  " },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("VALIDATION_ERROR");
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+    });
+
+    it("keeps ownership, so the panel can be read again", async () => {
+      const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-twice");
+      const args = { name: "terminal.readLastMessageOwned", arguments: { terminalId: "terminal-1" } };
+
+      expect((await callTool(server, args)).isError).toBeUndefined();
+      expect((await callTool(server, args)).isError).toBeUndefined();
+
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(2);
+      expect(store.resourceOwnership.owns("s-read-twice", "terminal", "terminal-1")).toBe(true);
+    });
+
+    // An unavailable answer is still an answer — the caller asked and was told
+    // why not — so it is a structured success, not a tool error.
+    it("returns an unavailable answer as a structured result", async () => {
+      const unavailable = { status: "unavailable", reason: "store-unknown" };
+      const { server } = readHarness("s-read-unavailable", () => Promise.resolve(unavailable));
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(result.structuredContent).toEqual(unavailable);
+    });
+
+    it("audits a read once, as the result the executor returned", async () => {
+      const { server, deps } = readHarness("s-read-audit");
+
+      await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(deps.appendAuditRecord).toHaveBeenCalledTimes(1);
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolId: "terminal.readLastMessageOwned",
+          outcome: { kind: "result", value: { ok: true, result: READ_RESULT } },
+        })
+      );
+    });
+
+    it("reports a failed read as an execution error, audited as a throw", async () => {
+      const { server, deps } = readHarness("s-read-throw", () =>
+        Promise.reject(new Error("pty host unavailable"))
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("EXECUTION_ERROR");
+      expect(deps.appendAuditRecord).toHaveBeenCalledTimes(1);
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({ outcome: expect.objectContaining({ kind: "throw" }) })
+      );
+    });
+  });
+
   describe("owned terminal input (#12407)", () => {
     const SUBMIT_RESULT = {
       sent: true,

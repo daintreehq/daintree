@@ -14,6 +14,7 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.sendCommandOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
+  "terminal.readLastMessageOwned",
   "terminal.resumeSessions",
 
   // -- terminalMetaActions --
@@ -574,4 +575,5 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "fleet.retryFailures",
   "terminal.interrupt",
   "terminal.interruptOwned",
+  "terminal.readLastMessageOwned",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

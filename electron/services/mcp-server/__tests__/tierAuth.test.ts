@@ -635,7 +635,16 @@ describe("external tool surface budget (#11585)", () => {
   // `terminal.inject` for their session-scoped forms rather than adding beside
   // them: the unscoped pair reached any panel a listing returns, and the
   // surface needs input into the terminals it creates, not into the user's.
-  const EXTERNAL_BUDGET_MAX = 32;
+  //
+  // 32 → 33 for #12479's `terminal.readLastMessageOwned`. The surface could see
+  // that an agent it launched was waiting and not what on: a scrollback tail
+  // cuts a long hand-off or a question with options wherever the line count
+  // lands, so orchestrators read the CLI's own session files from a shell with
+  // nothing scoping the read. Nothing here could carry it — the status snapshot
+  // is not ownership-scoped and the ownership gate is per tool, not per field.
+  // The caller names a panel it created and the host resolves everything else,
+  // so the slot buys a bounded read of that one agent's reply, never a path.
+  const EXTERNAL_BUDGET_MAX = 33;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);
@@ -771,6 +780,23 @@ describe("external tool surface budget (#11585)", () => {
       expect(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).not.toContain(id);
       expect(isTierPermitted("external", id)).toBe(false);
     }
+  });
+
+  // A read, so it sits on the lowest in-app tier as well as the external one
+  // (#12479) — the subset invariant below needs the first, and nothing about
+  // reading an agent the session launched calls for more than the floor.
+  it("admits the owned last-message read externally and at the workbench floor (#12479)", () => {
+    const id = "terminal.readLastMessageOwned";
+    expect(BUILT_IN_ACTION_IDS as readonly string[]).toContain(id);
+    expect(isTierPermitted("external", id)).toBe(true);
+    expect(shouldExposeTool(makeEntry({ id, kind: "query" }), "external")).toBe(true);
+    for (const tier of ["workbench", "action", "system"] as const) {
+      expect(isTierPermitted(tier, id)).toBe(true);
+    }
+    // Read-only by its kind, not by an override — a query drives the hints.
+    const annotations = buildAnnotations(makeEntry({ id, kind: "query", danger: "safe" }));
+    expect(annotations.readOnlyHint).toBe(true);
+    expect(annotations.destructiveHint).toBe(false);
   });
 
   // A cut PR that quietly widens is the failure #10710 documents, so assert the

@@ -126,6 +126,7 @@ const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
 const TERMINAL_GET_STATUS_TOOL = "terminal.getStatus";
+const TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL = "terminal.readLastMessageOwned";
 
 /**
  * The tools whose execution never touches a renderer, and which are therefore
@@ -161,10 +162,69 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   SKILLS_LOAD_TOOL,
   MCP_SURFACE_TOOL_ID,
   PROJECT_RUN_CHECK_TOOL,
+  // Main-executed once its ownership check passes (#12479). It reads a file the
+  // agent wrote and dispatches nothing, so a closed workspace is no reason to
+  // refuse it.
+  TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
 ]);
 /**
- * The session-scoped `*Owned` tools (#11909), and the action each one delegates
- * to once ownership checks out.
+ * The main-process executors an owned tool can name. Kept apart from the rest
+ * of {@link SessionServerDeps} so a registry entry can only point at one of
+ * these, never at some unrelated dep.
+ */
+export interface OwnedMainExecutors {
+  /**
+   * Read the last message the agent in an owned panel wrote to its own
+   * transcript (#12479). Given the checked id and nothing else the caller sent.
+   */
+  handleTerminalReadLastMessageOwned: (
+    terminalId: string,
+    signal: AbortSignal
+  ) => Promise<import("../../../shared/types/agentLastMessage.js").AgentLastMessageResult>;
+}
+
+type OwnedResourceTool = {
+  // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
+  // and guards comparisons against it with a lint rule, and an ownership
+  // resource kind is a different taxonomy that would otherwise trip it.
+  resourceKind: OwnedResourceKind;
+  idArg: string;
+  releasesOwnership: boolean;
+} & (
+  | {
+      executor: "renderer";
+      delegateTo: string;
+      /**
+       * The delegate's own name for the id, where it differs from the public one.
+       * Arguments are rebuilt rather than forwarded, so without this the id
+       * simply would not reach an action that spells it differently.
+       */
+      delegateIdArg?: string;
+      /**
+       * Arguments beyond the id that reach the delegate, copied by name (#12407).
+       * Everything else the caller sent is dropped, and the checked id is written
+       * after these so no forwarded field can name a different target.
+       */
+      forwardArgs?: readonly string[];
+      /**
+       * Whether this tool's job is to bring the user to the resource. Only a
+       * reveal sets it, and only a reveal may: it is the single place on the
+       * external surface that deliberately moves the user, so it alone routes
+       * through the active view and raises that view's window.
+       */
+      reveals?: boolean;
+    }
+  | {
+      executor: "main";
+      handler: keyof OwnedMainExecutors;
+    }
+);
+
+type RendererOwnedResourceTool = Extract<OwnedResourceTool, { executor: "renderer" }>;
+
+/**
+ * The session-scoped `*Owned` tools (#11909), and what each one runs once
+ * ownership checks out.
  *
  * They run here rather than as ordinary renderer actions because the thing they
  * authorize against — which session created which resource — is main-process
@@ -184,45 +244,17 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
  * is still running, and dropping the record there would cost the session the
  * authority to reveal it a second time — or to clean it up at all.
  */
-const OWNED_RESOURCE_TOOLS: Record<
-  string,
-  {
-    resourceKind: OwnedResourceKind;
-    delegateTo: string;
-    idArg: string;
-    /**
-     * The delegate's own name for the id, where it differs from the public one.
-     * Arguments are rebuilt rather than forwarded, so without this the id
-     * simply would not reach an action that spells it differently.
-     */
-    delegateIdArg?: string;
-    /**
-     * Arguments beyond the id that reach the delegate, copied by name (#12407).
-     * Everything else the caller sent is dropped, and the checked id is written
-     * after these so no forwarded field can name a different target.
-     */
-    forwardArgs?: readonly string[];
-    releasesOwnership: boolean;
-    /**
-     * Whether this tool's job is to bring the user to the resource. Only a
-     * reveal sets it, and only a reveal may: it is the single place on the
-     * external surface that deliberately moves the user, so it alone routes
-     * through the active view and raises that view's window.
-     */
-    reveals?: boolean;
-  }
-> = {
-  // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
-  // and guards comparisons against it with a lint rule, and an ownership
-  // resource kind is a different taxonomy that would otherwise trip it.
+const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
   "terminal.closeOwned": {
     resourceKind: "terminal",
+    executor: "renderer",
     delegateTo: "terminal.close",
     idArg: "terminalId",
     releasesOwnership: true,
   },
   "worktree.deleteOwned": {
     resourceKind: "worktree",
+    executor: "renderer",
     delegateTo: "worktree.delete",
     idArg: "worktreeId",
     releasesOwnership: true,
@@ -234,6 +266,7 @@ const OWNED_RESOURCE_TOOLS: Record<
   // is rarely the one holding the panel (#12315).
   "terminal.revealOwned": {
     resourceKind: "terminal",
+    executor: "renderer",
     delegateTo: "pilot.openRun",
     idArg: "terminalId",
     delegateIdArg: "runId",
@@ -248,6 +281,7 @@ const OWNED_RESOURCE_TOOLS: Record<
   // becoming the general signal-passing surface it was deliberately not.
   "terminal.interruptOwned": {
     resourceKind: "terminal",
+    executor: "renderer",
     delegateTo: "terminal.interrupt",
     idArg: "terminalId",
     releasesOwnership: false,
@@ -260,6 +294,7 @@ const OWNED_RESOURCE_TOOLS: Record<
   // the caller's.
   "terminal.sendCommandOwned": {
     resourceKind: "terminal",
+    executor: "renderer",
     delegateTo: "terminal.sendCommand",
     idArg: "terminalId",
     forwardArgs: ["command"],
@@ -267,7 +302,20 @@ const OWNED_RESOURCE_TOOLS: Record<
   },
   "terminal.injectOwned": {
     resourceKind: "terminal",
+    executor: "renderer",
     delegateTo: "terminal.inject",
+    idArg: "terminalId",
+    releasesOwnership: false,
+  },
+  // The one entry that runs in main rather than delegating (#12479). What it
+  // reads is a file the agent wrote, which the renderer cannot open, and the
+  // answer is built from host state — the pty-host record and the store the
+  // pane was spawned against — rather than anything the caller supplies.
+  // Reading is not a claim the panel stopped existing, so the record stays.
+  [TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL]: {
+    resourceKind: "terminal",
+    executor: "main",
+    handler: "handleTerminalReadLastMessageOwned",
     idArg: "terminalId",
     releasesOwnership: false,
   },
@@ -473,7 +521,7 @@ export function validateDisplayImageUrl(
   return { valid: true };
 }
 
-export interface SessionServerDeps {
+export interface SessionServerDeps extends OwnedMainExecutors {
   sessionStore: SessionStore;
   /**
    * The workspace this session was bound to at handshake (#11789), echoed in
@@ -1041,7 +1089,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * the view that switches has to be the view on screen.
      */
     const dispatchOwnedResourceAction = async (
-      entry: (typeof OWNED_RESOURCE_TOOLS)[string],
+      entry: RendererOwnedResourceTool,
       resourceId: string
     ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
       const delegateArgs: Record<string, unknown> = {};
@@ -1710,6 +1758,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           ownedResourceId = resourceId;
         }
 
+        // A main-executed owned tool (#12479) runs straight after the gate
+        // above and before anything resolves a renderer manifest, so a
+        // workspace with no live view still answers it. The executor is handed
+        // the checked id and nothing else the caller sent — the same rebuild the
+        // delegated tools get. Read-only and never `danger: "confirm"`, so the
+        // strip shows a plain in-flight row; audit and strip-settle unify via
+        // the shared `finally`.
+        if (ownedResource?.executor === "main" && ownedResourceId !== undefined) {
+          emitToolCallStarted(false);
+          try {
+            const result = await deps[ownedResource.handler](ownedResourceId, extra.signal);
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, `${actionId} failed`),
+            });
+          }
+        }
+
         // Two launch arguments that would otherwise hand a session authority it
         // was never given (#12407), refused before anything reaches a renderer.
         //
@@ -2198,7 +2271,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           // `raised` answers the second half of a reveal — whether a window
           // actually came forward — and is vacuously true for everything else.
           const { envelope, raised } =
-            listPaging || ownedResource === undefined || ownedResourceId === undefined
+            listPaging || ownedResource?.executor !== "renderer" || ownedResourceId === undefined
               ? {
                   envelope: listPaging
                     ? await collectListPages()

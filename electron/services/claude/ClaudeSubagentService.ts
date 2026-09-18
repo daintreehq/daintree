@@ -38,7 +38,7 @@ function unavailable(
     : { status: "unavailable", reason };
 }
 
-interface ResolvedTerminal {
+export interface ResolvedTerminal {
   cwd: string;
   parentSessionId: string;
 }
@@ -49,9 +49,16 @@ interface ResolvedTerminal {
  * buggy caller cannot point this at another folder's Claude history — the cwd
  * and the session id both come from the host.
  */
-async function resolveTerminal(
-  terminalId: string
-): Promise<ResolvedTerminal | { status: "unavailable"; reason: AgentSubagentUnavailableReason }> {
+export async function resolveClaudeTerminal(terminalId: string): Promise<
+  | ResolvedTerminal
+  | {
+      status: "unavailable";
+      reason: Extract<
+        AgentSubagentUnavailableReason,
+        "terminal-unknown" | "provider-mismatch" | "no-session"
+      >;
+    }
+> {
   const info = await getPtyClient().getTerminalAsync(terminalId);
   if (!info) return { status: "unavailable", reason: "terminal-unknown" };
   // Live detection wins over the launch hint, matching the renderer. A pane
@@ -70,7 +77,7 @@ async function resolveTerminal(
 }
 
 export async function listClaudeSubagents(terminalId: string): Promise<AgentSubagentsResult> {
-  const resolved = await resolveTerminal(terminalId);
+  const resolved = await resolveClaudeTerminal(terminalId);
   if ("status" in resolved) return resolved;
 
   try {
@@ -92,7 +99,7 @@ export async function readClaudeSubagentTranscript(
   terminalId: string,
   subagentId: string
 ): Promise<AgentSubagentTranscriptResult> {
-  const resolved = await resolveTerminal(terminalId);
+  const resolved = await resolveClaudeTerminal(terminalId);
   if ("status" in resolved) return resolved;
   // The id becomes a filename, so it is checked before it is joined rather than
   // after: a traversal-shaped id must never reach `path.join` at all.
