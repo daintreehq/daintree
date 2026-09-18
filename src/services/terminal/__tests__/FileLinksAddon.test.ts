@@ -820,6 +820,332 @@ describe("FileLinksAddon", () => {
     });
   });
 
+  describe("paths an app hard-wrapped itself (#12449)", () => {
+    const CWD = "/home/user/project";
+
+    interface GridOptions {
+      /** `wrapped[i]` marks row i as xterm's own continuation of row i-1. */
+      wrapped?: boolean[];
+      /**
+       * Rows whose text is used as given rather than padded to `cols`, the way
+       * xterm translates a row holding a wide character: one string character
+       * for two cells, so the text comes up short of the row's width.
+       */
+      unpadded?: number[];
+    }
+
+    /**
+     * A grid the way xterm stores an agent TUI's own wrapping: every row padded
+     * to `cols`, and no row flagged `isWrapped` unless `wrapped` says so — the
+     * app ended each row with a real newline and indented the next one itself.
+     */
+    const makeGrid = (rows: string[], cols: number, options: GridOptions = {}): Terminal => {
+      for (const row of rows) {
+        if (row.length > cols) throw new Error(`fixture row is wider than ${cols}: ${row}`);
+      }
+      return {
+        cols,
+        buffer: {
+          active: {
+            getLine: vi.fn((index: number): IBufferLine | undefined => {
+              const row = rows[index];
+              if (row === undefined) return undefined;
+              const text = options.unpadded?.includes(index) ? row : row.padEnd(cols);
+              return {
+                translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+                isWrapped: options.wrapped?.[index] === true,
+              } as IBufferLine;
+            }),
+          },
+        },
+      } as unknown as Terminal;
+    };
+
+    const linksFor = (
+      rows: string[],
+      hoveredRow: number,
+      cols: number,
+      options?: GridOptions
+    ): Promise<ILink[] | undefined> =>
+      new Promise((resolve) => {
+        new FileLinksAddon(makeGrid(rows, cols, options), () => CWD).provideLinks(
+          hoveredRow + 1,
+          resolve
+        );
+      });
+
+    const readLink = (link: ILink) =>
+      link as unknown as { text: string; absolutePath: string; _line?: number };
+
+    it("links the whole path from either row of a Claude Code hard wrap", async () => {
+      // Claude Code cut the path at the pane edge and resumed it under the
+      // bullet's two-column indent, with a real newline in between. Scanned
+      // alone, the tail read as a relative path under the cwd: a live link to
+      // a file that doesn't exist.
+      const rows = [
+        "● Every row below was driven end to end. Screenshots: the unreachable notice /var/folders/6x/_z9d3pt11_s966hl76_d",
+        "  zynw0000gn/T/claude-chrome-screenshots-ox4tUT/screenshot-1789684756659-1.jpg, the expired notice after",
+      ];
+      const path =
+        "/var/folders/6x/_z9d3pt11_s966hl76_dzynw0000gn/T/claude-chrome-screenshots-ox4tUT/screenshot-1789684756659-1.jpg";
+      for (const hoveredRow of [0, 1]) {
+        const links = await linksFor(rows, hoveredRow, rows[0]!.length);
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).text).toBe(path);
+        expect(readLink(link).absolutePath).toBe(path);
+        expect(link.range.start).toEqual({ x: rows[0]!.indexOf("/var") + 1, y: 1 });
+        // The indent is layout, so the end column is where `.jpg` really sits.
+        expect(link.range.end).toEqual({ x: rows[1]!.indexOf(".jpg") + ".jpg".length, y: 2 });
+      }
+    });
+
+    it("joins only a token too long to have fit the box unbroken", async () => {
+      // `cols - indent` is the widest a word can be without a wrapper having
+      // to cut it. A token that fits was two words meeting at the margin.
+      const upper = "saved to: /tmp/shots/abcdefghi";
+      const fits = await linksFor([upper, "  jk/a.png done"], 1, upper.length);
+      expect(fits).toHaveLength(1);
+      expect(readLink(fits![0]!).text).toBe("jk/a.png");
+      expect(fits![0]!.range.start.y).toBe(2);
+
+      const overflows = await linksFor([upper, "  jkl/a.png done"], 1, upper.length);
+      expect(overflows).toHaveLength(1);
+      expect(readLink(overflows![0]!).absolutePath).toBe("/tmp/shots/abcdefghijkl/a.png");
+      expect(overflows![0]!.range.start).toEqual({ x: "saved to: ".length + 1, y: 1 });
+    });
+
+    it("never fuses two whole paths that met at the margin", async () => {
+      const rows = ["open /tmp/one/two/three.ts", "  /tmp/four/five/six.ts"];
+      for (const hoveredRow of [0, 1]) {
+        const links = await linksFor(rows, hoveredRow, rows[0]!.length);
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).absolutePath).toBe(
+          hoveredRow === 0 ? "/tmp/one/two/three.ts" : "/tmp/four/five/six.ts"
+        );
+        expect(link.range.start.y).toBe(hoveredRow + 1);
+        expect(link.range.end.y).toBe(hoveredRow + 1);
+      }
+    });
+
+    it.each([
+      ["open /tmp/one/two/three.ts", "/tmp/one/two/three.ts"],
+      // Trailing punctuation is peeled before the check, and a file URL's body
+      // would otherwise accept the comma and the word after it.
+      ["open file:///tmp/one.ts,", "file:///tmp/one.ts"],
+    ])(
+      "keeps a whole file at the margin from swallowing the next row's word (%s)",
+      async (upper, text) => {
+        const links = await linksFor([upper, "  andthenalongerword ok"], 0, upper.length);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).text).toBe(text);
+        expect(links![0]!.range.end.y).toBe(1);
+      }
+    );
+
+    it("ends a run where a row's part of the token already reads as a whole file", async () => {
+      // An indented list: the first entry's filename finished exactly at the
+      // margin, so the next row starts a new token rather than extending it.
+      const rows = ["open /tmp/abcdefghij", "  klmnopqrstuvwx.png", "  src/foo.ts"];
+      const first = await linksFor(rows, 1, 20);
+      expect(first?.map((link) => readLink(link).absolutePath)).toEqual([
+        "/tmp/abcdefghijklmnopqrstuvwx.png",
+      ]);
+      const second = await linksFor(rows, 2, 20);
+      expect(second).toHaveLength(1);
+      expect(readLink(second![0]!).absolutePath).toBe("/home/user/project/src/foo.ts");
+      expect(second![0]!.range.start.y).toBe(3);
+    });
+
+    it("still joins the rows after a whole file that ended at the margin", async () => {
+      const rows = ["  /tmp/abcdefghij.ts", "  /tmp/abcdefghijklm", "  nop/file.ts"];
+      const whole = await linksFor(rows, 0, 20);
+      expect(whole?.map((link) => readLink(link).absolutePath)).toEqual(["/tmp/abcdefghij.ts"]);
+      const joined = await linksFor(rows, 2, 20);
+      expect(joined).toHaveLength(1);
+      expect(readLink(joined![0]!).absolutePath).toBe("/tmp/abcdefghijklmnop/file.ts");
+      expect(joined![0]!.range.start).toEqual({ x: 3, y: 2 });
+    });
+
+    it("continues a hidden directory cut at the margin", async () => {
+      // `.claude` is a directory, not an extension: the dot opens the segment.
+      const upper = "open /tmp/.claude";
+      const links = await linksFor([upper, "  /skills/foo.ts"], 1, upper.length);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/tmp/.claude/skills/foo.ts");
+    });
+
+    it("never lets a web URL at the margin absorb the next row's path", async () => {
+      const upper = "see https://example.com/docs/guide";
+      const links = await linksFor([upper, "  src/foo.ts:12 failed"], 1, upper.length);
+      expect(links).toHaveLength(1);
+      const link = readLink(links![0]!);
+      expect(link.absolutePath).toBe("/home/user/project/src/foo.ts");
+      expect(link._line).toBe(12);
+    });
+
+    it("judges a token by the start xterm's own wrap carried it from", async () => {
+      // Row 1 alone reads as a relative path. Its token actually opened as a
+      // web URL on row 0, so the app's continuation on row 2 isn't a path.
+      const rows = ["https://example.com/", "guide/abcdefghijklmn", "  src/foo.ts failed"];
+      const links = await linksFor(rows, 2, 20, { wrapped: [false, true, false] });
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/home/user/project/src/foo.ts");
+      expect(links![0]!.range.start.y).toBe(3);
+    });
+
+    it("never lets a long word without a separator absorb the next row's path", async () => {
+      const upper = "the_quick_brown_fox_jumps_over";
+      const links = await linksFor([upper, "  src/foo.ts is fine"], 1, upper.length);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).absolutePath).toBe("/home/user/project/src/foo.ts");
+    });
+
+    it.each([
+      ["a row that stops short of the edge", "saved /tmp/shots/abc", 24],
+      ["a row whose last cell is a real space", "saved /tmp/shots/abc ", 21],
+    ])("does not continue %s", async (_label, upper, cols) => {
+      const links = await linksFor([upper, "  def/ghijklm.png ok"], 1, cols);
+      expect(links).toHaveLength(1);
+      expect(readLink(links![0]!).text).toBe("def/ghijklm.png");
+      expect(links![0]!.range.start.y).toBe(2);
+    });
+
+    it("turns away a row whose text is narrower than its cells", async () => {
+      // A wide character fills two cells with one string character, so the
+      // row's text no longer says which cell holds what. Joining it would put
+      // the underline in the wrong place.
+      const rows = ["界 /tmp/abcdefghijk", "  lmn.png done"];
+      expect(await linksFor(rows, 1, 19, { unpadded: [0] })).toBeUndefined();
+    });
+
+    it("rejoins a token the app split across three rows, with no separator in the middle", async () => {
+      const rows = ["saved /tmp/abcdefghi", "  jklmnopqrstuvwxyz0", "  12.png done"];
+      for (const hoveredRow of [0, 1, 2]) {
+        const links = await linksFor(rows, hoveredRow, 20);
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).absolutePath).toBe("/tmp/abcdefghijklmnopqrstuvwxyz012.png");
+        expect(link.range.start).toEqual({ x: "saved ".length + 1, y: 1 });
+        expect(link.range.end).toEqual({ x: "  12.png".length, y: 3 });
+      }
+    });
+
+    it("rejoins a file:// URL the app split at the margin", async () => {
+      const rows = ["image file:///tmp/gen/abcdefgh", "  ijkl.png ready"];
+      for (const hoveredRow of [0, 1]) {
+        const links = await linksFor(rows, hoveredRow, rows[0]!.length);
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).text).toBe("file:///tmp/gen/abcdefghijkl.png");
+        expect(readLink(link).absolutePath).toBe("/tmp/gen/abcdefghijkl.png");
+        expect(link.range.start).toEqual({ x: "image ".length + 1, y: 1 });
+        expect(link.range.end).toEqual({ x: "  ijkl.png".length, y: 2 });
+      }
+    });
+
+    it("reports only the links that touch the hovered row", async () => {
+      const rows = ["src/a.ts then /tmp/shots/abcdefg", "  hijklmnopqrs.png ok"];
+      const joined = "/tmp/shots/abcdefghijklmnopqrs.png";
+
+      const fromHead = await linksFor(rows, 0, rows[0]!.length);
+      expect(fromHead?.map((link) => readLink(link).absolutePath)).toEqual([
+        "/home/user/project/src/a.ts",
+        joined,
+      ]);
+
+      const fromTail = await linksFor(rows, 1, rows[0]!.length);
+      expect(fromTail?.map((link) => readLink(link).absolutePath)).toEqual([joined]);
+    });
+
+    it.each([
+      {
+        order: "xterm's wrap, then the app's",
+        rows: ["saved /tmp/abcdefghi", "jklmnopqrstuvwxyz012", "  34.png done"],
+        wrapped: [false, true, false],
+        path: "/tmp/abcdefghijklmnopqrstuvwxyz01234.png",
+        end: { x: "  34.png".length, y: 3 },
+      },
+      {
+        order: "the app's wrap, then xterm's",
+        rows: ["saved /tmp/abcdefghi", "  jklmnopqrs/uvwxyz0", "12.png done"],
+        wrapped: [false, false, true],
+        path: "/tmp/abcdefghijklmnopqrs/uvwxyz012.png",
+        end: { x: "12.png".length, y: 3 },
+      },
+    ])("follows one path across $order", async ({ rows, wrapped, path, end }) => {
+      // Only the app's continuation loses its indent. xterm's row is joined as
+      // it stands.
+      for (const hoveredRow of [0, 1, 2]) {
+        const links = await linksFor(rows, hoveredRow, 20, { wrapped });
+        expect(links).toHaveLength(1);
+        const link = links![0]!;
+        expect(readLink(link).absolutePath).toBe(path);
+        expect(link.range.start).toEqual({ x: "saved ".length + 1, y: 1 });
+        expect(link.range.end).toEqual(end);
+      }
+    });
+
+    it("rejoins a path the app spread over more rows than a short pane holds", async () => {
+      const middle = "  abcdefgh/ijklmnopq";
+      const rows = [
+        "open /tmp/abcdefghij",
+        ...Array.from({ length: 15 }, () => middle),
+        "  sub/file.ts",
+      ];
+      const path = `/tmp/abcdefghij${"abcdefgh/ijklmnopq".repeat(15)}sub/file.ts`;
+      for (const hoveredRow of [0, 8, 16]) {
+        const links = await linksFor(rows, hoveredRow, 20);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).absolutePath).toBe(path);
+        expect(links![0]!.range.end).toEqual({ x: "  sub/file.ts".length, y: 17 });
+      }
+    });
+
+    it.each([21, 24])("keeps %i whole paths that each fill a row apart", async (count) => {
+      // Every entry ends exactly at the margin, so each row's part of the
+      // token is already a whole file and no boundary is crossed, however
+      // long the list runs.
+      const path = `/tmp/${"a".repeat(88)}.ts`;
+      const rows = Array.from({ length: count }, () => `    ${path}`);
+      for (const hoveredRow of [0, 10, count - 1]) {
+        const links = await linksFor(rows, hoveredRow, 100);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).absolutePath).toBe(path);
+        expect(links![0]!.range.start).toEqual({ x: 5, y: hoveredRow + 1 });
+        expect(links![0]!.range.end).toEqual({ x: 100, y: hoveredRow + 1 });
+      }
+    });
+
+    it("never joins a run too long to judge", async () => {
+      // Past the rejoin budget the run can't be read end to end, so no join in
+      // it has been earned. Its rows read as they stand; in particular the
+      // head's match, stopped short by the `:`, never fuses across rows.
+      const rows = [
+        `open /tmp/${"c".repeat(90)}`,
+        `  ${"a".repeat(90)}.ts:bbbb`,
+        ...Array.from({ length: 24 }, () => `  ${"d".repeat(98)}`),
+        "  tail/file.ts ok",
+      ];
+      expect(await linksFor(rows, 1, 100)).toBeUndefined();
+      const tail = await linksFor(rows, rows.length - 1, 100);
+      expect(tail).toHaveLength(1);
+      expect(tail![0]!.range.start.y).toBe(rows.length);
+      expect(tail![0]!.range.end.y).toBe(rows.length);
+    });
+
+    it("distrusts a continuation whose head the rejoin budget cut off", async () => {
+      // The head row alone overruns what's left of the budget. The indent is
+      // dropped before that check, so the fragment still sits flush against
+      // the clipped edge instead of reading as a token that began after two
+      // spaces — and resolving against the cwd.
+      const cols = 1100;
+      const rows = [`see /tmp/${"a".repeat(cols - "see /tmp/".length)}`, "  bbb/ccc.png ok"];
+      expect(await linksFor(rows, 1, cols)).toBeUndefined();
+    });
+  });
+
   describe("path resolution", () => {
     it("should resolve relative paths against cwd", () => {
       return new Promise<void>((resolve) => {
