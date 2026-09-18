@@ -169,10 +169,15 @@ export class WorktreeMonitor {
   // Set when a pause tore down a recursive watcher, so resume can tell the
   // file browser its listings may have missed writes in the meantime.
   private recursiveLostToPause: boolean = false;
-  // A resume catch-up is waiting for (or holding) a poll-queue slot. Rapid
+  // The resume catch-up still waiting for a poll-queue slot, if any. Rapid
   // background/foreground flips while the queue is busy reuse it rather than
-  // stacking one forced pass per resume.
-  private resumeCatchUpQueued: boolean = false;
+  // stacking one pass per resume; it is released the moment the pass starts,
+  // so a resume that overlaps a running pass still queues its own.
+  private resumeCatchUpWaiting: object | null = null;
+  // Sticky until a catch-up pass consumes it: a resume that lost recursive
+  // coverage needs a forced pass even if the worktree is no longer elevated
+  // by the time the queued request runs.
+  private resumeCatchUpNeedsForce: boolean = false;
   private _hasInitialStatus: boolean = false;
 
   // File watcher state — owned by `watcherController`. The remaining fields
@@ -1666,17 +1671,9 @@ export class WorktreeMonitor {
 
     if (wasSuspended) {
       this.watcherController.ensureState();
+      const lostRecursive = this.recursiveLostToPause;
       this.reportWritesMissedWhilePaused();
-      if (!this.resumeCatchUpQueued) {
-        this.resumeCatchUpQueued = true;
-        // Back under recursive coverage, the stat pre-check would trust the
-        // watcher to have reported every working-tree write — and it wasn't
-        // listening. Everything else goes through the pre-check, which reads
-        // the same .git/ files a git-only watcher would have reported.
-        void this.queueStatusPassThenPoll(() => this.isElevated).finally(() => {
-          this.resumeCatchUpQueued = false;
-        });
-      }
+      this.queueResumeCatchUp(lostRecursive);
     } else if (!this.pollingStrategy.isCircuitBreakerTripped()) {
       const jitter = Math.random() * 2000;
       this.resumeTimer = setTimeout(() => {
@@ -1687,6 +1684,30 @@ export class WorktreeMonitor {
 
     this.scheduleResourcePoll();
     this.fetchScheduler.schedule(true);
+  }
+
+  /**
+   * Queue the one status pass a resume owes a suspended worktree. Forced when
+   * the pause took down recursive coverage or the worktree is elevated when
+   * the pass runs: back under a recursive watcher, the stat pre-check would
+   * trust it to have reported every working-tree write, and it wasn't
+   * listening. Everything else goes through the pre-check, which reads the
+   * same .git/ files a git-only watcher would have reported.
+   */
+  private queueResumeCatchUp(lostRecursive: boolean): void {
+    this.resumeCatchUpNeedsForce ||= lostRecursive;
+    if (this.resumeCatchUpWaiting) return;
+    const token = {};
+    this.resumeCatchUpWaiting = token;
+    const release = (): void => {
+      if (this.resumeCatchUpWaiting === token) this.resumeCatchUpWaiting = null;
+    };
+    void this.queueStatusPassThenPoll(() => {
+      release();
+      const force = this.resumeCatchUpNeedsForce || this.isElevated;
+      this.resumeCatchUpNeedsForce = false;
+      return force;
+    }).finally(release);
   }
 
   /**
@@ -1845,11 +1866,14 @@ export class WorktreeMonitor {
     if (after !== before) {
       this.reschedulePolling();
     }
-    if (after === "recursive" && before !== "recursive" && this._hasInitialStatus) {
+    if (after === "recursive" && before !== "recursive" && this.lastGitStatusCompletedAt > 0) {
       // An edit made under git-only coverage since the last elevated poll was
       // never reported, and the stat pre-check trusts a recursive watcher from
-      // here on — reconcile now, as every other upgrade path does.
-      this.triggerRefreshIfUpdating();
+      // here on — reconcile now, as every other upgrade path does. Queued, so
+      // a budget pass promoting many agents at once shares the poll queue's
+      // slots. Skipped before any real pass: with no stat baseline yet, the
+      // next poll runs a full status regardless.
+      void this.queueStatusPassThenPoll(() => true);
     }
   }
 
