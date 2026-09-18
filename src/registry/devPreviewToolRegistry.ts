@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore, type ComponentType } from "react";
-import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
+import { usePluginRuntimeStore, type PluginRuntimeMeta } from "@/store/pluginRuntimeStore";
 import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
+import { logWarn } from "@/utils/logger";
 
 /**
  * Tools a built-in plugin adds to the dev preview panel: a toggle in the
@@ -11,8 +12,10 @@ import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
  * Like `builtinRendererRegistry`, this is the seam that lets host UI render
  * plugin components without importing them. Registration is unconditional at
  * module eval; resolution hides a tool until its plugin is known to be loaded
- * and enabled — a default-off built-in must not flash its button before the
- * first plugin snapshot arrives.
+ * and enabled, AND until that plugin's manifest is seen to declare the tool id
+ * (`contributes.previewTools`) — a default-off built-in must not flash its
+ * button before the first plugin snapshot arrives, and a module side effect
+ * must not be able to add a tool the manifest never announced.
  */
 
 export interface DevPreviewToolContext {
@@ -145,28 +148,57 @@ export function getDevPreviewTool(toolId: string): DevPreviewTool | undefined {
   return TOOLS.get(toolId);
 }
 
-/** A registered tool whose plugin is loaded and enabled right now; undefined otherwise. */
+/** Tool ids already reported as undeclared, so the warning is once per id per session. */
+const warnedUndeclared = new Set<string>();
+
+/**
+ * Whether this plugin's manifest declares the tool. A tool registered by a
+ * renderer entry but absent from `contributes.previewTools` is a half-landed
+ * contribution — an entry that was renamed on one side only, or a tool a
+ * manifest never meant to ship — so it stays hidden and says so once.
+ *
+ * Silent while `meta` is undefined: that is the pre-snapshot state the enable
+ * gate already covers, and warning there would fire on every cold start.
+ */
+function isDeclared(tool: DevPreviewTool, meta: PluginRuntimeMeta | undefined): boolean {
+  if (!meta) return false;
+  if (meta.previewToolIds?.has(tool.id) === true) return true;
+  if (!warnedUndeclared.has(tool.id)) {
+    warnedUndeclared.add(tool.id);
+    logWarn(
+      `Dev-preview tool "${tool.id}" is registered but plugin "${tool.pluginId}" does not declare it in contributes.previewTools — hiding it.`
+    );
+  }
+  return false;
+}
+
+/**
+ * A registered tool whose plugin is loaded, enabled and declares it right now;
+ * undefined otherwise.
+ */
 export function getAvailableDevPreviewTool(toolId: string): DevPreviewTool | undefined {
   const tool = TOOLS.get(toolId);
   if (!tool) return undefined;
   const { pluginMetaById, disabledPluginIds } = usePluginRuntimeStore.getState();
-  return pluginMetaById.has(tool.pluginId) && !disabledPluginIds.has(tool.pluginId)
-    ? tool
-    : undefined;
+  if (disabledPluginIds.has(tool.pluginId)) return undefined;
+  return isDeclared(tool, pluginMetaById.get(tool.pluginId)) ? tool : undefined;
 }
 
-/** Registered tools whose plugin is loaded and enabled right now. */
+/** Registered tools whose plugin is loaded, enabled and declares them right now. */
 export function useDevPreviewTools(): readonly DevPreviewTool[] {
   const tools = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
   const disabled = usePluginRuntimeStore((s) => s.disabledPluginIds);
   const known = usePluginRuntimeStore((s) => s.pluginMetaById);
   const init = usePluginRuntimeStore((s) => s.init);
   useEffect(() => init(), [init]);
-  return tools.filter((tool) => known.has(tool.pluginId) && !disabled.has(tool.pluginId));
+  return tools.filter(
+    (tool) => !disabled.has(tool.pluginId) && isDeclared(tool, known.get(tool.pluginId))
+  );
 }
 
 export function __resetDevPreviewToolsForTests(): void {
   TOOLS.clear();
+  warnedUndeclared.clear();
   publish();
   useDevPreviewToolStore.setState({ activeByPanel: {} });
 }

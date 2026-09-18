@@ -33,6 +33,8 @@ A plugin that declares `"scope": "project"` lives in a project's own repository 
 | `processTools` | Rejected — detections are mirrored into the shared pty-host as one table for every terminal |
 | `mcpServers` | Rejected — the plugin-MCP IPC surface is app-global: servers are addressed by plugin and server id alone, and a tool call carries no project to check the contribution against |
 | `forgeProviders` | Rejected — forge providers need synchronous host methods that cannot cross the plugin worker's message port |
+| `previewTools` | Rejected — built-in only; the tool's components resolve out of the host bundle, which no other origin's renderer reaches |
+| `guestAdapters` | Rejected — built-in only; the bundle is emitted by Daintree's own build and runs with full DOM access inside the previewed site |
 
 Each rejection is a manifest error naming the obstacle, not a silent drop, and each is deferred rather than closed — the reason says what has to be built before the rule can go.
 
@@ -842,6 +844,66 @@ Declares a writable **Edit** mode alongside Source and Rendered in the host’s 
 **Built-in only.** The slot resolves through the builtin view registry compiled into the host bundle, which an installed plugin's renderer cannot register into, so the host refuses the contribution from any other origin at load with a recorded load error. Opening file editors to installed plugins is a separate decision.
 
 The host offers Edit inside the file browser’s existing content area and in standalone file panels (the standalone file viewer dialog stays read-only), only for a file the reader loaded as text, and only inside a project or worktree root. The editor view receives the panel's fixed identity — file, containment root, worktree and project — and publishes its document state (draft, dirty, conflict, and the Save and Discard operations) through the host's file-document store, which drives the dirty mark in the panel chrome, the draft-aware Rendered preview and the Save / Discard / Cancel prompt on close.
+
+## Preview tools — _Shipped (built-in only)_
+
+Declares a tool the dev-preview panel offers in its toolbar: a toggle, a strip under the toolbar and a drawer beside the page, with the host owning the chrome and the session lifecycle. The SvelteKit Site Builder (`plugins/builtin/sveltekit-builder/`) is the one contributor.
+
+The components stay a renderer-side registration — `registerDevPreviewTool` in the plugin's renderer entry, because they are compiled into the host bundle and nothing else can supply them. This declaration is what makes the tool **admissible**: `src/registry/devPreviewToolRegistry.ts` hides a registered tool whose plugin's manifest does not name its id, so a module side effect alone can no longer put a tool in the preview toolbar. [Views → Dev preview tools](./views.md#dev-preview-tools) is the lifecycle.
+
+```json
+{
+  "contributes": {
+    "previewTools": [
+      {
+        "id": "daintree.sveltekit-builder.builder",
+        "title": "Site Builder",
+        "iconId": "square-dashed-mouse-pointer",
+        "guestAdapter": "daintree.sveltekit-builder.guest"
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | **Not** namespaced by the host — the renderer entry registers with this same literal, so the manifest declares the qualified form and it must be prefixed with the plugin's own name. |
+| `title` | yes | The tool's name. The registration supplies the rendered label; this states what the plugin ships. |
+| `iconId` | no | Advisory, like `views[].iconId` — the tool's own `Button` owns the rendered glyph. |
+| `guestAdapter` | no | A [guest adapter](#guest-adapters--shipped-built-in-only) id **this same manifest** declares. A tool naming an adapter nothing declares is a manifest error. |
+
+**Built-in only.** The toolbar button, drawer and session all resolve out of the host bundle, which an installed plugin's renderer cannot register into — the same obstacle as [file editors](#file-editors--shipped-built-in-only). Unlike that one the refusal is in the manifest schema rather than at load, because the schema is built per discovery root, so a sample or project manifest fails `npm run check:plugin-manifests` instead of only at runtime.
+
+## Guest adapters — _Shipped (built-in only)_
+
+Declares a browser bundle the host reads back as text and installs into a previewed page through the site-preview bridge. A binding names an adapter id and the host loads that adapter's body itself; there is no way for a caller to put source on the wire (`electron/services/sitePreview/guestAdapters.ts`).
+
+```json
+{
+  "contributes": {
+    "guestAdapters": [
+      {
+        "id": "daintree.sveltekit-builder.guest",
+        "entry": "renderer/guest/entry.ts"
+      }
+    ]
+  }
+}
+```
+
+**Fields:**
+
+| Field | Required | Notes |
+| --- | --- | --- |
+| `id` | yes | The literal the page runtime binds with, so it is not namespaced by the host — qualified, and prefixed with the plugin's own name. |
+| `entry` | yes | Plugin-relative POSIX path to the bundle's source. No `..`, absolute or Windows segments, and it must end in `.ts`, `.tsx`, `.js` or `.mjs`. |
+
+**The built asset's path is derived, never declared.** `guestAdapterAssetPath` (`electron/services/sitePreview/guestAdapterAssets.ts`) turns the adapter id into `guest/<id suffix>.js` under the plugin's output dir. `scripts/build-main.mjs` bundles `entry` to exactly that path — as a standalone browser IIFE, not a main entry and not part of the renderer bundle — and `registerBuiltinGuestAdapters` reads it back from the same place at startup, so there is no second path for the two to disagree about. A declared adapter whose bundle did not land fails the build.
+
+**Built-in only.** The body is emitted by Daintree's own build and then runs with full DOM access inside whatever site the user is previewing. The registry exists precisely so that only main, from an asset it shipped, chooses that code.
 
 ## Agents — _Shipped (minimal tier)_
 

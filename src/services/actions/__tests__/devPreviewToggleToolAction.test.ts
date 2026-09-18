@@ -53,7 +53,9 @@ beforeEach(() => {
     panelsById: { [PANEL]: { id: PANEL, kind: "dev-preview", location: "grid" } },
   } as never);
   usePluginRuntimeStore.setState({
-    pluginMetaById: new Map([[PLUGIN, { devMode: false, displayName: "Acme" }]]),
+    pluginMetaById: new Map([
+      [PLUGIN, { devMode: false, displayName: "Acme", previewToolIds: new Set([TOOL]) }],
+    ]),
     disabledPluginIds: new Set<string>(),
   });
 });

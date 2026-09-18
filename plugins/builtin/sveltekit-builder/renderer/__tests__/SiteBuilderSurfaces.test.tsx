@@ -125,7 +125,16 @@ beforeEach(() => {
   host = createFakeHost();
   uninstall = host.install();
   usePluginRuntimeStore.setState({
-    pluginMetaById: new Map([[PLUGIN_ID, { devMode: false, displayName: "Site Builder" }]]),
+    pluginMetaById: new Map([
+      [
+        PLUGIN_ID,
+        {
+          devMode: false,
+          displayName: "Site Builder",
+          previewToolIds: new Set([BUILDER_TOOL_ID]),
+        },
+      ],
+    ]),
     disabledPluginIds: new Set(),
   });
   registerDevPreviewTool({
