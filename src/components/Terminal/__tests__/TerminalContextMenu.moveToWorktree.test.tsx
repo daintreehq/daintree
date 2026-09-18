@@ -5,55 +5,27 @@
  * headline helper all run for real here; only their inputs — the worktree list
  * and the four ordering preferences — are stubbed, so a regression back to the
  * raw `useWorktrees` order or an ad hoc label shows up as a wrong row.
+ *
+ * Past ten rows the submenu hands off to the searchable picker (#12446). The
+ * picker itself is stubbed down to its props; the handoff through the real
+ * overlays lives in `TerminalContextMenu.moveToWorktree.overlays.test.tsx`.
  */
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { render, screen, cleanup, fireEvent } from "@testing-library/react";
+import { render, renderHook, screen, cleanup, fireEvent, act } from "@testing-library/react";
 import type React from "react";
 import type { WorktreeState } from "@/types";
 import type { OrderBy } from "@/store/worktreeFilterStore";
 
-// Render menu content synchronously — Radix only mounts it behind a real
-// right-click into a portal. `disabled` is forwarded so the current row's state
-// is readable off the button.
-vi.mock("@/components/ui/context-menu", () => {
-  const Passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
-  const Item = ({
-    children,
-    onSelect,
-    disabled,
-  }: {
-    children?: React.ReactNode;
-    onSelect?: () => void;
-    disabled?: boolean;
-  }) => (
-    <button disabled={disabled} onClick={() => onSelect?.()}>
-      {children}
-    </button>
-  );
-  const SubContent = ({ children }: { children?: React.ReactNode }) => (
-    <div data-testid="sub-content">{children}</div>
-  );
-  return {
-    ContextMenu: Passthrough,
-    ContextMenuTrigger: Passthrough,
-    ContextMenuContent: Passthrough,
-    ContextMenuItem: Item,
-    ContextMenuActionItem: Item,
-    ContextMenuCheckboxItem: Item,
-    ContextMenuRadioGroup: Passthrough,
-    ContextMenuRadioItem: Item,
-    ContextMenuSeparator: () => null,
-    ContextMenuLabel: Passthrough,
-    ContextMenuShortcut: Passthrough,
-    ContextMenuGroup: Passthrough,
-    ContextMenuPortal: Passthrough,
-    ContextMenuSub: Passthrough,
-    ContextMenuSubContent: SubContent,
-    ContextMenuSubTrigger: Passthrough,
-  };
-});
-
-const { dispatch, worktreesRef, prefsRef, panelsById } = vi.hoisted(() => ({
+const {
+  dispatch,
+  worktreesRef,
+  prefsRef,
+  panelsById,
+  menuOpenChange,
+  menuCloseAutoFocus,
+  pickerProps,
+  anchorRef,
+} = vi.hoisted(() => ({
   dispatch: vi.fn<(...args: unknown[]) => Promise<unknown>>(),
   worktreesRef: { current: [] as unknown[] },
   prefsRef: {
@@ -65,6 +37,111 @@ const { dispatch, worktreesRef, prefsRef, panelsById } = vi.hoisted(() => ({
     },
   },
   panelsById: { current: {} as Record<string, unknown> },
+  // The root's open hook and the root content's close hook, as the menu last
+  // rendered them. Radix fires the close hook only from the root content,
+  // whichever level the selected item sat at.
+  menuOpenChange: { current: null as ((open: boolean) => void) | null },
+  menuCloseAutoFocus: { current: null as ((event: Event) => void) | null },
+  pickerProps: {
+    current: null as {
+      panelId: string;
+      currentWorktreeId: string | undefined;
+      isOpen: boolean;
+      returnFocusRef: { current: HTMLElement | null };
+      align?: string;
+    } | null,
+  },
+  anchorRef: {
+    current: null as {
+      current: { contextElement: HTMLElement; getBoundingClientRect: () => DOMRect } | null;
+    } | null,
+  },
+}));
+
+// Render menu content synchronously — Radix only mounts it behind a real
+// right-click into a portal. `disabled` and `aria-haspopup` are forwarded so
+// they are readable off the button.
+vi.mock("@/components/ui/context-menu", () => {
+  const Passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
+  const Item = ({
+    children,
+    onSelect,
+    disabled,
+    "aria-haspopup": ariaHasPopup,
+  }: {
+    children?: React.ReactNode;
+    onSelect?: () => void;
+    disabled?: boolean;
+    "aria-haspopup"?: React.AriaAttributes["aria-haspopup"];
+  }) => (
+    <button disabled={disabled} aria-haspopup={ariaHasPopup} onClick={() => onSelect?.()}>
+      {children}
+    </button>
+  );
+  const SubContent = ({ children }: { children?: React.ReactNode }) => (
+    <div data-testid="sub-content">{children}</div>
+  );
+  return {
+    ContextMenu: ({
+      children,
+      onOpenChange,
+    }: {
+      children?: React.ReactNode;
+      onOpenChange?: (open: boolean) => void;
+    }) => {
+      menuOpenChange.current = onOpenChange ?? null;
+      return <div>{children}</div>;
+    },
+    ContextMenuTrigger: Passthrough,
+    ContextMenuContent: ({
+      children,
+      onCloseAutoFocus,
+    }: {
+      children?: React.ReactNode;
+      onCloseAutoFocus?: (event: Event) => void;
+    }) => {
+      menuCloseAutoFocus.current = onCloseAutoFocus ?? null;
+      return <div>{children}</div>;
+    },
+    ContextMenuItem: Item,
+    ContextMenuActionItem: Item,
+    ContextMenuCheckboxItem: Item,
+    ContextMenuRadioGroup: Passthrough,
+    ContextMenuRadioItem: Item,
+    ContextMenuSeparator: () => <hr />,
+    ContextMenuLabel: Passthrough,
+    ContextMenuShortcut: Passthrough,
+    ContextMenuGroup: Passthrough,
+    ContextMenuPortal: Passthrough,
+    ContextMenuSub: Passthrough,
+    ContextMenuSubContent: SubContent,
+    ContextMenuSubTrigger: Passthrough,
+  };
+});
+
+vi.mock("@/components/Panel/MoveToWorktreePicker", () => ({
+  MoveToWorktreePicker: (props: NonNullable<(typeof pickerProps)["current"]>) => {
+    pickerProps.current = props;
+    return props.isOpen ? (
+      <div
+        data-testid="move-picker"
+        data-panel-id={props.panelId}
+        data-current-worktree={props.currentWorktreeId}
+      />
+    ) : null;
+  },
+}));
+
+vi.mock("@/components/ui/AppPalettePopover", () => ({
+  AppPalettePopover: ({ children }: { children?: React.ReactNode }) => <>{children}</>,
+}));
+
+vi.mock("@/components/ui/popover", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/popover")>()),
+  PopoverAnchor: ({ virtualRef }: { virtualRef?: NonNullable<(typeof anchorRef)["current"]> }) => {
+    anchorRef.current = virtualRef ?? null;
+    return null;
+  },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -72,7 +149,11 @@ vi.mock("@/services/ActionService", () => ({
 }));
 
 vi.mock("@/services/TerminalInstanceService", () => ({
-  terminalInstanceService: { getTerminal: () => undefined, getSelection: () => "" },
+  terminalInstanceService: {
+    get: () => undefined,
+    getTerminal: () => undefined,
+    getSelection: () => "",
+  },
 }));
 
 vi.mock("@/hooks/useWorktrees", () => ({
@@ -97,18 +178,21 @@ vi.mock("@/store/fleetArmingStore", () => ({
   isFleetArmEligible: () => false,
 }));
 
-vi.mock("@/store", () => ({
-  usePanelStore: (selector: (s: unknown) => unknown) =>
-    selector({
-      panelsById: panelsById.current,
-      maximizeTarget: null,
-      getPanelGroup: () => undefined,
-      watchedPanels: new Set<string>(),
-    }),
-}));
+vi.mock("@/store", () => {
+  const state = () => ({
+    panelsById: panelsById.current,
+    maximizeTarget: null,
+    getPanelGroup: () => undefined,
+    watchedPanels: new Set<string>(),
+  });
+  const usePanelStore = (selector: (s: unknown) => unknown) => selector(state());
+  usePanelStore.getState = state;
+  return { usePanelStore };
+});
 
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
+import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
 
 const T = 1_700_000_000_000;
 
@@ -277,5 +361,233 @@ describe("TerminalContextMenu — Move to worktree (#12445)", () => {
     openMenu([main]);
 
     expect(screen.queryByText("Move to worktree")).toBeNull();
+  });
+});
+
+const MORE = "More worktrees…";
+
+// Main plus `count - 1` others, fed newest-last with one old worktree pinned,
+// so the sidebar's order differs from both the input and a plain age sort.
+function manyWorktrees(count: number): WorktreeState[] {
+  const others = Array.from({ length: count - 1 }, (_, i) =>
+    createWorktree({
+      id: `wt-${i}`,
+      path: `/wt/${i}`,
+      name: `wt-${i}`,
+      branch: `feature/wt-${i}`,
+      createdAt: T + i,
+    })
+  );
+  prefsRef.current = { ...prefsRef.current, pinnedWorktrees: ["wt-0"] };
+  return [...others, main];
+}
+
+function subContent(): HTMLElement {
+  const trigger = screen.getByText("Move to worktree");
+  return trigger.parentElement!.querySelector<HTMLElement>('[data-testid="sub-content"]')!;
+}
+
+function rightClickPane(init: MouseEventInit = { clientX: 0, clientY: 0 }) {
+  fireEvent.contextMenu(screen.getByText("Panel body"), init);
+}
+
+/** Radix's close for the root content, which a submenu selection also ends in. */
+function closeMenu(): Event {
+  const event = new Event("focusout", { cancelable: true });
+  act(() => menuCloseAutoFocus.current?.(event));
+  return event;
+}
+
+function renderPanel(terminalId: string) {
+  return (
+    <TerminalContextMenu terminalId={terminalId}>
+      <div>Panel body</div>
+    </TerminalContextMenu>
+  );
+}
+
+describe("TerminalContextMenu — Move to worktree cap and picker handoff (#12446)", () => {
+  beforeEach(() => {
+    prefsRef.current = {
+      orderBy: "created",
+      groupByType: false,
+      pinnedWorktrees: [],
+      manualOrder: [],
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    dispatch.mockReset();
+    worktreesRef.current = [];
+    panelsById.current = {};
+    menuOpenChange.current = null;
+    menuCloseAutoFocus.current = null;
+    pickerProps.current = null;
+    anchorRef.current = null;
+  });
+
+  it("shows the first ten sidebar rows, a separator and More worktrees… when rows are cut", () => {
+    const worktrees = manyWorktrees(12);
+    openMenu(worktrees);
+
+    const sidebarOrder = renderHook(() => useSidebarWorktreeOrder()).result.current;
+    const rows = moveRows();
+    expect(rows).toHaveLength(11);
+    expect(labels(rows.slice(0, 10))).toEqual(
+      sidebarOrder.slice(0, 10).map((wt) => getWorktreeHeadline(wt).label)
+    );
+    // Neither the input order nor a plain age sort: the pin moved wt-0 up.
+    expect(labels(rows.slice(0, 10))).not.toEqual(
+      worktrees.slice(0, 10).map((wt) => getWorktreeHeadline(wt).label)
+    );
+    expect(labels(rows)[1]).toBe("feature/wt-0");
+
+    const separators = subContent().querySelectorAll("hr");
+    expect(separators).toHaveLength(1);
+    expect(separators[0]!.nextElementSibling).toBe(rows[10]);
+    expect(rows[10]!.textContent).toBe(MORE);
+    expect(rows[10]!.getAttribute("aria-haspopup")).toBe("dialog");
+  });
+
+  it("keeps the icon on every row, More worktrees… included", () => {
+    openMenu(manyWorktrees(12));
+
+    for (const row of moveRows()) {
+      expect(row.querySelector("svg")).not.toBeNull();
+    }
+  });
+
+  it.each([5, 10])("lists all %i worktrees with no separator or More row", (count) => {
+    openMenu(manyWorktrees(count));
+
+    expect(moveRows()).toHaveLength(count);
+    expect(subContent().querySelector("hr")).toBeNull();
+    expect(screen.queryByText(MORE)).toBeNull();
+  });
+
+  it("opens the picker for this terminal once the menu has closed, and dispatches nothing", () => {
+    openMenu(manyWorktrees(12), "wt-3");
+    rightClickPane();
+
+    fireEvent.click(screen.getByText(MORE));
+    // Not from the select itself: the menu still holds its focus trap there.
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+
+    const event = closeMenu();
+
+    const picker = screen.getByTestId("move-picker");
+    expect(picker.getAttribute("data-panel-id")).toBe("panel-1");
+    expect(picker.getAttribute("data-current-worktree")).toBe("wt-3");
+    expect(event.defaultPrevented).toBe(true);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it("still dispatches a row's move and leaves the picker closed", () => {
+    openMenu(manyWorktrees(12));
+    rightClickPane();
+
+    fireEvent.click(screen.getByText("feature/wt-0"));
+    const event = closeMenu();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      "terminal.moveToWorktree",
+      { terminalId: "panel-1", worktreeId: "wt-0" },
+      { source: "user" }
+    );
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("drops the request when the menu reopens before its close hook runs", () => {
+    openMenu(manyWorktrees(12));
+    rightClickPane();
+
+    fireEvent.click(screen.getByText(MORE));
+    act(() => menuOpenChange.current?.(true));
+    const event = closeMenu();
+
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("anchors on the point the menu opened at, tracked against the pane", () => {
+    openMenu(manyWorktrees(12));
+    const pane = screen.getByText("Panel body");
+    const rect = vi
+      .spyOn(pane, "getBoundingClientRect")
+      .mockReturnValue(DOMRect.fromRect({ x: 100, y: 50, width: 400, height: 300 }));
+
+    rightClickPane({ clientX: 160, clientY: 90 });
+    fireEvent.click(screen.getByText(MORE));
+    closeMenu();
+
+    const anchor = anchorRef.current?.current;
+    expect(anchor?.contextElement).toBe(pane);
+    expect(pickerProps.current?.returnFocusRef.current).toBe(pane);
+    const point = anchor!.getBoundingClientRect();
+    expect([point.x, point.y, point.width, point.height]).toEqual([160, 90, 0, 0]);
+
+    // The pane moved: the point moves with it.
+    rect.mockReturnValue(DOMRect.fromRect({ x: 200, y: 80, width: 400, height: 300 }));
+    const moved = anchor!.getBoundingClientRect();
+    expect([moved.x, moved.y]).toEqual([260, 120]);
+  });
+
+  it("closes the picker when the menu starts speaking for another panel, and keeps it closed", () => {
+    worktreesRef.current = manyWorktrees(12);
+    panelsById.current = {
+      "panel-1": { id: "panel-1", title: "One", kind: "terminal", worktreeId: "wt-main" },
+      "panel-2": { id: "panel-2", title: "Two", kind: "terminal", worktreeId: "wt-main" },
+    };
+    const { rerender } = render(renderPanel("panel-1"));
+    rightClickPane();
+    fireEvent.click(screen.getByText(MORE));
+    closeMenu();
+    expect(screen.getByTestId("move-picker").getAttribute("data-panel-id")).toBe("panel-1");
+
+    rerender(renderPanel("panel-2"));
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+
+    rerender(renderPanel("panel-1"));
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+  });
+
+  it("ignores a request made for the panel the menu no longer speaks for", () => {
+    worktreesRef.current = manyWorktrees(12);
+    panelsById.current = {
+      "panel-1": { id: "panel-1", title: "One", kind: "terminal", worktreeId: "wt-main" },
+      "panel-2": { id: "panel-2", title: "Two", kind: "terminal", worktreeId: "wt-main" },
+    };
+    const { rerender } = render(renderPanel("panel-1"));
+    rightClickPane();
+    fireEvent.click(screen.getByText(MORE));
+
+    rerender(renderPanel("panel-2"));
+    closeMenu();
+
+    expect(screen.queryByTestId("move-picker")).toBeNull();
+  });
+
+  it.each([
+    ["browser", { kind: "browser", browserUrl: "https://example.com" }],
+    ["dev-preview", { kind: "dev-preview", browserUrl: "http://localhost:3000" }],
+    ["review", { kind: "review" }],
+    ["file", { kind: "file", filePath: "/repo/README.md" }],
+    ["terminal", { kind: "terminal", cwd: "/repo" }],
+  ])("hands off to the picker from the %s menu", (_label, fields) => {
+    worktreesRef.current = manyWorktrees(12);
+    panelsById.current = {
+      "panel-1": { id: "panel-1", title: "Panel", worktreeId: "wt-main", ...fields },
+    };
+    render(renderPanel("panel-1"));
+    rightClickPane();
+
+    fireEvent.click(screen.getByText(MORE));
+    closeMenu();
+
+    expect(screen.getByTestId("move-picker").getAttribute("data-panel-id")).toBe("panel-1");
+    expect(anchorRef.current?.current?.contextElement).toBe(screen.getByText("Panel body"));
   });
 });

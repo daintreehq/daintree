@@ -32,13 +32,20 @@ export interface MoveToWorktreePickerProps {
    * where to go back to.
    */
   returnFocusRef: React.RefObject<HTMLElement | null>;
+  /**
+   * Which edge of the picker lines up with the anchor. The header's button
+   * sits at the end of its bar, so by default the picker hangs back from it.
+   */
+  align?: "start" | "center" | "end";
 }
 
 /**
- * The searchable list behind the panel header's "Move to worktree…" item.
+ * The searchable list behind the panel header's "Move to worktree…" item and
+ * the context menu's "More worktrees…".
  *
- * Content only: the `AppPalettePopover` root and its anchor belong to the
- * header, which wraps its own button. Rows come in the sidebar's order with the
+ * Content only: the `AppPalettePopover` root and its anchor belong to whoever
+ * opens it — the header wraps its own button, the context menu anchors on the
+ * pane it opened over. Rows come in the sidebar's order with the
  * sidebar's titles and filter with the sidebar's search, so a worktree the user
  * can find in one is found the same way in the other.
  */
@@ -48,6 +55,7 @@ export function MoveToWorktreePicker({
   isOpen,
   onOpenChange,
   returnFocusRef,
+  align = "end",
 }: MoveToWorktreePickerProps) {
   const [query, setQuery] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
@@ -106,7 +114,7 @@ export function MoveToWorktreePicker({
       consumeCloseAutoFocusSuppression={consumeCloseAutoFocusSuppression}
       returnFocusRef={returnFocusRef}
       side="bottom"
-      align="end"
+      align={align}
       sideOffset={4}
       // Narrower than the anchored tier: a list of one- and two-line titles,
       // not a launcher with metadata columns.
