@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it, expect, vi } from "vitest";
 import {
   walkEagerGraph,
+  scanForbiddenModules,
   scanSyncViolations,
   scanAllowlistMarkers,
   hasAllowlistMarker,
@@ -577,5 +578,36 @@ describe("eager-import-baseline.json hygiene (live canary)", () => {
     const marked = scanAllowlistMarkers(baseline.allowlist, root);
     const unmarked = baseline.allowlist.filter((file: string) => !marked.has(file));
     expect(unmarked).toEqual([]);
+  });
+});
+
+describe("scanForbiddenModules", () => {
+  it("catches the compiler, the runtime and the source model wherever they resolve", () => {
+    const found = scanForbiddenModules([
+      "electron/main.ts",
+      "node_modules/svelte/compiler/index.js",
+      "node_modules/svelte/src/internal/client/index.js",
+      "packages/svelte-source-model/src/resolve.ts",
+      "node_modules/@daintreehq/svelte-source-model/dist/index.js",
+    ]);
+
+    expect(found.map((f) => f.file)).toEqual([
+      "node_modules/@daintreehq/svelte-source-model/dist/index.js",
+      "node_modules/svelte/compiler/index.js",
+      "node_modules/svelte/src/internal/client/index.js",
+      "packages/svelte-source-model/src/resolve.ts",
+    ]);
+  });
+
+  it("passes an eager graph that reaches none of them", () => {
+    // The builder's own main code is fine on the eager path — it is the heavy
+    // dependencies behind its `await import()`s that must not be.
+    expect(
+      scanForbiddenModules([
+        "electron/main.ts",
+        "plugins/builtin/sveltekit-builder/main/engine.ts",
+        "node_modules/sveltekit-thing/index.js",
+      ])
+    ).toEqual([]);
   });
 });

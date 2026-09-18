@@ -179,6 +179,54 @@ export function scanSyncViolations(files, root, readFile) {
  * @param {{ count: number, allowlist: string[], syncViolations: {file:string, line:number, pattern:string}[] }} baseline
  * @param {{ markedFiles?: Set<string> }} [opts] — set of allowlisted files that carry the header marker
  */
+/**
+ * Modules that must never be reachable from main's eager import graph, whatever
+ * the module count says.
+ *
+ * This is an invariant, not a ratchet: there is no baseline to refresh and no
+ * `--update` that clears it. The Svelte compiler is roughly 862 KiB minified
+ * and the source model exists to keep it behind an `await import()`; a barrel
+ * re-export, a moved type-only import that stops being type-only, or a
+ * convenience helper added to the wrong file would pull both onto the startup
+ * path silently, and the only symptom would be a slower boot.
+ *
+ * Matched against esbuild's module paths, so both the workspace source and the
+ * resolved `node_modules` copy are caught.
+ */
+export const FORBIDDEN_EAGER_PATTERNS = [
+  {
+    // Both spellings: the package's `compiler` export, and `src/compiler/`,
+    // which is where the files actually resolve to.
+    label: "Svelte compiler",
+    test: (file) => /(^|\/)svelte\/(src\/)?compiler(\/|\.|$)/.test(file),
+  },
+  {
+    label: "Svelte runtime",
+    test: (file) => /(^|\/)node_modules\/svelte\//.test(file),
+  },
+  {
+    label: "svelte-source-model",
+    test: (file) =>
+      file.includes("packages/svelte-source-model/") ||
+      /node_modules\/@daintreehq\/svelte-source-model/.test(file),
+  },
+];
+
+/**
+ * Any eager module matching a forbidden pattern, as `{ file, label }`. Empty is
+ * the only passing result. One entry per file — the patterns overlap by design
+ * (the compiler lives inside the runtime package) and a file listed twice would
+ * read as two problems.
+ */
+export function scanForbiddenModules(files, patterns = FORBIDDEN_EAGER_PATTERNS) {
+  const found = [];
+  for (const file of files) {
+    const pattern = patterns.find((candidate) => candidate.test(file));
+    if (pattern) found.push({ file, label: pattern.label });
+  }
+  return found.sort((a, b) => a.file.localeCompare(b.file));
+}
+
 export function compareToBaseline(current, baseline, opts = {}) {
   const errors = [];
   const notices = [];
