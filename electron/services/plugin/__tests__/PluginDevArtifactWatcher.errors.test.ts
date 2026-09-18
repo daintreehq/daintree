@@ -106,7 +106,10 @@ describe("PluginDevArtifactWatcher subscription errors", () => {
       path.join(pluginDir, "plugin.json"),
       JSON.stringify({ name: PLUGIN_ID, version: "1.0.0", main: "dist/index.js" })
     );
-    await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "export function activate() {}\n");
+    await fsp.writeFile(
+      path.join(pluginDir, "dist", "index.js"),
+      "export function activate() {}\n"
+    );
     reload = vi.fn(async () => true);
   });
 

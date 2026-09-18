@@ -24,7 +24,6 @@ export function isRescanRequest(message: string): boolean {
  */
 export function removesWatchedRoot(events: readonly Event[] | undefined, root: string): boolean {
   return (
-    Array.isArray(events) &&
-    events.some((event) => event?.type === "delete" && event.path === root)
+    Array.isArray(events) && events.some((event) => event?.type === "delete" && event.path === root)
   );
 }

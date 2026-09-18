@@ -314,11 +314,7 @@ export class PluginDevArtifactWatcher {
         realDir,
         (err, events) => {
           if (this.isStale(state, generation)) return;
-          if (
-            err &&
-            isRescanRequest(err.message) &&
-            !removesWatchedRoot(events, state.realDir)
-          ) {
+          if (err && isRescanRequest(err.message) && !removesWatchedRoot(events, state.realDir)) {
             // FSEvents dropped events but the stream is still running, so keep
             // it and re-read the artifact — the same sweep a re-arm runs,
             // without rebuilding a healthy client or spending the budget. A

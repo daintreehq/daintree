@@ -125,7 +125,10 @@ describe("ProjectPluginWatcher subscription errors", () => {
         contributes: {},
       })
     );
-    await fsp.writeFile(path.join(pluginDir, "dist", "index.js"), "export function activate() {}\n");
+    await fsp.writeFile(
+      path.join(pluginDir, "dist", "index.js"),
+      "export function activate() {}\n"
+    );
     reload = vi.fn(async () => {});
   });
 
