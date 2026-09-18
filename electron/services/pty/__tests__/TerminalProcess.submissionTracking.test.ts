@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
@@ -15,6 +15,7 @@ import type { TerminalInputController } from "../TerminalInputController.js";
  */
 
 let ptyWriteMock: ReturnType<typeof vi.fn<(data: string) => void>>;
+let ptyOnDataCallback: ((data: string) => void) | null = null;
 
 vi.mock("node-pty", () => ({ spawn: vi.fn() }));
 
@@ -30,7 +31,10 @@ function createMockPty(): IPty {
     kill: () => {},
     pause: () => {},
     resume: () => {},
-    onData: () => ({ dispose: () => {} }),
+    onData: (cb: (data: string) => void) => {
+      ptyOnDataCallback = cb;
+      return { dispose: () => {} };
+    },
     onExit: () => ({ dispose: () => {} }),
   };
   return pty as IPty;
@@ -210,5 +214,58 @@ describe("TerminalProcess submission tracking (#12337)", () => {
     expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
     expect(terminal.getSubmission("tok-2")?.phase).toBe("pty_written");
     vi.useRealTimers();
+  });
+});
+
+/**
+ * #12478 through the real sampler: the record's `pty_written` time is the
+ * baseline, and the terminal's own `lastOutputChangeAt` is what it is compared
+ * against.
+ */
+describe("TerminalProcess submission output observation (#12478)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyWriteMock = vi.fn<(data: string) => void>();
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
+  });
+
+  it("reports nothing until the screen moves after the Enter, then the change", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    terminal.submit("fix the bug", "tok-1");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
+    // Accepted, and a screen that never moved: the reported loss.
+    expect(terminal.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+
+    ptyOnDataCallback!("● Looking into the bug now.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+
+    const changedAt = terminal.getPublicState().lastOutputChangeAt;
+    expect(changedAt).toBeDefined();
+    expect(terminal.getSubmission("tok-1")?.outputChangeAfterWriteAt).toBe(changedAt);
+    terminal.dispose();
+  });
+
+  it("does not count the composer echoing the body around the Enter", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    terminal.submit("fix the bug", "tok-1");
+    // The composer echoes the body the moment it lands, before the Enter.
+    ptyOnDataCallback!("> fix the bug");
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
+    // The echo WAS observed as a change — it just cannot be ordered after the
+    // Enter, so it is not reported against the submission.
+    expect(terminal.getPublicState().lastOutputChangeAt).toBeDefined();
+    expect(terminal.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+    terminal.dispose();
   });
 });

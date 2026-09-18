@@ -20,6 +20,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 import type { TerminalStatusResult } from "@shared/types/terminalStatus";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
+import { TerminalStatusResultSchema } from "../schemas";
 
 /**
  * Snapshots cross IPC bundled with the grid they were captured at (#11552).
@@ -848,6 +849,27 @@ describe("terminal.getStatus submission correlation (#12337)", () => {
       phase: "pty_written",
       at: 4242,
     });
+  });
+
+  it("keeps the output observation through the dispatcher's result parse (#12478)", async () => {
+    onePanel();
+    const record = {
+      token: "tok-1",
+      phase: "pty_written" as const,
+      at: 4242,
+      outputChangeAfterWriteAt: 9000,
+    };
+    terminalClientMock.getSubmissions.mockResolvedValue({ t1: { status: "found", record } });
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+    });
+
+    // Dispatch parses results against this schema (#11539), and a Zod object
+    // strips keys it does not declare — an undeclared field would vanish on
+    // the way out.
+    expect(TerminalStatusResultSchema.parse(result).terminals[0]?.submission).toEqual(record);
   });
 
   it("reports unknown when the terminal was read and holds no record", async () => {

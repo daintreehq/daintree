@@ -295,6 +295,26 @@ describe("mapTerminalInfo submission projection (#12337)", () => {
     expect(result.submission).toEqual({ token: "tok-1", phase: "pty_written", at: 9 });
   });
 
+  it("carries the derived output observation through untouched (#12478)", () => {
+    // Derived by the queue at read time; the mapper must forward the whole
+    // record rather than re-projecting the fields it happens to know about.
+    const getSubmission = vi.fn(() => ({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 9,
+      outputChangeAfterWriteAt: 1_500,
+    }));
+
+    const result = mapTerminalInfo(makeTerminal(), ctxWith(getSubmission), "tok-1");
+
+    expect(result.submission).toEqual({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 9,
+      outputChangeAfterWriteAt: 1_500,
+    });
+  });
+
   it("does not look up a submission when no token was named", () => {
     // This is the one conditional field on an otherwise unconditional mapper.
     // Every bulk query family (`get-all-terminals` and friends) omits the

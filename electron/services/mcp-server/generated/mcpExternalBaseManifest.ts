@@ -1642,6 +1642,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     description: "Epoch ms the phase was entered. Absent for `unknown`.",
                     type: "number",
                   },
+                  outputChangeAfterWriteAt: {
+                    description:
+                      "For pty_written only: epoch ms of the latest screen change seen >200ms after the Enter. Ordering, not attribution; absent means no change was seen.",
+                    type: "number",
+                  },
                 },
                 required: ["token", "phase"],
                 additionalProperties: false,

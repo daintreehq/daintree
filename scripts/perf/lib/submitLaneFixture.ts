@@ -397,6 +397,8 @@ export async function runSubmitLane(options: SubmitLaneOptions): Promise<SubmitL
   queue = new WriteQueue({
     isExited: () => disposed,
     lastOutputTime: () => (outputFlowing ? Date.now() : 0),
+    // No viewport tracker in this harness, so nothing was ever observed.
+    lastOutputChangeAt: () => undefined,
     performSubmit: async (text: string) => {
       const index = expectedBodies.indexOf(text);
       inFlight += 1;
