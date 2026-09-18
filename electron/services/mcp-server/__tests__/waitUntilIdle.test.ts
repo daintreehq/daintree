@@ -934,7 +934,7 @@ describe("lastHandback on wait results (#12488)", () => {
     });
   });
 
-  it("keeps each batched row's handback to its own terminal, even for one agent type", async () => {
+  it("keeps each batched row's handback to its own terminal", async () => {
     const asked = nextIds();
     const other = nextIds();
     seedWorkingAgent(asked.terminalId, asked.agentId);

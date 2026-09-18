@@ -931,6 +931,22 @@ export class PtyClient extends EventEmitter {
       options: withCurrentWindowsPath(options),
     });
     this.disarmStoredSessionAssignment(id);
+    this.disarmStoredHandback(id);
+  }
+
+  /**
+   * Drop a launch's handback code from the STORED spawn entry once it has been
+   * delivered (#12488). A replay after a host crash re-runs the launch, but the
+   * request it carried belonged to the host that died, and a code may be
+   * observed at most once — so the replayed launch holds no request, the same
+   * as any other request lost with its host. Same delivery point as
+   * {@link disarmStoredSessionAssignment}, for the same reason.
+   */
+  private disarmStoredHandback(id: string): void {
+    const stored = this.pendingSpawns.get(id);
+    if (stored?.handbackCode === undefined) return;
+    const { handbackCode: _delivered, ...rest } = stored;
+    this.pendingSpawns.set(id, rest);
   }
 
   /**

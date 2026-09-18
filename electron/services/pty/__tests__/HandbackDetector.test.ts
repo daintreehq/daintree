@@ -51,6 +51,27 @@ describe("detectHandback", () => {
     ).toBeNull();
   });
 
+  it("ignores an echo whose placeholder's closing bracket wrapped onto a quote gutter", () => {
+    // Stripping the `>` gutter would also strip the placeholder's `>`.
+    expect(detectHandback("DAINTREE-DONE-k7f3qa: <summary\n  > END-k7f3qa", CODE)).toBeNull();
+    expect(detectHandback("DAINTREE-DONE-k7f3qa: <sum\n  > mary> END-k7f3qa", CODE)).toBeNull();
+  });
+
+  it("ignores a capture spanning a line the semantic buffer cut short", () => {
+    const text = `DAINTREE-DONE-k7f3qa: <sum... [truncated]\nmore output END-k7f3qa`;
+    expect(detectHandback(text, CODE)).toBeNull();
+  });
+
+  it("finds a marker the TUI split at a hyphen", () => {
+    // Codex wraps with a hyphen splitter, so either marker can break after a dash.
+    const text = [
+      "• All tests pass now. DAINTREE-DONE-",
+      "  k7f3qa: fixed the flaky retry test END-",
+      "  k7f3qa",
+    ].join("\n");
+    expect(detectHandback(text, CODE)?.message).toBe("fixed the flaky retry test");
+  });
+
   it("finds the real marker after the echoed instruction", () => {
     const text = [
       `> Fix the bug ${buildHandbackInstruction(CODE)}`,

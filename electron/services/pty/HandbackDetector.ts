@@ -6,6 +6,7 @@ import {
 import { handbackEndMarker, handbackStartMarker } from "../../../shared/utils/handback.js";
 import { stripAnsiCodes } from "../../../shared/utils/artifactParser.js";
 import type { HandbackRequest } from "./HandbackTracker.js";
+import { SEMANTIC_BUFFER_TRUNCATION_MARKER } from "./types.js";
 
 /**
  * Finds a handback marker for one minted code in recent terminal text (#12488).
@@ -19,7 +20,9 @@ import type { HandbackRequest } from "./HandbackTracker.js";
  * - the echoed instruction, whose capture carries the `<summary>` placeholder;
  * - a marker still streaming, which has no closing `END-<code>` yet;
  * - an opening marker the agent mentioned and never closed, which is skipped
- *   in favour of the next opening marker rather than swallowing it.
+ *   in favour of the next opening marker rather than swallowing it;
+ * - a capture spanning a line the semantic buffer cut short, whose missing
+ *   bytes could have held the placeholder.
  */
 
 /**
@@ -60,9 +63,19 @@ const ECHO_NOISE_RE = /[\s\u2500-\u259f\u23bf\u23fa|›❯•●◦·]+/gu;
  * gutter or status glyph with the echo, and no real summary carries the
  * literal placeholder.
  */
-function isEchoedInstruction(message: string): boolean {
-  return message.replace(ECHO_NOISE_RE, "").includes(HANDBACK_SUMMARY_PLACEHOLDER);
+function isEchoedInstruction(text: string): boolean {
+  return text.replace(ECHO_NOISE_RE, "").includes(HANDBACK_SUMMARY_PLACEHOLDER);
 }
+
+/**
+ * A row that ends in a hyphen straight after a letter or digit, and the next
+ * row's gutter. Codex wraps with `textwrap`'s hyphen splitter, so a marker near
+ * the right edge can land as `DAINTREE-DONE-` / `k7f3qa:` on two rows; joining
+ * the halves back lets the literal search see it. Claude Code wraps only at
+ * whitespace.
+ */
+const HYPHEN_ROW_BREAK_RE =
+  /(?<=[A-Za-z0-9])-[ \t\u2500-\u259f|]*\r?\n[ \t\u2500-\u259f\u23bf\u23fa|>›❯•●◦·]*/gu;
 
 function capMessage(message: string): HandbackMatch {
   if (message.length === 0) return { message: null, truncated: false };
@@ -78,8 +91,9 @@ function capMessage(message: string): HandbackMatch {
  * The most recent complete, non-echo marker pair for `code` in `text`, which
  * must already be plain text (no ANSI) with rows separated by `\n`.
  */
-export function detectHandback(text: string, code: string): HandbackMatch | null {
-  if (!text) return null;
+export function detectHandback(rawText: string, code: string): HandbackMatch | null {
+  if (!rawText) return null;
+  const text = rawText.replace(HYPHEN_ROW_BREAK_RE, "-");
   const start = handbackStartMarker(code);
   const end = handbackEndMarker(code);
 
@@ -100,8 +114,12 @@ export function detectHandback(text: string, code: string): HandbackMatch | null
   }
 
   for (const capture of captures.reverse()) {
+    if (capture.includes(SEMANTIC_BUFFER_TRUNCATION_MARKER)) continue;
     const message = normalizeCapture(capture);
-    if (isEchoedInstruction(message)) continue;
+    // Checked on both forms: normalizing rejoins a placeholder wrapped across a
+    // `>` gutter, while the raw capture keeps a `>` that closes the placeholder
+    // at the start of a continuation row, which gutter stripping removes.
+    if (isEchoedInstruction(capture) || isEchoedInstruction(message)) continue;
     return capMessage(message);
   }
   return null;

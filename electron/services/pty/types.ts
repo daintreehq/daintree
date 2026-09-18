@@ -300,6 +300,8 @@ export interface TerminalSnapshot {
 export const OUTPUT_BUFFER_SIZE = 2000;
 export const SEMANTIC_BUFFER_MAX_LINES = 50;
 export const SEMANTIC_BUFFER_MAX_LINE_LENGTH = 1000;
+/** Appended where a semantic-buffer line was cut; the text beyond it is gone. */
+export const SEMANTIC_BUFFER_TRUNCATION_MARKER = "... [truncated]";
 export const SEMANTIC_FLUSH_INTERVAL_MS = 100;
 
 // Scrollback configuration

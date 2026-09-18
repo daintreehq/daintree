@@ -22,7 +22,12 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { AGENT_REGISTRY, getAgentDisplayTitle, getMergedPresetIdentities } from "@/config/agents";
+import {
+  AGENT_REGISTRY,
+  getAgentDisplayTitle,
+  getMergedPresetIdentities,
+  isRegisteredAgent,
+} from "@/config/agents";
 import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import {
@@ -353,7 +358,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt`."
+          "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt` and an agent."
         ),
       systemPrompt: z
         .string()
@@ -525,6 +530,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       if (handback === true && (prompt === undefined || prompt.trim() === "")) {
         throw new UnactionableTargetError(
           "handback asks the agent to mark the end of its reply to `prompt`, so it needs a non-empty `prompt`. Pass one, or launch without handback."
+        );
+      }
+      // A plain shell, a non-terminal panel or an unknown id has no agent to answer it.
+      if (handback === true && !isRegisteredAgent(agentId)) {
+        throw new UnactionableTargetError(
+          "handback needs an agent to answer it, and this id is not a registered agent: a plain shell or panel never prints the marker. Launch a registered agent, or launch without handback."
         );
       }
       const handbackCode = handback === true ? mintHandbackCode() : undefined;

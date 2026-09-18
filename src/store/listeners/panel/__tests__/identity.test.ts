@@ -406,6 +406,23 @@ describe("identity listener — completed-with-changes notification", () => {
     d.dispose();
   });
 
+  it("drops lastHandback when the pane leaves exited for a new session (#12488)", () => {
+    setupPanel({
+      agentState: "exited",
+      lastHandback: { message: "old session", observedAt: 1, truncated: false },
+    });
+    const d = setupIdentityListeners();
+
+    emitState(makePayload({ state: "idle", previousState: "exited", timestamp: nextTimestamp() }));
+
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "idle",
+      lastHandback: undefined,
+    });
+
+    d.dispose();
+  });
+
   it("dispatches worktree.openReviewHub when the action onClick fires", () => {
     setupPanel();
     const d = setupIdentityListeners();

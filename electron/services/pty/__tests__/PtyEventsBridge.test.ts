@@ -127,18 +127,11 @@ describe("bridgePtyEvent", () => {
     expect(payloads[0]).not.toHaveProperty("exitSignal");
   });
 
-  it("forwards the settle's check result and handback onto the main bus (#10682, #12488)", () => {
+  it("forwards the settle's handback onto the main bus, and only on that settle (#12488)", () => {
     const payloads: Array<Record<string, unknown>> = [];
     events.on("agent:state-changed", (payload) => {
       payloads.push(payload as unknown as Record<string, unknown>);
     });
-    const lastCheckResult = {
-      command: "npm test",
-      passed: false,
-      ranAt: 1_700_000_000_000,
-      failureSummary: "1 failed",
-      truncated: false,
-    };
     const lastHandback = {
       message: "fixed the flaky test",
       observedAt: 1_700_000_000_000,
@@ -155,7 +148,6 @@ describe("bridgePtyEvent", () => {
       timestamp: Date.now(),
       trigger: "activity",
       confidence: 1.0,
-      lastCheckResult,
       lastHandback,
     });
     bridgePtyEvent({
@@ -169,9 +161,7 @@ describe("bridgePtyEvent", () => {
       confidence: 1.0,
     });
 
-    expect(payloads[0]?.lastCheckResult).toEqual(lastCheckResult);
     expect(payloads[0]?.lastHandback).toEqual(lastHandback);
-    expect(payloads[1]).not.toHaveProperty("lastCheckResult");
     expect(payloads[1]).not.toHaveProperty("lastHandback");
   });
 

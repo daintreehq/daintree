@@ -17,7 +17,6 @@ import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
-import type { TerminalCheckResult } from "./checkResult.js";
 import type { TerminalHandback } from "./handback.js";
 
 export type { TerminalFlowStatus };
@@ -606,8 +605,6 @@ export type PtyHostEvent =
       heatAdded?: number;
       /** Number of changed characters in the most recent sample. */
       changedChars?: number;
-      /** Parsed check result first seen at this settle (#10682). */
-      lastCheckResult?: TerminalCheckResult;
       /** Handback marker first seen at this settle (#12488). */
       lastHandback?: TerminalHandback;
     }

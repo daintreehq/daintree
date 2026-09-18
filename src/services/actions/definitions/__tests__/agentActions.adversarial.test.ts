@@ -319,6 +319,18 @@ describe("agentActions adversarial", () => {
     expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
   });
 
+  it("agent.launch refuses handback for a launch that starts no agent", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    for (const agentId of ["terminal", "browser", "dev-preview"]) {
+      await expect(
+        callAction(actions, "agent.launch", { agentId, prompt: "do it", handback: true })
+      ).rejects.toBeInstanceOf(UnactionableTargetError);
+    }
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
   it("agent.launch leaves the prompt alone when handback is not asked for", async () => {
     const callbacks = makeCallbacks();
     const actions = setupActions(callbacks);

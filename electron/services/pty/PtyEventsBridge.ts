@@ -89,7 +89,6 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         ...(event.temperature !== undefined ? { temperature: event.temperature } : {}),
         ...(event.heatAdded !== undefined ? { heatAdded: event.heatAdded } : {}),
         ...(event.changedChars !== undefined ? { changedChars: event.changedChars } : {}),
-        ...(event.lastCheckResult ? { lastCheckResult: event.lastCheckResult } : {}),
         ...(event.lastHandback ? { lastHandback: event.lastHandback } : {}),
       });
       return true;
