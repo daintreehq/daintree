@@ -164,6 +164,7 @@ interface HarnessProps {
   onOpenChange?: (open: boolean) => void;
   onPanelKeyDown?: (event: React.KeyboardEvent) => void;
   onPanelClick?: (event: React.MouseEvent) => void;
+  align?: "start" | "center" | "end";
 }
 
 function Harness({
@@ -171,6 +172,7 @@ function Harness({
   onOpenChange,
   onPanelKeyDown,
   onPanelClick,
+  align,
 }: HarnessProps) {
   const [open, setOpen] = useState(true);
   const anchorRef = useRef<HTMLButtonElement>(null);
@@ -191,6 +193,7 @@ function Harness({
           isOpen={open}
           onOpenChange={handleOpenChange}
           returnFocusRef={anchorRef}
+          align={align}
         />
       </AppPalettePopover>
     </div>
@@ -611,5 +614,15 @@ describe("MoveToWorktreePicker", () => {
 
       expect(document.activeElement).toBe(anchor);
     });
+  });
+});
+
+describe("MoveToWorktreePicker alignment", () => {
+  // The header hangs it back from a button at the end of its bar; the context
+  // menu opens it from a point, the way the menu itself opened.
+  it.each(["start", "end"] as const)("lines the picker up on the anchor's %s edge", (align) => {
+    render(<Harness align={align} />);
+
+    expect(content.props.align).toBe(align);
   });
 });
