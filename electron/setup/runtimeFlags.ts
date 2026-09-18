@@ -53,6 +53,12 @@ export function getIsE2EDeferRendererLoad(): boolean {
   );
 }
 
+/**
+ * Windows-CI e2e opt-out for the cached-view CDP commands that share
+ * Playwright's debugger session: the periodic memory purge and the defensive
+ * CPU-rate reset. The name predates #12456, which stopped throttling cached
+ * views; freeze/thaw is not gated here.
+ */
 export function getIsE2EDisableCachedViewCpuThrottle(): boolean {
   return (
     !isPackaged &&

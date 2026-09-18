@@ -4,7 +4,7 @@
 // `contextBridge.exposeInMainWorld` bridges (`__DAINTREE_E2E_*`) gated only by
 // env-var reads — not a security boundary. The main-process bundles read a
 // further set of `DAINTREE_E2E_*` flags (sideload dir, crash-dump redirect,
-// renderer-load deferral, CPU-throttle disable) that influence file paths and
+// renderer-load deferral, cached-view CDP opt-out) that influence file paths and
 // plugin roots in production if they ever survive a build.
 //
 // Production builds replace those env reads with "" via esbuild defines

@@ -4,7 +4,7 @@ import { isSafeNavigationUrl } from "../../shared/utils/urlUtils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { canOpenExternalUrl, openExternalUrl } from "../utils/openExternal.js";
 import { getAppWebContents } from "../window/webContentsRegistry.js";
-import { throttleCpuWebContents, unthrottleCpuWebContents } from "../utils/webContentsLifecycle.js";
+import { unthrottleCpuWebContents } from "../utils/webContentsLifecycle.js";
 
 export const PORTAL_MAX_LIVE_TABS = 3;
 
@@ -370,17 +370,16 @@ export class PortalManager {
 
     // Park the previously-active view offscreen instead of detaching it —
     // keeps its renderer state (scroll, in-flight requests, sockets) alive.
-    // CPU throttle (not freeze) so its event loop and live SSE/WS streams
-    // keep running while V8/Blink CPU time drops.
+    // Neither frozen nor CPU-throttled, so its event loop and live SSE/WS
+    // streams keep running: CDP CPU throttling busy-spins the renderer it
+    // "slows" (#12456).
     if (this.activeView && this.activeView !== view) {
       this.activeView.setBounds(OFFSCREEN_BOUNDS);
-      if (this.activeView.webContents && !this.activeView.webContents.isDestroyed()) {
-        void throttleCpuWebContents(this.activeView.webContents);
-      }
     }
 
-    // Restore full CPU rate before making visible — the view may have been
-    // throttled while parked by a previous showTab() or hideAll().
+    // Defensive: clear CPU emulation on a view that already has a debugger
+    // session. Parking no longer throttles, so this only undoes a rate some
+    // other session left behind.
     if (view.webContents && !view.webContents.isDestroyed()) {
       void unthrottleCpuWebContents(view.webContents);
     }
@@ -432,12 +431,8 @@ export class PortalManager {
     if (this.activeView) {
       this.activeView.setBounds(OFFSCREEN_BOUNDS);
       this.hidden = true;
-      // CPU throttle (not freeze) the parked view — keeps SSE/WS streams and
-      // the event loop alive while cutting background CPU. showTab() restores
-      // the full rate on re-show.
-      if (this.activeView.webContents && !this.activeView.webContents.isDestroyed()) {
-        void throttleCpuWebContents(this.activeView.webContents);
-      }
+      // Parked like showTab() parks: not frozen, not CPU-throttled (#12456).
+
       // Return focus to the main app webContents. The old removeChildView
       // path implicitly blurred the portal view; keep that behavior so
       // keyboard input goes to the overlay's focus-trap (in the renderer's

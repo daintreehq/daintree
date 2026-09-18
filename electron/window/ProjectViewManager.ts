@@ -56,8 +56,8 @@ import { collectGuestPids } from "./ProjectViewLifecycleController.js";
 // after we've decided to leave efficiency is the worst-of-both-worlds.
 const EFFICIENCY_FREEZE_DEBOUNCE_MS = 500;
 // Trailing-edge debounce for forwarding resize-end content bounds to cached
-// project views (#10415). Cached renderers are CPU-throttled (and CDP-frozen
-// under efficiency), so mid-drag spam is pure waste — only the settled size
+// project views (#10415). Cached renderers are hidden (and CDP-frozen under
+// efficiency), so mid-drag spam is pure waste — only the settled size
 // matters. IPC to a frozen renderer queues in Mojo and delivers on unfreeze,
 // so no wake cycle is needed. Single debounce on `resize` rather than the
 // `resized` event because Linux never emits `resized`.
@@ -151,8 +151,8 @@ export interface ProjectViewManagerOptions {
   /**
    * Called when a view transitions from active to cached with its webContents.id.
    * Mirrors onViewEvicted: live producer ports (worktree, workspace direct) must
-   * be closed so messages don't accumulate in a renderer that Chromium may freeze
-   * after CPU throttling lands. Reactivation re-brokers a fresh port.
+   * be closed so messages don't accumulate in a renderer that may be frozen once
+   * it is parked. Reactivation re-brokers a fresh port.
    */
   onViewCached?: (webContentsId: number) => void;
   /** Called on every did-finish-load for any managed view (initial load and reloads) */
@@ -908,7 +908,7 @@ export class ProjectViewManager {
    * Never rejects, but the three outcomes are NOT interchangeable and the
    * caller must branch on them: a timeout means the renderer never said it had
    * restored its panels, so its agents may not have respawned. Treating that as
-   * success would park a half-booted view as `"cached"` — throttled, purge
+   * success would park a half-booted view as `"cached"` — hidden, purge
    * scheduled, and indistinguishable from a healthy one until the user switches
    * to it and finds it blank.
    */
@@ -1255,9 +1255,10 @@ export class ProjectViewManager {
       // session that is already using the view.
       //
       // Unlike eviction, skipping the freeze needs no bounded lease. It costs
-      // one optimization on one cached view — CPU throttling and the periodic
-      // memory purge still apply — rather than the memory a resident renderer
-      // holds, so a quiet binding can hold it for as long as the session lives.
+      // one optimization on one cached view — the renderer's own cached-view
+      // work demotion and the periodic memory purge still apply — rather than
+      // the memory a resident renderer holds, so a quiet binding can hold it
+      // for as long as the session lives.
       const mcp = this.mcpActivityFor(projectId, wc);
       if (mcp.liveBinding || mcp.dispatchLease || mcp.unknown) continue;
       void freezeWebContents(wc);
@@ -1296,8 +1297,8 @@ export class ProjectViewManager {
 
   // Wake any cached background view whose project gained a live agent after it
   // was already frozen (the seed/state-change races freezeAllCached). Unfreeze
-  // only — CPU throttle stays applied; throttling slows JS but does not suspend
-  // it, so the queued state event still applies. No-op outside efficiency.
+  // only — the view stays cached and hidden, and the queued state event applies
+  // once its event loop runs again. No-op outside efficiency.
   //
   // Not `private`: called from ProjectViewAgentStateCache's seed() after a
   // fresh agent-state map lands (#11004).

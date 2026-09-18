@@ -171,7 +171,6 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
-  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -227,10 +226,7 @@ import { events } from "../../services/events.js";
 import { logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
-import {
-  throttleCpuWebContents,
-  unthrottleCpuWebContents,
-} from "../../utils/webContentsLifecycle.js";
+import { freezeWebContents, unthrottleCpuWebContents } from "../../utils/webContentsLifecycle.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import { MIN_PRESSURE_EVICTION_AGE_MS } from "../ProjectViewEvictionController.js";
 
@@ -2020,7 +2016,7 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     expect(onViewCached).not.toHaveBeenCalledWith(wcB.id);
   });
 
-  it("fires onViewCached BEFORE CPU throttle so ports close before freeze becomes possible", async () => {
+  it("fires onViewCached BEFORE freezing the outgoing view so ports close first", async () => {
     const onViewCached = vi.fn();
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
@@ -2035,23 +2031,22 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     const wcA = createMockWebContents();
     const viewA = { webContents: wcA, setBounds: vi.fn() };
     manager.registerInitialView(viewA as never, "proj-a", "/path/a");
+    // Efficiency on: deactivation freezes the outgoing view inline.
+    manager.setEfficiencyFreeze(true);
 
-    const throttleMock = vi.mocked(throttleCpuWebContents);
-    throttleMock.mockClear();
+    const freezeMock = vi.mocked(freezeWebContents);
+    freezeMock.mockClear();
 
     await manager.switchTo("proj-b", "/path/b");
     await flushImmediates();
 
     const cachedOrder = onViewCached.mock.invocationCallOrder[0];
-    const throttleCall = throttleMock.mock.calls.findIndex((args) => {
-      const arg = args[0] as unknown;
-      return arg instanceof Object && "id" in arg && (arg as { id: number }).id === wcA.id;
-    });
-    const throttleOrder = throttleMock.mock.invocationCallOrder[throttleCall];
+    const freezeCall = freezeMock.mock.calls.findIndex((args) => (args[0] as unknown) === wcA);
+    const freezeOrder = freezeMock.mock.invocationCallOrder[freezeCall];
     expect(cachedOrder).toBeDefined();
-    expect(throttleOrder).toBeDefined();
-    expect(cachedOrder!).toBeLessThan(throttleOrder);
-    expect(throttleMock).toHaveBeenCalledWith(wcA);
+    expect(freezeOrder).toBeDefined();
+    expect(cachedOrder!).toBeLessThan(freezeOrder!);
+    manager.dispose();
   });
 
   it("invokes onViewCached for each cached view across rapid switches A→B→C (never for the active C)", async () => {
@@ -2176,9 +2171,10 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await flushImmediates();
     expect(manager.getActiveProjectId()).toBe("proj-b");
     expect(onViewCached).toHaveBeenCalledWith(wcA.id);
-    // CPU throttle must still happen even if the callback throws — the catch
-    // is around onViewCached only, not the surrounding deactivate flow.
-    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
+    // The rest of deactivation must still run even if the callback throws —
+    // the catch is around onViewCached only, not the surrounding flow.
+    expect(wcA.session.flushStorageData).toHaveBeenCalled();
+    expect(manager.getAllViews().find((v) => v.projectId === "proj-a")?.state).toBe("cached");
   });
 
   it("manager works without onViewCached configured (option is optional)", async () => {
@@ -2197,10 +2193,10 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
 
     await expect(manager.switchTo("proj-b", "/path/b")).resolves.toMatchObject({ isNew: true });
     await flushImmediates();
-    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(wcA);
+    expect(manager.getAllViews().find((v) => v.projectId === "proj-a")?.state).toBe("cached");
   });
 
-  it("throttles <webview> guests when their host view is cached and unthrottles on reactivation", async () => {
+  it("never CPU-throttles <webview> guests when their host is cached, and resets them on reactivation", async () => {
     const manager = new ProjectViewManager(win as never, {
       dirname: "/test",
       paintGateTimeoutMs: 0,
@@ -2223,10 +2219,11 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await manager.switchTo("proj-b", "/path/b");
     await flushImmediates();
 
-    expect(vi.mocked(throttleCpuWebContents)).toHaveBeenCalledWith(guest);
-    expect(vi.mocked(throttleCpuWebContents)).not.toHaveBeenCalledWith(unrelated);
+    // CDP CPU throttling busy-spins the renderer it "slows" (#12456): caching
+    // the host sends its guests no CPU-rate command at all.
+    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(guest);
 
-    // Reactivate proj-a — its guest must be unthrottled along with the host.
+    // Reactivate proj-a — its guest's rate is reset along with the host's.
     await manager.switchTo("proj-a", "/path/a");
     await flushImmediates();
 

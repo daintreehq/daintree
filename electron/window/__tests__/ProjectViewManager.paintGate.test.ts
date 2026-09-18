@@ -200,7 +200,6 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
-  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -1633,7 +1632,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     await switchPromise;
 
     // The outgoing project-a view was cached → its renderer is told so it can
-    // cancel any in-flight wake/repaint rAFs before being throttled/frozen.
+    // cancel any in-flight wake/repaint rAFs before being hidden/frozen.
     expect(initialWc.send).toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
   });
 });

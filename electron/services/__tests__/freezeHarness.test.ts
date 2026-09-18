@@ -15,11 +15,21 @@ vi.mock("../../window/ProjectViewLifecycleController.js", () => ({
   CACHED_VIEW_PURGE_DELAY_MS: 20_000,
 }));
 
+// Same reason: the snapshot module imports `electron`'s `app`. The pure CPU
+// helpers under test take their metrics as an argument.
+vi.mock("../../utils/appMetricsSnapshot.js", () => ({
+  refreshAppMetricsSnapshot: vi.fn(() => []),
+}));
+
 const {
   evaluateFreezeMeasurement,
+  evaluateIdleCpu,
   evaluatePurgeBudget,
   longestStall,
+  readCpuSample,
   sumTicksInWindow,
+  IDLE_CPU_WINDOW_MS,
+  MAX_IDLE_CACHED_CPU_PERCENT,
   MIN_CONTROL_TICKS,
   MIN_FREEZE_RATIO,
 } = await import("../freezeHarness.js");
@@ -253,5 +263,127 @@ describe("evaluatePurgeBudget", () => {
     const budget = evaluatePurgeBudget(base);
     expect(budget.plannedFinishMs).toBe(base.elapsedSinceCachedMs + budget.plannedRemainingMs);
     expect(budget.headroomMs).toBe(budget.deadlineMs - budget.plannedFinishMs);
+  });
+});
+
+describe("readCpuSample", () => {
+  function metric(pid: number, cumulativeCPUUsage?: number): Electron.ProcessMetric {
+    return {
+      pid,
+      type: "Tab",
+      creationTime: 1_000 + pid,
+      cpu: { percentCPUUsage: 0, idleWakeupsPerSecond: 0, cumulativeCPUUsage },
+    } as unknown as Electron.ProcessMetric;
+  }
+
+  it("reads the cumulative counter for the requested pid only", () => {
+    const sample = readCpuSample([metric(10, 1.5), metric(20, 9)], 20, 5_000);
+    expect(sample).toEqual({ pid: 20, creationTime: 1_020, cumulativeCpuSeconds: 9, atMs: 5_000 });
+  });
+
+  it("returns null for an absent process rather than a zero reading", () => {
+    expect(readCpuSample([metric(10, 1.5)], 99, 0)).toBeNull();
+  });
+
+  it("returns null when Electron reports no cumulative counter", () => {
+    expect(readCpuSample([metric(10)], 10, 0)).toBeNull();
+    expect(readCpuSample([metric(10, Number.NaN)], 10, 0)).toBeNull();
+  });
+});
+
+describe("evaluateIdleCpu", () => {
+  const cachedAtMs = 100_000;
+  function sample(atMs: number, cumulativeCpuSeconds: number, pid = 42, creationTime = 7) {
+    return { pid, creationTime, cumulativeCpuSeconds, atMs };
+  }
+  /** A window opening 2s after caching, at `percent` of one core throughout. */
+  function windowAt(percent: number, windowMs = IDLE_CPU_WINDOW_MS) {
+    const startAt = cachedAtMs + 2_000;
+    return {
+      start: sample(startAt, 3),
+      end: sample(startAt + windowMs, 3 + (percent / 100) * (windowMs / 1000)),
+      cachedAtMs,
+    };
+  }
+
+  it("passes an idle renderer", () => {
+    const verdict = evaluateIdleCpu(windowAt(1));
+    expect(verdict.failures).toEqual([]);
+    expect(verdict.passed).toBe(true);
+    expect(verdict.cpuPercent).toBeCloseTo(1, 5);
+  });
+
+  it("fails the CDP CPU-throttle busy-spin (#12456)", () => {
+    const verdict = evaluateIdleCpu(windowAt(35));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.cpuPercent).toBeCloseTo(35, 5);
+    expect(verdict.failures.join("\n")).toContain("idle cached renderer used 35.0% of a core");
+  });
+
+  it("holds the line at the ceiling: equal fails, just under passes", () => {
+    expect(evaluateIdleCpu(windowAt(MAX_IDLE_CACHED_CPU_PERCENT)).passed).toBe(false);
+    expect(evaluateIdleCpu(windowAt(MAX_IDLE_CACHED_CPU_PERCENT - 0.01)).passed).toBe(true);
+  });
+
+  it("does not divide by the core count — percent is of one core", () => {
+    // One full core for the whole window is 100%, never 100 / cores.
+    expect(evaluateIdleCpu(windowAt(100)).cpuPercent).toBeCloseTo(100, 5);
+  });
+
+  it("fails a missing sample instead of treating it as zero CPU", () => {
+    const { start, end } = windowAt(1);
+    for (const verdict of [
+      evaluateIdleCpu({ start: null, end, cachedAtMs }),
+      evaluateIdleCpu({ start, end: null, cachedAtMs }),
+    ]) {
+      expect(verdict.passed).toBe(false);
+      expect(Number.isNaN(verdict.cpuPercent)).toBe(true);
+      expect(verdict.failures.join("\n")).toContain("no cumulative CPU counter");
+    }
+  });
+
+  it("fails when the renderer process was replaced mid-window", () => {
+    const { start, end } = windowAt(1);
+    const respawned = evaluateIdleCpu({ start, end: { ...end, pid: 43 }, cachedAtMs });
+    expect(respawned.passed).toBe(false);
+    expect(respawned.failures.join("\n")).toContain("replaced mid-window");
+
+    const pidReused = evaluateIdleCpu({ start, end: { ...end, creationTime: 8 }, cachedAtMs });
+    expect(pidReused.passed).toBe(false);
+    expect(pidReused.failures.join("\n")).toContain("replaced mid-window");
+  });
+
+  it("fails a window shorter than required", () => {
+    const verdict = evaluateIdleCpu(windowAt(1, IDLE_CPU_WINDOW_MS - 1));
+    expect(verdict.passed).toBe(false);
+    expect(verdict.failures.join("\n")).toContain("shorter than");
+  });
+
+  it("fails a counter that went backwards", () => {
+    const { start, end } = windowAt(1);
+    const verdict = evaluateIdleCpu({
+      start,
+      end: { ...end, cumulativeCpuSeconds: 2 },
+      cachedAtMs,
+    });
+    expect(verdict.passed).toBe(false);
+    expect(verdict.failures.join("\n")).toContain("went backwards");
+  });
+
+  it("fails a window that closes past the guarded purge deadline", () => {
+    const { start, end } = windowAt(1);
+    const fitting = evaluateIdleCpu({
+      start,
+      end,
+      cachedAtMs,
+      purgeDelayMs: 20_000,
+      guardMs: 1_000,
+    });
+    expect(fitting.passed).toBe(true);
+
+    // The window closes 12s after caching; an 11s guarded deadline is overrun.
+    const late = evaluateIdleCpu({ start, end, cachedAtMs, purgeDelayMs: 12_000, guardMs: 1_000 });
+    expect(late.passed).toBe(false);
+    expect(late.failures.join("\n")).toContain("guarded purge deadline");
   });
 });

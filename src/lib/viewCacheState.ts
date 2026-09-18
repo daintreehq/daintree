@@ -12,11 +12,11 @@
  * for a cached view, which is how a hidden project ended up at 4.5% CPU and
  * 3300 idle wakeups/sec (#11212).
  *
- * The CPU throttle main applies alongside the cache
- * (`Emulation.setCPUThrottlingRate`) slows each callback but does not reduce
- * how often they fire; only a `Page.setWebLifecycleState` freeze does, and
- * that is deliberately skipped while the cached project has a live agent —
- * exactly the case that costs the most. So the renderer has to demote its own
+ * Main does not CPU-throttle cached views — `Emulation.setCPUThrottlingRate`
+ * busy-spins the renderer it "slows" (#12456) and never reduced how often
+ * callbacks fire anyway. Only a `Page.setWebLifecycleState` freeze does, and
+ * that is deliberately skipped while the cached project has a live agent or
+ * an MCP binding — exactly the cases that cost the most. So the renderer has to demote its own
  * periodic work, and main's explicit lifecycle IPC is the only signal that
  * reliably tracks it.
  *

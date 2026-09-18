@@ -3,7 +3,6 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   freezeWebContents,
   unfreezeWebContents,
-  throttleCpuWebContents,
   unthrottleCpuWebContents,
   purgeMemoryWebContents,
 } from "../webContentsLifecycle.js";
@@ -167,74 +166,52 @@ describe("webContentsLifecycle", () => {
     expect(wc.debugger.attach).toHaveBeenCalledTimes(1);
   });
 
-  describe("throttleCpuWebContents / unthrottleCpuWebContents", () => {
-    it("skips CPU throttling when Windows E2E disables cached-view CDP throttles", async () => {
-      vi.stubEnv("DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE", "1");
-      const wc = createMockWc();
-      await throttleCpuWebContents(wc as unknown as Electron.WebContents);
+  describe("unthrottleCpuWebContents", () => {
+    it("sends only Emulation.setCPUThrottlingRate rate 1 on an attached session", async () => {
+      const wc = createMockWc({ attached: true });
       await unthrottleCpuWebContents(wc as unknown as Electron.WebContents);
-      expect(wc.debugger.isAttached).not.toHaveBeenCalled();
+      expect(wc.debugger.sendCommand.mock.calls).toEqual([
+        ["Emulation.setCPUThrottlingRate", { rate: 1 }],
+      ]);
+      expect(wc.debugger.attach).not.toHaveBeenCalled();
+    });
+
+    it("never attaches a debugger just to reset the rate (#12456)", async () => {
+      const wc = createMockWc({ attached: false });
+      await unthrottleCpuWebContents(wc as unknown as Electron.WebContents);
       expect(wc.debugger.attach).not.toHaveBeenCalled();
       expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
     });
 
-    it("throttleCpuWebContents sends Emulation.setCPUThrottlingRate with rate: 4", async () => {
-      const wc = createMockWc();
-      await throttleCpuWebContents(wc as unknown as Electron.WebContents);
-      const calls = wc.debugger.sendCommand.mock.calls;
-      expect(calls.length).toBe(1);
-      expect(calls[0][0]).toBe("Emulation.setCPUThrottlingRate");
-      expect(calls[0][1]).toEqual({ rate: 4 });
-    });
-
-    it("unthrottleCpuWebContents sends rate: 1", async () => {
-      const wc = createMockWc();
+    it("reads attachment per call, so a session attached later is reset", async () => {
+      const wc = createMockWc({ attached: false });
       await unthrottleCpuWebContents(wc as unknown as Electron.WebContents);
-      const calls = wc.debugger.sendCommand.mock.calls;
-      expect(calls.length).toBe(1);
-      expect(calls[0][0]).toBe("Emulation.setCPUThrottlingRate");
-      expect(calls[0][1]).toEqual({ rate: 1 });
-    });
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
 
-    it("does not call Page.enable or Emulation.enable", async () => {
-      const wc = createMockWc();
-      await throttleCpuWebContents(wc as unknown as Electron.WebContents);
+      wc.debugger.isAttached.mockReturnValue(true);
       await unthrottleCpuWebContents(wc as unknown as Electron.WebContents);
-      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
-      expect(methods).not.toContain("Page.enable");
-      expect(methods).not.toContain("Emulation.enable");
+      expect(wc.debugger.sendCommand).toHaveBeenCalledWith("Emulation.setCPUThrottlingRate", {
+        rate: 1,
+      });
     });
 
-    it("attaches the debugger when not already attached", async () => {
-      const wc = createMockWc();
-      await throttleCpuWebContents(wc as unknown as Electron.WebContents);
-      expect(wc.debugger.attach).toHaveBeenCalledWith("1.3");
-    });
-
-    it("skips attach when already attached", async () => {
+    it("skips entirely when Windows E2E disables cached-view CDP commands", async () => {
+      vi.stubEnv("DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE", "1");
       const wc = createMockWc({ attached: true });
-      await throttleCpuWebContents(wc as unknown as Electron.WebContents);
-      expect(wc.debugger.attach).not.toHaveBeenCalled();
+      await unthrottleCpuWebContents(wc as unknown as Electron.WebContents);
+      expect(wc.debugger.isAttached).not.toHaveBeenCalled();
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
     });
 
     it("returns early when wc is destroyed", async () => {
-      const wc = createMockWc({ destroyed: true });
-      await throttleCpuWebContents(wc as unknown as Electron.WebContents);
+      const wc = createMockWc({ attached: true, destroyed: true });
       await unthrottleCpuWebContents(wc as unknown as Electron.WebContents);
+      expect(wc.debugger.isAttached).not.toHaveBeenCalled();
       expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
     });
 
-    it("swallows expected CDP errors silently (throttle)", async () => {
-      const wc = createMockWc();
-      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Target closed"));
-      await expect(
-        throttleCpuWebContents(wc as unknown as Electron.WebContents)
-      ).resolves.toBeUndefined();
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it("swallows expected CDP errors silently (unthrottle)", async () => {
-      const wc = createMockWc();
+    it("swallows expected CDP errors silently", async () => {
+      const wc = createMockWc({ attached: true });
       wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Inspected target navigated"));
       await expect(
         unthrottleCpuWebContents(wc as unknown as Electron.WebContents)
@@ -242,18 +219,8 @@ describe("webContentsLifecycle", () => {
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
-    it("warns once for an unexpected CDP error (throttle, rate 4)", async () => {
-      const wc = createMockWc();
-      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Unknown protocol failure"));
-      await expect(
-        throttleCpuWebContents(wc as unknown as Electron.WebContents)
-      ).resolves.toBeUndefined();
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-      expect(warnSpy.mock.calls[0][0]).toContain("setCPUThrottlingRate(4) failed");
-    });
-
-    it("warns once for an unexpected CDP error (unthrottle, rate 1)", async () => {
-      const wc = createMockWc();
+    it("warns once for an unexpected CDP error", async () => {
+      const wc = createMockWc({ attached: true });
       wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Unknown protocol failure"));
       await expect(
         unthrottleCpuWebContents(wc as unknown as Electron.WebContents)
@@ -262,24 +229,7 @@ describe("webContentsLifecycle", () => {
       expect(warnSpy.mock.calls[0][0]).toContain("setCPUThrottlingRate(1) failed");
     });
 
-    it("swallows synchronous throw from debugger.attach", async () => {
-      const wc = createMockWc();
-      wc.debugger.attach.mockImplementation(() => {
-        throw new Error("Another debugger is already attached to this target");
-      });
-      await expect(
-        throttleCpuWebContents(wc as unknown as Electron.WebContents)
-      ).resolves.toBeUndefined();
-      expect(warnSpy).not.toHaveBeenCalled();
-    });
-
-    it("never throws when wc.debugger is missing entirely (throttle)", async () => {
-      const wc = { isDestroyed: vi.fn(() => false) } as unknown as Electron.WebContents;
-      await expect(throttleCpuWebContents(wc)).resolves.toBeUndefined();
-      expect(warnSpy).toHaveBeenCalledTimes(1);
-    });
-
-    it("never throws when wc.debugger is missing entirely (unthrottle)", async () => {
+    it("never throws when wc.debugger is missing entirely", async () => {
       const wc = { isDestroyed: vi.fn(() => false) } as unknown as Electron.WebContents;
       await expect(unthrottleCpuWebContents(wc)).resolves.toBeUndefined();
       expect(warnSpy).toHaveBeenCalledTimes(1);
@@ -305,7 +255,7 @@ describe("webContentsLifecycle", () => {
       expect(methods).not.toContain("Memory.simulatePressureNotification");
     });
 
-    it("never sends Memory.forciblyPurgeJavaScriptMemory (SIGSEGVs throttled hidden views)", async () => {
+    it("never sends Memory.forciblyPurgeJavaScriptMemory (SIGSEGVed throttled hidden views)", async () => {
       const wc = createMockWc();
       await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
       const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);

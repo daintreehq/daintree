@@ -221,7 +221,7 @@ Resource governance is deliberately **quiet**. Per the runtime-signal tiers in [
 | Idle analysis-session trim (pty-host) | `electron/services/PtyManager.ts`, `electron/pty-host/handlers/resourceConfig.ts` |
 | Idle plugin-worker dispose | `electron/services/PluginService.ts` (`disposeIdlePluginWorkers`) |
 | View freeze / LRU eviction / paint gate | `electron/window/ProjectViewManager.ts` |
-| CDP freeze + CPU-throttle helpers | `electron/utils/webContentsLifecycle.ts` |
+| CDP freeze, memory-purge, and CPU-rate reset helpers | `electron/utils/webContentsLifecycle.ts` |
 | Memory-pressure hibernation | `electron/services/HibernationService.ts` |
 | Per-process memory mitigation tiers | `electron/services/ProcessMemoryMonitor.ts` |
 | Background git-watcher LRU budget | `electron/workspace-host/WorkspaceService.ts` |

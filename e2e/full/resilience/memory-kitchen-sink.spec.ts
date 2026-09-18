@@ -262,7 +262,7 @@ async function takeSample(ctx: AppContext): Promise<MemorySample> {
 
   // JS heap of every live project view (active + cached), summed. Cached
   // views are detached from contentView.children, so enumerate through the
-  // ProjectViewManager e2e seam. Throttled/frozen cached views may never
+  // ProjectViewManager e2e seam. Frozen cached views may never
   // answer executeJavaScript, so each probe races a short timeout instead of
   // stalling the whole sample.
   const viewInfo: { count: number; heaps: number[] } = await ctx.app.evaluate(async () => {

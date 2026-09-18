@@ -55,8 +55,8 @@ export function resolveAmbientWebContents(): Electron.WebContents | null {
  *
  * Cached (evicted-but-retained) views still have a live renderer and count, but
  * a visible one wins when the project is open in more than one window, so a
- * prompt lands where the user can already see it. A cached view is CPU-throttled
- * and may not answer inside a dispatch's timeout — it is still the right target,
+ * prompt lands where the user can already see it. A cached view may be frozen
+ * and not answer inside a dispatch's timeout — it is still the right target,
  * because "the project is open, just backgrounded" is not the same failure as
  * "the project has no renderer".
  */

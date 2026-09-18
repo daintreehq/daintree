@@ -84,6 +84,12 @@ describe("validateHarnessOutput", () => {
     expect(() => validateHarnessOutput(1, 1, okResult({ output }))).toThrow(/missing expected/);
   });
 
+  it("requires the idle cached-CPU check, not just the freeze ratios (#12456)", () => {
+    // The freeze legs count tasks, and a CDP CPU throttle spins outside any
+    // task — they passed while every cached view burned a quarter of a core.
+    expect(REQUIRED_MARKERS).toContain("[FREEZE-HARNESS] CHECK: idle cached CPU — OK");
+  });
+
   it("rejects a silent run that produced no output at all", () => {
     expect(() => validateHarnessOutput(1, 1, okResult({ output: "" }))).toThrow(/missing expected/);
   });

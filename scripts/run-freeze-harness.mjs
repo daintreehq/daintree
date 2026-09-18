@@ -2,7 +2,8 @@
  * CDP freeze harness runner (#11846) — launches the built Electron app in
  * `--daintree-freeze-harness` mode and validates that a cached project view's
  * renderer genuinely stops executing tasks when the production efficiency-freeze
- * path freezes it, and resumes when it is thawed.
+ * path freezes it, resumes when it is thawed, and costs close to no CPU while
+ * cached and idle (#12456).
  *
  * Deliberately not a Playwright spec. Playwright sends
  * `Emulation.setFocusEmulationEnabled` to every page target it attaches to,
@@ -45,6 +46,7 @@ export const REQUIRED_MARKERS = [
   "[FREEZE-HARNESS] CHECK: probe running — OK",
   "[FREEZE-HARNESS] CHECK: freeze ratio — OK",
   "[FREEZE-HARNESS] CHECK: recovery — OK",
+  "[FREEZE-HARNESS] CHECK: idle cached CPU — OK",
   "[FREEZE-HARNESS] PASS",
 ];
 
@@ -67,7 +69,7 @@ const FLUSH_TIMEOUT_MS = 5_000;
  * falls back rather than silently inverting what the caller asked for.
  */
 const MAX_TIMER_MS = 2_147_483_647;
-/** Runs are ~15s each; a ceiling here is a typo guard, not a capability limit. */
+/** Runs are ~30s each; a ceiling here is a typo guard, not a capability limit. */
 const MAX_RUNS = 1_000;
 
 export function parsePositiveInt(value, fallback, max = MAX_TIMER_MS) {

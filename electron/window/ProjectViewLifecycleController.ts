@@ -19,7 +19,6 @@ import { detachRendererConsoleCapture } from "./rendererConsoleCapture.js";
 import {
   freezeWebContents,
   unfreezeWebContents,
-  throttleCpuWebContents,
   unthrottleCpuWebContents,
   purgeMemoryWebContents,
 } from "../utils/webContentsLifecycle.js";
@@ -93,50 +92,43 @@ export function deactivateEntry(
   current.state = "cached";
   if (!opts.preserveLastUsed) current.lastUsed = Date.now();
 
-  // Throttle background view to reduce CPU and allow Chromium to reclaim memory
+  // Quiet the background view and let Chromium reclaim its memory
   if (!current.view.webContents.isDestroyed()) {
     const cachedWcId = current.view.webContents.id;
     // Mark cached so visible-only broadcasts (log batches) skip this
-    // renderer — pushed messages have no backpressure once throttled/frozen.
+    // renderer — pushed messages are wasted work while cached and have no
+    // backpressure once frozen.
     registerCachedViewWebContents(current.view.webContents);
     // Tell the renderer it's being cached so it cancels any in-flight wake/
     // repaint rAFs and reveal backstops scheduled for the view it's leaving —
     // otherwise those fire against a now-occluded/frozen view, or survive to
-    // run stale work on the next reactivation. Sent before the CPU throttle so
+    // run stale work on the next reactivation. Sent before any freeze below so
     // the renderer can still process it.
     try {
       current.view.webContents.send(CHANNELS.APP_VIEW_CACHED);
     } catch {
       // ignore — a destroyed/closing renderer has nothing to cancel
     }
-    // Close live producer ports BEFORE applying CPU throttle. Once throttled,
-    // Chromium can freeze the renderer after ~5 min hidden or under memory
-    // pressure; any messages still posted by main/utility processes
-    // accumulate in the frozen renderer's task queue (no native
-    // backpressure). Reactivation re-brokers a fresh port via activateView.
+    // Close live producer ports BEFORE the view can be frozen. Once hidden,
+    // Chromium can freeze the renderer after ~5 min or under memory pressure,
+    // and the efficiency freeze below can land immediately; any messages
+    // still posted by main/utility processes accumulate in the frozen
+    // renderer's task queue (no native backpressure). Reactivation re-brokers
+    // a fresh port via activateView.
     try {
       host.onViewCached?.(cachedWcId);
     } catch (error) {
       console.error("[ProjectViewManager] onViewCached threw during deactivate:", error);
     }
-    // Use CDP Emulation.setCPUThrottlingRate (per-renderer) instead of
-    // WebContents.setBackgroundThrottling — the latter is window-wide in
-    // Electron 28+, so the active view's setBackgroundThrottling(false)
-    // silently un-throttled every cached sibling (#8599). CPU throttling
-    // keeps the event loop and MessagePort dispatch alive while slowing
-    // V8/Blink CPU time for this single renderer.
-    void throttleCpuWebContents(current.view.webContents);
-
-    // <webview> guests (browser/dev-preview panels) are separate renderer
-    // processes with their own CDP targets — the host's throttle does not
-    // propagate. Throttle each guest too, or a cached project's dev-preview
-    // SPA keeps running at full rate with only native 1 Hz timer
-    // throttling. Guests are intentionally NOT CDP-frozen: freezing kills
-    // dev-server HMR websockets and would fight the dock-hide freeze owned
-    // by useWebviewThrottle.
-    forEachGuest(current.view.webContents, (guest) => {
-      void throttleCpuWebContents(guest);
-    });
+    // No CPU throttle here, host or <webview> guests. CDP
+    // `Emulation.setCPUThrottlingRate` looks like a background-CPU lever but
+    // is a slow-device simulation that busy-spins the throttled renderer's
+    // main thread — every cached view burned 25-40% of a core at rate 4,
+    // frozen or not (#12456). `setBackgroundThrottling` is no substitute:
+    // it is window-wide in Electron 28+ (#8599). Idle cost comes from what
+    // is already here: the view is hidden, the renderer was told it is
+    // cached, producer ports are closed, and the freeze below applies when
+    // nothing protects the view.
 
     // Flush pending DOMStorage writes (synchronous — view stays alive in
     // cache, so data loss is not a concern)
@@ -191,9 +183,9 @@ export function deactivateEntry(
 
 /**
  * Delayed + periodic V8 garbage collection for a cached view. The
- * renderer-side `requestIdleCallback(gc)` above is best-effort inside a
- * throttled renderer; this is the guaranteed main-side counterpart (works
- * throttled or frozen). It reclaims the renderer's JS heap only — Blink's
+ * renderer-side `requestIdleCallback(gc)` above is best-effort and never runs
+ * once the view is frozen; this is the guaranteed main-side counterpart (works
+ * frozen too). It reclaims the renderer's JS heap only — Blink's
  * discardable caches are not in reach from main (see the invariants on
  * `purgeMemoryWebContents`). Collecting does not stop timers, ports, or
  * agent output processing, so it is safe for cached views with live agents.
@@ -290,10 +282,25 @@ export function activateView(
     unregisterCachedViewWebContents(entry.view.webContents.id);
   }
 
-  // Defensive unfreeze BEFORE restoring CPU rate: efficiency transitions and
-  // view activations are async, so an activating view may still be frozen
-  // even if we've left efficiency in the meantime. Chromium does not
-  // auto-resume on focus or re-attach — explicit "active" required.
+  // Clear CPU emulation BEFORE the thaw below. The reset only acts on a
+  // renderer that already has a debugger session, and the thaw attaches one
+  // synchronously — run it first and every activation would pay a CDP round
+  // trip for a view nothing ever throttled. Nothing raises the rate any more
+  // (#12456); this is defensive cleanup for a session left at another rate.
+  // Guests too: separate renderer processes with their own CDP targets. CPU
+  // rate only — a guest the dock-hide path froze stays frozen (separate
+  // mechanism, released by useWebviewThrottle when its tab is shown).
+  if (!entry.view.webContents.isDestroyed()) {
+    void unthrottleCpuWebContents(entry.view.webContents);
+    forEachGuest(entry.view.webContents, (guest) => {
+      void unthrottleCpuWebContents(guest);
+    });
+  }
+
+  // Defensive unfreeze: efficiency transitions and view activations are
+  // async, so an activating view may still be frozen even if we've left
+  // efficiency in the meantime. Chromium does not auto-resume on focus or
+  // re-attach — explicit "active" required.
   // Fire-and-forget: there is a sub-millisecond window between addChildView
   // making the view visible and Chromium processing the "active" CDP command.
   // Awaiting would force activateView to be async and ripple through all
@@ -301,19 +308,6 @@ export function activateView(
   // been observable in testing.
   if (!entry.view.webContents.isDestroyed()) {
     void unfreezeWebContents(entry.view.webContents);
-  }
-
-  // Restore full CPU rate before making visible. Uses
-  // Emulation.setCPUThrottlingRate (per-renderer) — see deactivateEntry for
-  // why setBackgroundThrottling is unsuitable (window-wide in Electron 28+).
-  if (!entry.view.webContents.isDestroyed()) {
-    void unthrottleCpuWebContents(entry.view.webContents);
-    // Mirror the guest throttle applied in deactivateEntry. CPU rate only —
-    // a guest the dock-hide path froze stays frozen (separate mechanism,
-    // released by useWebviewThrottle when its tab is shown).
-    forEachGuest(entry.view.webContents, (guest) => {
-      void unthrottleCpuWebContents(guest);
-    });
   }
 
   // `insertBehind` stacks the incoming view at z-index 0 (below the still-
@@ -358,8 +352,8 @@ function forEachGuest(
       fn(guest);
     }
   } catch {
-    // Best-effort: enumeration unavailable (tests / teardown) — guests
-    // simply keep their current CPU rate.
+    // Best-effort: enumeration unavailable (tests / teardown) — guests are
+    // simply skipped.
   }
 }
 

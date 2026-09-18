@@ -219,7 +219,7 @@ Two distinct smoke checks run at different points in the pipeline:
 
 ## `test:freeze-harness` — why it can't be a Playwright spec
 
-`npm run test:freeze-harness` (`scripts/run-freeze-harness.mjs` + `electron/services/freezeHarness.ts`) measures whether a cached project view's renderer genuinely stops executing tasks when the efficiency-freeze path freezes it, and resumes when it is thawed.
+`npm run test:freeze-harness` (`scripts/run-freeze-harness.mjs` + `electron/services/freezeHarness.ts`) measures whether a cached project view's renderer genuinely stops executing tasks when the efficiency-freeze path freezes it, resumes when it is thawed, and costs close to no CPU while cached and idle.
 
 **Do not port this to Playwright.** Playwright sends `Emulation.setFocusEmulationEnabled` to every page target it attaches to. That handler takes out a `WebContents` capturer with `stay_hidden=false`, which permanently tells the renderer it is user-visible. `Page.setWebLifecycleState(frozen)` calls `WasHidden()` internally, so on a forced-visible page it no-ops — while still returning success. A freeze assertion written in Playwright passes whether or not freeze works, in every project view, always (#11846). A second CDP session can't undo it either: `capture_handle_` and `focus_emulation_enabled_` are per-session handler state.
 
@@ -231,6 +231,8 @@ The harness therefore boots the real app with no Playwright and no debugger clie
 npm run build && npm run test:freeze-harness
 FREEZE_HARNESS_RUNS=5 npm run test:freeze-harness   # variance
 ```
+
+The idle-CPU leg is the one deliberate bound (#12456). Task counts cannot see a CDP CPU throttle: `Emulation.setCPUThrottlingRate` busy-spins the renderer main thread from a signal handler, outside any task and frozen or not, so the freeze legs passed while every cached view burned 25–40% of a core. After the freeze legs the harness switches back to A, so B — never probed — is freshly cached with efficiency freeze off, then reads B's renderer `cpu.cumulativeCPUUsage` from `app.getAppMetrics()` across a 10 s window and requires under 10% of one core. It fails on a missing counter, a replaced process, a pid shared with the active view, or a window that closes past B's purge deadline. `percentCPUUsage` is not used because every other `getAppMetrics()` caller resets its interval.
 
 All three measurement windows have to close before the cached view's first memory purge (`CACHED_VIEW_PURGE_DELAY_MS`, armed as the view is parked), or the purge perturbs the throughput being measured. The planned schedule is checked against the elapsed clock just before the control leg, and the actual finish is checked again after the last window — so widening `DAINTREE_FREEZE_HARNESS_WINDOW_MS` past what fits, or timers running long on a loaded box, fails the run with the shortfall rather than reporting a number measured across a purge.
 
