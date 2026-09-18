@@ -108,8 +108,14 @@ export function deliverAgentRequest({
     ownerKey: memoryKey,
     // The same words, about the same subject, to the same place, from the same
     // composer: a remount that sends again while the first run is in flight
-    // joins it rather than typing the request into the agent twice.
-    idempotencyKey: `${memoryKey}\n${destinationKey(destination)}\n${subjectKey ?? ""}\n${sentDraft}`,
+    // joins it rather than typing the request into the agent twice. Without a
+    // subject key the words alone cannot say the prompts would match, so no
+    // key — a run of its own beats joining one about something else.
+    ...(subjectKey === undefined
+      ? {}
+      : {
+          idempotencyKey: `${memoryKey}\n${destinationKey(destination)}\n${subjectKey}\n${sentDraft}`,
+        }),
     destination,
     worktreeId,
     stillOwned: () => stillOwned(previewPanelId, worktreeId),

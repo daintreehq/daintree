@@ -109,6 +109,7 @@ describe("usePluginRuntimeStore", () => {
     expect(state.pluginMetaById.get("project__b6700c7a__gregpriday.video-manager")).toEqual({
       devMode: false,
       displayName: "Video Manager",
+      previewToolIds: new Set(),
     });
     // The bare manifest name is deliberately NOT a second key.
     expect(state.pluginMetaById.has("gregpriday.video-manager")).toBe(false);
@@ -186,6 +187,7 @@ describe("usePluginRuntimeStore", () => {
     expect(state.pluginMetaById.get("acme.dev")).toEqual({
       devMode: true,
       displayName: "Acme Dev",
+      previewToolIds: new Set(),
     });
     expect(state.pluginMetaById.get("acme.plain")?.devMode).toBe(false);
   });
@@ -389,7 +391,11 @@ describe("usePluginRuntimeStore", () => {
 
     await vi.waitFor(() => expect(logErrorMock).toHaveBeenCalled());
     const state = usePluginRuntimeStore.getState();
-    expect(state.pluginMetaById.get("acme.a")).toEqual({ devMode: true, displayName: "Acme A" });
+    expect(state.pluginMetaById.get("acme.a")).toEqual({
+      devMode: true,
+      displayName: "Acme A",
+      previewToolIds: new Set(),
+    });
     expect(state.disabledPluginIds.has("acme.a")).toBe(true);
   });
 

@@ -673,7 +673,9 @@ function isSafeGuestEntryPath(value: string): boolean {
   if (value.startsWith("/") || path.isAbsolute(value)) return false;
   if (!GUEST_ENTRY_EXTENSIONS.some((ext) => value.endsWith(ext))) return false;
   const segments = value.split("/");
-  if (segments[0] === GUEST_ASSET_OUTPUT_DIR) return false;
+  // Case-insensitively: on the case-insensitive filesystems macOS and Windows
+  // default to, `Guest/` is the same directory the bundler writes into.
+  if (segments[0]?.toLowerCase() === GUEST_ASSET_OUTPUT_DIR) return false;
   return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 

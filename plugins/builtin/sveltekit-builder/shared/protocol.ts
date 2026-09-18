@@ -47,7 +47,8 @@ export const GUEST_PROTOCOL_VERSION = 1;
 /**
  * The host-registered guest adapter this plugin binds to. The host owns the
  * runtime asset and resolves this id to it — the plugin sends the id and never
- * the body. Mirrored in `electron/services/sitePreview/svelteKitGuestAdapter.ts`.
+ * the body. Declared under `contributes.guestAdapters` in `plugin.json`, which
+ * is what main registers at startup; the protocol-drift test pins the two.
  */
 export const GUEST_ADAPTER_ID = "daintree.sveltekit-builder.guest";
 

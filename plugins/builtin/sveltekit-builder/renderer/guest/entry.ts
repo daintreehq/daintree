@@ -1,10 +1,10 @@
 /**
  * The guest runtime exactly as the host installs it.
  *
- * `scripts/build-main.mjs` bundles this entry into a standalone IIFE at
- * `dist-electron/plugins/builtin/sveltekit-builder/guest/runtime.js`, and the
- * host's `daintree.sveltekit-builder.guest` adapter reads that file back as
- * text. Nothing in the renderer imports it: the runtime used to travel as
+ * `scripts/build-main.mjs` bundles this entry — named by `contributes.guestAdapters`
+ * in `plugin.json` — into a standalone IIFE under the plugin's `guest/` output
+ * directory, at a path derived from the adapter id, and the host's
+ * `daintree.sveltekit-builder.guest` adapter reads that file back as text. Nothing in the renderer imports it: the runtime used to travel as
  * `Function.prototype.toString()` output, which forced the whole factory into
  * one closure and broke on any transform that hoisted a helper out of it.
  *

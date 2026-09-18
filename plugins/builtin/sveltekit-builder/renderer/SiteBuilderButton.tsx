@@ -25,7 +25,10 @@ function hasSvelteKitApp(
   worktreeId: string,
   worktreePath: string
 ): Promise<boolean> {
-  const cached = detected.get(worktreePath);
+  // Keyed by the workspace, not the path alone: the answer was authorised for
+  // one project and worktree, and must not be lent to a call about another.
+  const key = `${projectId}\n${worktreeId}\n${worktreePath}`;
+  const cached = detected.get(key);
   if (cached && Date.now() - cached.at < DETECTION_TTL_MS) return cached.pending;
   const pending = window.electron.plugin
     // The ids, not just the path: main scans through a filesystem handle bound
@@ -37,15 +40,15 @@ function hasSvelteKitApp(
       const found = typeof count === "number" && count > 0;
       // Only a positive answer is reused: an app scaffolded a moment ago must
       // show up on the next page load, not after the cache runs out.
-      if (!found && detected.get(worktreePath)?.pending === pending) detected.delete(worktreePath);
+      if (!found && detected.get(key)?.pending === pending) detected.delete(key);
       return found;
     })
     .catch(() => {
       // A failed lookup is retried next time rather than hiding the button for good.
-      detected.delete(worktreePath);
+      detected.delete(key);
       return false;
     });
-  detected.set(worktreePath, { at: Date.now(), pending });
+  detected.set(key, { at: Date.now(), pending });
   return pending;
 }
 
