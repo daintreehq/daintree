@@ -1010,10 +1010,10 @@ export class TerminalProcess {
   }
 
   private disposeHeadless(): void {
-    if (this.outputProgressTimer) {
-      clearTimeout(this.outputProgressTimer);
-      this.outputProgressTimer = null;
-    }
+    // Settle a pending sample against the mirror before it goes: a preserved
+    // exit drains its final output first, and that frame is the last change
+    // this terminal will ever show.
+    this.flushOutputProgressSample();
     this.analysis.release();
   }
 
@@ -1372,6 +1372,7 @@ export class TerminalProcess {
       try {
         this.outputProgress.noteResize(Date.now());
         this.analysis.resize(cols, rows);
+        this.scheduleOutputProgressSample();
         if (this.analysis.kind === "worker") {
           // Reflow rewraps the buffer — invalidate any wake no-change skip.
           // (The in-thread path bumps the epoch itself, gated on a live buffer.)
@@ -1447,6 +1448,10 @@ export class TerminalProcess {
     try {
       this.outputProgress.noteResize(Date.now());
       this.analysis.resize(cols, rows);
+      // Baseline the reflowed frame inside the quiet window. The worker's
+      // session schedules its own digest on resize; this is the in-thread
+      // counterpart, and a no-op without a local mirror.
+      this.scheduleOutputProgressSample();
       if (this.analysis.kind === "worker") {
         terminal.contentEpoch++;
       }
@@ -2019,15 +2024,26 @@ export class TerminalProcess {
   // In-thread counterpart of the worker's viewport digest: one trailing read
   // per burst, so the last frame before the output stops is always observed.
   private scheduleOutputProgressSample(): void {
-    if (this.outputProgressTimer) return;
+    if (this.outputProgressTimer || !this.terminalInfo.headlessTerminal) return;
     this.outputProgressTimer = setTimeout(() => {
       this.outputProgressTimer = null;
-      const mirror = this.terminalInfo.headlessTerminal;
-      // No mirror is no reading, not an empty screen.
-      if (!mirror) return;
-      this.noteOutputProgress(readViewportNonEmptyLines(mirror));
+      this.sampleOutputProgress();
     }, OUTPUT_PROGRESS_SAMPLE_MS);
     this.outputProgressTimer.unref?.();
+  }
+
+  private flushOutputProgressSample(): void {
+    if (!this.outputProgressTimer) return;
+    clearTimeout(this.outputProgressTimer);
+    this.outputProgressTimer = null;
+    this.sampleOutputProgress();
+  }
+
+  private sampleOutputProgress(): void {
+    const mirror = this.terminalInfo.headlessTerminal;
+    // No mirror is no reading, not an empty screen.
+    if (!mirror) return;
+    this.noteOutputProgress(readViewportNonEmptyLines(mirror));
   }
 
   private feedPreludeInThread(prelude: string): void {

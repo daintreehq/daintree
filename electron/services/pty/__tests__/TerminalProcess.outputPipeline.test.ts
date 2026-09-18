@@ -262,14 +262,23 @@ describe("TerminalProcess output progress, in-thread (#12428)", () => {
     terminal.dispose();
   });
 
-  it("drops a pending sample when the terminal is disposed", async () => {
+  it("settles a pending sample at dispose instead of leaving it armed", async () => {
+    // A preserved exit drains its final output and then releases the mirror;
+    // that frame must be observed before the mirror goes, not dropped with it.
     const terminal = createTerminal({ launchAgentId: "claude" });
+    const internals = terminal as unknown as { outputProgressTimer: unknown };
 
-    ptyOnDataCallback!("output that never gets sampled\r\n");
+    ptyOnDataCallback!("the final answer\r\n");
     await vi.advanceTimersByTimeAsync(1);
-    terminal.dispose();
-    await vi.advanceTimersByTimeAsync(500);
-
+    expect(internals.outputProgressTimer).not.toBeNull();
     expect(terminal.getPublicState().lastOutputChangeAt).toBeUndefined();
+
+    terminal.dispose();
+    const settled = terminal.getPublicState().lastOutputChangeAt;
+    expect(settled).toBe(Date.now());
+    expect(internals.outputProgressTimer).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(settled);
   });
 });

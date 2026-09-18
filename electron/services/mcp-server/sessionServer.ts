@@ -512,12 +512,12 @@ export interface SessionServerDeps {
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
-    options?: { maxTimeoutMs?: number }
+    options?: { maxTimeoutMs?: number; workspaceId?: string }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
   handleWaitUntilIdleBatch: (
     rawArgs: unknown,
     signal: AbortSignal,
-    options?: { maxTimeoutMs?: number }
+    options?: { maxTimeoutMs?: number; workspaceId?: string }
   ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
   /**
    * Execute `skills.search` in the main process (#10892). The renderer holds no
@@ -1766,7 +1766,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               tier === "external"
                 ? MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS
                 : INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS;
-            const result = await waitUntilIdle(args, extra.signal, { maxTimeoutMs });
+            // A bound session's output-progress reads stay inside its own
+            // workspace (#12428); the wait itself is unchanged.
+            const result = await waitUntilIdle(args, extra.signal, {
+              maxTimeoutMs,
+              ...(workspaceBinding ? { workspaceId: workspaceBinding.workspaceId } : {}),
+            });
             outcome = { kind: "result", value: { ok: true, result } };
             // Mirror the post-dispatch grant refresh in the main path:
             // when the call was authorized by a grant, extend the TTL
@@ -1812,7 +1817,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               tier === "external"
                 ? MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS
                 : INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS;
-            const result = await waitUntilIdleBatch(args, extra.signal, { maxTimeoutMs });
+            const result = await waitUntilIdleBatch(args, extra.signal, {
+              maxTimeoutMs,
+              ...(workspaceBinding ? { workspaceId: workspaceBinding.workspaceId } : {}),
+            });
             outcome = { kind: "result", value: { ok: true, result } };
             if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
               if (grantIssuedAt !== undefined) {

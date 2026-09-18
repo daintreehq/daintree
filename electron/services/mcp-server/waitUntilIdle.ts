@@ -28,19 +28,40 @@ export const OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS = 500;
  * terminal id rather than agent id — several terminals share an agent type.
  * A terminal whose record is missing, lacks the field, or does not answer
  * before the shared deadline is simply left out.
+ *
+ * A workspace-bound session reads only terminals the spawn ledger places in its
+ * own workspace, and that check runs before any RPC is issued. The wait itself
+ * already answered from a global store; output timing is finer-grained than
+ * busy/idle, and the pty fabric shards by owning project, so routing a foreign
+ * id at its owner's shard would leak through latency even with the field
+ * withheld (the same reasoning as `buildViewlessTerminalStatus`). The ledger
+ * cannot place a terminal this main process never tracked, so those go
+ * unread — the field is absent, never guessed.
  */
-async function readOutputProgress(terminalIds: readonly string[]): Promise<Map<string, number>> {
+async function readOutputProgress(
+  terminalIds: readonly string[],
+  signal: AbortSignal,
+  workspaceId: string | undefined
+): Promise<Map<string, number>> {
   const progress = new Map<string, number>();
   const ptyClient = getPtyClient();
-  if (!ptyClient || terminalIds.length === 0) return progress;
+  if (!ptyClient) return progress;
+  const readable =
+    workspaceId === undefined
+      ? terminalIds
+      : terminalIds.filter((id) => ptyClient.getTerminalProjectId(id) === workspaceId);
+  if (readable.length === 0) return progress;
 
   let deadlineHandle: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
   const deadline = new Promise<undefined>((resolve) => {
     deadlineHandle = setTimeout(() => resolve(undefined), OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS);
+    abortListener = () => resolve(undefined);
+    signal.addEventListener("abort", abortListener, { once: true });
   });
   try {
     const readings = await Promise.all(
-      terminalIds.map((id) =>
+      readable.map((id) =>
         Promise.race([
           ptyClient.getTerminalAsync(id).then(
             (record) => record?.lastOutputChangeAt,
@@ -50,12 +71,18 @@ async function readOutputProgress(terminalIds: readonly string[]): Promise<Map<s
         ])
       )
     );
-    terminalIds.forEach((id, index) => {
+    readable.forEach((id, index) => {
       const at = readings[index];
       if (at !== undefined) progress.set(id, at);
     });
   } finally {
     clearTimeout(deadlineHandle);
+    if (abortListener) signal.removeEventListener("abort", abortListener);
+  }
+  // Same outcome as a cancel mid-wait: the caller gave up, so nothing it would
+  // read as a successful answer goes back.
+  if (signal.aborted) {
+    throw new McpError(ErrorCode.RequestTimeout, "Request was cancelled.");
   }
   return progress;
 }
@@ -80,6 +107,11 @@ export interface WaitUntilIdleOptions {
    * human is sitting in; external (api-key) sessions get the global max.
    */
   maxTimeoutMs?: number;
+  /**
+   * The workspace a bound session is pinned to. When set, output progress is
+   * read only for terminals the spawn ledger places in it.
+   */
+  workspaceId?: string;
 }
 
 /**
@@ -97,7 +129,8 @@ export async function handleWaitUntilIdle(
 ): Promise<WaitUntilIdleResult> {
   const result = await waitForTerminalIdle(rawArgs, signal, options);
   if (result.trackingState !== "tracked") return result;
-  const lastOutputChangeAt = (await readOutputProgress([result.terminalId])).get(result.terminalId);
+  const progress = await readOutputProgress([result.terminalId], signal, options?.workspaceId);
+  const lastOutputChangeAt = progress.get(result.terminalId);
   return lastOutputChangeAt === undefined ? result : { ...result, lastOutputChangeAt };
 }
 
@@ -458,7 +491,7 @@ export async function handleWaitUntilIdleBatch(
   const trackedIds = result.results
     .filter((entry) => entry.trackingState === "tracked")
     .map((entry) => entry.terminalId);
-  const progress = await readOutputProgress(trackedIds);
+  const progress = await readOutputProgress(trackedIds, signal, options?.workspaceId);
   if (progress.size === 0) return result;
   return {
     ...result,

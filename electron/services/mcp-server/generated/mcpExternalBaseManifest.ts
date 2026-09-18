@@ -1536,6 +1536,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               lastTransitionAt: {
                 type: "number",
               },
+              lastOutputChangeAt: {
+                description:
+                  "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
+                type: "number",
+              },
               exitCode: {
                 description:
                   "Present once the process has exited, so its absence means still running — unless listed in `unavailableFields`. Null means the process was terminated by a signal and produced no numeric code — tell a clean finish from a failure with this rather than by scraping output.",
@@ -1660,7 +1665,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "array",
           items: {
             type: "string",
-            enum: ["armed", "lastCheckResult", "exitCode", "hasPty"],
+            enum: ["armed", "lastCheckResult", "exitCode", "hasPty", "lastOutputChangeAt"],
           },
           description:
             "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false.",
@@ -2194,6 +2199,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         lastTransitionAt: {
           type: "number",
         },
+        lastOutputChangeAt: {
+          type: "number",
+          description:
+            "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
+        },
         exitCode: {
           type: ["number", "null"],
           description:
@@ -2303,6 +2313,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               lastTransitionAt: {
                 type: "number",
+              },
+              lastOutputChangeAt: {
+                type: "number",
+                description:
+                  "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
               },
               exitCode: {
                 type: ["number", "null"],

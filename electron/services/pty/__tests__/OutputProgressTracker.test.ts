@@ -89,17 +89,58 @@ describe("OutputProgressTracker", () => {
       tracker.observe(["a long line", "that wraps", "new"], 1_000 + OUTPUT_PROGRESS_RESIZE_QUIET_MS)
     ).toBe(true);
   });
+
+  it("sees a tool row change that a spinner-and-verb pattern would have swallowed", () => {
+    const tracker = new OutputProgressTracker();
+    tracker.observe([...answer, "● Running tests in a.ts"], 0);
+    expect(tracker.observe([...answer, "● Running tests in b.ts"], 1_000)).toBe(true);
+  });
+
+  it("reads every frame of a hintless star spinner the same", () => {
+    // Claude's cycle passes through `·` and `*`; dropping some frames and
+    // keeping others would stamp on every lap.
+    const tracker = new OutputProgressTracker();
+    tracker.observe([...answer, "· Cogitating…"], 0);
+    expect(tracker.observe([...answer, "✻ Cogitating…"], 1_000)).toBe(false);
+    expect(tracker.observe([...answer, "* Cogitating…"], 2_000)).toBe(false);
+  });
+
+  it("reads a timer rolling over into minutes as unchanged", () => {
+    const tracker = new OutputProgressTracker();
+    tracker.observe(["● Bash(npm test)", "  ⎿  Running… (59s)"], 0);
+    expect(tracker.observe(["● Bash(npm test)", "  ⎿  Running… (1m 0s)"], 1_000)).toBe(false);
+    expect(tracker.observe(["● Bash(npm test)", "  ⎿  Running… (1:01)"], 2_000)).toBe(false);
+  });
+
+  it("keeps durations and token counts in ordinary output", () => {
+    const tracker = new OutputProgressTracker();
+    tracker.observe(["p95: 3.5s, budget 100 tokens"], 0);
+    expect(tracker.observe(["p95: 10ms, budget 100 tokens"], 200)).toBe(true);
+    expect(tracker.observe(["p95: 10ms, budget 200 tokens"], 400)).toBe(true);
+  });
+
+  it("ignores aider's waiting bar sweeping", () => {
+    const tracker = new OutputProgressTracker();
+    tracker.observe([...answer, "░░░░░░░░░█ Waiting for claude-sonnet"], 0);
+    expect(tracker.observe([...answer, "░░░░██░░░░ Waiting for claude-sonnet"], 1_000)).toBe(false);
+  });
+
+  it("sees an indentation-only change", () => {
+    const tracker = new OutputProgressTracker();
+    tracker.observe(["def f():", "return 1"], 0);
+    expect(tracker.observe(["def f():", "    return 1"], 200)).toBe(true);
+  });
 });
 
 describe("normalizeProgressLines", () => {
-  it("drops recognised status lines, masks counters, and collapses spacing", () => {
+  it("drops hinted status rows, masks tickers inside parentheses, and collapses interior spacing", () => {
     expect(
       normalizeProgressLines([
         "✻ Thinking… (2m 39s · esc to interrupt)",
-        "  ⎿  Running…   (1h2m3s)  ",
-        "Used 12.5k tokens",
+        "  ⎿  Running…   (1h2m3s · ↓ 12.5k tokens)  ",
+        "Used 12.5k tokens in v1.2m",
         "   ",
       ])
-    ).toEqual(["⎿ Running… (###)", "Used #"]);
+    ).toEqual(["  ⎿ Running… (# ~ ↓ #)", "Used 12.5k tokens in v1.2m"]);
   });
 });

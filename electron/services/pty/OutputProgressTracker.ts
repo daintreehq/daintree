@@ -5,24 +5,37 @@ import { hashStrings } from "./SustainedChangeTracker.js";
  * How long after a resize a viewport change is treated as reflow rather than
  * output. Covers the mirror's own rewrap plus the full repaint a TUI agent
  * sends back after SIGWINCH.
+ *
+ * Output that genuinely lands inside the window is absorbed with the reflow,
+ * which can leave the timestamp at the change before the resize until the next
+ * one arrives. Telling the two apart needs wrap-aware comparison across the
+ * geometry change; reporting every resize as progress would be worse, since a
+ * pane being dragged would keep a frozen agent looking busy.
  */
 export const OUTPUT_PROGRESS_RESIZE_QUIET_MS = 1000;
 
-// Every agent's working footer ("✻ Thinking… (2m 39s · esc to interrupt)",
-// "⠏ Pondering (esc to cancel, 14s)") animates for as long as the turn runs,
-// so a line matching one carries no evidence that anything else moved.
+// Rows that exist only to animate while a turn runs. The primary working
+// patterns all require an interrupt hint ("esc to interrupt", "esc to cancel"),
+// which is what makes them safe to drop outright — the looser spinner-and-verb
+// fallback also matches real tool rows like "● Running tests in a.ts".
 const STATUS_LINE_PATTERNS: readonly RegExp[] = [
   ...UNIVERSAL_PATTERN_CONFIG.primaryPatterns,
-  ...(UNIVERSAL_PATTERN_CONFIG.fallbackPatterns ?? []),
+  // Aider's knight-rider bar: the block moves every frame and carries no hint.
+  /^\s*[░█]{2,}\s+Waiting for\b/,
 ];
 
-// Spinner frames for agents whose indicator does not match a status pattern:
-// braille, Claude's star cycle, quarter circles and Kimi's moon phases.
+// Spinner frames, masked rather than dropped so every frame of a hintless
+// spinner row normalises the same: braille, Claude's star cycle (which passes
+// through `·` and `*`), quarter circles and Kimi's moon phases.
 const SPINNER_GLYPHS = /[⠀-⣿·*✢✳✶✻✽✼✾◐◓◑◒\u{1F311}-\u{1F318}]/gu;
 
-// Elapsed-time and token counters tick on their own inside tool rows too
-// ("⎿ Running… (12s)"), so they are masked wherever they appear.
-const COUNTER_SPANS = /\d+(?:[.,]\d+)?\s*k?\s*tokens?\b|\d+(?:\.\d+)?\s?(?:ms|[hms])(?![a-z])/giu;
+// Agents put their tickers in parentheses — "(12s)", "(2m 39s · ↓ 1.2k
+// tokens)", "(0:42)" — so counters are only masked there, and a whole elapsed
+// run collapses to one placeholder so "59s" → "1m 0s" reads as unchanged.
+// Numbers in ordinary output are left alone.
+const PARENTHESIZED = /\([^()\n]*\)/g;
+const COUNTER_SPANS =
+  /(?<![\w.])(?:\d+(?:\.\d+)?\s?(?:ms|[hms])(?![a-z])(?:\s*\d+(?:\.\d+)?\s?(?:ms|[hms])(?![a-z]))*|\d+(?::\d{2})+|\d+(?:[.,]\d+)?\s*k?\s*tokens?\b)/giu;
 
 const EMPTY_FINGERPRINT = hashStrings([]);
 
@@ -39,10 +52,13 @@ export function normalizeProgressLines(lines: readonly string[]): string[] {
     if (isStatusLine(line)) continue;
     const masked = line
       .replace(SPINNER_GLYPHS, "~")
-      .replace(COUNTER_SPANS, "#")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (masked !== "") normalized.push(masked);
+      .replace(PARENTHESIZED, (span) => span.replace(COUNTER_SPANS, "#"))
+      .trimEnd();
+    if (masked.trim() === "") continue;
+    // Right-aligned footers re-pad as their contents change width, so interior
+    // runs collapse; leading indentation is content and is kept.
+    const indent = /^\s*/.exec(masked)?.[0] ?? "";
+    normalized.push(indent + masked.slice(indent.length).replace(/\s+/g, " "));
   }
   return normalized;
 }
@@ -54,8 +70,8 @@ export function normalizeProgressLines(lines: readonly string[]): string[] {
  * The activity monitor cannot answer this: while a status-line rewrite is
  * recent it classifies the whole viewport change as indicator activity, and an
  * agent's spinner is always recent while it works. So the tracker compares the
- * viewport with recognised status lines dropped and counters masked, and a
- * frame that differs only in those reads as unchanged.
+ * viewport with recognised status rows dropped and spinner and ticker churn
+ * masked, and a frame that differs only in those reads as unchanged.
  *
  * It is an observation, not a verdict — long reasoning leaves the screen just
  * as still as a wedged turn does.
