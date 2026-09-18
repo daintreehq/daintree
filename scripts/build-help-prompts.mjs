@@ -32,6 +32,7 @@ const TARGETS = [
     out: path.join(HELP_DIR, "AGENTS.md"),
     parts: [
       path.join(SRC_DIR, "AGENTS.head.md"),
+      path.join(SRC_DIR, "AGENTS.tasks.md"),
       SHARED,
       path.join(SRC_DIR, "AGENTS.transcript.md"),
       SHARED_TAIL,

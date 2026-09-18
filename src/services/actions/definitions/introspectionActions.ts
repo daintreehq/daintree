@@ -351,6 +351,7 @@ export function registerIntrospectionActions(
         const description = (entry.description ?? "").toLowerCase();
         const category = (entry.category ?? "").toLowerCase();
         const keywords = (entry.keywords ?? []).join(" ").toLowerCase();
+        const keywordTokens = new Set(keywords.split(/\s+/));
 
         let score = 0;
 
@@ -363,8 +364,17 @@ export function registerIntrospectionActions(
           if (title.includes(term)) {
             score += 15;
           }
-          if (keywords.includes(term)) {
-            score += 8;
+          // Keywords are synonyms: they score only for a word the id and title
+          // don't already carry, so an action that restates its title in
+          // keywords doesn't count the same word twice. One the query names
+          // outright is weighted like an id match — that is what lets "spawn"
+          // lift `agent.launch` past siblings that merely share the query's noun.
+          if (!id.includes(term) && !title.includes(term)) {
+            if (keywordTokens.has(term)) {
+              score += 25;
+            } else if (keywords.includes(term)) {
+              score += 8;
+            }
           }
           if (description.includes(term)) {
             score += 4;

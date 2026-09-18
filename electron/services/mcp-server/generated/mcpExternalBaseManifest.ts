@@ -319,6 +319,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       },
       required: ["agentId"],
     },
+    keywords: ["spawn", "start", "run", "new", "agents", "task"],
     kind: "command",
     name: "agent.launch",
     outputSchema: {
