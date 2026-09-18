@@ -2,10 +2,11 @@
  * The boundary vocabulary of the Svelte source model.
  *
  * This package deliberately owns no Daintree concepts — no project, worktree,
- * panel or plugin id. It answers two questions about one `.svelte` file:
- * "which node in this source produced that rendered element?" and "what is the
- * smallest edit that changes it?". The plugin maps these results onto its own
- * domain model; the dependency never runs the other way.
+ * panel or plugin id. It answers one question about one `.svelte` file: "which
+ * node in this source produced that rendered element?", given the location the
+ * dev runtime stamped or, when that is missing or contradicted, the element's
+ * position in the template. The plugin maps the results onto its own domain
+ * model; the dependency never runs the other way.
  */
 
 /** A 1-indexed line / 0-indexed column pair, as Svelte's dev runtime reports it. */
