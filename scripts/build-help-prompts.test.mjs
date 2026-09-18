@@ -100,12 +100,15 @@ describe("help prompt outputs", () => {
       expect(tasksIdx).toBeLessThan(tierIdx);
     });
 
-    it("AGENTS.md omits the Tier Model, task recipes, and getStatus recipe", () => {
+    // Codex has no ScheduleWakeup and no Claude harness, so the Claude pacing
+    // recipe (and the triage prompt built around it) would send it after tools
+    // it doesn't have.
+    it("AGENTS.md omits the Tier Model and the Claude harness pacing recipe", () => {
       expect(AGENTS).not.toContain("## Tier Model");
-      expect(AGENTS).not.toContain("## Common Tasks");
-      expect(AGENTS).not.toContain("## When to Use Which");
       expect(AGENTS).not.toContain("## Watching Agent Terminals");
-      expect(AGENTS).not.toContain("terminal.getStatus");
+      expect(AGENTS).not.toContain("ScheduleWakeup");
+      expect(AGENTS).not.toContain("triage_terminals");
+      expect(AGENTS).not.toMatch(/Claude Code harness/);
     });
 
     it("AGENTS.md describes the wired daintree MCP", () => {
@@ -203,6 +206,44 @@ describe("help prompt outputs", () => {
         );
         expect(body).not.toMatch(/switch to a Claude help session/);
       }
+    });
+  });
+
+  // Codex help sessions run at the action tier; without these a session asked to
+  // launch agents spent its first several calls hunting for `agent.launch`.
+  describe("Codex operations recipes", () => {
+    it("AGENTS.md carries launch, status, send, wait, and close recipes", () => {
+      expect(AGENTS).toContain("## Common Tasks");
+      for (const tool of [
+        "agent.launch",
+        "terminal.getStatus",
+        "terminal.sendCommand",
+        "terminal.waitUntilIdleBatch",
+        "terminal.close",
+      ]) {
+        expect(AGENTS).toContain(tool);
+      }
+    });
+
+    it("AGENTS.md shows the agent.launch call shape and the missing-CLI outcome", () => {
+      expect(AGENTS).toMatch(/agent\.launch\(\{ agentId:[^\n]*prompt:[^\n]*worktreeId:[^\n]*name:/);
+      expect(AGENTS).toContain('spawnStatus: "missing-cli"');
+    });
+
+    it("AGENTS.md places the recipes ahead of the discovery guidance", () => {
+      const tasksIdx = AGENTS.indexOf("## Common Tasks");
+      const discoveryIdx = AGENTS.indexOf("## Finding the Right Tool");
+      expect(tasksIdx).toBeGreaterThan(-1);
+      expect(discoveryIdx).toBeGreaterThan(-1);
+      expect(tasksIdx).toBeLessThan(discoveryIdx);
+    });
+
+    // Codex reads project instructions up to `project_doc_max_bytes` (32 KiB by
+    // default) across the whole AGENTS.md chain and truncates past it without
+    // telling the model, and the help session appends its scratch note at
+    // runtime. Growing past this means trimming, not copying CLAUDE.md across.
+    it("AGENTS.md stays well inside Codex's instruction budget", () => {
+      expect(Buffer.byteLength(AGENTS, "utf8")).toBeLessThanOrEqual(24 * 1024);
     });
   });
 

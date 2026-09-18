@@ -874,6 +874,82 @@ describe("actions.search", () => {
     expect(byCategory.results[0]!.id).toBe("b");
   });
 
+  // Each pair puts the stronger match on the id that sorts later, so a tie
+  // would hand the win to the wrong entry.
+  it("ranks a keyword the query names outright above one that merely contains it", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "a.partial", title: "A", keywords: ["respawn"] }),
+      makeEntry({ id: "b.exact", title: "B", keywords: ["spawn"] }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "Spawn" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    expect(result.results.map((r) => r.id)).toEqual(["b.exact", "a.partial"]);
+  });
+
+  it("treats each word of a multi-word keyword as named outright", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "a.partial", title: "A", keywords: ["renew"] }),
+      makeEntry({ id: "b.exact", title: "B", keywords: ["new agent"] }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "new" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    expect(result.results[0]!.id).toBe("b.exact");
+  });
+
+  it("does not stack a keyword substring on top of an outright keyword match", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "a.spawn", title: "A" }),
+      makeEntry({ id: "z.item", title: "Z", keywords: ["spawn", "respawn"] }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "spawn" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    // Equal weight for an id substring and an outright keyword, so the id
+    // tie-break decides; a stacked substring bonus would reverse it.
+    expect(result.results.map((r) => r.id)).toEqual(["a.spawn", "z.item"]);
+  });
+
+  it("adds nothing for a keyword that restates a word the id already carries", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "b.devtools", title: "B" }),
+      makeEntry({ id: "z.dev", title: "Z", keywords: ["dev"] }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "dev" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    // Both score the id substring alone, so the id tie-break decides; any
+    // keyword weight on top would put z.dev first.
+    expect(result.results.map((r) => r.id)).toEqual(["b.devtools", "z.dev"]);
+  });
+
+  it("does not let a plural keyword add weight to the singular in the title", async () => {
+    vi.mocked(actionService.list).mockReturnValueOnce([
+      makeEntry({ id: "a.restart", title: "Restart Agent" }),
+      makeEntry({ id: "b.launch", title: "Launch Agent", keywords: ["agents"] }),
+    ]);
+
+    const def = registry.get("actions.search")!();
+    const result = (await def.run({ query: "agent" } as never, stubCtx)) as {
+      results: ActionManifestEntry[];
+    };
+
+    expect(result.results.map((r) => r.id)).toEqual(["a.restart", "b.launch"]);
+  });
+
   it("stably orders results by score descending then id ascending", async () => {
     vi.mocked(actionService.list).mockReturnValueOnce([
       makeEntry({ id: "c", title: "Title Match" }),

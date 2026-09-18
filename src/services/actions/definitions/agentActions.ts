@@ -326,6 +326,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     kind: "command",
     danger: "safe",
     scope: "renderer",
+    keywords: ["spawn", "start", "run", "new", "agents", "task"],
     argsSchema: z.object({
       agentId: AgentIdSchema,
       location: LaunchLocationSchema.optional(),
