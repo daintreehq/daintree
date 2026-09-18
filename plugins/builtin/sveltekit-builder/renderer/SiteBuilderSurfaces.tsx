@@ -39,6 +39,7 @@ import {
   INITIAL_INSPECTOR_STATE,
   type InspectorController,
   type InspectorState,
+  type WorkspaceState,
 } from "./inspectorController.js";
 import { InspectorNotice } from "./InspectorNotice.js";
 import { PropertyRow, SectionHeader } from "./InspectorSection.js";
@@ -55,7 +56,12 @@ import { IdentitySkeleton } from "./IdentitySkeleton.js";
 import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { scopesFor, type CallSite } from "./agentTask.js";
-import { DETACH_COPY, relativeTo } from "./copy.js";
+import {
+  DETACH_COPY,
+  UNTESTED_TOOLCHAIN_TITLE,
+  relativeTo,
+  untestedToolchainDetail,
+} from "./copy.js";
 import { middleTruncatePath } from "@/utils/textParsing";
 import { SelectionTrail, trailFor, type PickedCrumb } from "./SelectionTrail.js";
 
@@ -551,7 +557,9 @@ function workspaceNeedsAttention(state: InspectorState): boolean {
   // Several apps keep the drawer open for the switcher: choosing the wrong one
   // must stay fixable before anything is selected, and after a switch clears it.
   //
-  // A ready workspace has nothing else to report. It used to also raise whether
+  // A ready workspace's only other subject is the support verdict, and a
+  // diagnostic nobody has to act on does not earn opening the drawer: it waits
+  // in Site source for something else to open it. It used to also raise whether
   // direct editing and class completion were available here — neither of which
   // the builder does, so their absence is not a gap the user can do anything
   // about, and saying so was a warning about a road that isn't there.
@@ -570,7 +578,7 @@ function WorkspaceStatus({
 }) {
   const workspace = state.workspace;
   if (workspace.status === "idle" || workspace.status === "opening") return null;
-  if (workspace.status === "ready" && workspace.appRoots.length < 2) return null;
+  if (workspace.status === "ready" && !readyHasSomethingToSay(workspace)) return null;
   // One surface for everything about the project rather than the element, so
   // a setup problem and an element-level limitation never look like the same
   // kind of notice sat in the same column.
@@ -672,12 +680,22 @@ function SiteSourceBody({
         </InspectorNotice>
       );
     case "ready": {
-      if (workspace.appRoots.length < 2) return null;
+      if (!readyHasSomethingToSay(workspace)) return null;
+      const untested = workspace.support.level === "untested" ? workspace.support.reasons : null;
       return (
         <div className="flex flex-col gap-1">
-          {
-            // Choosing the wrong app has to be recoverable from where the
-            // choice shows, not by closing the builder to be asked again.
+          {untested ? (
+            // What the bundled compiler was tested against, said once and left
+            // alone: an observation, so `info` and no action. It does not open
+            // the drawer by itself — nothing about the app is worse for it, and
+            // the builder offers exactly what it offers either way.
+            <InspectorNotice tone="info" title={UNTESTED_TOOLCHAIN_TITLE} density="compact">
+              {untestedToolchainDetail(untested)}
+            </InspectorNotice>
+          ) : null}
+          {/* Choosing the wrong app has to be recoverable from where the
+              choice shows, not by closing the builder to be asked again. */}
+          {workspace.appRoots.length > 1 ? (
             <PropertyRow label="App">
               <Select
                 value={workspace.appRoot}
@@ -709,11 +727,16 @@ function SiteSourceBody({
                 </SelectContent>
               </Select>
             </PropertyRow>
-          }
+          ) : null}
         </div>
       );
     }
   }
+}
+
+/** A ready workspace shows the section for the app switcher, or for the verdict. */
+function readyHasSomethingToSay(workspace: Extract<WorkspaceState, { status: "ready" }>): boolean {
+  return workspace.appRoots.length > 1 || workspace.support.level === "untested";
 }
 
 /**

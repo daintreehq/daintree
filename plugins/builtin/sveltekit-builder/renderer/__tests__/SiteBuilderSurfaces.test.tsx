@@ -343,7 +343,7 @@ describe("preview binding", () => {
             status: "ready",
             workspaceSessionId: "ws-1",
             appRoot: args.appRoot,
-            support: { level: "full" },
+            support: { level: "tested" },
           }
         : { status: "ambiguous", appRoots: ["/repo/apps/web", "/repo/apps/docs"] }
     );
@@ -377,7 +377,7 @@ describe("preview binding", () => {
             status: "ready",
             workspaceSessionId: "ws-1",
             appRoot: args.appRoot,
-            support: { level: "full" },
+            support: { level: "tested" },
           }
         : { status: "ambiguous", appRoots: ["/repo", "/repo/apps/docs"] }
     );
@@ -409,7 +409,7 @@ describe("preview binding", () => {
             status: "ready",
             workspaceSessionId: `ws-${String(args.appRoot).split("/").pop()}`,
             appRoot: args.appRoot,
-            support: { level: "full" },
+            support: { level: "tested" },
           }
         : { status: "ambiguous", appRoots: ["/repo/apps/web", "/repo/apps/docs"] }
     );
@@ -464,21 +464,20 @@ describe("preview binding", () => {
     expect(host.calls(CHANNELS.workspaceOpen)).toHaveLength(0);
   });
 
-  it("traces and offers the agent on an app it can only preview", async () => {
+  it("traces and offers the agent on an app the compiler was never tested against", async () => {
     host.handlers.set(CHANNELS.workspaceOpen, () => ({
       status: "ready",
       workspaceSessionId: "ws-1",
       appRoot: "/repo",
       support: {
-        level: "preview-only",
-        reasons: ["svelte 4.2.1 is installed; tested against svelte 5"],
+        level: "untested",
+        reasons: ["svelte 4.2.1 is installed; this builder is tested against svelte 5"],
       },
     }));
     await mountBound();
-    // The rule: a Svelte version outside the supported range costs the user
-    // nothing, so the panel says nothing about it. What the builder offers —
-    // trace an element, hand it to an agent — is the same either way, and a
-    // notice about a road that isn't there would read as a degraded panel.
+    // The verdict costs the user nothing, so it does not open the drawer and
+    // does not touch the strip: what the builder offers — trace an element,
+    // hand it to an agent — is the same either way.
     expect(screen.queryByRole("region", { name: "Site source" })).toBeNull();
     expect(screen.queryByText(/tested against svelte 5/)).toBeNull();
     await act(async () => host.select(0));
@@ -487,6 +486,18 @@ describe("preview binding", () => {
     expect(screen.getByRole("region", { name: "Selected element" }).textContent).toContain(
       `${FILE}:6`
     );
+    // Once the drawer is open for the selection, the verdict is readable there
+    // as an observation about our compiler — a version and a package, no
+    // recovery action, nothing about a capability being withheld.
+    const siteSource = screen.getByRole("region", { name: "Site source" });
+    expect(siteSource.textContent).toContain("Toolchain not verified");
+    expect(siteSource.textContent).toContain("svelte 4.2.1 is installed");
+    expect(siteSource.textContent).not.toMatch(/preview[- ]only/i);
+    // The tier, asserted rather than described: nothing to do about it, so no
+    // control and no live region — it is read, not answered.
+    expect(within(siteSource).queryAllByRole("button")).toEqual([]);
+    expect(within(siteSource).queryByRole("alert")).toBeNull();
+    expect(within(siteSource).queryByRole("status")).toBeNull();
   });
 });
 
@@ -682,7 +693,7 @@ describe("selection identity", () => {
       status: "ready",
       workspaceSessionId: "ws-2",
       appRoot: "/repo",
-      support: { level: "full" },
+      support: { level: "tested" },
     }));
     closed = true;
     host.handlers.set(CHANNELS.selectionResolve, () => {
@@ -793,7 +804,7 @@ describe("an app inside a monorepo", () => {
       status: "ready",
       workspaceSessionId: "ws-1",
       appRoot: APP,
-      support: { level: "full" },
+      support: { level: "tested" },
     }));
     host.handlers.set(CHANNELS.selectionResolve, (args) => ({
       status: "ok",
@@ -1424,7 +1435,7 @@ describe("stale selections", () => {
       appRoot: "/repo",
       packageManager: "npm",
       versions: { svelte: "5.2.0", kit: "2.15.0", tailwind: "4.1.0", vite: "7.0.0" },
-      support: { level: "full" },
+      support: { level: "tested" },
       routes: [
         {
           routeId: "/pricing",
@@ -1613,7 +1624,7 @@ describe("lifetime", () => {
       status: "ready",
       workspaceSessionId: "ws-2",
       appRoot: "/repo",
-      support: { level: "full" },
+      support: { level: "tested" },
     }));
     host.handlers.set(CHANNELS.selectionResolve, () => {
       throw new Error("WORKSPACE_CLOSED: that source workspace is not open; open it again");
@@ -1660,7 +1671,7 @@ describe("lifetime", () => {
       status: "ready",
       workspaceSessionId: "ws-2",
       appRoot: "/repo",
-      support: { level: "full" },
+      support: { level: "tested" },
     }));
     host.handlers.set(CHANNELS.selectionResolve, (args) => ({
       status: "ok",

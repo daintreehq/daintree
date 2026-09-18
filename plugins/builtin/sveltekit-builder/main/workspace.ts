@@ -15,6 +15,12 @@ export interface Workspace {
   readonly previewPanelId: string;
   readonly worktreePath: string;
   readonly appRoot: string;
+  /**
+   * What the bundled compiler was tested against for this app. Carried, never
+   * consulted: no path here narrows what the workspace offers on the strength
+   * of it — the view reports it so a person and an agent can weigh a traced
+   * range themselves.
+   */
   readonly support: SupportVerdict;
   /** Filesystem authority pinned to this workspace's project and worktree, not to focus. */
   readonly fs: PluginFsApi;

@@ -12,7 +12,7 @@ describe("inspectProject", () => {
     const { model } = await inspectProject(reader, { worktreeRoot: worktree, appRoot: worktree });
 
     expect(() => ProjectModelResultSchema.parse(model)).not.toThrow();
-    expect(model.support.level).toBe("full");
+    expect(model.support.level).toBe("tested");
     expect(model.packageManager).toBe("npm");
     expect(model.routes.map((route) => route.routeId)).toEqual(["/", "/about"]);
   });
@@ -25,7 +25,7 @@ describe("inspectProject", () => {
     });
 
     expect(() => ProjectModelResultSchema.parse(model)).not.toThrow();
-    expect(model.support.level).toBe("preview-only");
+    expect(model.support.level).toBe("untested");
     expect(support.missingInstall).toEqual([]);
     expect(model.routes).toHaveLength(1);
   });
@@ -64,15 +64,15 @@ describe("inspectWorktree", () => {
 
     expect(inspection?.app?.packageName).toBe("@acme/docs");
     expect(inspection?.model.packageManager).toBe("pnpm");
-    expect(inspection?.model.support.level).toBe("full");
+    expect(inspection?.model.support.level).toBe("tested");
     expect(inspection?.model.versions.svelte).not.toBeNull();
   });
 
-  it("carries the install-versus-unsupported distinction out of the model", async () => {
+  it("carries the install-versus-untested distinction out of the model", async () => {
     const worktree = fixtureWorktree("missing-install");
     const { inspection } = await inspectWorktree(reader, worktree);
 
-    expect(inspection?.model.support.level).toBe("preview-only");
+    expect(inspection?.model.support.level).toBe("untested");
     expect(inspection?.support.missingInstall).toEqual(["kit"]);
     expect(inspection?.packageManager.name).toBe("unknown");
   });

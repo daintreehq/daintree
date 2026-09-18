@@ -31,9 +31,9 @@ export * from "./versions.js";
  * Everything the setup card needs, alongside the wire-shaped `model`.
  *
  * The extras are not decoration: `missingInstall` separates "run install" from
- * "unsupported", `packageManager.conflict` is what turns an ambiguous tree into
- * a question for the user, and `routesDirectory.source` says whether the routes
- * path was read or assumed. `ProjectModelResultSchema` is strict and frozen, so
+ * "installed at a version we never tested against", `packageManager.conflict`
+ * is what turns an ambiguous tree into a question for the user, and
+ * `routesDirectory.source` says whether the routes path was read or assumed. `ProjectModelResultSchema` is strict and frozen, so
  * they travel beside it rather than inside it.
  */
 export interface ProjectInspection {
@@ -53,7 +53,8 @@ export interface InspectProjectArgs {
 
 /**
  * Read one SvelteKit app: which package manager runs it, whether its installed
- * toolchain clears the supported baseline, and what routes it has.
+ * toolchain is one the bundled compiler was tested against, and what routes it
+ * has.
  *
  * Reads only. Detection never installs a package, executes project code, or
  * rewrites configuration — the app may be a repository the user has not yet

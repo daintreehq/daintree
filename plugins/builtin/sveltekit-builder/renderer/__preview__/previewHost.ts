@@ -185,7 +185,7 @@ export function createPreviewHost() {
     status: "ready",
     workspaceSessionId: "ws-1",
     appRoot: WORKTREE,
-    support: { level: "full" },
+    support: { level: "tested" },
   }));
   handlers.set(CHANNELS.selectionResolve, (args) => ({
     status: "ok",
@@ -195,7 +195,7 @@ export function createPreviewHost() {
     appRoot: WORKTREE,
     packageManager: "pnpm",
     versions: { svelte: "5.38.1", kit: "2.36.0", tailwind: "4.1.12", vite: "7.1.2" },
-    support: { level: "full" },
+    support: { level: "tested" },
     basePath: "",
     routes: [
       {

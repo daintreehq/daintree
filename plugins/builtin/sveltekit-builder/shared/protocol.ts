@@ -255,11 +255,17 @@ export const MAX_GUEST_MESSAGE_BYTES = 256 * 1024;
 /* View → main                                                                */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * What the bundled compiler was tested against, not what the user may do.
+ * The builder traces and hands off identically either way — nothing gates on
+ * this — so it is a diagnostic: `untested` says which package reads as a
+ * version we never proved the parser against, and the reasons name it.
+ */
 export const SupportVerdictSchema = z.discriminatedUnion("level", [
-  z.object({ level: z.literal("full") }).strict(),
+  z.object({ level: z.literal("tested") }).strict(),
   z
     .object({
-      level: z.literal("preview-only"),
+      level: z.literal("untested"),
       /** Human-readable, already specific: names the package and version found. */
       reasons: z.array(z.string().min(1)).min(1),
     })

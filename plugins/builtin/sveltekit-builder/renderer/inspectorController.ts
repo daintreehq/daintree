@@ -976,8 +976,8 @@ export class InspectorController implements DevPreviewToolSession {
     const workspace = this.state.workspace;
     const page = this.state.page;
     const binding = this.state.binding;
-    // A preview-only app is still traced, and its selection can still go to an
-    // agent: the verdict is about which compiler proved the range, not about
+    // An untested toolchain is still traced, and its selection can still go to
+    // an agent: the verdict is about which compiler proved the range, not about
     // what the drawer offers.
     if (workspace.status !== "ready" || binding.status !== "bound") {
       this.patchState({
