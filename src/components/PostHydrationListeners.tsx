@@ -6,6 +6,7 @@ import { useIdleTerminalNotifications } from "../hooks/useIdleTerminalNotificati
 import { useIdleBackgroundCloseNotifications } from "../hooks/useIdleBackgroundCloseNotifications";
 import { useParkReleaseNotifications } from "../hooks/useParkReleaseNotifications";
 import { useDiskSpaceWarnings } from "../hooks/useDiskSpaceWarnings";
+import { useSystemMemoryPressureNotice } from "../hooks/useSystemMemoryPressureNotice";
 import { useHostMemoryPauseSync } from "../hooks/useHostMemoryPauseSync";
 import { useForgeTokenHealth } from "../hooks/useForgeTokenHealth";
 import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
@@ -34,6 +35,7 @@ export function PostHydrationListeners() {
   useIdleBackgroundCloseNotifications();
   useParkReleaseNotifications();
   useDiskSpaceWarnings();
+  useSystemMemoryPressureNotice();
   useHostMemoryPauseSync();
   useForgeTokenHealth();
   useForgeRateLimit();

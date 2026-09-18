@@ -59,6 +59,7 @@ import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { distributePortsToView } from "./window/portDistribution.js";
+import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
   setupWindowServices,
@@ -517,6 +518,7 @@ if (!gotTheLock) {
             });
           }
         }
+        deliverOpenSystemMemoryPressure(win, wc);
         // Refresh workspace direct port (preload context is reset on reload)
         getWorkspaceClientRef()?.attachDirectPort(win.id, wc);
 

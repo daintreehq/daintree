@@ -36,6 +36,8 @@ import {
   startAppMetricsMonitor,
   hasSustainedRendererSaturation,
 } from "../services/ProcessMemoryMonitor.js";
+import { createDefaultSystemMemoryPressureMonitor } from "../services/SystemMemoryPressureMonitor.js";
+import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
@@ -75,7 +77,7 @@ import {
 import { registerDeferredTask } from "./deferredInitQueue.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { setPluginDirResolver } from "../setup/protocols.js";
-import { isE2EFaultMode } from "../setup/runtimeFlags.js";
+import { isE2EFaultMode, isE2EMode } from "../setup/runtimeFlags.js";
 import { activateOpenFileInstaller } from "../setup/openFileInstall.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { scratchStore } from "../services/ScratchStore.js";
@@ -581,6 +583,16 @@ export async function initGlobalServices(
     name: "app-metrics-monitor",
     run: () => {
       if (getStopAppMetricsMonitor()) return;
+      // Off under E2E so a loaded runner's swap cannot drop a grid-bar notice
+      // into an unrelated spec.
+      const systemMemoryPressure = isE2EMode
+        ? null
+        : createDefaultSystemMemoryPressureMonitor((payload) => {
+            publishSystemMemoryPressure(
+              payload,
+              windowRegistry ? windowRegistry.all().map((wCtx) => wCtx.browserWindow) : []
+            );
+          });
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({
           destroyHiddenWebviews: async (tier) => {
@@ -657,6 +669,11 @@ export async function initGlobalServices(
               }
             }
           },
+          sampleSystemHealth: systemMemoryPressure
+            ? () => {
+                void systemMemoryPressure.sample();
+              }
+            : undefined,
           sampleRendererElu: () => {
             if (!windowRegistry) return;
             const requestId = `elu-${Date.now().toString(36)}`;

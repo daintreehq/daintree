@@ -27,6 +27,21 @@ export interface SystemWakePayload {
 }
 
 /**
+ * Pushed on the two edges of a sustained system-memory episode: `degraded` once
+ * when it opens, `normal` once when it clears. Observations only — each figure
+ * is non-null only when that measurement was over its threshold on the sample
+ * that opened the episode, and both are null on `normal`.
+ */
+export interface SystemMemoryPressurePayload {
+  status: "degraded" | "normal";
+  /** Percent of swap in use; on Windows, of the commit limit (see `swapKind`). */
+  swapUsedPercent: number | null;
+  swapKind: "swap" | "commit";
+  /** Resident memory of the macOS `fseventsd` daemon, in MB. Darwin only. */
+  fseventsdRssMb: number | null;
+}
+
+/**
  * Availability for an individual agent CLI.
  *
  * - `missing`: binary not found via any probe (PATH, native installer path, npm global bin).

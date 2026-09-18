@@ -50,6 +50,7 @@ import type {
   SystemOpenPathPayload,
   SystemOpenInEditorPayload,
   SystemWakePayload,
+  SystemMemoryPressurePayload,
   CliAvailability,
   AgentCliDetails,
   AgentVersionInfo,
@@ -1697,6 +1698,8 @@ export interface IpcEventMap {
 
   // System events
   "system:wake": SystemWakePayload;
+  // Sustained system memory pressure opened or cleared (window-scoped)
+  "system:memory-pressure": SystemMemoryPressurePayload;
 
   // Portal events
   "portal:nav-event": import("../portal.js").PortalNavEvent;
@@ -2134,6 +2137,8 @@ export type IpcEventBusMap = Pick<
   | "window:sample-renderer-elu"
   // System wake (per-webContents)
   | "system:wake"
+  // System memory pressure episode edges (window-scoped)
+  | "system:memory-pressure"
   // Resource profile (global broadcast)
   | "resource:profile-changed"
   // Sound cancel (global broadcast)

@@ -10,6 +10,7 @@ const hibernation = vi.fn();
 const idleTerminal = vi.fn();
 const parkRelease = vi.fn();
 const diskSpace = vi.fn();
+const systemMemoryPressure = vi.fn();
 const tokenHealth = vi.fn();
 const rateLimit = vi.fn();
 const recipeFocus = vi.fn();
@@ -31,6 +32,9 @@ vi.mock("@/hooks/useParkReleaseNotifications", () => ({
 }));
 vi.mock("@/hooks/useDiskSpaceWarnings", () => ({
   useDiskSpaceWarnings: () => diskSpace(),
+}));
+vi.mock("@/hooks/useSystemMemoryPressureNotice", () => ({
+  useSystemMemoryPressureNotice: () => systemMemoryPressure(),
 }));
 vi.mock("@/hooks/useHostMemoryPauseSync", () => ({
   useHostMemoryPauseSync: () => hostMemoryPause(),
@@ -63,6 +67,7 @@ const allHooks = [
   idleTerminal,
   parkRelease,
   diskSpace,
+  systemMemoryPressure,
   tokenHealth,
   rateLimit,
   recipeFocus,

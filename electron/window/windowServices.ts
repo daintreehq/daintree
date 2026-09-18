@@ -20,6 +20,7 @@ import { runSmokeFunctionalChecks } from "../services/smokeTest.js";
 import { runFreezeHarness } from "../services/freezeHarness.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
+import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
 import {
@@ -266,6 +267,7 @@ export async function setupWindowServices(
           payload: diskStatus,
         });
       }
+      deliverOpenSystemMemoryPressure(win, appWc);
     });
 
     opts.loadRenderer(reason, opts.initialProjectId);
