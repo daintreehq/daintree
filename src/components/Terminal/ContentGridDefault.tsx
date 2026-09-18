@@ -36,7 +36,6 @@ const NON_SCROLL_ROW_MIN_PX = pxForRows(GRID_MIN_PANEL_ROWS);
 // Only rendered for the one layout pass before the split controller publishes
 // its real template, which lands before paint.
 const SPLIT_FALLBACK_TEMPLATE = `minmax(0, 1fr) ${DIVIDER_WIDTH_PX}px minmax(0, 1fr)`;
-const SPLIT_DIVIDER_KEY = "two-pane-split-divider";
 
 export function ContentGridDefault({
   ctx,
@@ -102,7 +101,10 @@ export function ContentGridDefault({
     if (splitTerminals && index === 1) {
       elements.push(
         <TwoPaneSplitLayout
-          key={SPLIT_DIVIDER_KEY}
+          // Keyed by the split's owner so a pending divider ratio is flushed
+          // against the worktree and pair it was set for, never adopted by the
+          // next one. Only the divider remounts; the panes are its siblings.
+          key={`split:${ctx.activeWorktreeId ?? ""}:${splitTerminals[0].id}:${splitTerminals[1].id}`}
           terminals={splitTerminals}
           activeWorktreeId={ctx.activeWorktreeId}
           containerRef={gridNodeRef}
@@ -203,6 +205,12 @@ export function ContentGridDefault({
                 ref={bindGridScrollContainer}
                 className={cn(
                   "h-full bg-noise p-1",
+                  // Pin the split's pane, divider, pane to their own tracks. An
+                  // optimistic close hides a pane with `display:none`, and
+                  // auto-placement would otherwise slide the survivor into the
+                  // divider's 6px track until the canonical close lands.
+                  isSplit &&
+                    "*:row-start-1 [&>:nth-child(1)]:col-start-1 [&>:nth-child(2)]:col-start-2 [&>:nth-child(3)]:col-start-3",
                   ctx.isOver && "ring-2 ring-daintree-accent/30 ring-inset"
                 )}
                 style={{
