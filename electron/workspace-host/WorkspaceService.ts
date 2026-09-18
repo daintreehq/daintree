@@ -3701,8 +3701,8 @@ export class WorkspaceService {
       // and a blanked `credential.helper`, so a private submodule fails fast
       // instead of blocking forever on an askpass the host has no terminal for.
       // SSH submodules still authenticate through the user's keys and agent;
-      // the pinned `core.sshCommand` runs in BatchMode, so only one that needs
-      // an interactive answer fails.
+      // the pinned `core.sshCommand` runs in BatchMode, so auth that would need
+      // an interactive answer fails without prompting.
       const git = await createHardenedGit(worktreePath, this._shutdownController.signal);
 
       // Roster authority is the new worktree's index, not `.gitmodules` — a

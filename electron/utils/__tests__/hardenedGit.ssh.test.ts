@@ -17,9 +17,9 @@ import path from "node:path";
  */
 
 /**
- * Deadline for each hardened git call, inside vitest's 15s test timeout: a
- * stalled transport then aborts and kills its child before the fixture is
- * removed, rather than outliving a timed-out test.
+ * Deadline for each hardened git call, inside vitest's 15s test timeout, so a
+ * stalled transport is cancelled and fails the test on its own terms rather
+ * than being cut off by vitest mid-call.
  */
 const GIT_CALL_DEADLINE_MS = 10_000;
 

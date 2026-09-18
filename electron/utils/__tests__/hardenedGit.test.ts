@@ -73,8 +73,8 @@ function sshOptionValues(argv: readonly string[], key: string): string[] {
  * itself, and it can never stop on a prompt. A blank value fails the first
  * (issue #12475) and a bare `ssh` fails the second — its host-key prompt hangs
  * a process with no terminal, which `GIT_TERMINAL_PROMPT=0` does not cover.
- * The connect timeout has to land inside simple-git's block timeout, or a
- * silent unreachable host is killed as a stall instead of reported as one.
+ * The connect timeout sits below simple-git's block timeout so an unreachable
+ * host is reported by ssh as a connection timeout, not as a generic stall.
  */
 function expectNonInteractiveSsh(command: unknown): void {
   expect(typeof command).toBe("string");
