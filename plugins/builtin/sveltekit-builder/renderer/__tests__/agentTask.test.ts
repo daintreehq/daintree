@@ -4,9 +4,7 @@ import {
   callSiteKey,
   componentCallSites,
   scopesFor,
-  deliveryFromPhase,
   isAgentBusy,
-  launchReadiness,
   taskScopes,
 } from "../agentTask.js";
 import { FILE, makeSelection } from "./testHost.js";
@@ -178,16 +176,7 @@ describe("buildAgentTaskPrompt", () => {
   });
 });
 
-describe("delivery", () => {
-  it("claims sent only once the whole prompt reached the pty", () => {
-    expect(deliveryFromPhase("pty_written")).toEqual({ status: "sent" });
-    expect(deliveryFromPhase("queued")).toBeNull();
-    expect(deliveryFromPhase("writing")).toBeNull();
-    expect(deliveryFromPhase("unknown")).toEqual({ status: "unconfirmed" });
-    expect(deliveryFromPhase("failed")?.status).toBe("failed");
-    expect(deliveryFromPhase("cancelled")?.status).toBe("failed");
-  });
-
+describe("agent activity", () => {
   it("treats a mid-turn agent as busy and a waiting one as reachable", () => {
     expect(isAgentBusy("working")).toBe(true);
     expect(isAgentBusy("directing")).toBe(true);
@@ -374,18 +363,5 @@ describe("scopesFor", () => {
   it("points at the element when nothing was picked, even without a traced source", () => {
     const result = scopesFor(makeSelection({ node: { definition: null } }), null);
     expect(result.scopes[result.pickedIndex]?.kind).toBe("element");
-  });
-});
-
-describe("launchReadiness", () => {
-  it("types a request only into an agent waiting at its own prompt", () => {
-    expect(launchReadiness("waiting", "prompt")).toBe("ready");
-    expect(launchReadiness("idle", undefined)).toBe("ready");
-    // A trust or approval question is also "waiting"; typing would answer it.
-    expect(launchReadiness("waiting", "question")).toBe("needs-you");
-    expect(launchReadiness("waiting", "approval")).toBe("needs-you");
-    expect(launchReadiness("waiting", "error")).toBe("needs-you");
-    expect(launchReadiness("working", undefined)).toBe("not-yet");
-    expect(launchReadiness(null, undefined)).toBe("not-yet");
   });
 });

@@ -1831,3 +1831,165 @@ describe("builder lifetime while switched on", () => {
     }
   });
 });
+
+describe("delivery across the builder's lifetime", () => {
+  /** The panel store the composer needs: the preview, and optionally an agent beside it. */
+  function panels(withTerminal: boolean) {
+    usePanelStore.setState({
+      panelIds: withTerminal ? ["preview-1", "term-1"] : ["preview-1"],
+      panelsById: {
+        "preview-1": { id: "preview-1", kind: "dev-preview", location: "grid", worktreeId: "wt-1" },
+        ...(withTerminal
+          ? {
+              "term-1": {
+                id: "term-1",
+                kind: "terminal",
+                location: "grid",
+                worktreeId: "wt-1",
+                hasPty: true,
+                title: "claude · pricing polish",
+                launchAgentId: "claude",
+                detectedAgentId: "claude",
+                // Unclassified: the host has no evidence the agent can take input.
+                agentState: null,
+              },
+            }
+          : {}),
+      } as never,
+    });
+  }
+
+  /**
+   * The host actions a delivery goes through, with readiness withheld until the
+   * test says otherwise and every submission recorded.
+   */
+  async function agentActions(options: { onSend?: () => Promise<void> } = {}) {
+    const { actionService } = await import("@/services/ActionService");
+    const sent: string[] = [];
+    const launches: string[] = [];
+    let ready = false;
+    const dispatch = vi.spyOn(actionService, "dispatch").mockImplementation((async (
+      id: string,
+      args: Record<string, unknown>
+    ) => {
+      switch (id) {
+        case "agent.launch":
+          launches.push(String(args.agentId));
+          return { ok: true, result: { launched: true, terminalId: "term-9" } };
+        case "terminal.getStatus":
+          return {
+            ok: true,
+            result: {
+              terminals: [
+                {
+                  terminalId: (args.terminalIds as string[])[0],
+                  agentState: ready ? "waiting" : null,
+                  ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
+                },
+              ],
+            },
+          };
+        case "terminal.sendCommand":
+          await options.onSend?.();
+          sent.push(String(args.command));
+          return { ok: true, result: { submissionToken: `token-${sent.length}` } };
+        default:
+          return { ok: false, error: { message: `unexpected ${id}` } };
+      }
+    }) as never);
+    return {
+      dispatch,
+      sent,
+      launches,
+      polls: () => dispatch.mock.calls.filter(([id]) => id === "terminal.getStatus").length,
+      becomeReady: () => (ready = true),
+    };
+  }
+
+  async function typeAndSend() {
+    const request = screen.getByRole("textbox", { name: "Request for the agent" });
+    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    const send = () => screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send().disabled).toBe(false));
+    fireEvent.click(send());
+  }
+
+  function disablePlugin() {
+    return act(async () => {
+      usePluginRuntimeStore.setState({ disabledPluginIds: new Set([PLUGIN_ID]) });
+    });
+  }
+
+  it("types nothing into the agent when the plugin is disabled during the readiness wait", async () => {
+    // The request is waiting on an agent that has shown no sign it can take
+    // input. Nothing of the builder is mounted to notice the plugin going away,
+    // so the run itself has to stop — and a session that reaches its prompt
+    // afterwards must not be typed into.
+    panels(true);
+    const agent = await agentActions();
+    await mountSelected();
+    await typeAndSend();
+    await waitFor(() => expect(agent.polls()).toBeGreaterThan(1));
+
+    await disablePlugin();
+    const pollsAtDisable = agent.polls();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1_200)));
+    agent.becomeReady();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1_200)));
+
+    expect(agent.sent).toEqual([]);
+    // And the run really stopped, rather than quietly polling on.
+    expect(agent.polls()).toBe(pollsAtDisable);
+  });
+
+  it("doesn't retry a request the plugin was disabled in the middle of writing", async () => {
+    // Part of the prompt may already be in the agent's input. Cancelling can't
+    // take that back, so the one thing that must not happen is a second write.
+    // The record itself is gone with the rest of the preview's memory — being
+    // disabled forgets drafts — which is why this asserts on the submissions.
+    panels(true);
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const agent = await agentActions({ onSend: () => held });
+    await mountSelected();
+    await typeAndSend();
+    agent.becomeReady();
+    await waitFor(() =>
+      expect(agent.dispatch.mock.calls.some(([id]) => id === "terminal.sendCommand")).toBe(true)
+    );
+
+    await disablePlugin();
+    await act(async () => {
+      release();
+      await new Promise((resolve) => setTimeout(resolve, 1_200));
+    });
+    expect(agent.sent).toHaveLength(1);
+    expect(agent.sent[0]).toContain("Say Upgrade");
+    expect(agent.dispatch.mock.calls.filter(([id]) => id === "terminal.sendCommand")).toHaveLength(
+      1
+    );
+  });
+
+  it("launches once and sends once across a remount, and shows the receipt after it", async () => {
+    // Starting an agent re-lays the grid, which remounts the builder — the
+    // remount used to cancel the very request that caused it. The run lives
+    // with the host, so it survives, and the surface picks the receipt back up.
+    panels(false);
+    const agent = await agentActions();
+    await mountSelected();
+    await typeAndSend();
+    await waitFor(() => expect(agent.launches).toEqual(["claude"]));
+
+    cleanup();
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 10)));
+    mount();
+    agent.becomeReady();
+
+    await waitFor(() => expect(agent.sent).toHaveLength(1), { timeout: 4_000 });
+    expect(agent.sent[0]).toContain("Say Upgrade");
+    expect(agent.launches).toEqual(["claude"]);
+    await screen.findByText(/^Sent to /);
+  });
+});

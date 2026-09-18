@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
+import { __resetAgentRequestsForTests } from "@/services/agentRequests";
 import { cancelAgentRequests, deliverAgentRequest } from "../agentRequest";
 import {
   __resetComposerMemoryForTests,
@@ -52,13 +53,14 @@ function terminal(agentState: string | null = null) {
   return { sent, setState: (next: string) => (state = next) };
 }
 
-function send() {
+function send(overrides: { subjectKey?: string; prompt?: string } = {}) {
   return deliverAgentRequest({
     memoryKey: KEY,
     worktreeId: "wt-1",
     sentDraft: "Make it pop",
     destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
-    buildPrompt: async () => "Make it pop",
+    buildPrompt: async () => overrides.prompt ?? "Make it pop",
+    ...(overrides.subjectKey === undefined ? {} : { subjectKey: overrides.subjectKey }),
   });
 }
 
@@ -71,6 +73,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   dispatch.mockReset();
+  __resetAgentRequestsForTests();
   __resetComposerMemoryForTests();
   useDevPreviewToolStore.setState({ activeByPanel: {} });
   usePanelStore.setState({ panelsById: {} as never });
@@ -204,6 +207,60 @@ describe("deliverAgentRequest", () => {
       state: { status: "unconfirmed" },
       request: "Make it pop",
     });
+    // Unconfirmed is not a reason to try again: the words may be in the agent
+    // already, and only the user may decide to repeat them.
+    expect(dispatch.mock.calls.filter(([id]) => id === "terminal.sendCommand")).toHaveLength(1);
+  });
+
+  it("writes once when the same request is sent again while the first is in flight", async () => {
+    const agent = terminal();
+    // The grid re-lays and the composer remounts mid-flight, then asks again
+    // for the same words to the same place.
+    const first = send();
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = send();
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await first;
+    await second;
+    expect(agent.sent).toEqual(["Make it pop"]);
+    expect(readComposerMemory(KEY).delivery?.state.status).toBe("sent");
+  });
+
+  it("treats the same words about another subject as a different request", async () => {
+    const agent = terminal();
+    // Same sentence, but the user picked another element before sending again:
+    // the prompt differs, so this is not the run already in flight.
+    const first = send({ subjectKey: "sel-1", prompt: "Make it pop — button" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = send({ subjectKey: "sel-2", prompt: "Make it pop — heading" });
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await first;
+    await second;
+    // The newer run supersedes the older one, and what went out is its prompt.
+    expect(agent.sent).toEqual(["Make it pop — heading"]);
+  });
+
+  it("clears the sent draft even when the record it would write is already there", async () => {
+    const agent = terminal("waiting");
+    updateComposerMemory(KEY, {
+      draft: "Make it pop",
+      // The same receipt is already in memory — a previous identical delivery,
+      // or a surface that restored it. The dedupe skips the write; the draft
+      // must still go, because the words did.
+      delivery: {
+        state: { status: "sent" },
+        title: "Claude",
+        terminalId: "t1",
+        request: "Make it pop",
+      },
+    });
+    const run = send();
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+    expect(agent.sent).toEqual(["Make it pop"]);
+    expect(readComposerMemory(KEY).draft).toBe("");
   });
 
   it("settles a cancelled request instead of leaving it pending", async () => {
