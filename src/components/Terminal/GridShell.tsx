@@ -4,7 +4,8 @@ import { TerminalCountWarning } from "./TerminalCountWarning";
 import type { ContentGridContext } from "./useContentGridContext";
 
 // GridShell provides the shared ContextMenu + TerminalCountWarning scaffolding
-// used by the fleet scope, two-pane split, and default grid branches.
+// used by the fleet scope and default grid (which also lays out the two-pane
+// split) branches.
 // The `bindCombinedGrid` is NOT applied here — each branch attaches it on its
 // own inner div to preserve exact ResizeObserver-dimension behavior.
 export function GridShell({

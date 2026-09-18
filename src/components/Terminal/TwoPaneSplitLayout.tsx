@@ -1,12 +1,8 @@
-import { useCallback, useRef, useEffect, useState, useMemo } from "react";
+import { useCallback, useRef, useEffect, useLayoutEffect, useState, useMemo } from "react";
 import { createPortal } from "react-dom";
-import { SortableContext, horizontalListSortingStrategy } from "@dnd-kit/sortable";
-import { cn } from "@/lib/utils";
 import { useTwoPaneSplitStore } from "@/store";
 import { resolveEffectiveRatio } from "@/store/twoPaneSplitStore";
 import type { PanelInstance } from "@shared/types/panel";
-import { SortableTerminal } from "@/components/DragDrop";
-import { GridPanel } from "./GridPanel";
 import { TwoPaneSplitDivider, DIVIDER_WIDTH_PX } from "./TwoPaneSplitDivider";
 import { MIN_TERMINAL_WIDTH_PX } from "@/lib/terminalLayout";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
@@ -17,24 +13,27 @@ import {
   subscribeSidebarHydrationUnlock,
 } from "@/lib/layoutTransitionLock";
 
+// The two-pane split's controller: ratio, divider, and drag locks. It renders
+// only the divider — the panes stay in ContentGridDefault's keyed list, so
+// crossing into or out of split mode resizes them instead of remounting them
+// (#12476). It is mounted exactly while split mode is active, so its mount and
+// unmount effects still bracket one split session.
 interface TwoPaneSplitLayoutProps {
   terminals: [PanelInstance, PanelInstance];
-  focusedId: string | null;
   activeWorktreeId: string | null;
-  isInTrash: (id: string) => boolean;
-  // Stable panel-aware add-tab callback. GridPanel binds it to the
-  // subscribed terminal internally so we never recreate inline closures here.
-  onAddTabForPanel?: (terminal: PanelInstance) => void | Promise<void>;
+  // The grid element the panes and this divider sit in.
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  // The grid owns the element the column template applies to, so the ratio is
+  // lifted to it: the current template while mounted, `null` on unmount.
+  onGridTemplateChange: (template: string | null) => void;
 }
 
 export function TwoPaneSplitLayout({
   terminals,
-  focusedId,
   activeWorktreeId,
-  isInTrash,
-  onAddTabForPanel,
+  containerRef,
+  onGridTemplateChange,
 }: TwoPaneSplitLayoutProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
   const [containerWidth, setContainerWidth] = useState<number>(0);
   const [localRatio, setLocalRatio] = useState<number | null>(null);
   const [isDraggingDivider, setIsDraggingDivider] = useState(false);
@@ -197,7 +196,7 @@ export function TwoPaneSplitLayout({
       unsubscribeTransition();
       unsubscribeHydration();
     };
-  }, []);
+  }, [containerRef]);
 
   // Recover the deferred unlock-resync once the drag ends. Without this, a
   // sidebar transition that completed mid-drag would leave `containerWidth`
@@ -211,7 +210,7 @@ export function TwoPaneSplitLayout({
     if (!node) return;
     const width = node.clientWidth;
     setContainerWidth((prev) => (prev === width ? prev : width));
-  }, [isDraggingDivider]);
+  }, [isDraggingDivider, containerRef]);
 
   const handleRatioChange = useCallback((newRatio: number) => {
     setLocalRatio(newRatio);
@@ -322,6 +321,13 @@ export function TwoPaneSplitLayout({
   // it is no longer load-bearing for layout.
   const gridTemplateColumns = `minmax(0, ${clampedRatio}fr) ${DIVIDER_WIDTH_PX}px minmax(0, ${1 - clampedRatio}fr)`;
 
+  // Layout effects, so the grid adopts the template in the same commit this
+  // mounts in and the fallback template is never painted.
+  useLayoutEffect(() => {
+    onGridTemplateChange(gridTemplateColumns);
+  }, [gridTemplateColumns, onGridTemplateChange]);
+  useLayoutEffect(() => () => onGridTemplateChange(null), [onGridTemplateChange]);
+
   const panelIds = useMemo(() => terminals.map((t) => t.id), [terminals]);
 
   // Track previous drag state to detect drag end
@@ -346,72 +352,16 @@ export function TwoPaneSplitLayout({
 
   return (
     <>
-      <SortableContext
-        id="grid-container"
-        items={panelIds}
-        strategy={horizontalListSortingStrategy}
-      >
-        <div
-          ref={containerRef}
-          className={cn("h-full grid bg-noise p-1")}
-          style={{
-            gap: 0,
-            gridTemplateColumns,
-            backgroundColor: "var(--color-grid-bg)",
-          }}
-          id="panel-grid"
-          data-grid-container="true"
-          data-split-mode="true"
-        >
-          {/* min-h-0: the implicit row track is `auto`, so without it a panel
-              with intrinsic-height content (file viewer) sizes the row to the
-              content instead of the container (#11024). */}
-          <div className="relative min-w-0 min-h-0">
-            <SortableTerminal
-              terminal={terminals[0]}
-              sourceLocation="grid"
-              sourceIndex={0}
-              disabled={isInTrash(terminals[0].id)}
-              layoutDependency={`${terminals[0].id}:${terminals[1].id}:${clampedRatio}`}
-            >
-              <GridPanel
-                terminalId={terminals[0].id}
-                isFocused={terminals[0].id === focusedId}
-                isMultiPanelGrid={true}
-                onAddTabForPanel={onAddTabForPanel}
-              />
-            </SortableTerminal>
-          </div>
-
-          <TwoPaneSplitDivider
-            containerRef={containerRef}
-            ratio={clampedRatio}
-            onRatioChange={handleRatioChange}
-            onRatioCommit={handleRatioCommit}
-            onDoubleClick={handleDoubleClick}
-            onDragStateChange={handleDragStateChange}
-            minRatio={minRatio}
-            maxRatio={maxRatio}
-          />
-
-          <div className="relative min-w-0 min-h-0">
-            <SortableTerminal
-              terminal={terminals[1]}
-              sourceLocation="grid"
-              sourceIndex={1}
-              disabled={isInTrash(terminals[1].id)}
-              layoutDependency={`${terminals[0].id}:${terminals[1].id}:${clampedRatio}`}
-            >
-              <GridPanel
-                terminalId={terminals[1].id}
-                isFocused={terminals[1].id === focusedId}
-                isMultiPanelGrid={true}
-                onAddTabForPanel={onAddTabForPanel}
-              />
-            </SortableTerminal>
-          </div>
-        </div>
-      </SortableContext>
+      <TwoPaneSplitDivider
+        containerRef={containerRef}
+        ratio={clampedRatio}
+        onRatioChange={handleRatioChange}
+        onRatioCommit={handleRatioCommit}
+        onDoubleClick={handleDoubleClick}
+        onDragStateChange={handleDragStateChange}
+        minRatio={minRatio}
+        maxRatio={maxRatio}
+      />
 
       {/* Drag overlay to prevent iframes from capturing mouse events */}
       {isDraggingDivider &&

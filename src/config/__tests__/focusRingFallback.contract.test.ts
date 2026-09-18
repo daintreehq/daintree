@@ -501,11 +501,6 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Review hub file listbox — roving focus via aria-activedescendant; the active row owns the focus indicator, not the container (tabIndex=-1, programmatic focus only)",
   },
   {
-    file: "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
-    fragment: "h-full flex flex-col outline-hidden",
-    reason: "Grid layout container — focus owned by terminal pane children",
-  },
-  {
     file: "src/components/Terminal/ContentGridMaximizedGroup.tsx",
     fragment: "h-full flex flex-col bg-surface-canvas outline-hidden",
     reason: "Grid layout container — focus owned by terminal pane children",

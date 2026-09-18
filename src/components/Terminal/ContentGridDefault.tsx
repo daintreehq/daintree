@@ -1,6 +1,10 @@
 import { ProjectPluginTrustBanner } from "@/components/Plugin/ProjectPluginTrustBanner";
-import React, { useCallback } from "react";
-import { SortableContext, rectSortingStrategy } from "@dnd-kit/sortable";
+import React, { useCallback, useRef, useState } from "react";
+import {
+  SortableContext,
+  horizontalListSortingStrategy,
+  rectSortingStrategy,
+} from "@dnd-kit/sortable";
 import { LayoutGroup } from "framer-motion";
 import { cn } from "@/lib/utils";
 import { GRID_MIN_PANEL_ROWS, MIN_TERMINAL_WIDTH_PX, pxForRows } from "@/lib/terminalLayout";
@@ -18,6 +22,8 @@ import { GridScrollbar, GRID_SCROLLBAR_GUTTER_PX } from "./GridScrollbar";
 import { TerminalCountWarning } from "./TerminalCountWarning";
 import { BatchScrollbackRestoreBar } from "./BatchScrollbackRestoreBar";
 import { ContentGridEmptyState } from "./ContentGridEmptyState";
+import { TwoPaneSplitLayout } from "./TwoPaneSplitLayout";
+import { DIVIDER_WIDTH_PX } from "./TwoPaneSplitDivider";
 import { ProjectSurfaceFrame } from "@/components/Plugin/ProjectSurfaceFrame";
 import type { ContentGridContext } from "./useContentGridContext";
 
@@ -26,6 +32,11 @@ import type { ContentGridContext } from "./useContentGridContext";
 // room. Mirrors `gridRowsOverflow`'s per-row minimum so the scroll-mode flip
 // lines up exactly with the point this floor would overflow.
 const NON_SCROLL_ROW_MIN_PX = pxForRows(GRID_MIN_PANEL_ROWS);
+
+// Only rendered for the one layout pass before the split controller publishes
+// its real template, which lands before paint.
+const SPLIT_FALLBACK_TEMPLATE = `minmax(0, 1fr) ${DIVIDER_WIDTH_PX}px minmax(0, 1fr)`;
+const SPLIT_DIVIDER_KEY = "two-pane-split-divider";
 
 export function ContentGridDefault({
   ctx,
@@ -40,12 +51,22 @@ export function ContentGridDefault({
 }) {
   "use memo";
 
+  // The two-pane split is a geometry of this same grid, not a separate tree:
+  // swapping component types at the boundary remounted every surviving panel,
+  // so closing a third panel restarted media and dropped scroll state (#12476).
+  const splitTerminals = ctx.useTwoPaneSplitMode ? ctx.twoPaneTerminals : null;
+  const isSplit = splitTerminals !== null;
+  const isScrollMode = !isSplit && ctx.isScrollMode;
+  const [splitTemplate, setSplitTemplate] = useState<string | null>(null);
+  const gridNodeRef = useRef<HTMLDivElement | null>(null);
+
   // Compose the dnd droppable binding, the grid container ref, and the
   // scroll-root state setter into a single ref callback so the grid div is the
   // canonical scroll container for IntersectionObserver and scrollIntoView.
   const { setGridScrollRoot } = ctx;
   const bindGridScrollContainer = useCallback(
     (node: HTMLDivElement | null) => {
+      gridNodeRef.current = node;
       bindCombinedGrid(node);
       setGridScrollRoot(node);
     },
@@ -56,13 +77,96 @@ export function ContentGridDefault({
   // wrappers only re-measure when grid geometry actually changed (see
   // SortableTerminal.layoutDependency).
   const gridLayoutDependency = [
-    ctx.gridCols,
-    ctx.isScrollMode ? ctx.scrollRowHeight : "fit",
+    isSplit ? `split:${splitTemplate ?? ""}` : ctx.gridCols,
+    isScrollMode ? ctx.scrollRowHeight : "fit",
     ctx.maximizedId ?? "",
     ctx.gridWidth ?? 0,
     ctx.showPlaceholder && ctx.placeholderInGrid ? ctx.placeholderIndex : "",
     ctx.tabGroups.map((g) => `${g.id}/${g.panelIds.length}`).join(","),
   ].join("|");
+
+  // One flat keyed list. Returning a per-group array from `map` made React
+  // match those inner arrays by position, so closing a panel remounted every
+  // panel after it (#12476). The trailing placeholder joins the same list so it
+  // keeps its identity moving to and from the end.
+  const gridItems: React.ReactNode[] = ctx.tabGroups.flatMap((group, index) => {
+    const groupPanels = ctx.getTabGroupPanels(group.id, "grid");
+    if (groupPanels.length === 0) return [];
+
+    const elements: React.ReactNode[] = [];
+
+    if (ctx.showPlaceholder && ctx.placeholderInGrid && ctx.placeholderIndex === index) {
+      elements.push(<SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />);
+    }
+
+    if (splitTerminals && index === 1) {
+      elements.push(
+        <TwoPaneSplitLayout
+          key={SPLIT_DIVIDER_KEY}
+          terminals={splitTerminals}
+          activeWorktreeId={ctx.activeWorktreeId}
+          containerRef={gridNodeRef}
+          onGridTemplateChange={setSplitTemplate}
+        />
+      );
+    }
+
+    const isGroupDisabled = groupPanels.some((p) => ctx.isInTrash(p.id));
+
+    if (groupPanels.length === 1) {
+      const terminal = groupPanels[0]!;
+      elements.push(
+        <SortableTerminal
+          key={group.id}
+          terminal={terminal}
+          sourceLocation="grid"
+          sourceIndex={index}
+          disabled={isGroupDisabled}
+          layoutTransition={ctx.layoutTransition}
+          layoutEnabled={ctx.layoutAnimationEnabled}
+          layoutDependency={gridLayoutDependency}
+        >
+          <GridPanel
+            terminalId={terminal.id}
+            isFocused={terminal.id === ctx.focusedId}
+            isMultiPanelGrid={ctx.gridItemCount > 1}
+            onAddTabForPanel={ctx.handleAddTabForPanel}
+          />
+        </SortableTerminal>
+      );
+    } else {
+      const firstPanel = groupPanels[0]!;
+      elements.push(
+        <SortableTerminal
+          key={group.id}
+          terminal={firstPanel}
+          sourceLocation="grid"
+          sourceIndex={index}
+          disabled={isGroupDisabled}
+          groupId={group.id}
+          groupPanelIds={group.panelIds}
+          layoutTransition={ctx.layoutTransition}
+          layoutEnabled={ctx.layoutAnimationEnabled}
+          layoutDependency={gridLayoutDependency}
+        >
+          <GridTabGroup
+            group={group}
+            focusedId={ctx.focusedId}
+            isMultiPanelGrid={ctx.gridItemCount > 1}
+          />
+        </SortableTerminal>
+      );
+    }
+
+    return elements;
+  });
+  if (
+    ctx.showPlaceholder &&
+    ctx.placeholderInGrid &&
+    ctx.placeholderIndex === ctx.tabGroups.length
+  ) {
+    gridItems.push(<SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />);
+  }
 
   return (
     <GridScrollRootContext.Provider value={ctx.gridScrollRoot}>
@@ -85,7 +189,11 @@ export function ContentGridDefault({
         <TerminalCountWarning className="mx-1 mt-1 shrink-0" />
         <BatchScrollbackRestoreBar className="mx-1 mt-1 shrink-0" />
         <div className="relative flex-1 min-h-0">
-          <SortableContext id="grid-container" items={ctx.panelIds} strategy={rectSortingStrategy}>
+          <SortableContext
+            id="grid-container"
+            items={ctx.panelIds}
+            strategy={isSplit ? horizontalListSortingStrategy : rectSortingStrategy}
+          >
             <GridShell
               ctx={ctx}
               showTerminalCountWarning={false}
@@ -99,18 +207,27 @@ export function ContentGridDefault({
                 )}
                 style={{
                   display: "grid",
-                  gridTemplateColumns: `repeat(${ctx.gridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
-                  gridAutoRows: ctx.isScrollMode
-                    ? `${ctx.scrollRowHeight}px`
-                    : `minmax(${NON_SCROLL_ROW_MIN_PX}px, 1fr)`,
-                  gap: "4px",
+                  gridTemplateColumns: isSplit
+                    ? (splitTemplate ?? SPLIT_FALLBACK_TEMPLATE)
+                    : `repeat(${ctx.gridCols}, minmax(min(100%, ${MIN_TERMINAL_WIDTH_PX}px), 1fr))`,
+                  // The split is one row that shrinks with the window instead
+                  // of scrolling. Its floor is 0, not `auto`, or a panel with
+                  // intrinsic-height content (file viewer) sizes the row to the
+                  // content instead of the container (#11024).
+                  gridAutoRows: isSplit
+                    ? "minmax(0, 1fr)"
+                    : isScrollMode
+                      ? `${ctx.scrollRowHeight}px`
+                      : `minmax(${NON_SCROLL_ROW_MIN_PX}px, 1fr)`,
+                  // The split's divider is its own 6px track.
+                  gap: isSplit ? 0 : "4px",
                   backgroundColor: "var(--color-grid-bg)",
                   overflowX: "hidden",
                   // Scroll mode shows the dedicated grid scrollbar at all
                   // times (`scroll`) so the user can always see the grid
                   // itself scrolls; non-scroll mode only scrolls if a short
                   // window genuinely clips the quad (`auto`).
-                  overflowY: ctx.isScrollMode ? "scroll" : "auto",
+                  overflowY: isScrollMode ? "scroll" : "auto",
                   // Prevent Chromium's scroll-anchor algorithm from fighting
                   // framer-motion's `LayoutGroup` layout-projection when panels
                   // are added or removed above the viewport — Chromium 146
@@ -139,10 +256,11 @@ export function ContentGridDefault({
                   // (`gridRowsOverflowWithHysteresis`), so a resize through the
                   // threshold flips at most once per direction. Keep both before
                   // re-narrowing this gutter.
-                  paddingRight: ctx.isScrollMode ? GRID_SCROLLBAR_GUTTER_PX : undefined,
+                  paddingRight: isScrollMode ? GRID_SCROLLBAR_GUTTER_PX : undefined,
                 }}
                 id="panel-grid"
                 data-grid-container="true"
+                data-split-mode={isSplit ? "true" : undefined}
               >
                 {ctx.isEmpty && !ctx.showPlaceholder ? (
                   <div className="col-span-full row-span-full">
@@ -176,83 +294,14 @@ export function ContentGridDefault({
                     </ProjectSurfaceFrame>
                   </div>
                 ) : (
-                  <LayoutGroup id="main-grid">
-                    {ctx.tabGroups.map((group, index) => {
-                      const groupPanels = ctx.getTabGroupPanels(group.id, "grid");
-                      if (groupPanels.length === 0) return null;
-
-                      const elements: React.ReactNode[] = [];
-
-                      if (
-                        ctx.showPlaceholder &&
-                        ctx.placeholderInGrid &&
-                        ctx.placeholderIndex === index
-                      ) {
-                        elements.push(<SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />);
-                      }
-
-                      const isGroupDisabled = groupPanels.some((p) => ctx.isInTrash(p.id));
-
-                      if (groupPanels.length === 1) {
-                        const terminal = groupPanels[0]!;
-                        elements.push(
-                          <SortableTerminal
-                            key={group.id}
-                            terminal={terminal}
-                            sourceLocation="grid"
-                            sourceIndex={index}
-                            disabled={isGroupDisabled}
-                            layoutTransition={ctx.layoutTransition}
-                            layoutEnabled={ctx.layoutAnimationEnabled}
-                            layoutDependency={gridLayoutDependency}
-                          >
-                            <GridPanel
-                              terminalId={terminal.id}
-                              isFocused={terminal.id === ctx.focusedId}
-                              isMultiPanelGrid={ctx.gridItemCount > 1}
-                              onAddTabForPanel={ctx.handleAddTabForPanel}
-                            />
-                          </SortableTerminal>
-                        );
-                      } else {
-                        const firstPanel = groupPanels[0]!;
-                        elements.push(
-                          <SortableTerminal
-                            key={group.id}
-                            terminal={firstPanel}
-                            sourceLocation="grid"
-                            sourceIndex={index}
-                            disabled={isGroupDisabled}
-                            groupId={group.id}
-                            groupPanelIds={group.panelIds}
-                            layoutTransition={ctx.layoutTransition}
-                            layoutEnabled={ctx.layoutAnimationEnabled}
-                            layoutDependency={gridLayoutDependency}
-                          >
-                            <GridTabGroup
-                              group={group}
-                              focusedId={ctx.focusedId}
-                              isMultiPanelGrid={ctx.gridItemCount > 1}
-                            />
-                          </SortableTerminal>
-                        );
-                      }
-
-                      return elements;
-                    })}
-                    {ctx.showPlaceholder &&
-                      ctx.placeholderInGrid &&
-                      ctx.placeholderIndex === ctx.tabGroups.length && (
-                        <SortableGridPlaceholder key={GRID_PLACEHOLDER_ID} />
-                      )}
-                  </LayoutGroup>
+                  <LayoutGroup id="main-grid">{gridItems}</LayoutGroup>
                 )}
               </div>
             </GridShell>
           </SortableContext>
           <GridScrollbar
             scrollRoot={ctx.gridScrollRoot}
-            revision={`${ctx.gridItemCount}:${ctx.gridCols}:${ctx.isScrollMode}:${ctx.scrollRowHeight}`}
+            revision={`${ctx.gridItemCount}:${ctx.gridCols}:${isScrollMode}:${ctx.scrollRowHeight}`}
           />
         </div>
       </div>
