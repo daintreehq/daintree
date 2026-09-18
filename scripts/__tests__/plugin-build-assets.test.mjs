@@ -8,10 +8,20 @@ import {
   GUEST_RUNTIME_ASSETS,
   PLUGIN_EXTRA_ASSET_SKIP_DIRS,
   copyPluginExtraAssets,
+  discoverGuestRuntimeAssets,
+  findMissingGuestAssets,
   findMissingPluginAssets,
   findTypeScriptCommandHandlers,
   guestRuntimeBuildConfig,
 } from "../build-main.mjs";
+// The app's own copy of the same derivation. This script cannot import it (it
+// runs under plain `node`), so the two are restated halves of one rule and this
+// suite is what keeps them equal.
+import {
+  guestAdapterAssetPath,
+  isSafeGuestEntryPath,
+  listBuiltinGuestAdapters,
+} from "../../electron/services/sitePreview/guestAdapterAssets.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
@@ -358,7 +368,155 @@ describe("findTypeScriptCommandHandlers", () => {
   });
 });
 
+function writeManifest(dir, manifest) {
+  writeFile(path.join(dir, "plugin.json"), JSON.stringify(manifest));
+}
+
+describe("discoverGuestRuntimeAssets", () => {
+  it("derives an esbuild entry and outfile per declared adapter", () => {
+    writeManifest(path.join(workDir, "plugins/builtin/alpha"), {
+      name: "acme.alpha",
+      contributes: {
+        guestAdapters: [
+          { id: "acme.alpha.guest", entry: "renderer/guest/entry.ts" },
+          { id: "acme.alpha.probe", entry: "renderer/probe.ts" },
+        ],
+      },
+    });
+
+    expect(discoverGuestRuntimeAssets(workDir)).toEqual([
+      {
+        adapterId: "acme.alpha.guest",
+        entry: "plugins/builtin/alpha/renderer/guest/entry.ts",
+        outfile: "dist-electron/plugins/builtin/alpha/guest/guest.js",
+      },
+      {
+        adapterId: "acme.alpha.probe",
+        entry: "plugins/builtin/alpha/renderer/probe.ts",
+        outfile: "dist-electron/plugins/builtin/alpha/guest/probe.js",
+      },
+    ]);
+  });
+
+  it("ignores a plugin that declares none, an unreadable manifest and a missing root", () => {
+    writeManifest(path.join(workDir, "plugins/builtin/plain"), {
+      name: "acme.plain",
+      contributes: { commands: [] },
+    });
+    writeFile(path.join(workDir, "plugins/builtin/bad/plugin.json"), "{ not json");
+    expect(discoverGuestRuntimeAssets(workDir)).toEqual([]);
+    expect(discoverGuestRuntimeAssets(path.join(workDir, "nope"))).toEqual([]);
+  });
+
+  it("drops a declaration whose entry or id would reach outside the plugin", () => {
+    writeManifest(path.join(workDir, "plugins/builtin/hostile"), {
+      name: "acme.hostile",
+      contributes: {
+        guestAdapters: [
+          { id: "acme.hostile.a", entry: "../other/entry.ts" },
+          { id: "other.plugin.b", entry: "renderer/b.ts" },
+          { id: "acme.hostile.ok", entry: "renderer/ok.ts" },
+          // The bundler's own output dir — a source file there would be copied
+          // over the compiled asset (PLUGIN_EXTRA_ASSET_SKIP_DIRS skips it).
+          { id: "acme.hostile.reserved", entry: "guest/entry.ts" },
+        ],
+      },
+    });
+    expect(discoverGuestRuntimeAssets(workDir).map((a) => a.adapterId)).toEqual([
+      "acme.hostile.ok",
+    ]);
+  });
+
+  it("agrees with the app's own copy of the derivation", () => {
+    // Both halves, one manifest. The build's own predicates are module-private,
+    // so they are exercised through `discoverGuestRuntimeAssets`; a change to
+    // one rule without the other would leave the build emitting an asset the
+    // host never reads back, or skipping one it does.
+    writeManifest(path.join(workDir, "plugins/builtin/alpha"), {
+      name: "acme.alpha",
+      contributes: {
+        guestAdapters: [
+          { id: "acme.alpha.guest", entry: "renderer/guest/entry.ts" },
+          { id: "acme.alpha.a-b", entry: "renderer/ab.ts" },
+          { id: "acme.alpha.a.b", entry: "renderer/collide.ts" },
+          { id: "acme.alpha.bad", entry: "../escape.ts" },
+          { id: "other.plugin.nope", entry: "renderer/x.ts" },
+        ],
+      },
+    });
+
+    const fromBuild = discoverGuestRuntimeAssets(workDir);
+    const fromApp = listBuiltinGuestAdapters(path.join(workDir, "plugins/builtin"));
+    expect(fromBuild.map((a) => a.adapterId)).toEqual(fromApp.map((d) => d.adapterId));
+    expect(fromBuild.map((a) => a.outfile)).toEqual(
+      fromApp.map((d) => `dist-electron/plugins/builtin/${d.dirName}/${d.assetPath}`)
+    );
+    for (const declaration of fromApp) {
+      expect(guestAdapterAssetPath(declaration.pluginId, declaration.adapterId)).toBe(
+        declaration.assetPath
+      );
+      expect(isSafeGuestEntryPath(declaration.entry)).toBe(true);
+    }
+  });
+});
+
+describe("findMissingGuestAssets", () => {
+  function declareOne() {
+    writeManifest(path.join(workDir, "plugins/builtin/alpha"), {
+      name: "acme.alpha",
+      contributes: { guestAdapters: [{ id: "acme.alpha.guest", entry: "renderer/entry.ts" }] },
+    });
+    return path.join(workDir, "dist-electron/plugins");
+  }
+
+  it("reports a declared adapter whose bundle never landed", () => {
+    const dist = declareOne();
+    expect(findMissingGuestAssets(workDir, dist)).toEqual([
+      'acme.alpha.guest: "dist-electron/plugins/builtin/alpha/guest/guest.js" not found in built output',
+    ]);
+  });
+
+  it("is silent once the bundle exists", () => {
+    const dist = declareOne();
+    writeFile(path.join(dist, "builtin/alpha/guest/guest.js"), "(() => {})();\n");
+    expect(findMissingGuestAssets(workDir, dist)).toEqual([]);
+  });
+
+  it("is silent when nothing declares an adapter", () => {
+    expect(findMissingGuestAssets(workDir, path.join(workDir, "dist-electron/plugins"))).toEqual(
+      []
+    );
+  });
+
+  it("finds the asset the real build emits for every shipped declaration", () => {
+    // The repo's own manifests, against the repo's own output tree. Skipped on a
+    // cold checkout where `dist-electron/` has never been built.
+    const dist = path.join(repoRoot, "dist-electron/plugins");
+    if (!fs.existsSync(dist)) return;
+    expect(findMissingGuestAssets(repoRoot, dist)).toEqual([]);
+  });
+});
+
 describe("guest runtime assets", () => {
+  it("is discovered from the built-in manifests rather than hand-listed", () => {
+    // The whole point of the phase: a second built-in guest runtime is a
+    // manifest edit, not an edit to this build script.
+    expect(GUEST_RUNTIME_ASSETS).toEqual(discoverGuestRuntimeAssets(repoRoot));
+    expect(GUEST_RUNTIME_ASSETS.map((a) => a.adapterId)).toContain(
+      "daintree.sveltekit-builder.guest"
+    );
+  });
+
+  it("keeps the builder's runtime first, which its own asset tests index by position", () => {
+    // `plugins/builtin/sveltekit-builder/shared/__tests__/buildGuestAsset.ts`
+    // builds `GUEST_RUNTIME_ASSETS[0]`. Discovery is directory order, so a
+    // built-in plugin sorting before `sveltekit-builder` — or a second adapter
+    // declared ahead of its guest — would silently point those suites at the
+    // wrong runtime. This is the loud failure that says to select by adapterId
+    // there instead.
+    expect(GUEST_RUNTIME_ASSETS[0]?.adapterId).toBe("daintree.sveltekit-builder.guest");
+  });
+
   it("names entries that exist and land inside their plugin's dist directory", () => {
     expect(GUEST_RUNTIME_ASSETS.length).toBeGreaterThan(0);
     for (const asset of GUEST_RUNTIME_ASSETS) {

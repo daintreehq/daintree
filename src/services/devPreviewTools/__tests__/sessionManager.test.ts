@@ -77,7 +77,18 @@ function live(): FakeSession | null {
 beforeEach(() => {
   sessions.length = 0;
   usePluginRuntimeStore.setState({
-    pluginMetaById: new Map([[PLUGIN, { devMode: false, displayName: "Acme" }]]),
+    pluginMetaById: new Map([
+      [
+        PLUGIN,
+        {
+          devMode: false,
+          displayName: "Acme",
+          // The registry admits a tool only when its plugin's manifest declares
+          // the id, so the fake meta declares every tool these cases register.
+          previewToolIds: new Set([TOOL, "acme.tools.other"]),
+        },
+      ],
+    ]),
     disabledPluginIds: new Set(),
   });
   panels({ [PANEL]: "grid" });

@@ -28,6 +28,20 @@
         "requires": []
       }
     ],
+    "previewTools": [
+      {
+        "id": "daintree.sveltekit-builder.builder",
+        "title": "Site Builder",
+        "iconId": "square-dashed-mouse-pointer",
+        "guestAdapter": "daintree.sveltekit-builder.guest"
+      }
+    ],
+    "guestAdapters": [
+      {
+        "id": "daintree.sveltekit-builder.guest",
+        "entry": "renderer/guest/entry.ts"
+      }
+    ],
     "toolbarButtons": [
       {
         "id": "toggle",

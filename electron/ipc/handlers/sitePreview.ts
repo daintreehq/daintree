@@ -21,7 +21,7 @@ import { defineIpcNamespace, op, opValidated } from "../define.js";
 import { getWebContentsForProject } from "../../window/webContentsRegistry.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { getSitePreviewBridge, resetSitePreviewBridge } from "../../services/SitePreviewBridge.js";
-import { registerSvelteKitGuestAdapter } from "../../services/sitePreview/svelteKitGuestAdapter.js";
+import { registerBuiltinGuestAdapters } from "../../services/sitePreview/builtinGuestAdapters.js";
 import type { HandlerDependencies } from "../types.js";
 import type { IpcContext } from "../types.js";
 import type {
@@ -158,10 +158,11 @@ export const sitePreviewNamespace = defineIpcNamespace({
 });
 
 export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => void {
-  // Registered here rather than in a plugin's activation: the body is an app
-  // asset, and the bridge must be able to resolve it whether or not the Site
-  // Builder's renderer view has ever been loaded.
-  const disposeAdapter = registerSvelteKitGuestAdapter();
+  // Registered here rather than in a plugin's activation: the bodies are app
+  // assets, and the bridge must be able to resolve one whether or not the
+  // declaring plugin's renderer view has ever been loaded. Which adapters exist
+  // comes from the built-in manifests, so no plugin is named here.
+  const disposeAdapters = registerBuiltinGuestAdapters();
 
   const bridge = getSitePreviewBridge({
     push: (payload) => {
@@ -183,7 +184,7 @@ export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => v
   const disposeNamespace = sitePreviewNamespace.register();
   return () => {
     disposeNamespace();
-    disposeAdapter();
+    disposeAdapters();
     void bridge.disposeAll();
     resetSitePreviewBridge();
   };

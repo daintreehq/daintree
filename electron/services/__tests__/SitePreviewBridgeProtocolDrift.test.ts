@@ -11,13 +11,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
-// The adapter module resolves its asset under `app.getAppPath()`; this test
-// only reads its id.
-vi.mock("electron", () => ({ app: { getAppPath: () => "/app" } }));
-
-import { SVELTEKIT_GUEST_ADAPTER_ID } from "../sitePreview/svelteKitGuestAdapter.js";
+import {
+  guestAdapterAssetPath,
+  listBuiltinGuestAdapters,
+} from "../sitePreview/guestAdapterAssets.js";
 import {
   GUEST_PROTOCOL_VERSION,
   GuestEnvelopeSchema,
@@ -30,6 +29,20 @@ const PLUGIN_PROTOCOL = path.resolve(
   HERE,
   "../../../plugins/builtin/sveltekit-builder/shared/protocol.ts"
 );
+const BUILTIN_PLUGINS_ROOT = path.resolve(HERE, "../../../plugins/builtin");
+const PLUGIN_MANIFEST = path.join(BUILTIN_PLUGINS_ROOT, "sveltekit-builder/plugin.json");
+
+interface BuilderManifest {
+  name: string;
+  contributes: {
+    previewTools: { id: string; guestAdapter?: string }[];
+    guestAdapters: { id: string; entry: string }[];
+  };
+}
+
+function readBuilderManifest(): BuilderManifest {
+  return JSON.parse(fs.readFileSync(PLUGIN_MANIFEST, "utf8")) as BuilderManifest;
+}
 
 function readPluginProtocol(): string {
   return fs.readFileSync(PLUGIN_PROTOCOL, "utf8");
@@ -85,11 +98,55 @@ describe("site preview guest protocol", () => {
     expect(readNumericConstant(runtime, "MAX_MESSAGE_BYTES")).toBe(MAX_GUEST_MESSAGE_BYTES);
   });
 
-  it("agrees with the plugin on the id of the guest runtime it binds to", () => {
-    // The plugin sends this id and the host resolves it to the asset it ships.
-    // A rename on one side alone would surface as an unbindable preview.
+  it("agrees with the manifest on the id of the guest runtime it binds to", () => {
+    // The plugin sends this id and the host resolves it — through the manifest
+    // declaration, which is the only thing that registers an adapter at all — to
+    // the asset the build emitted. A rename on one side alone would surface as an
+    // unbindable preview, so the manifest is now the other half of this contract.
     const match = /export const GUEST_ADAPTER_ID = "([^"]+)";/.exec(readPluginProtocol());
-    expect(match?.[1]).toBe(SVELTEKIT_GUEST_ADAPTER_ID);
+    const declared = readBuilderManifest().contributes.guestAdapters.map((a) => a.id);
+    expect(declared).toContain(match?.[1]);
+  });
+
+  it("agrees with the manifest on the id of the preview tool the renderer registers", () => {
+    // The renderer entry restates this literal to keep zod out of the eager
+    // bundle, and `devPreviewToolRegistry` hides a tool the manifest does not
+    // declare — so an undeclared rename here is a builder that never appears.
+    const source = readPluginProtocol();
+    const pluginId = /export const PLUGIN_ID = "([^"]+)";/.exec(source)?.[1];
+    // Composed from PLUGIN_ID in the plugin, so read the suffix out of the
+    // template literal rather than expecting a plain string.
+    const suffix = /export const BUILDER_TOOL_ID = `\$\{PLUGIN_ID\}\.([a-z0-9-]+)`;/.exec(
+      source
+    )?.[1];
+    expect(pluginId).toBeDefined();
+    expect(suffix).toBeDefined();
+    const declared = readBuilderManifest().contributes.previewTools.map((t) => t.id);
+    expect(declared).toContain(`${pluginId}.${suffix}`);
+  });
+
+  it("points each declared preview tool at a guest adapter the same manifest declares", () => {
+    const { contributes } = readBuilderManifest();
+    const adapterIds = new Set(contributes.guestAdapters.map((a) => a.id));
+    for (const tool of contributes.previewTools) {
+      if (tool.guestAdapter === undefined) continue;
+      expect(adapterIds).toContain(tool.guestAdapter);
+    }
+  });
+
+  it("derives the guest asset path the build emits from the declared adapter id", () => {
+    // The manifest never names the built asset — the host derives it. This pins
+    // the derivation for the shipped declaration so a change to it has to be
+    // deliberate, and the build's own mirror of the rule is checked against this
+    // function in `scripts/__tests__/plugin-build-assets.test.mjs`.
+    const declarations = listBuiltinGuestAdapters(BUILTIN_PLUGINS_ROOT);
+    const builder = declarations.find((d) => d.pluginId === "daintree.sveltekit-builder");
+    expect(builder).toBeDefined();
+    expect(builder?.entry).toBe("renderer/guest/entry.ts");
+    expect(builder?.assetPath).toBe("guest/guest.js");
+    expect(guestAdapterAssetPath("daintree.sveltekit-builder", builder!.adapterId)).toBe(
+      "guest/guest.js"
+    );
   });
 
   it("agrees with the plugin on the set of guest event types", () => {

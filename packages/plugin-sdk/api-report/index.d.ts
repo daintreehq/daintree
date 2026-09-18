@@ -1766,6 +1766,42 @@ interface FileEditorContribution {
     /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
     maxBytes?: number;
 }
+/**
+ * One `contributes.previewTools` entry: a tool the dev-preview panel offers in
+ * its toolbar, with the host owning the chrome and the session lifecycle.
+ *
+ * The components stay a renderer-side registration (`registerDevPreviewTool`) —
+ * they are host-bundled, so nothing else can supply them. This declaration is
+ * what makes the tool admissible: `src/registry/devPreviewToolRegistry.ts`
+ * hides a registered tool whose plugin's manifest does not name its id, so a
+ * module side effect alone can no longer put a tool in the toolbar. Built-in
+ * plugins only.
+ */
+interface PreviewToolContribution {
+    /** Fully qualified and prefixed with the plugin name — the host does not namespace it. */
+    id: string;
+    /** User-facing name for the tool. */
+    title: string;
+    /** Lucide icon id for the toolbar toggle. */
+    iconId?: string;
+    /** A {@link PluginGuestAdapterContribution} id this same manifest declares. */
+    guestAdapter?: string;
+}
+/**
+ * One `contributes.guestAdapters` entry: a browser bundle the host reads back as
+ * text and installs into a previewed page through the site-preview bridge.
+ *
+ * `entry` is the plugin-relative source; the built asset's path is derived from
+ * the id rather than declared, so the build and the startup registration cannot
+ * disagree about where the bundle landed. Built-in plugins only — the body runs
+ * with full DOM access inside the previewed site.
+ */
+interface PluginGuestAdapterContribution {
+    /** Fully qualified and prefixed with the plugin name; the renderer binds by this literal. */
+    id: string;
+    /** Plugin-relative POSIX path to the bundle's source entry. */
+    entry: string;
+}
 interface PanelContribution {
     id: string;
     name: string;
@@ -2485,6 +2521,25 @@ interface PluginManifest {
          * plugin ships an editor.
          */
         fileEditors: FileEditorContribution[];
+        /**
+         * Dev-preview tools this plugin offers (built-in only). The renderer
+         * registry admits a registered tool only when its plugin's manifest names
+         * the tool id here, so the manifest — not a module side effect — is what
+         * puts a tool in the preview toolbar.
+         *
+         * Optional in the type but always materialized by the manifest schema's
+         * `.default([])`, for the same reason as `agentMcp` — the hand-built
+         * manifest literals in tests and tooling predate the field.
+         */
+        previewTools?: PreviewToolContribution[];
+        /**
+         * Guest runtimes this plugin ships as standalone browser assets (built-in
+         * only). Main registers one site-preview guest adapter per entry at
+         * startup; the build derives the bundle's entry and output from the same
+         * declaration. Optional in the type for the same reason as
+         * `previewTools`.
+         */
+        guestAdapters?: PluginGuestAdapterContribution[];
         /**
          * Plugin-contributed launchable agents (#9560). Each entry registers an
          * {@link PluginAgentContribution} into the effective agent registry at load

@@ -109,7 +109,18 @@ function Preview(overrides: Partial<typeof host> = {}) {
 
 function pluginLoaded(enabled: boolean) {
   usePluginRuntimeStore.setState({
-    pluginMetaById: new Map([[PLUGIN, { devMode: false, displayName: "Acme" }]]),
+    pluginMetaById: new Map([
+      [
+        PLUGIN,
+        {
+          devMode: false,
+          displayName: "Acme",
+          // The registry admits a tool only when its plugin's manifest declares
+          // the id, so the fake meta must declare every tool these cases register.
+          previewToolIds: new Set([TOOL, BROKEN_TOOL]),
+        },
+      ],
+    ]),
     disabledPluginIds: new Set(enabled ? [] : [PLUGIN]),
   });
 }
