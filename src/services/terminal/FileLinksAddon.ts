@@ -182,15 +182,13 @@ type RowReader = (row: number) => RowSnapshot | undefined;
 // unwrapped paste from turning every hover into a megabyte of string building.
 const MAX_LOGICAL_LINE_LENGTH = 2048;
 
-// A token longer than this many rows isn't a path an agent printed, and
-// bounding the chain walk keeps a wall of full-width output cheap to hover.
-const MAX_HARD_WRAP_ROWS = 16;
-
 // Sentence punctuation an agent leaves glued to the end of a path token.
 const TRAILING_PUNCTUATION = /[,.;:!?)\]}'"`>]+$/;
 
-// A token that already reads as a whole file: `.ext`, maybe `:line[:col]`.
-const COMPLETE_FILE_TAIL = /\.\w+(?::\d+(?::\d+)?)?$/;
+// A token that already reads as a whole file: `.ext`, maybe `:line[:col]`. The
+// dot must follow a name character, so a hidden segment (`/.claude`) cut at the
+// margin still reads as a directory to be continued.
+const COMPLETE_FILE_TAIL = /[^\\/.]\.\w+(?::\d+(?::\d+)?)?$/;
 
 function overlapsClaimed(
   claimed: ReadonlyArray<[number, number]>,
@@ -326,10 +324,10 @@ function firstNonSpace(text: string): number {
  *
  * Shape only. `upper` must run to the right edge and `lower` must be a row the
  * terminal didn't wrap, opening with a hanging indent of spaces. Both rows
- * must be exactly `cols` characters, which is a row's width in cells only
- * while every cell holds one character: a row carrying a wide character
- * comes up short and is turned away, because columns derived from its text
- * would put the underline on the wrong cells.
+ * must be exactly `cols` characters long. That's a total-length check, not a
+ * cell-by-cell one: a wide character usually leaves a row short and turns it
+ * away, but an emoji's surrogate pair or a combining mark can even the count
+ * back out and misplace the underline. It never retargets the file.
  */
 function hardWrapIndent(upper: RowSnapshot, lower: RowSnapshot, cols: number): number | null {
   if (lower.isWrapped) return null;
@@ -358,9 +356,16 @@ function isWholePathToken(token: string): boolean {
   return match[0].indexOf(capture) + capture.length === body.length;
 }
 
+/** The unbroken run of text in `text` starting at `from`. */
+function leadingRun(text: string, from: number): string {
+  const end = text.indexOf(" ", from);
+  return text.slice(from, end === -1 ? text.length : end);
+}
+
 /**
- * The hanging indent of row `upperRow + 1` when it continues a token an app
- * split at `upperRow`'s right edge itself, or null.
+ * Settle every app hard wrap in the run of rows one token crosses, starting
+ * from the hard boundary below `upperRow`. The result maps each hard
+ * boundary's upper row to whether its rows join.
  *
  * Agent TUIs (Claude Code's Ink, for one) wrap their own output: a word longer
  * than the text box is cut at the margin and resumed on the next row after a
@@ -369,68 +374,135 @@ function isWholePathToken(token: string): boolean {
  * two rows are one token. Scanning them apart links the tail as a relative path
  * under the cwd, which is a live link to the wrong file.
  *
- * Joining is a guess from the rows' shape, so it has to earn it:
+ * The run is found from shape alone. It walks up and down through every row
+ * the token fills edge to edge, across xterm's own wraps as well as the app's.
+ * Every boundary inside it arrives at the same run and the same verdicts, so
+ * each row of a long path agrees whichever one the pointer is on.
+ *
+ * Joining is a guess, so each hard boundary has to earn it:
+ * - A token that already reads as a whole file where it meets the margin
+ *   (`src/a.ts`, then an unrelated indented line) ends there. The run is cut
+ *   at that boundary and whatever follows is judged as its own token.
+ * - Before its first hard boundary, the token must carry a path separator.
  * - A word-wrapper only splits a word that can't fit on a line, and the box
  *   runs from the continuation's indent to the pane's right edge. A token no
- *   longer than that width is two words that happened to meet at the margin.
- * - The head must already look like a path (it carries a separator) and must
- *   not already read as a whole file (`src/a.ts` ending exactly at the margin
- *   followed by an unrelated word).
+ *   longer than that was two words that happened to meet at the margin.
  * - The joined token must be one path from end to end.
  *
  * The rows can't record where a newline really was, so a coincidence can still
- * pass. An extensionless path ending exactly at the margin, followed by an
- * indented path, joins the two. That takes an exact fit at the margin, and the
- * alternative is to link every hard-wrapped path to the wrong file.
+ * pass: an extensionless path ending exactly at the margin, followed by an
+ * indented path, joins the two. The opposite miss happens too: a cut that
+ * leaves `.ex` behind, inside an extension or a dotted name, reads as a whole
+ * file and isn't joined. Both need the cut to land in exactly the wrong place,
+ * and the alternative is to link every hard-wrapped path to the wrong file.
  *
- * The verdict belongs to the token, not the boundary: the chain is walked to
- * both ends through rows the token fills edge to edge, so every row of a long
- * path agrees whichever one the pointer is on.
+ * A run too long to walk, or one whose start was trimmed out of scrollback,
+ * can't be judged. It is joined anyway: the rejoin budget then clips the
+ * window, and a fragment against a clipped edge is distrusted rather than
+ * linked on its own.
  */
-function hardWrapContinuation(read: RowReader, cols: number, upperRow: number): number | null {
-  const upper = read(upperRow);
-  const lower = read(upperRow + 1);
-  if (!upper || !lower) return null;
-  const indent = hardWrapIndent(upper, lower, cols);
-  if (indent === null) return null;
+function resolveHardWraps(
+  read: RowReader,
+  cols: number,
+  upperRow: number,
+  indent: number
+): Map<number, boolean> {
+  type Join = "soft" | "hard";
+  // How the token crosses from `upper` into `lower`, if it does.
+  const joinOf = (upper: RowSnapshot, lower: RowSnapshot): Join | null => {
+    if (!lower.isWrapped) return hardWrapIndent(upper, lower, cols) === indent ? "hard" : null;
+    const upperEnd = upper.text.length - 1;
+    return upper.text.charCodeAt(upperEnd) !== 32 && lower.text.charCodeAt(0) !== 32
+      ? "soft"
+      : null;
+  };
+  // Where the token resumes on a row it crossed onto.
+  const resumeAt = (join: Join): number => (join === "soft" ? 0 : indent);
+  // Whether the token fills `row` from `from` to the edge, running on past it.
+  const fills = (row: RowSnapshot, from: number): boolean =>
+    row.text.length === cols && !hasSpaceIn(row.text, from, cols);
 
-  // A row the token fills from the indent to the edge carries it through.
-  const fillsRow = (row: RowSnapshot): boolean =>
-    row.text.length === cols && !hasSpaceIn(row.text, indent, cols);
+  let span = 2 * cols;
+  let unjudgeable = false;
 
-  let rows = 2;
+  const above: Join[] = [];
   let head = upperRow;
   for (;;) {
-    const headRow = read(head)!;
-    if (firstNonSpace(headRow.text) !== indent || !fillsRow(headRow)) break;
-    const above = read(head - 1);
-    if (!above || hardWrapIndent(above, headRow, cols) !== indent) break;
-    if (++rows > MAX_HARD_WRAP_ROWS) return null;
+    const row = read(head)!;
+    const previous = read(head - 1);
+    if (!previous) {
+      // A row still claiming xterm's wrap at the top of the buffer lost its
+      // head to scrollback trimming, and the token's start with it.
+      if (row.isWrapped && fills(row, 0)) unjudgeable = true;
+      break;
+    }
+    const join = joinOf(previous, row);
+    if (join === null || !fills(row, resumeAt(join))) break;
+    if ((span += cols) > MAX_LOGICAL_LINE_LENGTH) {
+      unjudgeable = true;
+      break;
+    }
+    above.push(join);
     head--;
   }
+
+  const below: Join[] = ["hard"];
   let tail = upperRow + 1;
-  for (;;) {
-    const tailRow = read(tail)!;
-    if (!fillsRow(tailRow)) break;
-    const below = read(tail + 1);
-    if (!below || hardWrapIndent(tailRow, below, cols) !== indent) break;
-    if (++rows > MAX_HARD_WRAP_ROWS) return null;
+  while (!unjudgeable) {
+    const row = read(tail)!;
+    if (!fills(row, resumeAt(below[below.length - 1]!))) break;
+    const next = read(tail + 1);
+    const join = next ? joinOf(row, next) : null;
+    if (join === null) break;
+    if ((span += cols) > MAX_LOGICAL_LINE_LENGTH) {
+      unjudgeable = true;
+      break;
+    }
+    below.push(join);
     tail++;
   }
 
-  const headText = read(head)!.text;
-  const headToken = headText.slice(headText.lastIndexOf(" ") + 1);
-  if (!headToken.includes("/") && !headToken.includes("\\")) return null;
-  if (COMPLETE_FILE_TAIL.test(headToken.replace(TRAILING_PUNCTUATION, ""))) return null;
-
-  let token = headToken;
-  for (let row = head + 1; row <= tail; row++) {
-    const text = read(row)!.text;
-    const end = text.indexOf(" ", indent);
-    token += text.slice(indent, end === -1 ? text.length : end);
+  // joins[k] is the boundary between rows `head + k` and `head + k + 1`.
+  const joins = [...above.reverse(), ...below];
+  const verdicts = new Map<number, boolean>();
+  if (unjudgeable) {
+    joins.forEach((join, k) => {
+      if (join === "hard") verdicts.set(head + k, true);
+    });
+    return verdicts;
   }
-  if (token.length <= cols - indent) return null;
-  return isWholePathToken(token) ? indent : null;
+
+  const headText = read(head)!.text;
+  let token = headText.slice(headText.lastIndexOf(" ") + 1);
+  let prefix: string | null = null;
+  let pending: number[] = [];
+  const settle = (): void => {
+    const joined =
+      prefix !== null &&
+      (prefix.includes("/") || prefix.includes("\\")) &&
+      token.length > cols - indent &&
+      isWholePathToken(token);
+    for (const row of pending) verdicts.set(row, joined);
+  };
+
+  joins.forEach((join, k) => {
+    const lower = read(head + k + 1)!.text;
+    if (join === "hard") {
+      if (COMPLETE_FILE_TAIL.test(token.replace(TRAILING_PUNCTUATION, ""))) {
+        settle();
+        verdicts.set(head + k, false);
+        token = leadingRun(lower, indent);
+        prefix = null;
+        pending = [];
+        return;
+      }
+      prefix ??= token;
+      pending.push(head + k);
+    }
+    token += leadingRun(lower, resumeAt(join));
+  });
+  settle();
+  return verdicts;
 }
 
 /**
@@ -477,6 +549,7 @@ export class FileLinksAddon implements ILinkProvider {
     }
 
     const lineText = line.translateToString(true);
+    const read = this._rowReader();
 
     // A row that continues, or is continued by, another holds only part of a
     // logical line, so nothing about it can be decided from its own text.
@@ -492,13 +565,14 @@ export class FileLinksAddon implements ILinkProvider {
     // scroll-feel regex/GC cost, not write throughput. A wrapped row is exempt:
     // the tail of `file:///tmp/long/` + `shot.png` carries no separator of its
     // own, and skipping it would leave half the URL unclickable. So is a row
-    // that may continue an app's own hard wrap — only as the continuation,
-    // though: a hard wrap's head needs a separator of its own.
+    // that may continue an app's own hard wrap. A row that continues nothing
+    // can still open one, but the token has to carry a separator before its
+    // first hard wrap, so that row would have one of its own.
     if (
       !partOfWrappedLine &&
       !lineText.includes("/") &&
       !lineText.includes("\\") &&
-      !this._mayContinueHardWrap(bufferLineNumber - 1)
+      !this._mayContinueHardWrap(bufferLineNumber - 1, read)
     ) {
       callback(undefined);
       return;
@@ -515,7 +589,7 @@ export class FileLinksAddon implements ILinkProvider {
     // margin leaves behind still parses, and linking it opens a real-but-wrong
     // file. The no-separator fast path above already turned away the rows that
     // would make this cost anything, and the window itself is budgeted.
-    const logical = this._readLogicalLine(bufferLineNumber - 1);
+    const logical = this._readLogicalLine(bufferLineNumber - 1, read);
     if (!logical) {
       callback(undefined);
       return;
@@ -737,7 +811,7 @@ export class FileLinksAddon implements ILinkProvider {
    * actually sees, remembering where each row's text starts so matches can be
    * mapped back to buffer coordinates. Rows are joined where xterm wrapped
    * them itself, and where an app hard-wrapped a path at the margin (see
-   * `hardWrapContinuation`), minus that continuation's indent.
+   * `resolveHardWraps`), minus that continuation's indent.
    *
    * The window is anchored on `rowIndex` and grows outward on a shared budget,
    * rather than starting at the logical line's first row: a run longer than
@@ -748,14 +822,28 @@ export class FileLinksAddon implements ILinkProvider {
    * either way the edge is artificial, and a match against one can't be
    * trusted to be whole.
    */
-  private _readLogicalLine(rowIndex: number): LogicalLine | null {
-    const read = this._rowReader();
+  private _readLogicalLine(rowIndex: number, read = this._rowReader()): LogicalLine | null {
     const current = read(rowIndex);
     if (!current) return null;
     const cols = this._terminal.cols;
+    // Every hard boundary of a run is settled the first time any of them is
+    // asked about, so the rejoin walks each run once.
+    const verdicts = new Map<number, boolean>();
     // The indent a hard-wrapped continuation of `upperRow` carries, or null.
-    const hardIndent = (upperRow: number): number | null =>
-      typeof cols === "number" && cols > 0 ? hardWrapContinuation(read, cols, upperRow) : null;
+    const hardIndent = (upperRow: number): number | null => {
+      if (typeof cols !== "number" || cols <= 0) return null;
+      const upper = read(upperRow);
+      const lower = read(upperRow + 1);
+      if (!upper || !lower) return null;
+      const indent = hardWrapIndent(upper, lower, cols);
+      if (indent === null) return null;
+      if (!verdicts.has(upperRow)) {
+        for (const [row, joined] of resolveHardWraps(read, cols, upperRow, indent)) {
+          verdicts.set(row, joined);
+        }
+      }
+      return verdicts.get(upperRow) === true ? indent : null;
+    };
 
     // trimRight is deliberately OFF for the rejoin. A wrapped row is full by
     // definition, so trimming can only delete real trailing spaces — and those
@@ -838,7 +926,9 @@ export class FileLinksAddon implements ILinkProvider {
 
   /**
    * A reader over the active buffer that reads each row at most once. The
-   * rejoin and the hard-wrap chain walk revisit the same rows.
+   * fast-path probe, the rejoin, and the hard-wrap walk all revisit the same
+   * rows. Scoped to one read of the buffer: a later staleness check needs a
+   * fresh one.
    */
   private _rowReader(): RowReader {
     const buffer = this._terminal.buffer.active;
@@ -859,12 +949,11 @@ export class FileLinksAddon implements ILinkProvider {
    * Cheap test for whether `rowIndex` could continue the row above through an
    * app's own hard wrap. It lets a row with no separator past the fast path,
    * the way a middle or tail fragment of a long path must be. The full
-   * verdict is `hardWrapContinuation`'s.
+   * verdict is `resolveHardWraps`'s.
    */
-  private _mayContinueHardWrap(rowIndex: number): boolean {
+  private _mayContinueHardWrap(rowIndex: number, read: RowReader): boolean {
     const cols = this._terminal.cols;
     if (typeof cols !== "number" || cols <= 0 || rowIndex === 0) return false;
-    const read = this._rowReader();
     const above = read(rowIndex - 1);
     const current = read(rowIndex);
     return !!above && !!current && hardWrapIndent(above, current, cols) !== null;
