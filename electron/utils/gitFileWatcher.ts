@@ -11,7 +11,7 @@ import {
 import { getGitDir } from "./gitUtils.js";
 import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "./gitCheckIgnore.js";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
-import { subscribeParcelWatcher } from "./parcelWatcherBackend.js";
+import { resolveParcelWatcherExclusions, subscribeParcelWatcher } from "./parcelWatcherBackend.js";
 import { logWarn } from "./logger.js";
 import { affectedDirsForBurst } from "./worktreeAffectedDirs.js";
 
@@ -61,6 +61,27 @@ const WORKTREE_IGNORE_GLOBS = [
 ];
 
 /**
+ * Top-level directories to exclude from the recursive stream at the OS level,
+ * highest priority first — FSEvents takes at most eight. Every name must
+ * already be covered by `WORKTREE_IGNORE_GLOBS`: an exclusion only stops churn
+ * the globs would have discarded anyway, so nothing the user cares about goes
+ * quiet. `.git` qualifies because the dedicated `fs.watch` handles, not this
+ * stream, observe git state.
+ */
+const WORKTREE_EXCLUSION_CANDIDATES = [
+  "node_modules",
+  ".git",
+  "dist",
+  "build",
+  ".next",
+  "target",
+  "coverage",
+  ".turbo",
+  ".venv",
+  "out",
+];
+
+/**
  * Cap on the paths retained for one burst. Past it the burst degrades to
  * "unknown" and takes the full refresh — a checkout storm rewriting thousands
  * of files is never going to classify as ignored-only, so the memory is spent
@@ -78,6 +99,9 @@ const WORKTREE_CLASSIFY_TIMEOUT_MS = 2_000;
 
 /** Minimum gap between classification-failure warnings, per watcher. */
 const CLASSIFY_WARN_THROTTLE_MS = 30_000;
+
+/** Minimum gap between dropped-event (rescan) warnings, per watcher. */
+const RESCAN_WARN_THROTTLE_MS = 30_000;
 
 /**
  * Worktree files whose contents change what `git status` reports about OTHER
@@ -212,6 +236,9 @@ export class GitFileWatcher {
   /** Bumped on every flush and on disposal so a stale result cannot act. */
   private classifyGeneration = 0;
   private lastClassifyWarnAt = 0;
+  private lastRescanWarnAt = Number.NEGATIVE_INFINITY;
+  /** Rescan warnings swallowed by the throttle since the last one logged. */
+  private suppressedRescanWarnings = 0;
   /**
    * Cached "does this repo contain tracked files that match an ignore rule?".
    * Dropped whenever a git-internal file changes, which is where `git add -f`
@@ -328,12 +355,27 @@ export class GitFileWatcher {
         if (this.disposed) {
           return false;
         }
+        // FSEvents reports canonical paths, and Parcel only applies its globs
+        // to events under the root it was given — so a root reached through a
+        // symlinked ancestor filtered nothing natively, and the literal
+        // exclusions below would resolve to paths FSEvents never matches.
+        const watchRoot =
+          process.platform === "darwin"
+            ? (this.worktreeRealPath ?? this.worktreePath)
+            : this.worktreePath;
+        const exclusions = await resolveParcelWatcherExclusions(
+          watchRoot,
+          WORKTREE_EXCLUSION_CANDIDATES
+        );
+        if (this.disposed) {
+          return false;
+        }
         // Fire-and-forget: subscribe() schedules the platform watcher
         // asynchronously. Startup failures (ENOSPC, EMFILE) route through
         // onWatcherFailed / onInotifyLimitReached / onEmfileLimitReached
         // callbacks when the Promise rejects. WatcherController.handleWatcherFailed()
         // is already designed for async callback delivery.
-        this.startWorktreeWatcher();
+        this.startWorktreeWatcher(watchRoot, exclusions);
       }
 
       return true;
@@ -404,7 +446,7 @@ export class GitFileWatcher {
     }
   }
 
-  private startWorktreeWatcher(): void {
+  private startWorktreeWatcher(watchRoot: string, exclusions: readonly string[]): void {
     // The recursive watcher is a dirty signal, never the authoritative state:
     // native queues can overflow or coalesce events on every platform. A null
     // filename from Windows fs.watch becomes a root-level dirty signal in the
@@ -414,7 +456,7 @@ export class GitFileWatcher {
     // per-directory fd exhaustion — is eliminated by the single-stream-per-
     // subtree design.
     subscribeParcelWatcher(
-      this.worktreePath,
+      watchRoot,
       (err, events) => {
         if (err) {
           this.handleWorktreeWatcherError(err, "runtime");
@@ -428,7 +470,9 @@ export class GitFileWatcher {
         // tracked status at all (#12235).
         this.handleWorktreeChange(events);
       },
-      { ignore: WORKTREE_IGNORE_GLOBS }
+      // The globs stay: the exclusions cover only directories that existed
+      // at subscribe time, only at the top level, and only eight of them.
+      { ignore: [...WORKTREE_IGNORE_GLOBS, ...exclusions] }
     )
       .then((sub) => {
         if (this.disposed) {
@@ -471,12 +515,11 @@ export class GitFileWatcher {
       }
     }
 
-    logWarn(`Worktree recursive watcher error (${phase})`, {
-      path: this.worktreePath,
-      error: message,
-    });
-
-    if (isRescanRequest(message)) {
+    // A rescan request only arrives through a live subscription's callback; a
+    // startup rejection carrying the same words means no stream was ever
+    // established, so it falls through to the failure path.
+    if (phase === "runtime" && isRescanRequest(message)) {
+      this.warnRescanRequest(message);
       // @parcel/watcher has two error channels and they mean opposite things.
       // This one is `EventList::error()` (macOS FSEvents `MustScanSubDirs`),
       // delivered through `Watcher::triggerCallbacks` — the callbacks stay
@@ -497,6 +540,11 @@ export class GitFileWatcher {
       this.handleWorktreeChange(null);
       return;
     }
+
+    logWarn(`Worktree recursive watcher error (${phase})`, {
+      path: this.worktreePath,
+      error: message,
+    });
 
     // Parcel's fatal channel clears its callbacks; the Windows adapter forwards
     // fs.watch's runtime error channel. Either means the subscription is no
@@ -934,6 +982,27 @@ export class GitFileWatcher {
     logWarn("Worktree burst ignore-classification failed; refreshing status", {
       path: this.worktreePath,
       error: (error as Error)?.message ?? String(error),
+    });
+  }
+
+  /**
+   * Throttled because a build or test run can overflow the stream many times a
+   * minute, and every one is already acted on by the forced refresh. The
+   * suppressed count keeps the overflow rate readable from the log.
+   */
+  private warnRescanRequest(message: string): void {
+    const now = Date.now();
+    if (now - this.lastRescanWarnAt < RESCAN_WARN_THROTTLE_MS) {
+      this.suppressedRescanWarnings++;
+      return;
+    }
+    this.lastRescanWarnAt = now;
+    const suppressed = this.suppressedRescanWarnings;
+    this.suppressedRescanWarnings = 0;
+    logWarn("Worktree recursive watcher error (runtime)", {
+      path: this.worktreePath,
+      error: message,
+      ...(suppressed > 0 ? { suppressed } : {}),
     });
   }
 }

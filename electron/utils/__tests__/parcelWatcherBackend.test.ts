@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolve } from "node:path";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 
 const { existsSyncMock, fsWatchMock, subscribeMock } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
@@ -17,9 +19,11 @@ vi.mock("@parcel/watcher", () => ({
 }));
 
 import {
+  MAX_PARCEL_EXCLUSION_PATHS,
   closeAllParcelWatcherSubscriptions,
   getParcelWatcherLifecycleStats,
   parcelWatcherBackendOption,
+  resolveParcelWatcherExclusions,
   subscribeParcelWatcher,
 } from "../parcelWatcherBackend.js";
 
@@ -194,5 +198,62 @@ describe("subscribeParcelWatcher", () => {
 
     expect(callback).toHaveBeenCalledWith(error, []);
     await subscription.unsubscribe();
+  });
+});
+
+describe("resolveParcelWatcherExclusions", () => {
+  // node:fs is mocked for the subscription tests above; node:fs/promises is
+  // real, so these run against an actual directory tree.
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "daintree-exclusions-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("keeps only candidates that are real directories, in priority order", async () => {
+    const outside = await mkdtemp(join(tmpdir(), "daintree-exclusions-target-"));
+    try {
+      await mkdir(join(root, "dist"));
+      await mkdir(join(root, "node_modules"));
+      // A linked worktree's `.git` is a pointer file, not the repository.
+      await writeFile(join(root, ".git"), "gitdir: /elsewhere/.git/worktrees/wt\n");
+      // A symlinked directory's contents are not under the watched tree.
+      await symlink(outside, join(root, "build"), "dir");
+      await writeFile(join(root, "out"), "not a directory\n");
+
+      await expect(
+        resolveParcelWatcherExclusions(root, [
+          "node_modules",
+          ".git",
+          "dist",
+          "build",
+          "out",
+          "coverage",
+        ])
+      ).resolves.toEqual(["node_modules", "dist"]);
+    } finally {
+      await rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  it("caps at the FSEvents limit after skipping candidates that are absent", async () => {
+    const candidates = ["absent", ".git", "a", "b", "c", "d", "e", "f", "g", "h"];
+    for (const name of candidates.slice(1)) await mkdir(join(root, name));
+
+    const exclusions = await resolveParcelWatcherExclusions(root, candidates);
+
+    // Over the limit FSEvents applies none of them, so the cap is exact.
+    expect(exclusions).toHaveLength(MAX_PARCEL_EXCLUSION_PATHS);
+    expect(exclusions).toEqual([".git", "a", "b", "c", "d", "e", "f", "g"]);
+  });
+
+  it("returns nothing for a root that does not exist", async () => {
+    await expect(
+      resolveParcelWatcherExclusions(join(root, "missing"), ["node_modules", ".git"])
+    ).resolves.toEqual([]);
   });
 });

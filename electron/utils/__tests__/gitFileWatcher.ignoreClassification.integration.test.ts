@@ -182,3 +182,31 @@ describe("worktree burst ignore classification against real git", () => {
     expect(observed.changes).toBeGreaterThan(0);
   });
 });
+
+describe("OS-level exclusion of hot directories", () => {
+  it("drops writes under an excluded directory without hiding a source edit", async () => {
+    // mkdtemp lands under /var on macOS, a symlink to /private/var — the
+    // aliased-root shape where Parcel's globs and FSEvents' exclusions only
+    // apply if the watcher subscribes at the canonical root.
+    const { root, git } = makeRepo();
+    writeFileSync(join(root, ".gitignore"), "node_modules/\n");
+    writeFileSync(join(root, "src.txt"), "committed\n");
+    mkdirSync(join(root, "node_modules"));
+    git(["add", "-A"]);
+    git(["commit", "-m", "init"]);
+
+    const churn = await observe(root, () => {
+      for (let i = 0; i < 15; i++) {
+        mkdirSync(join(root, "node_modules", `pkg-${i}`));
+        writeFileSync(join(root, "node_modules", `pkg-${i}`, "index.js"), `module ${i}\n`);
+      }
+    });
+    expect(churn).toEqual({ changes: 0, fileSignals: 0 });
+
+    const edit = await observe(root, () => {
+      writeFileSync(join(root, "src.txt"), "modified\n");
+    });
+    expect(edit.changes).toBeGreaterThan(0);
+    expect(edit.fileSignals).toBeGreaterThan(0);
+  });
+});
