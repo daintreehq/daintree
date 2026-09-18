@@ -134,6 +134,8 @@ export type SitePreviewDetachReason =
   | "debugger-detached"
   /** Sustained invalid traffic; the transport was removed to stop the flood. */
   | "guest-flooding"
+  /** The plugin that owns the guest adapter was disabled or unloaded. */
+  | "owner-disabled"
   | "host-shutdown";
 
 export type SitePreviewPushPayload =

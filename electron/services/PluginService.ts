@@ -111,6 +111,7 @@ import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
+import { peekSitePreviewBridge } from "./SitePreviewBridge.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
@@ -5104,6 +5105,15 @@ export class PluginService {
     // are idempotent — already-cleared keys are silent no-ops. Provider and
     // impl steps are split so a throw in the descriptor unregister doesn't
     // strand the impl unregister and vice versa.
+    // Before the registries clear: a guest runtime is code of this plugin's
+    // running inside the user's previewed site, reading its DOM over a live CDP
+    // binding. The bind-time enablement check keeps it out of the next
+    // document; nothing but this takes it out of the one on screen.
+    runUnloadStep(pluginId, "disposeSitePreviewBindings", () => {
+      void peekSitePreviewBridge()
+        ?.disposeForPlugin(pluginId)
+        .catch(() => undefined);
+    });
     runUnloadStep(pluginId, "removeHandlers", () => this.removeHandlers(pluginId));
     runUnloadStep(pluginId, "unregisterPluginActions", () =>
       this.unregisterPluginActions(pluginId)

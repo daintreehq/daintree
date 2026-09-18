@@ -165,6 +165,18 @@ export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => v
   const disposeAdapters = registerBuiltinGuestAdapters();
 
   const bridge = getSitePreviewBridge({
+    // Supplied here rather than defaulted inside the bridge: `PluginService`
+    // reaches the other way for its unload step, and the bridge importing it
+    // back would close the cycle.
+    //
+    // Imported when a bind first asks, not at module load: `PluginService`
+    // pulls in `ProjectStore`, which reads `app.getPath("userData")` while it
+    // evaluates. Registering these handlers must not require an Electron app
+    // to exist. `bindLocked` is async, so the deferral costs nothing.
+    isPluginEnabled: async (pluginId) => {
+      const { pluginService } = await import("../../services/PluginService.js");
+      return pluginService.hasPlugin(pluginId);
+    },
     push: (payload) => {
       // Sent only to views of the owning project. Deliberately NOT
       // `broadcastToProjectRenderers`: that helper falls back to an app-wide

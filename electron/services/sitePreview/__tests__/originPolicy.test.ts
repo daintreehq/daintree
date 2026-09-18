@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isLocalPreviewUrl, originPolicyAllows } from "../originPolicy.js";
+import { buildOriginGuardSource, isLocalPreviewUrl, originPolicyAllows } from "../originPolicy.js";
 
 describe("isLocalPreviewUrl", () => {
   it.each([
@@ -54,5 +54,43 @@ describe("originPolicyAllows", () => {
     expect(originPolicyAllows("any", "https://example.com/")).toBe(true);
     expect(originPolicyAllows("local-preview", "https://example.com/")).toBe(false);
     expect(originPolicyAllows("local-preview", "http://localhost:5173/")).toBe(true);
+  });
+});
+
+describe("buildOriginGuardSource", () => {
+  /** Evaluate the guard the way the guest does, against a given document URL. */
+  function guardSays(policy: "any" | "local-preview", href: string): boolean {
+    const source = buildOriginGuardSource(policy);
+    return Function("location", `return ${source};`)({ href }) as boolean;
+  }
+
+  it("refuses a denied origin and allows a local preview", () => {
+    expect(guardSays("local-preview", "https://example.com/oauth")).toBe(false);
+    expect(guardSays("local-preview", "http://localhost:5173/")).toBe(true);
+    expect(guardSays("any", "https://example.com/oauth")).toBe(true);
+  });
+
+  it("gives the same verdict in the page as the host gives itself", () => {
+    // The guard is the host's own function serialised, so the two cannot drift.
+    // If they ever could, this is where it would show.
+    const urls = [
+      "http://localhost:5173/",
+      "http://127.0.0.1:3000/x",
+      "http://192.168.1.10:8080/",
+      "http://10.0.0.4/",
+      "http://172.16.0.1/",
+      "http://172.32.0.1/",
+      "https://example.com/oauth",
+      "https://accounts.google.com/",
+      "about:blank",
+      "file:///etc/passwd",
+      "not a url",
+      "",
+    ];
+    for (const url of urls) {
+      for (const policy of ["any", "local-preview"] as const) {
+        expect(guardSays(policy, url), `${policy} ${url}`).toBe(originPolicyAllows(policy, url));
+      }
+    }
   });
 });

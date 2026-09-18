@@ -91,8 +91,11 @@ function makeHarness(
     /** Called when a load starts, so a test can wait for the read to be in flight. */
     onEnter: (() => void) | null;
   } = { fails: false, gate: null, onEnter: null };
+  // The owning plugin's lifecycle, which a test can switch off mid-flight.
+  const pluginEnabled = { value: true };
   const bridge = new SitePreviewBridge({
     push: (payload) => pushed.push(payload),
+    isPluginEnabled: async () => pluginEnabled.value,
     listGuests: () => [
       { webContentsId: WEB_CONTENTS_ID, panelId: PANEL_ID, projectId: PROJECT_ID, url: "http://x" },
       { webContentsId: 99, panelId: "other", projectId: "project-2", url: "http://y" },
@@ -120,7 +123,7 @@ function makeHarness(
       return adapterBodies.get(adapterId) ?? "";
     },
   });
-  return { bridge, wc, pushed, adapterBodies, adapterLoad };
+  return { bridge, wc, pushed, adapterBodies, adapterLoad, pluginEnabled };
 }
 
 /** Replay the execution-context announcements CDP makes after `Runtime.enable`. */
@@ -1191,5 +1194,131 @@ describe("SitePreviewBridge", () => {
       ).toBe(true);
     });
     expect(harness.bridge.getState(PROJECT_ID, "session-1")).toBeNull();
+  });
+});
+
+describe("SitePreviewBridge owner lifecycle", () => {
+  it("refuses to bind an adapter whose plugin is not enabled", async () => {
+    const harness = makeHarness();
+    harness.pluginEnabled.value = false;
+
+    await expect(
+      harness.bridge.bind({
+        projectId: PROJECT_ID,
+        panelId: PANEL_ID,
+        adapterId: ADAPTER_ID,
+        mode: "select",
+      })
+    ).rejects.toThrow(/not enabled/);
+
+    // Nothing was read and nothing was installed.
+    expect(harness.wc.debugger.methods()).not.toContain("Page.addScriptToEvaluateOnNewDocument");
+  });
+
+  it("refuses when the plugin is disabled while the adapter body is being read", async () => {
+    const harness = makeHarness();
+    let release: () => void = () => {};
+    harness.adapterLoad.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    harness.adapterLoad.onEnter = () => {
+      // The disable lands under the read's await — the window the second check
+      // exists to close.
+      harness.pluginEnabled.value = false;
+    };
+    const bound = harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "select",
+    });
+    release();
+
+    await expect(bound).rejects.toThrow(/not enabled/);
+    expect(harness.wc.debugger.methods()).not.toContain("Page.addScriptToEvaluateOnNewDocument");
+  });
+
+  it("tears down a live binding when its owning plugin unloads", async () => {
+    const harness = makeHarness();
+    const state = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "select",
+    });
+    expect(harness.bridge.getState(PROJECT_ID, state.sessionId)).not.toBeNull();
+
+    await harness.bridge.disposeForPlugin(PLUGIN_ID);
+
+    expect(harness.bridge.getState(PROJECT_ID, state.sessionId)).toBeNull();
+    expect(harness.pushed.some((p) => p.kind === "detached" && p.reason === "owner-disabled")).toBe(
+      true
+    );
+    // The runtime already in the page goes too, not just the registration.
+    expect(harness.wc.debugger.methods()).toContain("Page.removeScriptToEvaluateOnNewDocument");
+  });
+
+  it("leaves another plugin's bindings alone", async () => {
+    const harness = makeHarness();
+    const state = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "select",
+    });
+
+    await harness.bridge.disposeForPlugin("some.other.plugin");
+
+    expect(harness.bridge.getState(PROJECT_ID, state.sessionId)).not.toBeNull();
+  });
+});
+
+describe("SitePreviewBridge disable races a bind", () => {
+  it("refuses a bind whose plugin was torn down while it was in flight", async () => {
+    // `teardown` removes a binding from the map before awaiting its CDP
+    // cleanup, so a `disposeForPlugin` overlapping a bind can walk an empty map
+    // and leave the successor behind. The enabled flag is deliberately left
+    // TRUE here, so only the generation guard can refuse this.
+    const harness = makeHarness();
+    let release: () => void = () => {};
+    harness.adapterLoad.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    harness.adapterLoad.onEnter = () => {
+      void harness.bridge.disposeForPlugin(PLUGIN_ID);
+    };
+
+    const bound = harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "select",
+    });
+    release();
+
+    await expect(bound).rejects.toThrow(/not enabled/);
+    expect(harness.wc.debugger.methods()).not.toContain("Page.addScriptToEvaluateOnNewDocument");
+  });
+
+  it("still binds normally when no teardown intervened", async () => {
+    // The guard must not refuse an ordinary bind, including a rebind of the
+    // same panel, which tears the predecessor down on purpose.
+    const harness = makeHarness();
+    const first = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "select",
+    });
+    const second = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "select",
+    });
+
+    expect(second.sessionId).not.toBe(first.sessionId);
+    expect(harness.bridge.getState(PROJECT_ID, second.sessionId)).not.toBeNull();
+    expect(harness.bridge.getState(PROJECT_ID, first.sessionId)).toBeNull();
   });
 });
