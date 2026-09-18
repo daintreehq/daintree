@@ -7,6 +7,7 @@ import type { ShellEnvironmentObservation } from "../../../setup/shellEnvironmen
 import {
   __resetClaudeSessionStoreForTests,
   findUntouchedClaudeSession,
+  getClaudePaneProjectsRoot,
   isClaudeSessionWithoutTranscript,
   observeClaudeTranscript,
   rememberClaudePaneStore,
@@ -417,5 +418,37 @@ describe("isClaudeSessionWithoutTranscript", () => {
     const record = { agentId: "claude", sessionId: SESSION, cwd: CWD };
     await expect(isClaudeSessionWithoutTranscript(record, "term-oldest")).resolves.toBe(false);
     await expect(isClaudeSessionWithoutTranscript(record, "term-1023")).resolves.toBe(true);
+  });
+});
+
+describe("getClaudePaneProjectsRoot", () => {
+  it("returns the store a terminal was launched against", () => {
+    rememberClaudePaneStore("term-1", "/home/u/.claude/projects");
+
+    expect(getClaudePaneProjectsRoot("term-1")).toBe("/home/u/.claude/projects");
+  });
+
+  // Unknown and uncertain read the same: a reader of the pane's transcript has
+  // no store it may use in either case, and must never guess one.
+  it("returns null for a terminal never remembered, or remembered as uncertain", () => {
+    rememberClaudePaneStore("term-uncertain", null);
+
+    expect(getClaudePaneProjectsRoot("term-never")).toBeNull();
+    expect(getClaudePaneProjectsRoot("term-uncertain")).toBeNull();
+  });
+
+  it("follows a relaunch that moved the terminal to another store", () => {
+    rememberClaudePaneStore("term-1", "/a/projects");
+    rememberClaudePaneStore("term-1", "/b/projects");
+
+    expect(getClaudePaneProjectsRoot("term-1")).toBe("/b/projects");
+  });
+
+  it("forgets a terminal once too many newer ones are remembered", () => {
+    rememberClaudePaneStore("term-oldest", "/a/projects");
+    for (let i = 0; i < 1_024; i++) rememberClaudePaneStore(`term-${i}`, "/a/projects");
+
+    expect(getClaudePaneProjectsRoot("term-oldest")).toBeNull();
+    expect(getClaudePaneProjectsRoot("term-1023")).toBe("/a/projects");
   });
 });

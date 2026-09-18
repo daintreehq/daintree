@@ -4,6 +4,7 @@ import {
   TerminalSummarySchema,
   TerminalStatusResultSchema,
   TerminalSendCommandResultSchema,
+  TerminalLastMessageResultSchema,
 } from "./schemas";
 import { tailCapturedOutput } from "@shared/utils/artifactParser";
 import {
@@ -647,6 +648,49 @@ export function registerTerminalQueryActions(
     run: async () => {
       throw new Error(
         "terminal.waitUntilIdleBatch must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
+  // Registered here for manifest metadata only — schema, description, tier and
+  // audit registration. Execution lives in the MCP CallTool handler
+  // (electron/services/mcp-server/sessionServer.ts): the ownership ledger it
+  // authorizes against is keyed by MCP session id, which the renderer never
+  // sees, and the transcript it reads is a file only main can open. Main checks
+  // ownership, then reads the agent's session from host state alone (#12479).
+  // `run()` throws if the renderer ever invokes it directly.
+  actions.set("terminal.readLastMessageOwned", () => ({
+    id: "terminal.readLastMessageOwned",
+    title: "Read Owned Agent's Last Message",
+    description:
+      "Read what the agent in a panel this connection created last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+    category: "terminal",
+    kind: "query",
+    danger: "safe",
+    denyPluginDispatch: true,
+    scope: "renderer",
+    keywords: ["transcript", "reply", "question", "owned"],
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "The agent panel to read, as an `id` this session got when it created the panel. Required: there is no focus fallback."
+        ),
+    }),
+    resultSchema: TerminalLastMessageResultSchema,
+    mcpOutputSchema: true,
+    examples: [
+      {
+        args: { terminalId: "term-abc123" },
+        description:
+          "An agent you launched stopped, and you need its hand-off or the exact question it asked before replying.",
+      },
+    ],
+    run: async () => {
+      throw new Error(
+        "terminal.readLastMessageOwned must be invoked through the MCP main-process path, not renderer dispatch."
       );
     },
   }));

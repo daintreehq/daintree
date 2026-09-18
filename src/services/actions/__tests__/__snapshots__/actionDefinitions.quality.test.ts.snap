@@ -5242,6 +5242,30 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
+    "description": "Read what the agent in a panel this connection created last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+    "examples": [
+      {
+        "args": {
+          "terminalId": "term-abc123",
+        },
+        "description": "An agent you launched stopped, and you need its hand-off or the exact question it asked before replying.",
+      },
+    ],
+    "id": "terminal.readLastMessageOwned",
+    "keywords": [
+      "transcript",
+      "reply",
+      "question",
+      "owned",
+    ],
+    "kind": "query",
+    "requiresArgs": true,
+    "title": "Read Owned Agent's Last Message",
+  },
+  {
+    "category": "terminal",
+    "danger": "safe",
+    "dangerRationale": undefined,
     "description": "Redraw terminal display to fix visual corruption",
     "examples": undefined,
     "id": "terminal.redraw",

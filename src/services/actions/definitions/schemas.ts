@@ -2,6 +2,10 @@ import { z } from "zod";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
 import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "@shared/types/terminalStatus";
 import {
+  AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
+  type AgentLastMessageResult,
+} from "@shared/types/agentLastMessage";
+import {
   GLOBAL_SETTINGS_TAB_IDS,
   PROJECT_SETTINGS_TAB_IDS,
 } from "@/components/Settings/settingsTabIds";
@@ -595,6 +599,68 @@ export const TerminalStatusResultSchema = z.object({
       "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
     ),
 });
+
+const AgentLastMessageSchema = z.object({
+  id: z.string().nullable(),
+  text: z
+    .string()
+    .describe("Its text blocks in order, cut to 24 KiB once escaped, keeping the end."),
+  truncated: z.boolean().describe("The start of the message was cut to fit."),
+  recordedAt: z.number().nullable(),
+  stopReason: z
+    .string()
+    .nullable()
+    .describe("Raw from the transcript, not a verdict on whether the turn ended."),
+});
+
+/**
+ * A root union, so zod emits `oneOf` with no top-level type — and
+ * `buildToolOutputSchema` forwards only an object-rooted schema, which would
+ * silently advertise nothing (#12479). The metadata puts `type: "object"` at
+ * the root beside the arms, which is valid JSON Schema and keeps each arm
+ * closed: an `ok` without its fields, or an `unavailable` carrying them, fails
+ * a strict client's check. Main builds this result itself and nothing on the
+ * way validates it, so those closed arms are the whole contract.
+ */
+export const TerminalLastMessageResultSchema = z
+  .discriminatedUnion("status", [
+    z.object({
+      status: z.literal("ok"),
+      provider: z.enum(["claude", "codex"]),
+      message: AgentLastMessageSchema.nullable().describe(
+        "The last reply that had text. Null when only an unanswered tool call is on record."
+      ),
+      unansweredToolUses: z
+        .array(
+          z.object({
+            id: z.string(),
+            name: z.string(),
+            input: z
+              .record(z.string(), z.unknown())
+              .optional()
+              .describe("Only on a question to the user; omitted whole when too large or deep."),
+          })
+        )
+        .describe(
+          "Calls made in or after the message with no result later in the file, oldest first, at most 8. Not proof the agent is waiting on one now."
+        ),
+      newerRecordsFollow: z
+        .boolean()
+        .describe(
+          "A prompt, tool result or later message follows the text, or a line is still being written."
+        ),
+      fileUpdatedAt: z.number(),
+    }),
+    z.object({
+      status: z.literal("unavailable"),
+      reason: z
+        .enum(AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS)
+        .describe(
+          "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted."
+        ),
+    }),
+  ])
+  .meta({ type: "object" }) satisfies z.ZodType<AgentLastMessageResult>;
 
 export const PersistedStoreInfoSchema = z.object({
   storeId: z.string(),

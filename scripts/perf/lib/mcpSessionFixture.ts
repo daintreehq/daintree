@@ -571,6 +571,12 @@ export async function openSession(
       instantiateSchema(manifest.byId.get("project.runCheck")?.outputSchema) as never,
     handleTerminalGetStatusViewless: async () =>
       instantiateSchema(manifest.byId.get("terminal.getStatus")?.outputSchema) as never,
+    // Self-gated (see SELF_GATED_TOOLS), so a battery never reaches it; this
+    // only satisfies the dep with a result its own schema accepts.
+    handleTerminalReadLastMessageOwned: async () => ({
+      status: "unavailable",
+      reason: "no-message",
+    }),
     isTerminalIdInUse: () => false,
     appendAuditRecord: (input) => {
       audits.push({ toolId: input.toolId, tier: input.tier, outcomeKind: input.outcome.kind });
@@ -817,6 +823,7 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.interruptOwned",
   "terminal.sendCommandOwned",
   "terminal.injectOwned",
+  "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
   "help.displayImage",
 ]);

@@ -1965,6 +1965,191 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
+      "Read what the agent in a panel this connection created last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+    enabled: true,
+    examples: [
+      {
+        args: {
+          terminalId: "term-abc123",
+        },
+        description:
+          "An agent you launched stopped, and you need its hand-off or the exact question it asked before replying.",
+      },
+    ],
+    id: "terminal.readLastMessageOwned",
+    inputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      type: "object",
+      properties: {
+        terminalId: {
+          type: "string",
+          minLength: 1,
+          description:
+            "The agent panel to read, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
+        },
+      },
+      required: ["terminalId"],
+    },
+    keywords: ["transcript", "reply", "question", "owned"],
+    kind: "query",
+    name: "terminal.readLastMessageOwned",
+    outputSchema: {
+      $schema: "https://json-schema.org/draft/2020-12/schema",
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              const: "ok",
+            },
+            provider: {
+              type: "string",
+              enum: ["claude", "codex"],
+            },
+            message: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: {
+                    id: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "null",
+                        },
+                      ],
+                    },
+                    text: {
+                      type: "string",
+                      description:
+                        "Its text blocks in order, cut to 24 KiB once escaped, keeping the end.",
+                    },
+                    truncated: {
+                      type: "boolean",
+                      description: "The start of the message was cut to fit.",
+                    },
+                    recordedAt: {
+                      anyOf: [
+                        {
+                          type: "number",
+                        },
+                        {
+                          type: "null",
+                        },
+                      ],
+                    },
+                    stopReason: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "null",
+                        },
+                      ],
+                      description:
+                        "Raw from the transcript, not a verdict on whether the turn ended.",
+                    },
+                  },
+                  required: ["id", "text", "truncated", "recordedAt", "stopReason"],
+                  additionalProperties: false,
+                },
+                {
+                  type: "null",
+                },
+              ],
+              description:
+                "The last reply that had text. Null when only an unanswered tool call is on record.",
+            },
+            unansweredToolUses: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  id: {
+                    type: "string",
+                  },
+                  name: {
+                    type: "string",
+                  },
+                  input: {
+                    description:
+                      "Only on a question to the user; omitted whole when too large or deep.",
+                    type: "object",
+                    propertyNames: {
+                      type: "string",
+                    },
+                    additionalProperties: {},
+                  },
+                },
+                required: ["id", "name"],
+                additionalProperties: false,
+              },
+              description:
+                "Calls made in or after the message with no result later in the file, oldest first, at most 8. Not proof the agent is waiting on one now.",
+            },
+            newerRecordsFollow: {
+              type: "boolean",
+              description:
+                "A prompt, tool result or later message follows the text, or a line is still being written.",
+            },
+            fileUpdatedAt: {
+              type: "number",
+            },
+          },
+          required: [
+            "status",
+            "provider",
+            "message",
+            "unansweredToolUses",
+            "newerRecordsFollow",
+            "fileUpdatedAt",
+          ],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            status: {
+              type: "string",
+              const: "unavailable",
+            },
+            reason: {
+              type: "string",
+              enum: [
+                "provider-mismatch",
+                "terminal-unknown",
+                "no-session",
+                "cli-missing",
+                "ambiguous-session",
+                "timeout",
+                "protocol-error",
+                "store-unreadable",
+                "store-unknown",
+                "no-message",
+                "search-cap-reached",
+              ],
+              description:
+                "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted.",
+            },
+          },
+          required: ["status", "reason"],
+          additionalProperties: false,
+        },
+      ],
+      type: "object",
+    },
+    requiresArgs: true,
+    title: "Read Owned Agent's Last Message",
+  },
+  {
+    band: "reversible",
+    category: "terminal",
+    danger: "safe",
+    description:
       "Bring the user to a panel this session created, switching workspace and raising the window when it is somewhere they are not looking. Only panels this connection created can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
     enabled: true,
     id: "terminal.revealOwned",

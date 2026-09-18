@@ -49,6 +49,11 @@ export const WORKBENCH_TIER_TOOLS = [
   "terminal.list",
   "terminal.getOutput",
   "terminal.getStatus",
+  // Read-only, and scoped to panels this session created (#12479). Here for the
+  // subset invariant — the external tier carries it and may not reach past the
+  // assistant — and because a read of an agent the assistant launched itself
+  // is the lowest-privilege thing the assistant does with one.
+  "terminal.readLastMessageOwned",
 
   // Read-only snapshot of the user's supervised fleet broadcast run (#10930).
   // Observability only — dispatching a broadcast stays off the MCP surface.

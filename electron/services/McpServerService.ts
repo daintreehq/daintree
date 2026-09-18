@@ -31,6 +31,7 @@ import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/wait
 import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { handleTerminalGetStatusViewless } from "./mcp-server/terminalStatus.js";
+import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
@@ -267,6 +268,8 @@ export class McpServerService {
       handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId),
+      handleTerminalReadLastMessageOwned: (terminalId, signal) =>
+        handleTerminalReadLastMessageOwned(terminalId, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
       // collision check needs: a panel store only knows its own (#12407).
       isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,

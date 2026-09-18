@@ -39,6 +39,7 @@ import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
+import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 
 type BearerTestHandle = {
   touchBearer: (
@@ -181,6 +182,9 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
     handleTerminalGetStatusViewless: vi
       .fn()
       .mockResolvedValue({ terminals: [], source: "pty", unavailableFields: [] }),
+    handleTerminalReadLastMessageOwned: vi
+      .fn()
+      .mockResolvedValue({ status: "unavailable", reason: "no-message" }),
     isTerminalIdInUse: vi.fn(() => false),
     getCachedManifest: vi.fn(() => null),
     clearCachedManifest: vi.fn(),
@@ -1106,6 +1110,88 @@ describe("HttpLifecycle", () => {
       expect(callArgs.resultMeta).toBeUndefined();
       // Success dispatches DO carry a resultSummary (tool output).
       expect(callArgs.resultSummary).toBeDefined();
+    });
+  });
+
+  // The audit ring is persisted and exportable, and the generic summarizer's
+  // redaction is built for secrets, not for an agent's prose or its questions.
+  // Driven end to end — through the lifecycle's own summary and into a real
+  // audit service's stored and persisted records — because a projection that
+  // exists but is not on the path proves nothing (#12479).
+  describe("buildSessionServerDeps — last-message reads reach the audit log as shape only", () => {
+    it("records status, provider, length and tool names, never the text or a question", () => {
+      const deps = fakeDeps();
+      const lc = new HttpLifecycle(deps);
+      const deps_ = (
+        lc as unknown as {
+          buildSessionServerDeps: (sessionId: string) => {
+            appendAuditRecord: (input: Record<string, unknown>) => void;
+          };
+        }
+      ).buildSessionServerDeps("session-read");
+      const prose = "PROSE-SENTINEL ".repeat(200);
+      deps_.appendAuditRecord({
+        toolId: "terminal.readLastMessageOwned",
+        sessionId: "session-read",
+        tier: "external",
+        args: { terminalId: "term-1" },
+        durationMs: 3,
+        outcome: {
+          kind: "result",
+          value: {
+            ok: true,
+            result: {
+              status: "ok",
+              provider: "claude",
+              message: {
+                id: "msg_1",
+                text: prose,
+                truncated: false,
+                recordedAt: 1,
+                stopReason: "end_turn",
+              },
+              unansweredToolUses: [
+                {
+                  id: "toolu_q",
+                  name: "AskUserQuestion",
+                  input: { questions: [{ question: "QUESTION-SENTINEL?" }] },
+                },
+              ],
+              newerRecordsFollow: false,
+              fileUpdatedAt: 1,
+            },
+          },
+        },
+      });
+
+      const call = (deps.auditService.appendRecord as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+      expect(JSON.parse(call.resultSummary)).toEqual({
+        status: "ok",
+        provider: "claude",
+        messageChars: prose.length,
+        unansweredToolNames: ["AskUserQuestion"],
+      });
+
+      let persisted: unknown[] = [];
+      const store: McpAuditLogStore = {
+        read: () => persisted,
+        write: (records: unknown[]) => {
+          persisted = records;
+        },
+      };
+      const service = new AuditService(
+        () => {},
+        () => ({ auditEnabled: true, auditMaxRecords: 500 }),
+        store
+      );
+      service.appendRecord(call);
+      service.flushNow();
+
+      for (const written of [service.getRecords(), persisted]) {
+        const text = JSON.stringify(written);
+        expect(text).toContain("AskUserQuestion");
+        expect(text).not.toContain("SENTINEL");
+      }
     });
   });
 

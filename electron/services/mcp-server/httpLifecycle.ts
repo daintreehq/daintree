@@ -24,6 +24,7 @@ import type {
   McpWorkspaceBinding,
 } from "./shared.js";
 import { parseWorkspaceSelector, type WorkspaceSelectorRejection } from "./workspaceSelector.js";
+import { projectAuditResult } from "./auditResultProjection.js";
 import { WorkspaceBindingError } from "./rendererBridge.js";
 import { PLUGIN_MCP_ROUTE_PREFIX, type PluginMcpRouteHandler } from "../pluginAgentMcp/types.js";
 import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
@@ -160,6 +161,7 @@ export interface HttpLifecycleDeps {
     rawArgs: unknown,
     workspaceId: string
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
+  handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   isTerminalIdInUse: (terminalId: string) => boolean;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
@@ -223,14 +225,20 @@ export function sessionCredentialDigest(authHeader: string): string {
  * audit record, so the recent-calls popover can show what each call actually
  * returned. Gate outcomes (unauthorized / dedup / collision / rate-limit)
  * return null — their `result` classification already says everything.
+ *
+ * A successful result passes through its tool's host-owned projection first
+ * (#12479). The scrub and the length cap run afterwards on whatever is left,
+ * so a tool whose result is conversation hands the summarizer only its shape —
+ * truncating the text after the fact would still have kept its head.
  */
 function summarizeAuditOutcome(
+  toolId: string,
   outcome: import("./auditLog.js").AuditOutcome,
   scrub: (value: string) => string
 ): string | null {
   if (outcome.kind === "result") {
     if (outcome.value.ok) {
-      return summarizeMcpResult(outcome.value.result, scrub);
+      return summarizeMcpResult(projectAuditResult(toolId, outcome.value.result), scrub);
     }
     const { code, message } = outcome.value.error;
     return scrub(`${code}: ${message}`).slice(0, 500);
@@ -1929,6 +1937,7 @@ export class HttpLifecycle {
       handleSkillsLoad: this.deps.handleSkillsLoad,
       handleProjectRunCheck: this.deps.handleProjectRunCheck,
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
+      handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside
@@ -1944,7 +1953,7 @@ export class HttpLifecycle {
         // public field).
         const { capturedTurnId, ...recordInput } = input;
         const turnId = capturedTurnId ?? null;
-        const resultSummary = summarizeAuditOutcome(input.outcome, (s) =>
+        const resultSummary = summarizeAuditOutcome(input.toolId, input.outcome, (s) =>
           scrubSecrets(sanitizePath(s))
         );
         // `summarizeAuditOutcome` returns null for all gate outcomes by

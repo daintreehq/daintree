@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
+import Ajv2020 from "ajv/dist/2020.js";
+import { mkdtemp, mkdir, rm, writeFile } from "fs/promises";
+import { tmpdir } from "os";
+import path from "path";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
@@ -30,6 +34,8 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 import { ActionService } from "../../../ActionService";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
 import { TerminalStatusResultSchema } from "../schemas";
+import { readClaudeLastMessage } from "../../../../../electron/services/claude/ClaudeSessionReader";
+import { buildToolCallResult } from "../../../../../electron/services/mcp-server/toolCallResult";
 
 function registerDefinitions(): ActionRegistry {
   const registry: ActionRegistry = new Map();
@@ -302,5 +308,169 @@ describe("terminal.list owned input contract (#12308)", () => {
     const result = await registerAll().dispatch("terminal.list" as ActionId, { owned: "yes" });
     expect(result.ok).toBe(false);
     expect(result.ok === false && result.error.code).toBe("VALIDATION_ERROR");
+  });
+});
+
+describe("terminal.readLastMessageOwned (#12479)", () => {
+  const ID = "terminal.readLastMessageOwned";
+
+  const OK_WITH_MESSAGE = {
+    status: "ok",
+    provider: "claude",
+    message: {
+      id: "msg_1",
+      text: "Verdict: ship it.",
+      truncated: false,
+      recordedAt: 1_767_225_600_000,
+      stopReason: "end_turn",
+    },
+    unansweredToolUses: [{ id: "toolu_b", name: "Bash" }],
+    newerRecordsFollow: false,
+    fileUpdatedAt: 1_767_225_600_000,
+  };
+
+  const OK_QUESTION_ONLY = {
+    status: "ok",
+    provider: "claude",
+    message: null,
+    unansweredToolUses: [
+      {
+        id: "toolu_q",
+        name: "AskUserQuestion",
+        input: { questions: [{ question: "Which database?", options: [{ label: "Postgres" }] }] },
+      },
+    ],
+    newerRecordsFollow: true,
+    fileUpdatedAt: 1,
+  };
+
+  function validator() {
+    const schema = outputSchema(registerAll(), ID);
+    if (!schema) throw new Error("no output schema was generated");
+    return new Ajv2020({ strict: false }).compile(schema);
+  }
+
+  it("is a read-only query", () => {
+    const entry = registerAll().get(ID as ActionId);
+
+    expect(entry?.kind).toBe("query");
+    expect(entry?.danger).toBe("safe");
+  });
+
+  // Execution belongs to main, which holds the ownership ledger and can open
+  // the transcript; a renderer dispatch reaching `run()` is a routing bug.
+  it("refuses a renderer dispatch, and requires a panel id before that", async () => {
+    const service = registerAll();
+
+    const missing = await service.dispatch(ID as ActionId, {}, { source: "agent" });
+    expect(missing.ok === false && missing.error.code).toBe("VALIDATION_ERROR");
+
+    const routed = await service.dispatch(
+      ID as ActionId,
+      { terminalId: "t-1" },
+      { source: "agent" }
+    );
+    expect(routed.ok).toBe(false);
+    expect(routed.ok === false && routed.error.message).toMatch(/main-process path/);
+  });
+
+  // A root union emits `oneOf` with no type, and the output gate forwards only
+  // an object-rooted schema — so without the root type the tool would
+  // advertise nothing and attach no structured content, silently.
+  it("advertises an object-rooted output schema with one closed arm per status", () => {
+    const schema = z
+      .object({
+        type: z.literal("object"),
+        oneOf: z.array(z.object({ additionalProperties: z.literal(false) })).length(2),
+      })
+      .safeParse(outputSchema(registerAll(), ID));
+
+    expect(schema.success).toBe(true);
+  });
+
+  // Main builds this result by hand and nothing on the way validates it, so a
+  // strict client's check against the advertised schema is the whole contract.
+  it("accepts every shape the reader returns", () => {
+    const validate = validator();
+
+    for (const payload of [
+      OK_WITH_MESSAGE,
+      OK_QUESTION_ONLY,
+      { status: "unavailable", reason: "store-unknown" },
+      { status: "unavailable", reason: "search-cap-reached" },
+    ]) {
+      expect(validate(payload), JSON.stringify(validate.errors)).toBe(true);
+    }
+  });
+
+  // The payloads above pin the schema; this pins the reader to it. What the
+  // reader really returns goes through the builder a client's response comes
+  // from, and has to arrive structured and valid — including the cases that
+  // trim, omit or escape.
+  it("validates what the real reader returns, after the response builder", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "last-message-schema-"));
+    try {
+      const sessionId = "1ad2578c-b710-4302-90c1-b222c4c29aa2";
+      const cwd = "/work/app";
+      const projectsRoot = path.join(root, "projects");
+      const dir = path.join(projectsRoot, cwd.replace(/\//g, "-"));
+      await mkdir(dir, { recursive: true });
+      const record = (id: string, content: unknown[]) =>
+        JSON.stringify({
+          type: "assistant",
+          message: { id, content, stop_reason: "end_turn" },
+          timestamp: "2026-09-18T10:00:00.000Z",
+        });
+      const question = (input: unknown) => ({
+        type: "tool_use",
+        id: "toolu_q",
+        name: "AskUserQuestion",
+        input,
+      });
+      const transcripts = [
+        [
+          record("m", [{ type: "text", text: "Verdict: \u001b[1mship\u001b[0m it." }]),
+          record("m", [question(OK_QUESTION_ONLY.unansweredToolUses[0]!.input)]),
+        ],
+        [record("m", [question({ questions: [{ question: "x".repeat(9_000) }] })])],
+        [
+          record("m", [{ type: "text", text: "\u0001".repeat(60_000) }]),
+          record("m", [
+            { type: "tool_use", id: "toolu_b", name: "Bash", input: { command: "ls" } },
+          ]),
+        ],
+      ];
+      const read = () => readClaudeLastMessage({ projectsRoot, cwd, sessionId });
+
+      const results = [await read()];
+      for (const lines of transcripts) {
+        await writeFile(path.join(dir, `${sessionId}.jsonl`), `${lines.join("\n")}\n`);
+        results.push(await read());
+      }
+
+      expect(results.map((result) => result.status)).toEqual(["unavailable", "ok", "ok", "ok"]);
+      const validate = validator();
+      for (const result of results) {
+        const response = buildToolCallResult(result, { structuredContent: { ...result } });
+        expect(response.isError).toBeUndefined();
+        expect(validate(response.structuredContent), JSON.stringify(validate.errors)).toBe(true);
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects the contradictions a flat schema would have let through", () => {
+    const validate = validator();
+
+    for (const payload of [
+      { status: "ok" },
+      { status: "unavailable", reason: "store-unknown", message: null },
+      { status: "unavailable", reason: "subagent-not-found" },
+      { ...OK_WITH_MESSAGE, extra: true },
+      { ...OK_WITH_MESSAGE, message: { ...OK_WITH_MESSAGE.message, text: undefined } },
+    ]) {
+      expect(validate(payload)).toBe(false);
+    }
   });
 });

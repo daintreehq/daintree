@@ -348,7 +348,13 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // `closeOwned` to come back with it has misread the ownership ledger, which
   // is written from dispatch results and cannot be reached from here. Dropping
   // either clause buys ~90 B and costs a caller one of those two mistakes.
-  const MAX_EXTERNAL_TOTAL_BYTES = 11_452;
+  // 11_452 → 11_647 for #12479's `terminal.readLastMessageOwned`, a 363 B
+  // description of which 168 B fit the existing headroom. Its last sentence is
+  // the one a caller cannot do without: the tool reports what the transcript
+  // holds, not whether the agent is waiting, and a permission prompt is never
+  // in it — without that, "no unanswered question" reads as "nothing to answer"
+  // while the pane sits on an approval dialog.
+  const MAX_EXTERNAL_TOTAL_BYTES = 11_647;
 
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
@@ -417,7 +423,10 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // tools ids from a listing and reads every refusal as a bug. The external
   // total above falls instead: there the owned pair replaced the unscoped one,
   // at 149 B less than the 706 B it removed.
-  const MAX_COHORT_TOTAL_BYTES = 54_593;
+  // 54_593 → 54_956 for #12479's `terminal.readLastMessageOwned`, carried at the
+  // workbench floor for the same subset invariant. Its 363 B is the whole of the
+  // increase, so this stays the measured total rather than an allowance.
+  const MAX_COHORT_TOTAL_BYTES = 54_956;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 

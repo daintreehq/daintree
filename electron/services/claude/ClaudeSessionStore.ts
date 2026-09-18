@@ -347,6 +347,16 @@ export function rememberClaudePaneStore(terminalId: string, projectsRoot: string
 }
 
 /**
+ * The store a Claude terminal was launched against, or null when it was never
+ * remembered or was not certain — the only answer a reader of that pane's own
+ * transcript may use (#12479). Daintree's own store is never a fallback: it is
+ * only right for a pane whose spawn already said so, and that pane is here.
+ */
+export function getClaudePaneProjectsRoot(terminalId: string): string | null {
+  return paneStores.get(terminalId) ?? null;
+}
+
+/**
  * True only for an unbookmarked Claude session whose transcript is proven
  * missing from the store its terminal was launched against — the journal's cue
  * not to record a session nobody can resume. A terminal whose store was never
