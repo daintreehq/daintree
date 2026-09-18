@@ -325,7 +325,15 @@ export class GitHubAuth {
     });
   }
 
-  static async validate(token: string): Promise<GitHubTokenValidation> {
+  /**
+   * Validate a token against `GET /user`. `signal` lets a caller abandon the
+   * check early; the built-in timeout still applies either way.
+   */
+  static async validate(
+    token: string,
+    options: GitHubValidateOptions = {}
+  ): Promise<GitHubTokenValidation> {
+    const { signal, detached = false } = options;
     if (!token || token.trim() === "") {
       return { valid: false, scopes: [], error: "Token is empty" };
     }
@@ -348,12 +356,15 @@ export class GitHubAuth {
           "User-Agent": "Daintree-Electron",
           "X-GitHub-Api-Version": "2022-11-28",
         },
-        signal: AbortSignal.timeout(GITHUB_AUTH_TIMEOUT_MS),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(GITHUB_AUTH_TIMEOUT_MS)])
+          : AbortSignal.timeout(GITHUB_AUTH_TIMEOUT_MS),
         // Validation must succeed even when a previous token left the
         // circuit-breaker in a blocked state — otherwise the user can never
         // recover by entering a new token. The semaphore still applies so
         // a flurry of validate calls can't drown background work.
         daintreeSkipRateLimitPreflight: true,
+        daintreeDetached: detached,
       });
 
       if (!response.ok) {
@@ -559,6 +570,16 @@ export function _resetGithubFetchSemaphoreForTests(): void {
  * header) runs off the critical path. This prevents a stuck response body
  * from blocking every GitHub call behind the fetch wrapper.
  */
+export interface GitHubValidateOptions {
+  signal?: AbortSignal;
+  /**
+   * The token may not be the configured one (e.g. a credential being
+   * previewed for import), so its response must not touch the configured
+   * token's rate-limit breaker or auth metadata.
+   */
+  detached?: boolean;
+}
+
 export interface RateLimitAwareFetchInit extends RequestInit {
   /**
    * Skip the preflight circuit-breaker check for this request. Used by
@@ -567,6 +588,13 @@ export interface RateLimitAwareFetchInit extends RequestInit {
    * is still honored.
    */
   daintreeSkipRateLimitPreflight?: boolean;
+  /**
+   * The request authenticates with a token other than the configured one, so
+   * its rate-limit headers and auth metadata describe a different account.
+   * Skips recording both; another account's exhausted quota must not block
+   * the configured account's requests.
+   */
+  daintreeDetached?: boolean;
 }
 
 export async function rateLimitAwareFetch(
@@ -574,6 +602,7 @@ export async function rateLimitAwareFetch(
   init?: RateLimitAwareFetchInit
 ): Promise<Response> {
   const skipPreflight = init?.daintreeSkipRateLimitPreflight === true;
+  const detached = init?.daintreeDetached === true;
 
   if (!skipPreflight) {
     const block = gitHubRateLimitService.shouldBlockRequest();
@@ -582,12 +611,17 @@ export async function rateLimitAwareFetch(
     }
   }
 
-  // Strip the custom property before forwarding so `globalThis.fetch`
-  // doesn't see an unknown init field.
+  // Strip the custom properties before forwarding so `globalThis.fetch`
+  // doesn't see unknown init fields.
   let fetchInit: RequestInit | undefined = init;
-  if (init && "daintreeSkipRateLimitPreflight" in init) {
-    const { daintreeSkipRateLimitPreflight: _ignored, ...rest } = init;
-    void _ignored;
+  if (init && ("daintreeSkipRateLimitPreflight" in init || "daintreeDetached" in init)) {
+    const {
+      daintreeSkipRateLimitPreflight: _ignoredPreflight,
+      daintreeDetached: _ignoredDetached,
+      ...rest
+    } = init;
+    void _ignoredPreflight;
+    void _ignoredDetached;
     fetchInit = rest;
   }
 
@@ -606,6 +640,7 @@ export async function rateLimitAwareFetch(
     }
 
     const response = await globalThis.fetch(input, fetchInit);
+    if (detached) return response;
 
     const requestId = response.headers.get("x-github-request-id") ?? undefined;
 

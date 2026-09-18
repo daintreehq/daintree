@@ -27,6 +27,7 @@ import type {
 } from "../../../../shared/types/forge.js";
 import { GitHubAuth } from "./GitHubAuth.js";
 import { cloneCapability } from "./GitHubClone.js";
+import { credentialImportCapability } from "./GitHubCliCredential.js";
 import { validateGitHubToken } from "./GitHubToken.js";
 import { parseGitHubRepoUrl } from "./GitHubRepoContext.js";
 import { gitHubRateLimitService } from "./GitHubRateLimitService.js";
@@ -44,7 +45,7 @@ import { resolveAuthorAvatar } from "./GitHubProfilePicture.js";
 import { gitHubTokenHealthService } from "./GitHubTokenHealthService.js";
 import { fetchRateLimitDetails } from "./GitHubRateLimitApi.js";
 import { toRateLimitInfo } from "./rateLimitUtils.js";
-import type { GitHubTokenHealthPayload } from "../shared/types.js";
+import type { GitHubTokenHealthPayload, GitHubTokenValidation } from "../shared/types.js";
 import { gitHubIssueToForgeIssue, gitHubPRToForgePR } from "./mappers.js";
 import {
   listIssuesImpl,
@@ -289,6 +290,16 @@ const healthEventsCapability: HealthEventsCapability = {
   },
 };
 
+function toAuthValidation(result: GitHubTokenValidation): AuthValidation {
+  return {
+    valid: result.valid,
+    scopes: result.scopes,
+    expiresAt: null,
+    ...(result.valid && result.username ? { account: result.username } : {}),
+    ...(result.error ? { error: result.error } : {}),
+  };
+}
+
 export const githubForgeProvider: ForgeProviderImpl = {
   async getCredentials(): Promise<Credentials | null> {
     const token = GitHubAuth.getToken();
@@ -311,12 +322,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
       return { valid: false, error: "No GitHub token configured" };
     }
     const result = await validateGitHubToken(token);
-    return {
-      valid: result.valid,
-      scopes: result.scopes,
-      expiresAt: null,
-      ...(result.error ? { error: result.error } : {}),
-    };
+    return toAuthValidation(result);
   },
 
   parseRemote(url: string): RepoRef | null {
@@ -430,12 +436,7 @@ export const githubForgeProvider: ForgeProviderImpl = {
       return { valid: false, error: "Token is required" };
     }
     const result = await validateGitHubToken(token.trim());
-    return {
-      valid: result.valid,
-      scopes: result.scopes,
-      expiresAt: null,
-      ...(result.error ? { error: result.error } : {}),
-    };
+    return toAuthValidation(result);
   },
 
   getRateLimit: getRateLimitImpl,
@@ -477,4 +478,5 @@ export const githubForgeProvider: ForgeProviderImpl = {
   avatars: avatarCapability,
   healthEvents: healthEventsCapability,
   clone: cloneCapability,
+  credentialImport: credentialImportCapability,
 };

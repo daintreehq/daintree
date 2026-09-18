@@ -72,6 +72,47 @@ describe("GitHubAuth", () => {
     expect(result.error).toBe("Cannot reach GitHub. Check your internet connection.");
   });
 
+  it("aborts the /user request when the caller's signal aborts", async () => {
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("This operation was aborted", "AbortError"))
+          );
+        })
+    );
+    (globalThis as unknown as { fetch: Mock }).fetch = fetchMock;
+    const controller = new AbortController();
+
+    const pending = GitHubAuth.validate("ghp_validtoken012345678901234567890123456789", {
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    controller.abort();
+    const result = await pending;
+
+    expect(result.valid).toBe(false);
+  });
+
+  it("returns the login and scopes of a valid token", async () => {
+    (globalThis as unknown as { fetch: Mock }).fetch = vi.fn().mockResolvedValue(
+      new Response('{"login":"octocat"}', {
+        status: 200,
+        headers: { "x-oauth-scopes": "repo, read:org" },
+      })
+    );
+
+    const result = await GitHubAuth.validate("gho_validtoken012345678901234567890123456789", {
+      signal: new AbortController().signal,
+    });
+
+    expect(result).toMatchObject({
+      valid: true,
+      username: "octocat",
+      scopes: ["repo", "read:org"],
+    });
+  });
+
   it("returns 'Invalid or expired token' for a 401 with 'Bad credentials' in the body", async () => {
     (globalThis as unknown as { fetch: Mock }).fetch = vi
       .fn()
@@ -251,6 +292,30 @@ describe("GitHubAuth", () => {
 
     // Should not mark blocked since remaining=4999 > 0.
     expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+  });
+
+  it("detached validation leaves the configured token's rate-limit and auth state alone", async () => {
+    (globalThis as unknown as { fetch: Mock }).fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ login: "someone-else", avatar_url: "" }),
+      headers: new Headers({
+        "x-oauth-scopes": "repo",
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 60),
+        "github-authentication-token-expiration": "2030-01-01 00:00:00 UTC",
+      }),
+    });
+    gitHubRateLimitService._resetForTests();
+
+    const result = await GitHubAuth.validate("gho_validtoken012345678901234567890123456789", {
+      detached: true,
+    });
+
+    expect(result).toMatchObject({ valid: true, username: "someone-else" });
+    // The same response through a non-detached validate registers a primary
+    // block (see the next test); another account's exhausted quota must not.
+    expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+    expect(getLastAuthMetadata()).toBeNull();
   });
 
   it("validate captures primary rate limit when remaining=0", async () => {

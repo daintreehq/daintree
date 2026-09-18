@@ -17,8 +17,16 @@ import {
   pickPrimaryValue,
 } from "../../services/forge/forgeCredentialUtils.js";
 import { getImplForNamespaceActivating } from "./forgeResolution.js";
-import type { AuthValidation, ForgeProviderImpl } from "../../../shared/types/forge.js";
+import type {
+  AuthValidation,
+  CredentialImportCandidate,
+  CredentialImportExpected,
+  CredentialImportFailureReason,
+  CredentialImportUnavailable,
+  ForgeProviderImpl,
+} from "../../../shared/types/forge.js";
 import { logWarn } from "../../utils/logger.js";
+import { raceAbort } from "../../utils/raceAbort.js";
 
 /**
  * Read the persisted global default provider id, normalizing legacy forms
@@ -147,6 +155,151 @@ function refreshProviderTokenHealth(impl: ForgeProviderImpl, providerId: string)
   }
 }
 
+/**
+ * Every credential write — a pasted token and both steps of a CLI import —
+ * draws on one budget: each call hits the provider's validation API, and the
+ * limiter is keyed per channel, so separate keys would triple the allowance
+ * (#9956).
+ */
+export function checkForgeCredentialRateLimit(): void {
+  checkRateLimit(CHANNELS.FORGE_SET_CREDENTIAL, 5, 10_000);
+}
+
+function toCredentialRecord(credentials: Record<string, unknown>): Record<string, string> {
+  const record: Record<string, string> = {};
+  for (const [k, v] of Object.entries(credentials)) {
+    if (typeof v === "string") record[k] = v;
+  }
+  return record;
+}
+
+/**
+ * Wait for startup plugin activation, then resolve a provider's impl,
+ * activating it on demand. Saving or importing a credential is often the
+ * FIRST interaction with a lazy provider (fresh session, no matching project
+ * open yet), so the impl may not be bound — activate implicitly like every
+ * other forge IPC surface (#10523 / d434e770c precedent).
+ */
+export async function resolveCredentialProvider(
+  providerId: string
+): Promise<ForgeProviderImpl | undefined> {
+  await awaitPluginInit();
+  return getImplForNamespaceActivating(providerId);
+}
+
+/** Where the credential being persisted comes from. */
+export type CredentialSource =
+  /** Values the user entered; validated with `validateToken`. */
+  | { kind: "fields"; credentials: Record<string, string> }
+  /** A credential the provider reads itself; validated inside `credentialImport.commit`. */
+  | { kind: "import"; expected: CredentialImportExpected };
+
+export type PersistCredentialFailureReason =
+  CredentialImportFailureReason | "provider-unavailable" | "unsupported";
+
+export type PersistCredentialResult =
+  | { saved: true; validation: AuthValidation }
+  | {
+      saved: false;
+      reason: PersistCredentialFailureReason;
+      /** The provider's rejection, for a pasted credential only. */
+      validation?: AuthValidation;
+    };
+
+/**
+ * Validate and save a provider credential, then deliver it everywhere a
+ * credential change has to reach. The one write path for a pasted credential
+ * (`forge:set-credential`) and a CLI import (`forge:commit-credential-import`),
+ * so both get the same audit, live-impl delivery, health re-probe and
+ * workspace sync.
+ *
+ * `signal` bounds everything before the write — provider activation and the
+ * import commit are raced against it, since neither can be relied on to stop
+ * by itself — and is checked again immediately before the store write, with
+ * nothing awaited in between: a caller that has already reported failure must
+ * never find the credential saved afterwards. Once the write happens the rest
+ * of the pipeline runs to completion.
+ */
+export async function persistCredential(
+  providerId: string,
+  source: CredentialSource,
+  signal?: AbortSignal
+): Promise<PersistCredentialResult> {
+  const impl = await raceAbort(resolveCredentialProvider(providerId), signal, undefined);
+  if (signal?.aborted) return { saved: false, reason: "cancelled" };
+  if (!impl) return { saved: false, reason: "provider-unavailable" };
+
+  let record: Record<string, string>;
+  let primaryValue: string;
+  let validation: AuthValidation;
+
+  if (source.kind === "fields") {
+    record = source.credentials;
+    // Re-picked now that activation has registered the provider's declared
+    // fields, matching how `buildStoredCredentials` reads the record back.
+    primaryValue = pickPrimaryValue(credentialFieldsFor(providerId), record).trim();
+    if (primaryValue.length === 0) {
+      return {
+        saved: false,
+        reason: "validation-failed",
+        validation: { valid: false, error: "Credential is required" },
+      };
+    }
+    validation = await auditForgeCall(
+      { providerId, methodName: "validateToken", argsSummary: "" },
+      () => impl.validateToken(primaryValue),
+      // A rejected credential is a resolved call but a failed outcome —
+      // audit it as an error so bad-token bursts surface in anomaly
+      // detection rather than hiding behind result: "success".
+      (validation) => (validation.valid ? "success" : "error")
+    );
+    if (!validation.valid) return { saved: false, reason: "validation-failed", validation };
+  } else {
+    const capability = impl.credentialImport;
+    if (!capability) return { saved: false, reason: "unsupported" };
+    // The commit re-reads and re-validates the credential itself, so it is
+    // the audited validation here. A throw is contained before it reaches the
+    // audit log's error formatter: the plugin may have put the credential in
+    // its message.
+    const candidate = await auditForgeCall(
+      { providerId, methodName: "credentialImport.commit", argsSummary: "" },
+      async (): Promise<CredentialImportCandidate | CredentialImportUnavailable> => {
+        try {
+          return await raceAbort(capability.commit(source.expected, signal), signal, {
+            unavailable: true as const,
+            reason: "cancelled" as const,
+          });
+        } catch {
+          return { unavailable: true, reason: "cli-failed" };
+        }
+      },
+      (candidate) => (candidate.unavailable ? "error" : "success")
+    );
+    if (candidate.unavailable) return { saved: false, reason: candidate.reason };
+    record = toCredentialRecord(candidate.credentials);
+    primaryValue = pickPrimaryValue(credentialFieldsFor(providerId), record).trim();
+    if (primaryValue.length === 0) return { saved: false, reason: "invalid-output" };
+    validation = candidate.validation;
+  }
+
+  if (signal?.aborted) return { saved: false, reason: "cancelled" };
+  const existing = store.get("forgeCredentials") ?? {};
+  store.set("forgeCredentials", { ...existing, [providerId]: JSON.stringify(record) });
+
+  // Deliver the credential to the live impl so forge API calls run
+  // authenticated. Without this the token only ever reached the store —
+  // the impl stayed unauthenticated despite the UI showing "connected"
+  // (#9983). `setCredentials` is optional; a synchronous throw here is a
+  // plugin bug that should surface, so it is intentionally uncaught,
+  // mirroring `validateToken` above.
+  impl.setCredentials?.({ kind: "bearer", value: primaryValue });
+  refreshProviderTokenHealth(impl, providerId);
+
+  await syncWorkspaceCredential(providerId, primaryValue);
+
+  return { saved: true, validation };
+}
+
 export function registerForgeSettingsHandlers(): () => void {
   const cleanups: Array<() => void> = [];
 
@@ -226,66 +379,30 @@ export function registerForgeSettingsHandlers(): () => void {
     typedHandle(
       CHANNELS.FORGE_SET_CREDENTIAL,
       async (providerId: unknown, credentials: unknown): Promise<AuthValidation> => {
-        // Same budget as github:set-token — each call hits the provider's
-        // token-validation API (#9956).
-        checkRateLimit(CHANNELS.FORGE_SET_CREDENTIAL, 5, 10_000);
+        checkForgeCredentialRateLimit();
         if (typeof providerId !== "string" || providerId.length === 0) {
           return { valid: false, error: "Provider id is required" };
         }
         if (!credentials || typeof credentials !== "object") {
           return { valid: false, error: "Credentials are required" };
         }
-        const record: Record<string, string> = {};
-        for (const [k, v] of Object.entries(credentials as Record<string, unknown>)) {
-          if (typeof v === "string") record[k] = v;
-        }
+        const record = toCredentialRecord(credentials as Record<string, unknown>);
 
         const fields = credentialFieldsFor(providerId);
-        const primaryValue = pickPrimaryValue(fields, record).trim();
-        if (primaryValue.length === 0) {
+        if (pickPrimaryValue(fields, record).trim().length === 0) {
           return { valid: false, error: "Credential is required" };
         }
 
-        // Saving a credential is often the FIRST interaction with a lazy
-        // provider (fresh session, no matching project open yet), so the impl
-        // may not be bound — activate implicitly like every other forge IPC
-        // surface (#10523 / d434e770c precedent).
-        await awaitPluginInit();
-        const impl = await getImplForNamespaceActivating(providerId);
-        if (!impl) {
-          return {
+        const result = await persistCredential(providerId, { kind: "fields", credentials: record });
+        if (result.saved) return result.validation;
+        // Without a signal, a pasted credential fails only on validation or
+        // a provider that can't be activated.
+        return (
+          result.validation ?? {
             valid: false,
             error: "Provider isn't available — check it's enabled in Plugins",
-          };
-        }
-
-        const validation = await auditForgeCall(
-          { providerId, methodName: "validateToken", argsSummary: "" },
-          () => impl.validateToken(primaryValue),
-          // A rejected credential is a resolved call but a failed outcome —
-          // audit it as an error so bad-token bursts surface in anomaly
-          // detection rather than hiding behind result: "success".
-          (validation) => (validation.valid ? "success" : "error")
+          }
         );
-        if (!validation.valid) {
-          return validation;
-        }
-
-        const existing = store.get("forgeCredentials") ?? {};
-        store.set("forgeCredentials", { ...existing, [providerId]: JSON.stringify(record) });
-
-        // Deliver the credential to the live impl so forge API calls run
-        // authenticated. Without this the token only ever reached the store —
-        // the impl stayed unauthenticated despite the UI showing "connected"
-        // (#9983). `setCredentials` is optional; a synchronous throw here is a
-        // plugin bug that should surface, so it is intentionally uncaught,
-        // mirroring `validateToken` above.
-        impl.setCredentials?.({ kind: "bearer", value: primaryValue });
-        refreshProviderTokenHealth(impl, providerId);
-
-        await syncWorkspaceCredential(providerId, primaryValue);
-
-        return validation;
       }
     )
   );

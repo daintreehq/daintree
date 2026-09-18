@@ -195,6 +195,10 @@ export type {
   ForgeRateLimitKind,
   ForgeRateLimitChangedPayload,
   ForgeTokenHealthChangedPayload,
+  ForgeCredentialImportFailureReason,
+  ForgeCredentialImportFailure,
+  ForgeCredentialImportPreviewResult,
+  ForgeCredentialImportCommitResult,
   // Per-service connectivity types
   ConnectivityServiceKey,
   ServiceConnectivityStatus,

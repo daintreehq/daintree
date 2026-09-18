@@ -178,6 +178,12 @@ interface AuthValidation {
     /** Epoch milliseconds, or `null` when the token does not expire. */
     expiresAt?: number | null;
     error?: string;
+    /**
+     * Login of the account the credential authenticates as, when the provider
+     * learns it during validation. Display-only: the host shows it next to a
+     * saved credential and never derives behavior from it.
+     */
+    account?: string;
 }
 /**
  * Opaque credential the host passes through without inspecting. Token
@@ -983,6 +989,85 @@ interface CloneCapability {
     cloneRepository?(url: string, targetDir: string, opts: CloneRequestOptions): Promise<void>;
 }
 /**
+ * Why a credential import could not produce a credential. A closed set on
+ * purpose: the raw material behind a failure (CLI stdout, stderr, exec errors)
+ * can carry the credential itself, so nothing but one of these codes may cross
+ * back to the host.
+ */
+type CredentialImportFailureReason = 
+/** The provider's CLI is not installed or not on PATH. */
+"cli-not-found"
+/** The CLI did not answer in time — e.g. waiting on an OS keychain prompt. */
+ | "cli-timeout"
+/** The CLI ran but holds no credential for the forge's host. */
+ | "not-signed-in"
+/** The CLI printed something that is not a credential. */
+ | "invalid-output"
+/** Any other failure launching or running the CLI. */
+ | "cli-failed"
+/** The forge rejected the credential, or could not be reached to check it. */
+ | "validation-failed"
+/** The CLI's active account changed between preview and commit. */
+ | "account-changed"
+/** The host's signal aborted the operation. */
+ | "cancelled";
+/** Failure result shared by {@link CredentialImportCapability} methods. */
+interface CredentialImportUnavailable {
+    unavailable: true;
+    reason: CredentialImportFailureReason;
+}
+/**
+ * What an import would save, without the credential itself. Safe to show the
+ * user: this is everything the confirm step displays.
+ */
+interface CredentialImportPreview {
+    unavailable?: false;
+    /** Login the credential authenticates as, from a live validation. */
+    account: string;
+    /** Scopes the forge reported for the credential; empty means unknown. */
+    scopes: string[];
+    /** Required scopes the credential lacks. Never populated when `scopes` is empty. */
+    missingScopes: string[];
+    /** The tool the credential came from, e.g. `"gh"`. */
+    source: string;
+}
+/** What the user confirmed, bound into {@link CredentialImportCapability.commit}. */
+interface CredentialImportExpected {
+    /** Account shown in the preview. A different active account aborts the commit. */
+    account: string;
+}
+/**
+ * Secret-bearing commit result. Main-process only: the host persists it
+ * through the same path a pasted credential takes and never forwards it to a
+ * renderer, a log, or an action result.
+ */
+interface CredentialImportCandidate {
+    unavailable?: false;
+    /** Credential record keyed by the provider's declared `credentialFields` ids. */
+    credentials: Record<string, string>;
+    /** The live validation the commit just ran; `valid` is always `true`. */
+    validation: AuthValidation;
+}
+/**
+ * Optional one-time import of a credential a local tool already holds (e.g.
+ * the GitHub CLI's login), so a user who is signed in there does not have to
+ * copy a token by hand. It is an import, not a live dependency: after commit
+ * the provider authenticates with the saved copy like any pasted credential.
+ *
+ * Both methods run in main and must catch every failure internally, returning
+ * a {@link CredentialImportUnavailable} rather than throwing. {@link preview}
+ * reads and validates the credential, then discards it. {@link commit} reads
+ * it again, validates again, and refuses with `"account-changed"` when the
+ * account differs from `expected`; the host then persists the result — the
+ * provider never writes credential storage itself. Reading may trigger an OS
+ * keychain prompt, so the host only calls either method on an explicit user
+ * action. Both must honor `signal`.
+ */
+interface CredentialImportCapability {
+    preview(signal?: AbortSignal): Promise<CredentialImportPreview | CredentialImportUnavailable>;
+    commit(expected: CredentialImportExpected, signal?: AbortSignal): Promise<CredentialImportCandidate | CredentialImportUnavailable>;
+}
+/**
  * Runtime contract a forge plugin implements and registers via
  * `host.registerForgeProvider`. Every provider implements the base methods;
  * optional capabilities are sibling fields the host probes at runtime.
@@ -1220,6 +1305,7 @@ interface ForgeProviderImpl {
     avatars?: AvatarCapability;
     healthEvents?: HealthEventsCapability;
     clone?: CloneCapability;
+    credentialImport?: CredentialImportCapability;
 }
 /**
  * Suggested capability vocabulary surfaced in the manifest's `capabilities`
@@ -4343,4 +4429,4 @@ type PluginProcessStreamEvent = {
     signal: string | null;
 };
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };

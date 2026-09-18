@@ -2,6 +2,7 @@ import type {
   CheckRunConclusion,
   CheckRunStatus,
   CIStatusState,
+  CredentialImportFailureReason,
   ForgeTokenHealthState,
   Issue,
   PR,
@@ -398,3 +399,45 @@ export interface ForgeAuditStats {
 
 /** Anomaly suppression floor — lower than MCP's 50 because forge calls are low-frequency. */
 export const FORGE_AUDIT_ANOMALY_MIN_RECORDS = 10;
+
+/**
+ * Why `forge.previewCredentialImport` / `forge.commitCredentialImport` produced
+ * nothing: a provider {@link CredentialImportFailureReason}, or a host-side
+ * refusal before the provider ran.
+ */
+export type ForgeCredentialImportFailureReason =
+  | CredentialImportFailureReason
+  /** Missing provider id or expected account. */
+  | "invalid-request"
+  /** The provider isn't registered or couldn't be activated. */
+  | "provider-unavailable"
+  /** The provider doesn't implement `credentialImport`. */
+  | "unsupported"
+  /** The provider or host threw while saving. */
+  | "save-failed";
+
+// `unavailable` rather than `ok`: an IPC handler result may not reuse the
+// response envelope's own discriminator keys.
+export interface ForgeCredentialImportFailure {
+  unavailable: true;
+  reason: ForgeCredentialImportFailureReason;
+}
+
+/**
+ * Renderer-facing preview of a credential import. Built field by field in
+ * main from the provider's result, so it can only ever carry these fields —
+ * never the credential.
+ */
+export type ForgeCredentialImportPreviewResult =
+  | {
+      unavailable: false;
+      account: string;
+      scopes: string[];
+      missingScopes: string[];
+      source: string;
+    }
+  | ForgeCredentialImportFailure;
+
+/** Renderer-facing outcome of a confirmed credential import. */
+export type ForgeCredentialImportCommitResult =
+  { unavailable: false; account: string; scopes: string[] } | ForgeCredentialImportFailure;

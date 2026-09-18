@@ -70,6 +70,12 @@ import type {
   CheckRun,
   CheckRunStatus,
   CheckRunConclusion,
+  CredentialImportCapability,
+  CredentialImportCandidate,
+  CredentialImportExpected,
+  CredentialImportFailureReason,
+  CredentialImportPreview,
+  CredentialImportUnavailable,
   PluginProcessStreamEvent,
   ActionDispatchResult,
   ActionDispatchSuccess,
@@ -201,6 +207,18 @@ describe("plugin-sdk boundary", () => {
       expectTypeOf<CheckRun>().toMatchTypeOf<object>();
       expectTypeOf<CheckRunStatus>().toMatchTypeOf<string>();
       expectTypeOf<CheckRunConclusion>().toMatchTypeOf<string>();
+    });
+
+    it("exports the optional credential-import capability and its result shapes", () => {
+      // A third-party forge provider (e.g. one backed by `glab`) must be able to
+      // implement `credentialImport` and name the secret-bearing commit result
+      // without reaching into internal app paths.
+      expectTypeOf<CredentialImportCapability>().toMatchTypeOf<object>();
+      expectTypeOf<CredentialImportCandidate>().toMatchTypeOf<object>();
+      expectTypeOf<CredentialImportExpected>().toMatchTypeOf<object>();
+      expectTypeOf<CredentialImportPreview>().toMatchTypeOf<object>();
+      expectTypeOf<CredentialImportUnavailable>().toMatchTypeOf<object>();
+      expectTypeOf<CredentialImportFailureReason>().toMatchTypeOf<string>();
     });
 
     it("exports the process-stream event type and channel constant", () => {

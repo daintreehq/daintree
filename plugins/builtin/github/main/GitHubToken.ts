@@ -1,4 +1,4 @@
-import { GitHubAuth } from "./GitHubAuth.js";
+import { GitHubAuth, type GitHubValidateOptions } from "./GitHubAuth.js";
 import { clearGitHubCaches } from "./GitHubCaches.js";
 
 export function getGitHubToken(): string | undefined {
@@ -27,6 +27,6 @@ export async function getGitHubConfigAsync() {
   return GitHubAuth.getConfigAsync();
 }
 
-export async function validateGitHubToken(token: string) {
-  return GitHubAuth.validate(token);
+export async function validateGitHubToken(token: string, options?: GitHubValidateOptions) {
+  return GitHubAuth.validate(token, options);
 }

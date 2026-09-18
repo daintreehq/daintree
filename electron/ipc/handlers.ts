@@ -64,6 +64,7 @@ import { registerForgeRecommendationHandlers } from "./handlers/forgeRecommendat
 import { registerForgeHandlers } from "./handlers/forge.js";
 import { registerForgeDataHandlers } from "./handlers/forgeData.js";
 import { registerForgeSettingsHandlers } from "./handlers/forgeSettings.js";
+import { registerForgeCredentialImportHandlers } from "./handlers/forgeCredentialImport.js";
 import { registerForgeAuditHandlers } from "./handlers/forgeAudit.js";
 import { initForgeHealthRelay, disposeForgeHealthRelay } from "../services/forgeHealthRelay.js";
 import { registerRunHistoryHandlers } from "./handlers/runHistory.js";
@@ -199,6 +200,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerShortcutHintsHandlers());
     register(() => registerForgeRecommendationHandlers());
     register(() => registerForgeSettingsHandlers());
+    register(() => registerForgeCredentialImportHandlers());
     register(() => registerForgeHandlers());
     register(() => registerForgeDataHandlers());
     register(() => {

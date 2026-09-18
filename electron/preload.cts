@@ -62,6 +62,7 @@ import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preloa
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
 import { buildForgeRecommendationPreloadBindings } from "./ipc/handlers/forgeRecommendation.preload.js";
+import { buildForgeCredentialImportPreloadBindings } from "./ipc/handlers/forgeCredentialImport.preload.js";
 import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
@@ -2866,6 +2867,7 @@ function buildElectronApi(): ElectronAPI {
     forgeRecommendation: buildForgeRecommendationPreloadBindings(_unwrappingInvoke),
 
     forge: {
+      ...buildForgeCredentialImportPreloadBindings(_unwrappingInvoke),
       getSettings: () => _unwrappingInvoke(CHANNELS.FORGE_GET_SETTINGS),
       setDefaultProvider: (providerId: string | null) =>
         _unwrappingInvoke(CHANNELS.FORGE_SET_DEFAULT_PROVIDER, providerId),

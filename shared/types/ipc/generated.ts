@@ -493,6 +493,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; prNumber: number; body: string }];
     result: import("../forge.js").IssueComment;
   };
+  "forge:commit-credential-import": {
+    args: [providerId: string, expected: import("../forge.js").CredentialImportExpected];
+    result: import("./forge.js").ForgeCredentialImportCommitResult;
+  };
   "forge:convert-pr-to-draft": {
     args: [payload: { cwd: string; prNumber: number }];
     result: import("../forge.js").PRDraftStateResult;
@@ -620,6 +624,10 @@ export interface GeneratedIpcInvokeMap {
   "forge:open-repo": {
     args: [payload: { cwd: string }];
     result: void;
+  };
+  "forge:preview-credential-import": {
+    args: [providerId: string];
+    result: import("./forge.js").ForgeCredentialImportPreviewResult;
   };
   "forge:remove-issue-label": {
     args: [payload: { cwd: string; issueNumber: number; label: string }];
