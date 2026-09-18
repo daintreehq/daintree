@@ -31,6 +31,8 @@ import { discoverProjectPlugins } from "../projectPluginDiscovery.js";
 
 const PROJECT_ID = "project";
 const PLUGIN = "acme.hello";
+/** Distinct from every other delay in play, so a scheduled re-arm is identifiable. */
+const REARM_DELAY_MS = 13;
 
 const RESCAN_MESSAGES = [
   "Events were dropped by the FSEvents client. File system must be re-scanned.",
@@ -52,7 +54,7 @@ describe("ProjectPluginWatcher subscription errors", () => {
       reload,
       viewGenerationsAllocated: () => 0,
       resolveGitDir: async () => null,
-      timings: { debounceMs: 5, rearmDelayMs: 5, ...timings },
+      timings: { debounceMs: 5, rearmDelayMs: REARM_DELAY_MS, ...timings },
     });
   }
 
@@ -70,6 +72,29 @@ describe("ProjectPluginWatcher subscription errors", () => {
       await new Promise((resolve) => setTimeout(resolve, 5));
     }
     return predicate();
+  }
+
+  /** No timer pending and no settle running: the last scheduled rescan finished. */
+  function isIdle(): boolean {
+    const internals = watcher as unknown as {
+      states: Map<string, { timer: unknown; running: boolean }>;
+    };
+    const state = internals.states.get(PROJECT_ID);
+    return state !== undefined && state.timer === null && !state.running;
+  }
+
+  /**
+   * Fire a fatal error and require that it schedules no re-arm. Checked at the
+   * scheduling call rather than by waiting, which a slow machine could turn
+   * into a false pass.
+   */
+  function fireFatalExpectingNoRetry(): void {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    latest().callback(new Error("Unable to watch directory"), []);
+    const retried = setTimeoutSpy.mock.calls.some(([, delay]) => delay === REARM_DELAY_MS);
+    setTimeoutSpy.mockRestore();
+    expect(retried).toBe(false);
+    expect(watcher.isWatching(PROJECT_ID)).toBe(false);
   }
 
   async function fireFatalAndAwaitRearm(): Promise<void> {
@@ -132,7 +157,9 @@ describe("ProjectPluginWatcher subscription errors", () => {
     const entry = latest();
 
     entry.callback(new Error(RESCAN_MESSAGES[0]), []);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Let the notice's own rescan finish first, so it cannot be what finds the
+    // write below.
+    expect(await waitFor(isIdle)).toBe(true);
     expect(reload).not.toHaveBeenCalled();
 
     const entryPath = path.join(pluginDir, "dist", "index.js");
@@ -141,6 +168,22 @@ describe("ProjectPluginWatcher subscription errors", () => {
 
     expect(await waitFor(() => reload.mock.calls.length === 1)).toBe(true);
     expect(subscribeParcelWatcher).toHaveBeenCalledTimes(1);
+    expect(entry.unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("re-arms when the rescan notice arrives with the removal of the watched root", async () => {
+    makeWatcher();
+    await watcher.ensure(PROJECT_ID, root);
+    const first = latest();
+
+    // FSEvents stops the stream on a root removal, notice or not.
+    const count = subscriptions.length;
+    first.callback(new Error(RESCAN_MESSAGES[0]), [
+      { type: "delete", path: path.join(root, ".daintree", "plugins") },
+    ]);
+
+    expect(await waitFor(() => subscriptions.length === count + 1)).toBe(true);
+    expect(first.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("still tears down and re-arms on a fatal error", async () => {
@@ -164,11 +207,8 @@ describe("ProjectPluginWatcher subscription errors", () => {
       await fireFatalAndAwaitRearm();
     }
     now += 59_999;
-    latest().callback(new Error("Unable to watch directory"), []);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-
+    fireFatalExpectingNoRetry();
     expect(subscribeParcelWatcher).toHaveBeenCalledTimes(3);
-    expect(watcher.isWatching(PROJECT_ID)).toBe(false);
   });
 
   it("restores the budget once a subscription has stayed up for the healthy interval", async () => {
@@ -182,9 +222,6 @@ describe("ProjectPluginWatcher subscription errors", () => {
     expect(subscribeParcelWatcher).toHaveBeenCalledTimes(3);
 
     // And a failure straight after that re-arm is back on a spent budget.
-    latest().callback(new Error("Unable to watch directory"), []);
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(subscribeParcelWatcher).toHaveBeenCalledTimes(3);
-    expect(watcher.isWatching(PROJECT_ID)).toBe(false);
+    fireFatalExpectingNoRetry();
   });
 });

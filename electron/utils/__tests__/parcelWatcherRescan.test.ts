@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isRescanRequest } from "../parcelWatcherRescan.js";
+import { isRescanRequest, removesWatchedRoot } from "../parcelWatcherRescan.js";
 
 describe("isRescanRequest", () => {
   // The three drop notices @parcel/watcher's FSEvents backend emits through the
@@ -24,5 +24,28 @@ describe("isRescanRequest", () => {
     "Unable to watch directory",
   ])("treats %j as a real failure", (message) => {
     expect(isRescanRequest(message)).toBe(false);
+  });
+});
+
+describe("removesWatchedRoot", () => {
+  const root = "/projects/app/.daintree/plugins";
+
+  it("spots a delete of the root itself", () => {
+    expect(
+      removesWatchedRoot(
+        [
+          { type: "update", path: `${root}/acme/dist/index.js` },
+          { type: "delete", path: root },
+        ],
+        root
+      )
+    ).toBe(true);
+  });
+
+  it("ignores deletes below the root, and other event types on it", () => {
+    expect(removesWatchedRoot([{ type: "delete", path: `${root}/acme` }], root)).toBe(false);
+    expect(removesWatchedRoot([{ type: "update", path: root }], root)).toBe(false);
+    expect(removesWatchedRoot([], root)).toBe(false);
+    expect(removesWatchedRoot(undefined, root)).toBe(false);
   });
 });

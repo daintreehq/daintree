@@ -70,6 +70,15 @@ describe("PluginDevArtifactWatcher subscription errors", () => {
     return predicate();
   }
 
+  /** No timer pending and no settle running: the last scheduled rescan finished. */
+  function isIdle(): boolean {
+    const internals = watcher as unknown as {
+      states: Map<string, { timer: unknown; running: boolean }>;
+    };
+    const state = internals.states.get(PLUGIN_ID);
+    return state !== undefined && state.timer === null && !state.running;
+  }
+
   async function arm(): Promise<void> {
     watcher.ensure(PLUGIN_ID, pluginDir);
     expect(await waitFor(() => watcher.stateOf(PLUGIN_ID)?.state === "watching")).toBe(true);
@@ -124,7 +133,9 @@ describe("PluginDevArtifactWatcher subscription errors", () => {
     const entry = latest();
 
     entry.callback(new Error(RESCAN_MESSAGES[0]), []);
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Let the notice's own rescan finish first, so it cannot be what finds the
+    // write below.
+    expect(await waitFor(isIdle)).toBe(true);
     expect(reload).not.toHaveBeenCalled();
 
     const entryPath = path.join(pluginDir, "dist", "index.js");
@@ -133,6 +144,20 @@ describe("PluginDevArtifactWatcher subscription errors", () => {
 
     expect(await waitFor(() => reload.mock.calls.length === 1)).toBe(true);
     expect(subscribeParcelWatcher).toHaveBeenCalledTimes(1);
+    expect(entry.unsubscribe).not.toHaveBeenCalled();
+  });
+
+  it("re-arms when the rescan notice arrives with the removal of the watched root", async () => {
+    makeWatcher();
+    await arm();
+    const first = latest();
+
+    // FSEvents stops the stream on a root removal, notice or not.
+    const count = subscriptions.length;
+    first.callback(new Error(RESCAN_MESSAGES[0]), [{ type: "delete", path: pluginDir }]);
+
+    expect(await waitFor(() => subscriptions.length === count + 1)).toBe(true);
+    expect(first.unsubscribe).toHaveBeenCalledTimes(1);
   });
 
   it("still tears down and re-arms on a fatal error", async () => {
@@ -161,6 +186,22 @@ describe("PluginDevArtifactWatcher subscription errors", () => {
 
     expect(watcher.stateOf(PLUGIN_ID)?.state).toBe("degraded");
     await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(subscribeParcelWatcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("gives no healthy credit to re-arms whose subscribe is rejected", async () => {
+    makeWatcher({ rearmMaxAttempts: 2, rearmHealthyMs: 60_000 });
+    await arm();
+    vi.mocked(subscribeParcelWatcher)
+      .mockRejectedValueOnce(new Error("EACCES"))
+      .mockRejectedValueOnce(new Error("EACCES"));
+
+    // Long after the arm, so this failure earns a fresh budget — but the
+    // rejected attempts that follow never held a subscription and must not.
+    now += 120_000;
+    latest().callback(new Error("Unable to watch directory"), []);
+
+    expect(await waitFor(() => watcher.stateOf(PLUGIN_ID)?.state === "degraded")).toBe(true);
     expect(subscribeParcelWatcher).toHaveBeenCalledTimes(3);
   });
 

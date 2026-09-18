@@ -6,7 +6,7 @@ import type { AsyncSubscription } from "@parcel/watcher";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import { subscribeParcelWatcher } from "../../utils/parcelWatcherBackend.js";
-import { isRescanRequest } from "../../utils/parcelWatcherRescan.js";
+import { isRescanRequest, removesWatchedRoot } from "../../utils/parcelWatcherRescan.js";
 import { ABSENT_FINGERPRINT, fingerprintPluginDir } from "./pluginArtifactFingerprint.js";
 import { getGitDir } from "../../utils/gitUtils.js";
 import {
@@ -386,12 +386,18 @@ export class ProjectPluginWatcher {
         pluginsRoot,
         (err, events) => {
           if (state.generation !== generation || state.stopped || this.disposed) return;
-          if (err && isRescanRequest(err.message)) {
+          if (
+            err &&
+            isRescanRequest(err.message) &&
+            !removesWatchedRoot(events, state.pluginsRoot)
+          ) {
             // FSEvents dropped events but the stream is still running. Tearing
             // it down would rebuild a healthy client under exactly the churn
             // that overflowed it, and spend the re-arm budget doing so. The
             // lost events are unknowable, so rescan the whole folder instead —
             // any events riding along with the notice are a subset of that.
+            // A batch that also removed the root stopped the stream, so that
+            // one takes the re-arm path below.
             logger.debug("Project plugin watcher dropped events; rescanning", {
               projectId: state.projectId,
             });

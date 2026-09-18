@@ -1,3 +1,5 @@
+import type { Event } from "@parcel/watcher";
+
 /**
  * Distinguish @parcel/watcher's non-fatal "you missed some events, re-scan"
  * signal from a genuine subscription failure. Only the macOS FSEvents backend
@@ -12,4 +14,17 @@
  */
 export function isRescanRequest(message: string): boolean {
   return /must be re-scanned/i.test(message);
+}
+
+/**
+ * Whether a batch reports the watched root itself being removed. The FSEvents
+ * backend stops the stream when that happens, silently and whatever else rode
+ * along with it — so a rescan notice in the same batch does not mean the
+ * stream is still alive.
+ */
+export function removesWatchedRoot(events: readonly Event[] | undefined, root: string): boolean {
+  return (
+    Array.isArray(events) &&
+    events.some((event) => event?.type === "delete" && event.path === root)
+  );
 }

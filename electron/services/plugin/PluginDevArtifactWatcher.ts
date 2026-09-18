@@ -7,7 +7,7 @@ import type { PluginDevWatcherState } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import { subscribeParcelWatcher } from "../../utils/parcelWatcherBackend.js";
-import { isRescanRequest } from "../../utils/parcelWatcherRescan.js";
+import { isRescanRequest, removesWatchedRoot } from "../../utils/parcelWatcherRescan.js";
 import { ABSENT_FINGERPRINT, fingerprintPluginDir } from "./pluginArtifactFingerprint.js";
 
 const logger = createLogger("main:PluginDevArtifactWatcher");
@@ -314,10 +314,16 @@ export class PluginDevArtifactWatcher {
         realDir,
         (err, events) => {
           if (this.isStale(state, generation)) return;
-          if (err && isRescanRequest(err.message)) {
+          if (
+            err &&
+            isRescanRequest(err.message) &&
+            !removesWatchedRoot(events, state.realDir)
+          ) {
             // FSEvents dropped events but the stream is still running, so keep
             // it and re-read the artifact — the same sweep a re-arm runs,
-            // without rebuilding a healthy client or spending the budget.
+            // without rebuilding a healthy client or spending the budget. A
+            // batch that also removed the root stopped the stream, so that one
+            // takes the re-arm path below.
             logger.debug("Plugin dev artifact watcher dropped events; rescanning", {
               pluginId: state.pluginId,
             });
