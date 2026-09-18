@@ -2076,7 +2076,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     type: "string",
                   },
                   input: {
-                    description: "Only on a question to the user; omitted whole when too large.",
+                    description:
+                      "Only on a question to the user; omitted whole when too large or deep.",
                     type: "object",
                     propertyNames: {
                       type: "string",

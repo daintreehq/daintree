@@ -56,12 +56,6 @@ const FIELD_MAX_CHARS = 256;
  * allowed to cost the caller everything else.
  */
 const TOOL_INPUT_MAX_DEPTH = 32;
-/**
- * How Claude Code records a local slash command it ran itself — `/exit`,
- * `/model` — as user records that are not marked meta. They are bookkeeping,
- * not something said to the agent.
- */
-const LOCAL_COMMAND_PREFIXES = ["<command-name>", "<command-message>", "<local-command-"];
 
 /** Injection seams for tests: the step and the ceiling, nothing else. */
 export interface ClaudeSessionReaderOptions {
@@ -167,11 +161,19 @@ function sameFile(a: Stats, b: Stats): boolean {
  * `lstat` refuses a symlink planted where the transcript should be, which
  * `stat` would follow to some other session's file, and the descriptor is then
  * checked against what was `lstat`ed, so a leaf swapped between the two reads
- * nothing. `O_NOFOLLOW` covers the last path component only, though: a project
- * directory swapped for a symlink after the containment check would carry the
- * open outside the store. So once the file is open, its real path must still
- * lie inside the store and still name the file the descriptor holds. Every
- * byte after that comes from this handle.
+ * nothing. `O_NONBLOCK` keeps a leaf swapped for a FIFO from holding the open
+ * until a writer appears; the descriptor check then refuses it. `O_NOFOLLOW`
+ * covers the last path component only, though: a project directory swapped for
+ * a symlink after the containment check would carry the open outside the
+ * store. So once the file is open, its real path must still lie inside the
+ * store and still name the file the descriptor holds.
+ *
+ * That narrows the window rather than closing it — Node has no
+ * descriptor-relative open, so a process swapping the directory back and forth
+ * around each check can still win. It would gain nothing by it: the store is
+ * the user's own, and anything able to race it can already write the
+ * transcript that would have been read. Every byte after this comes from the
+ * handle.
  */
 async function openVerified(
   file: string,
@@ -179,7 +181,10 @@ async function openVerified(
 ): Promise<{ handle: FileHandle; stats: Stats } | null> {
   const checked = await lstat(file);
   if (!checked.isFile()) return null;
-  const handle = await open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  const handle = await open(
+    file,
+    fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0) | (fsConstants.O_NONBLOCK ?? 0)
+  );
   try {
     const stats = await handle.stat();
     if (stats.isFile() && sameFile(stats, checked)) {
@@ -188,9 +193,9 @@ async function openVerified(
         return { handle, stats };
       }
     }
-  } catch (error) {
-    await handle.close();
-    throw error;
+  } catch {
+    // The file was opened and could not then be verified — a name that
+    // vanished under the check included. That is not an absent transcript.
   }
   await handle.close();
   return null;
@@ -283,10 +288,7 @@ interface SessionRecord {
   type: string | null;
   subtype: string | null;
   isSidechain: boolean;
-  /**
-   * Bookkeeping rather than conversation: meta records, compaction summaries
-   * and the echo of a local slash command. Nothing said to the agent or by it.
-   */
+  /** Harness-injected, compaction summaries included — nothing said to the agent or by it. */
   isMeta: boolean;
   /** Something said to the agent — text or any other non-result block — whatever else the record carries. */
   isPrompt: boolean;
@@ -300,13 +302,6 @@ interface SessionRecord {
 
 function boundedString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value.slice(0, FIELD_MAX_CHARS) : null;
-}
-
-function isLocalCommandEcho(content: unknown): boolean {
-  const first = Array.isArray(content) ? (content[0] as { text?: unknown } | undefined)?.text : content;
-  if (typeof first !== "string") return false;
-  const text = first.trimStart();
-  return LOCAL_COMMAND_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
 /**
@@ -364,8 +359,7 @@ function parseSessionRecord(line: string): SessionRecord | null {
     type: typeof record.type === "string" ? record.type : null,
     subtype: typeof record.subtype === "string" ? record.subtype : null,
     isSidechain: record.isSidechain === true,
-    isMeta:
-      record.isMeta === true || record.isCompactSummary === true || isLocalCommandEcho(content),
+    isMeta: record.isMeta === true || record.isCompactSummary === true,
     isPrompt,
     timestamp: Number.isFinite(timestamp) ? timestamp : null,
     message: message ? { content } : null,
@@ -496,11 +490,13 @@ function projectToolUses(newestFirst: ToolUse[]): AgentUnansweredToolUse[] {
     ) {
       return projected;
     }
+    // Depth first: serializing is itself recursive, so on a deep enough input
+    // the size check below would be the call that overflows.
+    if (nestingExceeds(input, TOOL_INPUT_MAX_DEPTH)) return projected;
     const bytes = wireBytes(input);
     if (
       bytes > LAST_MESSAGE_TOOL_INPUT_MAX_BYTES ||
-      inputBytes + bytes > LAST_MESSAGE_TOOL_INPUTS_TOTAL_MAX_BYTES ||
-      nestingExceeds(input, TOOL_INPUT_MAX_DEPTH)
+      inputBytes + bytes > LAST_MESSAGE_TOOL_INPUTS_TOTAL_MAX_BYTES
     ) {
       return projected;
     }
@@ -566,8 +562,9 @@ export async function readClaudeLastMessage(
     let userFollows = false;
     const laterAssistantIds: (string | null)[] = [];
 
+    // Newest first, like the scan itself, including within one record.
     const collectToolUses = (record: SessionRecord): void => {
-      for (const use of record.toolUses) {
+      for (const use of [...record.toolUses].reverse()) {
         if (answered.has(use.id) || seenToolUses.has(use.id)) continue;
         seenToolUses.add(use.id);
         unanswered.push(use);
@@ -581,6 +578,7 @@ export async function readClaudeLastMessage(
     })) {
       const record = parseSessionRecord(bytes.toString("utf8"));
       if (!record || record.isSidechain) continue;
+      if (record.type === "assistant" && record.isMeta) continue;
 
       if (record.type === "user") {
         for (const id of record.toolResultIds) answered.add(id);

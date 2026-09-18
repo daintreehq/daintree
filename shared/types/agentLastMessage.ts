@@ -59,7 +59,7 @@ export interface AgentLastMessage {
 export interface AgentUnansweredToolUse {
   id: string;
   name: string;
-  /** Only for a question to the user, and omitted whole when too large to return intact. */
+  /** Only for a question to the user, and omitted whole when too large or too deeply nested to return intact. */
   input?: Record<string, unknown>;
 }
 

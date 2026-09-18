@@ -638,7 +638,7 @@ export const TerminalLastMessageResultSchema = z
             input: z
               .record(z.string(), z.unknown())
               .optional()
-              .describe("Only on a question to the user; omitted whole when too large."),
+              .describe("Only on a question to the user; omitted whole when too large or deep."),
           })
         )
         .describe(
