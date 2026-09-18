@@ -1422,6 +1422,8 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         truncated: {
           type: "boolean",
+          description:
+            "True when older output was left out, by `maxLines` or the 50 KiB response budget; the newest lines are kept.",
         },
         error: {
           type: "string",
@@ -1600,6 +1602,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     type: "null",
                   },
                 ],
+              },
+              recentOutputTruncated: {
+                description:
+                  "True when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept.",
+                type: "boolean",
               },
               armed: {
                 description:

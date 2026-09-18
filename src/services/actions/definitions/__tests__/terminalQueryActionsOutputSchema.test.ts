@@ -113,6 +113,33 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(unavailable?.enum).toContain("hasPty");
   });
 
+  it("terminal.getStatus advertises recentOutputTruncated and keeps it through dispatch (#12450)", () => {
+    const service = registerAll();
+    const schema = outputSchema(service, "terminal.getStatus")!;
+    const items = (schema.properties as { terminals: { items?: Record<string, unknown> } })
+      .terminals.items;
+    const props = (items?.properties as Record<string, { type?: unknown }>) ?? {};
+    expect(props.recentOutputTruncated?.type).toBe("boolean");
+    expect((items?.required as string[] | undefined) ?? []).not.toContain("recentOutputTruncated");
+
+    // Dispatch strips undeclared keys, so an unlisted flag would never arrive.
+    const def = registerDefinitions().get("terminal.getStatus")!() as AnyActionDefinition;
+    const parsed = def.resultSchema!.parse({
+      terminals: [
+        {
+          terminalId: "t1",
+          agentId: null,
+          agentState: null,
+          recentOutput: "tail",
+          recentOutputTruncated: true,
+        },
+      ],
+      source: "renderer",
+      unavailableFields: ["hasPty"],
+    }) as { terminals: { recentOutputTruncated?: boolean }[] };
+    expect(parsed.terminals[0]?.recentOutputTruncated).toBe(true);
+  });
+
   it("terminal.getOutput exposes content/lineCount/truncated properties", () => {
     const props =
       (outputSchema(registerAll(), "terminal.getOutput")!.properties as Record<string, unknown>) ??

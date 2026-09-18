@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
 
 /**
  * Snapshots cross IPC with the grid they were captured at (#11552); this action
@@ -252,6 +253,28 @@ describe("terminal.getOutput action", () => {
 
     // Should cap at 1000 lines
     expect(result.lineCount).toBe(1000);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("fits a wide tail under the response cap and keeps its newest lines (#12450)", async () => {
+    const lines = Array.from({ length: 1000 }, (_, i) => `row ${i} `.padEnd(240, "─"));
+    mockGetSerializedState.mockResolvedValue(snapshotOf(lines.join("\r\n")));
+
+    const actions = await createRegistry();
+    const action = actions.get("terminal.getOutput")!();
+    const result = (await action.run(
+      { terminalId: "test-terminal", maxLines: 1000 },
+      {}
+    )) as TerminalOutputResult & { content: string };
+
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    const kept = result.content.split("\n");
+    expect(kept.at(-1)).toBe(lines.at(-1));
+    expect(kept).toEqual(lines.slice(-kept.length));
+    expect(result.lineCount).toBe(kept.length);
+    expect(result.lineCount).toBeLessThan(1000);
     expect(result.truncated).toBe(true);
   });
 

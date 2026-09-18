@@ -41,6 +41,11 @@ export interface TerminalStatusEntry {
   spawnedAt?: number;
   lastCheckResult?: TerminalCheckResult;
   recentOutput?: string | null;
+  /**
+   * Set alongside a string `recentOutput`: true when older output was left out,
+   * by the requested line count or by the shared response budget (#12450).
+   */
+  recentOutputTruncated?: boolean;
   armed?: boolean;
   hasPty?: boolean;
   /**

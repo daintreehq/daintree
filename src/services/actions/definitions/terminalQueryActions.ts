@@ -6,6 +6,11 @@ import {
   TerminalSendCommandResultSchema,
 } from "./schemas";
 import { tailCapturedOutput } from "@shared/utils/artifactParser";
+import {
+  boundTerminalStatusOutput,
+  fitTerminalOutputResult,
+} from "@shared/utils/terminalOutputBudget";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -215,7 +220,11 @@ export function registerTerminalQueryActions(
       terminalId: z.string(),
       content: z.string().nullable(),
       lineCount: z.number(),
-      truncated: z.boolean(),
+      truncated: z
+        .boolean()
+        .describe(
+          "True when older output was left out, by `maxLines` or the 50 KiB response budget; the newest lines are kept."
+        ),
       error: z.string().optional(),
     }),
     mcpOutputSchema: true,
@@ -256,12 +265,13 @@ export function registerTerminalQueryActions(
         stripAnsi
       );
 
-      return {
-        terminalId,
-        content,
-        lineCount,
-        truncated,
-      };
+      // Fit under the response cap here, keeping the newest lines (#12450).
+      // Left to the transport, an oversized tail is cut from the end — the
+      // newest lines — into JSON that will not parse, and reported as an error.
+      return fitTerminalOutputResult(
+        { terminalId, content, lineCount, truncated },
+        MCP_RESPONSE_TEXT_MAX_BYTES
+      );
     },
   }));
 
@@ -503,11 +513,9 @@ export function registerTerminalQueryActions(
               // Normalize before tailing (#10763) — see terminal.getOutput.
               // Without this, a bottom-padding TUI's blank rows fill the small
               // last-N window and recentOutput reads as empty even when idle.
-              entry.recentOutput = tailCapturedOutput(
-                serialized.data,
-                effectiveLines,
-                stripAnsi
-              ).content;
+              const tail = tailCapturedOutput(serialized.data, effectiveLines, stripAnsi);
+              entry.recentOutput = tail.content;
+              entry.recentOutputTruncated = tail.truncated;
             }
           }
         }
@@ -529,11 +537,17 @@ export function registerTerminalQueryActions(
       // `runtimeStatus` would publish an interpretation as a process fact. The
       // pty-host computes it, so the reduced answer reports it and this one
       // says it could not look.
-      return {
-        terminals: entries,
-        source: "renderer" as const,
-        unavailableFields: ["hasPty" as const],
-      };
+      //
+      // Tails are fitted last, once every other field is in place, so the
+      // budget they split is what the rest of the snapshot leaves (#12450).
+      return boundTerminalStatusOutput(
+        {
+          terminals: entries,
+          source: "renderer" as const,
+          unavailableFields: ["hasPty" as const],
+        },
+        MCP_RESPONSE_TEXT_MAX_BYTES
+      );
     },
   }));
 

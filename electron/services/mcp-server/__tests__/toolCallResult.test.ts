@@ -5,6 +5,11 @@ import {
   buildToolCallResult,
   buildToolCallTextResult,
 } from "../toolCallResult.js";
+import {
+  boundTerminalStatusOutput,
+  fitTerminalOutputResult,
+} from "../../../../shared/utils/terminalOutputBudget.js";
+import type { TerminalStatusResult } from "../../../../shared/types/terminalStatus.js";
 
 function textOf(result: { content: { type: string; text?: string }[] }): string {
   return result.content[0]?.text ?? "";
@@ -301,5 +306,47 @@ describe("SDK conformance", () => {
     expect(parsed.success).toBe(true);
     expect(parsed.data?.structuredContent).toBeUndefined();
     expect(parsed.data?.isError).toBe(true);
+  });
+});
+
+describe("terminal tails fitted before the cap (#12450)", () => {
+  const lines = Array.from({ length: 1000 }, (_, i) => `row ${i} `.padEnd(160, "│"));
+
+  it("ships an oversized getOutput tail whole: parseable, structured, not an error", () => {
+    const fitted = fitTerminalOutputResult(
+      { terminalId: "t-1", content: lines.join("\n"), lineCount: 1000, truncated: false },
+      TOOL_RESULT_TEXT_MAX_BYTES
+    );
+    const result = buildToolCallResult(fitted, { structuredContent: fitted });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toEqual(fitted);
+    const parsed = JSON.parse(textOf(result)) as typeof fitted;
+    expect(parsed.content.split("\n").at(-1)).toBe(lines.at(-1));
+    expect(parsed.truncated).toBe(true);
+  });
+
+  it("ships an oversized status snapshot whole with every tail's newest line", () => {
+    const status: TerminalStatusResult = {
+      terminals: ["a", "b", "c"].map((id) => ({
+        terminalId: id,
+        agentId: "claude",
+        agentState: "working",
+        recentOutput: lines.slice(-50).join("\n"),
+        recentOutputTruncated: true,
+      })),
+      source: "pty",
+      unavailableFields: ["armed", "lastCheckResult"],
+    };
+    const bounded = boundTerminalStatusOutput(status, TOOL_RESULT_TEXT_MAX_BYTES);
+    const result = buildToolCallResult(bounded, {
+      structuredContent: bounded as unknown as Record<string, unknown>,
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.structuredContent).toEqual(bounded);
+    for (const entry of bounded.terminals) {
+      expect(entry.recentOutput?.split("\n").at(-1)).toBe(lines.at(-1));
+    }
   });
 });

@@ -9,6 +9,7 @@ vi.mock("../../assistantTerminal.js", () => ({
 }));
 
 import { buildViewlessTerminalStatus, viewlessStatusArgsAreAnswerable } from "../terminalStatus.js";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../../shared/config/mcpLimits.js";
 
 const WORKSPACE = "ws-1";
 
@@ -404,6 +405,32 @@ describe("buildViewlessTerminalStatus results", () => {
     });
 
     expect(result.terminals[0]?.recentOutput).toBe("two\nthree");
+    expect(result.terminals[0]?.recentOutputTruncated).toBe(true);
+  });
+
+  it("fits busy tails under the response cap, keeping each one's newest lines (#12450)", async () => {
+    const lines = Array.from({ length: 50 }, (_, i) => `row ${i} `.padEnd(600, "│"));
+    const ids = ["t-1", "t-2", "t-3"];
+    const d = deps(
+      ids.map((id) => record({ id })),
+      { serialized: Object.fromEntries(ids.map((id) => [id, { data: lines.join("\n") }])) }
+    );
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ids,
+      includeOutput: { lines: 50 },
+    });
+
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    expect(result.terminals.map((t) => t.terminalId)).toEqual(ids);
+    for (const entry of result.terminals) {
+      const kept = (entry.recentOutput as string).split("\n");
+      expect(kept.length).toBeGreaterThan(0);
+      expect(kept).toEqual(lines.slice(-kept.length));
+      expect(entry.recentOutputTruncated).toBe(true);
+    }
   });
 
   it("strips ANSI by default and keeps it on request", async () => {

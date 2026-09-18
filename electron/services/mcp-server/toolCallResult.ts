@@ -1,17 +1,21 @@
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 
 /**
  * Byte ceiling for the text body of a `tools/call` response (#11526).
  *
- * Matches `RESOURCE_TEXT_MAX_BYTES` — resources were already capped here and
+ * Shared with `RESOURCE_TEXT_MAX_BYTES` — resources were already capped here and
  * tool results were not capped at all, so a single call could return 31 MB.
  * Deliberately byte-based rather than token-based: tokenization is a client
  * concern and pinning the server to one vendor's tokenizer would be worse than
  * a conservative fixed bound. 50 KiB of compact JSON lands around 13-25K
  * tokens, comfortably under the 25K-token ceiling clients commonly enforce.
+ *
+ * Over the cap this keeps the head of the text. Terminal tails are fitted to the
+ * same number before they get here (#12450), so they never reach that cut.
  */
-export const TOOL_RESULT_TEXT_MAX_BYTES = 50 * 1024;
+export const TOOL_RESULT_TEXT_MAX_BYTES = MCP_RESPONSE_TEXT_MAX_BYTES;
 
 /**
  * Nesting ceiling for the structured half.

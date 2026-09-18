@@ -1,6 +1,11 @@
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
 import { panelKindHasPty } from "../../../shared/config/panelKindRegistry.js";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { tailCapturedOutput } from "../../../shared/utils/artifactParser.js";
+import {
+  boundTerminalStatusOutput,
+  type CapturedTail,
+} from "../../../shared/utils/terminalOutputBudget.js";
 import type {
   TerminalStatusEntry,
   TerminalStatusResult,
@@ -319,7 +324,7 @@ export async function buildViewlessTerminalStatus(
     if (record && isVisibleToBoundSession(record, workspaceId)) records.set(id, record);
   });
 
-  const outputs = new Map<string, string | null>();
+  const outputs = new Map<string, CapturedTail | null>();
   if (includeOutput) {
     const readable = lookupIds.filter((id) => records.has(id));
     const snapshots = await Promise.all(
@@ -332,7 +337,7 @@ export async function buildViewlessTerminalStatus(
         // Normalize before tailing (#10763), same as the renderer path: a
         // bottom-padding TUI's blank rows otherwise fill the last-N window and
         // an active agent reads as silent.
-        snapshot ? tailCapturedOutput(snapshot.data, lines, stripAnsi).content : null
+        snapshot ? tailCapturedOutput(snapshot.data, lines, stripAnsi) : null
       );
     });
   }
@@ -353,15 +358,24 @@ export async function buildViewlessTerminalStatus(
       };
     }
     const entry = buildEntry(record, submissionToken);
-    if (includeOutput) entry.recentOutput = outputs.get(id) ?? null;
+    if (includeOutput) {
+      const tail = outputs.get(id) ?? null;
+      entry.recentOutput = tail?.content ?? null;
+      if (tail) entry.recentOutputTruncated = tail.truncated;
+    }
     return entry;
   });
 
-  return {
-    terminals,
-    source: "pty",
-    unavailableFields: [...VIEWLESS_STATUS_UNAVAILABLE_FIELDS],
-  };
+  // Same fitting as the renderer answer (#12450), so a caller's tails do not
+  // change shape with whether its workspace happens to have a view open.
+  return boundTerminalStatusOutput<TerminalStatusResult>(
+    {
+      terminals,
+      source: "pty",
+      unavailableFields: [...VIEWLESS_STATUS_UNAVAILABLE_FIELDS],
+    },
+    MCP_RESPONSE_TEXT_MAX_BYTES
+  );
 }
 
 /**

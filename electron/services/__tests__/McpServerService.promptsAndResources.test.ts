@@ -18,7 +18,7 @@ import type {
 } from "../../../shared/types/actions.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { BUILT_IN_ACTION_IDS } from "../../../shared/config/actionIds.js";
-import { TIER_ALLOWLISTS } from "../mcp-server/shared.js";
+import { RESOURCE_TEXT_MAX_BYTES, TIER_ALLOWLISTS } from "../mcp-server/shared.js";
 
 function namesActionId(line: string, id: string): boolean {
   let from = line.indexOf(id);
@@ -1219,8 +1219,9 @@ describe("McpServerService", () => {
       expect(uris.some((u) => u.startsWith("daintree://worktree/"))).toBe(false);
     });
 
-    it("truncates oversized scrollback payloads with a marker", async () => {
-      const huge = "x".repeat(60 * 1024);
+    it("keeps the newest lines of an oversized raw scrollback payload", async () => {
+      const lines = Array.from({ length: 2000 }, (_, i) => `line ${i} `.padEnd(60, "."));
+      const huge = lines.join("\n");
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
         if (payload.actionId === "terminal.getOutput") return { ok: true, result: huge };
         return { ok: true, result: [] };
@@ -1235,8 +1236,35 @@ describe("McpServerService", () => {
 
       const result = await client.readResource({ uri: "daintree://terminal/t-1/scrollback" });
       const content = result.contents[0] as { uri: string; mimeType: string; text: string };
-      expect(content.text.endsWith("\n\n[truncated]")).toBe(true);
-      expect(content.text.length).toBeLessThan(huge.length);
+      const marker = "[truncated]\n\n";
+      expect(content.text.startsWith(marker)).toBe(true);
+      expect(Buffer.byteLength(content.text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
+      const kept = content.text.slice(marker.length).split("\n");
+      expect(kept.length).toBeGreaterThan(1);
+      expect(kept).toEqual(lines.slice(-kept.length));
+    });
+
+    it("serves a fitted scrollback read as parseable JSON rather than cutting it", async () => {
+      // `terminal.getOutput` fits its compact JSON to the cap; indenting it for
+      // the resource used to push it back over and into the head-first cut.
+      const base = { terminalId: "t-1", content: "", lineCount: 200, truncated: true };
+      const filler = "y".repeat(RESOURCE_TEXT_MAX_BYTES - JSON.stringify(base).length);
+      const output = { ...base, content: filler };
+      const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
+        if (payload.actionId === "terminal.getOutput") return { ok: true, result: output };
+        return { ok: true, result: [] };
+      });
+      const { window } = createMockWindow({
+        getManifest: manifestForResources,
+        dispatchAction: dispatchMock,
+      });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = await client.readResource({ uri: "daintree://terminal/t-1/scrollback" });
+      const content = result.contents[0] as { uri: string; mimeType: string; text: string };
+      expect(JSON.parse(content.text)).toEqual(output);
     });
 
     it("workbench tier sees resources and is permitted to read them", async () => {
