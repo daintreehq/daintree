@@ -406,6 +406,15 @@ function renderPanel(terminalId: string) {
   );
 }
 
+// One panel of each kind that picks a different return branch of the menu.
+const MENU_BRANCHES: Array<[string, Record<string, unknown>]> = [
+  ["browser", { kind: "browser", browserUrl: "https://example.com" }],
+  ["dev-preview", { kind: "dev-preview", browserUrl: "http://localhost:3000" }],
+  ["review", { kind: "review" }],
+  ["file", { kind: "file", filePath: "/repo/README.md" }],
+  ["terminal", { kind: "terminal", cwd: "/repo" }],
+];
+
 describe("TerminalContextMenu — Move to worktree cap and picker handoff (#12446)", () => {
   beforeEach(() => {
     prefsRef.current = {
@@ -427,28 +436,31 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
     anchorRef.current = null;
   });
 
-  it("shows the first ten sidebar rows, a separator and More worktrees… when rows are cut", () => {
-    const worktrees = manyWorktrees(12);
-    openMenu(worktrees);
+  it.each([11, 12])(
+    "shows the first ten sidebar rows of %i, a separator and More worktrees…",
+    (count) => {
+      const worktrees = manyWorktrees(count);
+      openMenu(worktrees);
 
-    const sidebarOrder = renderHook(() => useSidebarWorktreeOrder()).result.current;
-    const rows = moveRows();
-    expect(rows).toHaveLength(11);
-    expect(labels(rows.slice(0, 10))).toEqual(
-      sidebarOrder.slice(0, 10).map((wt) => getWorktreeHeadline(wt).label)
-    );
-    // Neither the input order nor a plain age sort: the pin moved wt-0 up.
-    expect(labels(rows.slice(0, 10))).not.toEqual(
-      worktrees.slice(0, 10).map((wt) => getWorktreeHeadline(wt).label)
-    );
-    expect(labels(rows)[1]).toBe("feature/wt-0");
+      const sidebarOrder = renderHook(() => useSidebarWorktreeOrder()).result.current;
+      const rows = moveRows();
+      expect(rows).toHaveLength(11);
+      expect(labels(rows.slice(0, 10))).toEqual(
+        sidebarOrder.slice(0, 10).map((wt) => getWorktreeHeadline(wt).label)
+      );
+      // Neither the input order nor a plain age sort: the pin moved wt-0 up.
+      expect(labels(rows.slice(0, 10))).not.toEqual(
+        worktrees.slice(0, 10).map((wt) => getWorktreeHeadline(wt).label)
+      );
+      expect(labels(rows)[1]).toBe("feature/wt-0");
 
-    const separators = subContent().querySelectorAll("hr");
-    expect(separators).toHaveLength(1);
-    expect(separators[0]!.nextElementSibling).toBe(rows[10]);
-    expect(rows[10]!.textContent).toBe(MORE);
-    expect(rows[10]!.getAttribute("aria-haspopup")).toBe("dialog");
-  });
+      const separators = subContent().querySelectorAll("hr");
+      expect(separators).toHaveLength(1);
+      expect(separators[0]!.nextElementSibling).toBe(rows[10]);
+      expect(rows[10]!.textContent).toBe(MORE);
+      expect(rows[10]!.getAttribute("aria-haspopup")).toBe("dialog");
+    }
+  );
 
   it("keeps the icon on every row, More worktrees… included", () => {
     openMenu(manyWorktrees(12));
@@ -496,18 +508,6 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
       { terminalId: "panel-1", worktreeId: "wt-0" },
       { source: "user" }
     );
-    expect(screen.queryByTestId("move-picker")).toBeNull();
-    expect(event.defaultPrevented).toBe(false);
-  });
-
-  it("drops the request when the menu reopens before its close hook runs", () => {
-    openMenu(manyWorktrees(12));
-    rightClickPane();
-
-    fireEvent.click(screen.getByText(MORE));
-    act(() => menuOpenChange.current?.(true));
-    const event = closeMenu();
-
     expect(screen.queryByTestId("move-picker")).toBeNull();
     expect(event.defaultPrevented).toBe(false);
   });
@@ -568,15 +568,17 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
     closeMenu();
 
     expect(screen.queryByTestId("move-picker")).toBeNull();
+
+    // The next request is made for, and opens for, the panel it now speaks for.
+    rightClickPane();
+    fireEvent.click(screen.getByText(MORE));
+    closeMenu();
+
+    expect(screen.getByTestId("move-picker").getAttribute("data-panel-id")).toBe("panel-2");
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
-  it.each([
-    ["browser", { kind: "browser", browserUrl: "https://example.com" }],
-    ["dev-preview", { kind: "dev-preview", browserUrl: "http://localhost:3000" }],
-    ["review", { kind: "review" }],
-    ["file", { kind: "file", filePath: "/repo/README.md" }],
-    ["terminal", { kind: "terminal", cwd: "/repo" }],
-  ])("hands off to the picker from the %s menu", (_label, fields) => {
+  it.each(MENU_BRANCHES)("hands off to the picker from the %s menu", (_label, fields) => {
     worktreesRef.current = manyWorktrees(12);
     panelsById.current = {
       "panel-1": { id: "panel-1", title: "Panel", worktreeId: "wt-main", ...fields },
@@ -590,4 +592,25 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
     expect(screen.getByTestId("move-picker").getAttribute("data-panel-id")).toBe("panel-1");
     expect(anchorRef.current?.current?.contextElement).toBe(screen.getByText("Panel body"));
   });
+
+  it.each(MENU_BRANCHES)(
+    "drops a request when the %s menu reopens before its close hook",
+    (_label, fields) => {
+      worktreesRef.current = manyWorktrees(12);
+      panelsById.current = {
+        "panel-1": { id: "panel-1", title: "Panel", worktreeId: "wt-main", ...fields },
+      };
+      render(renderPanel("panel-1"));
+      rightClickPane();
+
+      fireEvent.click(screen.getByText(MORE));
+      expect(menuOpenChange.current).toEqual(expect.any(Function));
+      act(() => menuOpenChange.current!(true));
+      const event = closeMenu();
+
+      expect(screen.queryByTestId("move-picker")).toBeNull();
+      expect(event.defaultPrevented).toBe(false);
+      expect(dispatch).not.toHaveBeenCalled();
+    }
+  );
 });

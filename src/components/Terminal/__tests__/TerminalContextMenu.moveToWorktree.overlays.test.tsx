@@ -143,8 +143,11 @@ beforeEach(() => {
   _resetTooltipFocusSuppressionForTests();
 });
 
-afterEach(() => {
+// A picker or dock preview left open unmounts here, and Radix runs its focus
+// return on a timer; let it land before the next test starts.
+afterEach(async () => {
   cleanup();
+  await settle();
 });
 
 describe("TerminalContextMenu More worktrees…, through the real overlays", () => {
@@ -174,6 +177,7 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
     await openPickerFromMenu(pane);
     await waitFor(() => expect(document.activeElement).toBe(searchField()));
     await settle();
+    const paneFocus = vi.spyOn(pane, "focus");
 
     // The whole press: Radix holds a primary-button outside press until its
     // click, so the pointer-down alone dismisses nothing.
@@ -185,7 +189,8 @@ describe("TerminalContextMenu More worktrees…, through the real overlays", () 
 
     await waitFor(() => expect(searchField()).toBeNull());
     await settle();
-    expect(document.activeElement).not.toBe(pane);
+    expect(paneFocus).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(document.body);
   });
 
   it("moves the panel from the picker", async () => {
