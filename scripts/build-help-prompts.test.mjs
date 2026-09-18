@@ -212,22 +212,50 @@ describe("help prompt outputs", () => {
   // Codex help sessions run at the action tier; without these a session asked to
   // launch agents spent its first several calls hunting for `agent.launch`.
   describe("Codex operations recipes", () => {
-    it("AGENTS.md carries launch, status, send, wait, and close recipes", () => {
+    // Scoped per recipe: the tool names also appear in shared guidance and in
+    // neighbouring recipes, so a whole-file match would survive a recipe's
+    // deletion.
+    function recipe(heading) {
+      const start = AGENTS.indexOf(`### ${heading}\n`);
+      expect(start, `missing recipe: ${heading}`).toBeGreaterThan(-1);
+      const next = AGENTS.slice(start + 4).search(/^#{2,3} /m);
+      return next === -1 ? AGENTS.slice(start) : AGENTS.slice(start, start + 4 + next);
+    }
+
+    it.each([
+      ["Launch agents", "agent.launch("],
+      ["Check on agents", "terminal.getStatus("],
+      ["Send a follow-up", "terminal.sendCommand("],
+      ["Wait for agents", "terminal.waitUntilIdleBatch("],
+      ["Close terminals", "terminal.close("],
+    ])("AGENTS.md has a %s recipe calling %s", (heading, call) => {
       expect(AGENTS).toContain("## Common Tasks");
-      for (const tool of [
-        "agent.launch",
-        "terminal.getStatus",
-        "terminal.sendCommand",
-        "terminal.waitUntilIdleBatch",
-        "terminal.close",
-      ]) {
-        expect(AGENTS).toContain(tool);
-      }
+      expect(recipe(heading)).toContain(call);
     });
 
-    it("AGENTS.md shows the agent.launch call shape and the missing-CLI outcome", () => {
-      expect(AGENTS).toMatch(/agent\.launch\(\{ agentId:[^\n]*prompt:[^\n]*worktreeId:[^\n]*name:/);
-      expect(AGENTS).toContain('spawnStatus: "missing-cli"');
+    it("AGENTS.md tells Codex to call a named recipe directly", () => {
+      const intro = AGENTS.slice(
+        AGENTS.indexOf("## Common Tasks"),
+        AGENTS.indexOf("### Launch agents")
+      );
+      expect(intro).toMatch(/directly/);
+      expect(intro).toContain("actions.search");
+    });
+
+    it("the launch recipe passes the task, target, and tab name, and handles a missing CLI", () => {
+      const launch = recipe("Launch agents");
+      const call = launch.match(/agent\.launch\(\{[^}]*\}\)/)?.[0] ?? "";
+      for (const arg of ["agentId:", "prompt:", "worktreeId:", "name:"]) {
+        expect(call).toContain(arg);
+      }
+      expect(launch).toContain('spawnStatus: "missing-cli"');
+    });
+
+    // The renderer's launcher refuses a launch while another of the same agent
+    // id is still starting, so parallel same-kind launches come back
+    // `launched: false`.
+    it("the launch recipe serialises launches of the same agent id", () => {
+      expect(recipe("Launch agents")).toMatch(/same `agentId` one at a time/);
     });
 
     it("AGENTS.md places the recipes ahead of the discovery guidance", () => {

@@ -21,9 +21,9 @@ These cover most operational requests, and all of them sit in the default `actio
 ### Launch agents
 
 1. `agent.launch({ agentId: "claude" | "codex" | "gemini" | …, prompt: <task>, worktreeId: <id>, name: <short label> })`. The `prompt` becomes the agent's first message, so don't send it again. **Always pass `name`**, a short task label such as `"Codex: auth refactor"` that becomes the tab title, so parallel agents can be told apart. Omit `worktreeId` for the active worktree; resolve a named one once with `worktree.list`.
-2. For several agents, issue up to 4 launches at once if your client makes parallel tool calls, otherwise back to back, with no status check in between.
-3. Read each result. `launched: true` means the panel was created and its process is starting, not that the agent is ready. `launched: false` means no agent is running; with `spawnStatus: "missing-cli"` Daintree opened a setup diagnostic instead, so tell the user to install that CLI rather than polling it.
-4. Once all are dispatched, one `terminal.getStatus` over the launched `terminalId`s, with `includeOutput`, confirms each picked up its prompt. Handle a startup dialog as **Agents You Launch** below describes.
+2. Launch agents with the same `agentId` one at a time: a call that overlaps a launch of the same kind still starting is refused with `launched: false` and creates nothing. Different agent kinds can launch at once if your client makes parallel tool calls. Either way, don't check status between launches.
+3. Read each result. `launched: true` means the panel was created and its process is starting, not that the agent is ready. `launched: false` means this call started no agent. With `spawnStatus: "missing-cli"` the CLI can't run (not installed, or installed but unusable) and Daintree opened a setup diagnostic instead; point the user to it rather than polling it.
+4. Once all are dispatched, one `terminal.getStatus` over the launched `terminalId`s, with `includeOutput`, is the first check on each. A new agent reads `working` from the start, so only its output shows it took the prompt; if that isn't visible yet, report startup as unconfirmed rather than sending the prompt again. Handle a startup dialog as **Agents You Launch** below describes.
 
 ### Check on agents
 
@@ -35,11 +35,11 @@ These cover most operational requests, and all of them sit in the default `actio
 
 ### Wait for agents
 
-`terminal.waitUntilIdleBatch({ terminalIds, mode: "all" })` returns once every listed agent stops working (`mode: "first"`: once any one does); `terminal.waitUntilIdle` waits on one. Interactive sessions cap a wait at 60s, and the user cannot talk to you while it is open. `timedOut: true` means still working: unless the user asked you to see them through, report where they are and end your turn instead of chaining waits. A closed terminal settles too, so read `trackingState` before calling one finished. `timeoutMs: 0` takes a snapshot without blocking.
+`terminal.waitUntilIdleBatch({ terminalIds, mode: "all" })` returns once every listed agent has settled (`mode: "first"`: once any one has); `terminal.waitUntilIdle` waits on one. Interactive sessions cap a wait at 60s, and the user cannot talk to you while it is open. `timedOut: true` means the wait ended first: unless the user asked you to see them through, check `terminal.getStatus`, report where they are, and end your turn instead of chaining waits. Settled is not finished: an agent stopped on a question settles, and so does a closed terminal, so read each row's `waitingReason` and `trackingState` before calling it done. `timeoutMs: 0` takes a snapshot without blocking.
 
 ### Close terminals
 
-`terminal.close({ terminalId })` moves a panel to the trash, where it is briefly recoverable; always name the panel. `terminal.kill` destroys a panel and its process permanently, needs the user's confirmation, and is only for a terminal that close didn't stop. Confirm with the user before `terminal.closeAll` or `terminal.killAll`.
+`terminal.close({ terminalId })` usually moves a panel to the trash, where it is briefly recoverable before its process is killed; remove-on-exit and dialog panels are discarded outright. Always name the panel. `terminal.kill` destroys a panel and its process permanently, needs the user's confirmation, and is only for a terminal that close didn't stop. Confirm with the user before `terminal.closeAll` or `terminal.killAll`.
 
 ### Picking between similar tools
 
@@ -60,7 +60,7 @@ These cover most operational requests, and all of them sit in the default `actio
 
 ## Finding the Right Tool
 
-`ListTools` is the advertised baseline for what you can call. It reflects your capability tier, and it is not refreshed when the user approves a single tool for you mid-session, so `actions.list` and `actions.search` are the better read on what you can call _right now_ — their `results` include anything a live approval has opened up. When no worked example below names the operation you need, use `actions.search` to find candidate actions and `actions.getSchema` to inspect one's arguments before calling it. Neither unlocks anything — discovery reports your surface, it never extends it.
+`ListTools` is the advertised baseline for what you can call. It reflects your capability tier, and it is not refreshed when the user approves a single tool for you mid-session, so `actions.list` and `actions.search` are the better read on what you can call _right now_ — their `results` include anything a live approval has opened up. When no recipe in these instructions names the operation you need, use `actions.search` to find candidate actions and `actions.getSchema` to inspect one's arguments before calling it. Neither unlocks anything — discovery reports your surface, it never extends it.
 
 **Never report a capability as missing without searching for it first.** `actions.search` and `actions.list` also return an `unavailable` array, and `actions.getSchema` returns an `unavailable` object with `TIER_NOT_PERMITTED`. These name actions that exist but sit above your capability tier, each carrying `minimumTier` and `callable: false`. They are not callable and calling them is not an option — but they are proof the feature exists. Read one and tell the user the operation exists and which tier it needs; never tell them Daintree can't do it.
 
