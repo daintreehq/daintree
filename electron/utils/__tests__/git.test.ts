@@ -1280,9 +1280,7 @@ describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
       throw new Error("the operation was aborted");
     });
 
-    await expect(
-      getWorktreeChangesWithStats(cwd, { signal: controller.signal })
-    ).rejects.toThrow();
+    await expect(getWorktreeChangesWithStats(cwd, { signal: controller.signal })).rejects.toThrow();
     expect(vi.mocked(logWarn)).not.toHaveBeenCalledWith(
       "Failed to read numstat diff; continuing without line stats",
       expect.anything()
