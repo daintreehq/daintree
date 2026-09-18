@@ -17,12 +17,23 @@ import {
 // driven directly; `init` is the IPC pull, which jsdom has no bridge for.
 const runtime = vi.hoisted(() => {
   const noopInit = () => {};
+  // Explicit membership: an absent entry means "no snapshot yet", which the
+  // hook treats as unavailable, so a mock that answered `has` for anything
+  // could not tell the two apart.
+  const known: ReadonlyMap<string, unknown> = new Map<string, unknown>([
+    ["daintree.markdown-editor", { devMode: false, displayName: "Markdown editor" }],
+    ["daintree.other-editor", { devMode: false, displayName: "Other editor" }],
+    ["x", { devMode: false, displayName: "X" }],
+  ]);
+  const noneDisabled: ReadonlySet<string> = new Set<string>();
   return {
     // Replaced wholesale on every change so useSyncExternalStore sees a new
     // snapshot exactly when something moved, and a stable one otherwise.
-    state: { disabledPluginIds: new Set<string>() as ReadonlySet<string>, init: noopInit },
+    state: { disabledPluginIds: noneDisabled, pluginMetaById: known, init: noopInit },
     listeners: new Set<() => void>(),
     noopInit,
+    known,
+    noneDisabled,
   };
 });
 vi.mock("@/store/pluginRuntimeStore", async () => {
@@ -37,9 +48,24 @@ vi.mock("@/store/pluginRuntimeStore", async () => {
   return { usePluginRuntimeStore };
 });
 
-function setDisabled(ids: string[]): void {
-  runtime.state = { disabledPluginIds: new Set(ids), init: runtime.noopInit };
+/**
+ * Moves only what it is given: the untouched half keeps its exact instance, so
+ * a case that changes metadata proves the metadata subscription rather than
+ * riding on a new disabled set.
+ */
+function setRuntime(
+  next: { disabled?: ReadonlySet<string>; known?: ReadonlyMap<string, unknown> } = {}
+): void {
+  runtime.state = {
+    disabledPluginIds: next.disabled ?? runtime.noneDisabled,
+    pluginMetaById: next.known ?? runtime.known,
+    init: runtime.noopInit,
+  };
   for (const listener of runtime.listeners) listener();
+}
+
+function setDisabled(ids: string[]): void {
+  setRuntime({ disabled: new Set(ids) });
 }
 
 function Editor(): null {
@@ -125,6 +151,77 @@ describe("fileEditorRegistry (#12323)", () => {
 
       act(() => setDisabled([]));
       expect(result.current?.registration.id).toBe("markdown");
+    });
+
+    it("hides the editor while the owning plugin is not in the runtime snapshot yet", () => {
+      registerBuiltinView("markdown.editor", Editor, { pluginId: "daintree.markdown-editor" });
+      setRuntime({ known: new Map() });
+      const { result } = renderHook(() => useFileEditor("/repo/plan.md"));
+      expect(result.current).toBeNull();
+
+      // Only the metadata moved — the disabled set is the very same instance.
+      act(() => setRuntime());
+      expect(result.current?.registration.id).toBe("markdown");
+    });
+  });
+
+  describe("competing registrations for one extension", () => {
+    const second = "daintree.other-editor";
+
+    beforeEach(() => {
+      registerFileEditor({
+        id: "other",
+        pluginId: second,
+        slot: "other.editor",
+        extensions: ["md"],
+        maxBytes: 4096,
+      });
+      registerBuiltinView("markdown.editor", Editor, { pluginId: "daintree.markdown-editor" });
+      registerBuiltinView("other.editor", Editor, { pluginId: second });
+    });
+
+    it("prefers the first registration while both are enabled", () => {
+      const { result } = renderHook(() => useFileEditor("/repo/plan.md"));
+      expect(result.current?.registration.id).toBe("markdown");
+      expect(resolveFileEditor("/repo/plan.md")?.id).toBe("markdown");
+    });
+
+    it("falls through to the later candidate when the first is disabled", () => {
+      setDisabled(["daintree.markdown-editor"]);
+      const { result } = renderHook(() => useFileEditor("/repo/plan.md"));
+      expect(result.current?.registration.id).toBe("other");
+      expect(resolveFileEditor("/repo/plan.md")?.id).toBe("other");
+
+      // And back again, live, when the first one returns.
+      act(() => setDisabled([]));
+      expect(result.current?.registration.id).toBe("markdown");
+    });
+
+    it("skips a candidate whose slot was never registered", () => {
+      __resetBuiltinRendererRegistryForTests();
+      registerBuiltinView("other.editor", Editor, { pluginId: second });
+      const { result } = renderHook(() => useFileEditor("/repo/plan.md"));
+      expect(result.current?.registration.id).toBe("other");
+    });
+
+    it("keeps the enable route on a disabled candidate when the enabled one has no slot", () => {
+      // B is enabled but its renderer entry never registered, so the only
+      // editor a user can actually reach is A's — behind its enable toggle.
+      __resetBuiltinRendererRegistryForTests();
+      registerBuiltinView("markdown.editor", Editor, { pluginId: "daintree.markdown-editor" });
+      setDisabled(["daintree.markdown-editor"]);
+      const { result } = renderHook(() => useFileEditor("/repo/plan.md"));
+      expect(result.current).toBeNull();
+      expect(resolveFileEditor("/repo/plan.md")?.id).toBe("markdown");
+    });
+
+    it("resolves null once every candidate is disabled", () => {
+      setDisabled(["daintree.markdown-editor", second]);
+      const { result } = renderHook(() => useFileEditor("/repo/plan.md"));
+      expect(result.current).toBeNull();
+      // The non-reactive route still reports a claimant, so the enable banner
+      // has something to offer.
+      expect(resolveFileEditor("/repo/plan.md")?.id).toBe("markdown");
     });
   });
 });
