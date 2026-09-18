@@ -20,7 +20,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `agent.focusNextWorking` | Focus Next Working Agent | safe | — |
 | `agent.focusPreviousAgent` | Focus Previous Agent | safe | — |
 | `agent.getState` | Get Agent State | safe | `agentId` |
-| `agent.launch` | Launch Agent | safe | `agentId`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `interactive?`, `location?`, `model?`, `name?`, `presetId?`, `prompt?`, `removeOnExit?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `worktreeId?` |
+| `agent.launch` | Launch Agent | safe | `agentId`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `presetId?`, `prompt?`, `removeOnExit?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `worktreeId?` |
 | `agent.listAvailable` | List Available Agents | safe | — |
 | `agent.listPresets` | List Agent Presets | safe | `agentId`, `projectId?` |
 | `agent.listToolbar` | List Toolbar Agents | safe | — |
