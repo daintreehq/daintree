@@ -20,7 +20,7 @@ vi.mock("@/services/KeybindingService", () => ({
 }));
 vi.mock("@/lib/notify", () => ({ notify: vi.fn() }));
 
-import type { ActionId, ActionManifestEntry } from "@shared/types/actions";
+import { z } from "zod";
 import { HELP_TIER_CUMULATIVE } from "@shared/config/helpAssistantTierAllowlists";
 import { ACTIONS_SEARCH_MAX_LIMIT } from "@shared/config/mcpIntrospection";
 import { ActionService, actionService } from "@/services/ActionService";
@@ -55,12 +55,12 @@ afterAll(() => {
   vi.restoreAllMocks();
 });
 
+const SearchResultSchema = z.object({ results: z.array(z.object({ id: z.string() })) });
+
 async function firstCallable(query: string): Promise<string | undefined> {
-  const search = registry.get("actions.search" as ActionId)!();
-  const { results } = (await search.run(
-    { query, limit: ACTIONS_SEARCH_MAX_LIMIT } as never,
-    {}
-  )) as { results: ActionManifestEntry[] };
+  const search = registry.get("actions.search")!();
+  const result: unknown = await search.run({ query, limit: ACTIONS_SEARCH_MAX_LIMIT }, {});
+  const { results } = SearchResultSchema.parse(result);
   return results.find((entry) => ACTION_TIER.has(entry.id))?.id;
 }
 
