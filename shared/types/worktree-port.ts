@@ -176,6 +176,21 @@ export interface WorktreePortProtocol {
     payload: { worktreeId: string };
     result: { risk: SubmoduleDeleteRisk | null };
   };
+  // The switched-to view reporting when every worktree in its store carried a
+  // status (`appliedAt`), or that its deadline passed first (`appliedAt: null`).
+  // The host refuses an applied report taken from a store that does not match
+  // it — another epoch, another worktree count, or a load still enumerating —
+  // and the view reports again on its next store change (#12461).
+  "report-switch-status-timing": {
+    payload: {
+      switchId: string;
+      epoch: string;
+      appliedAt: number | null;
+      worktreeCount: number;
+      statusCount: number;
+    };
+    result: { accepted: boolean };
+  };
 }
 
 export type WorktreePortAction = keyof WorktreePortProtocol;

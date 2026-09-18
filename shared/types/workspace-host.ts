@@ -705,6 +705,21 @@ export type ForgeResolveProviderResult =
   | { status: "not-ready" };
 
 /**
+ * Wall-clock (`Date.now()`) stamps of the host's most recent project load and
+ * of each live monitor's first status-bearing snapshot. Absolute rather than
+ * relative so main can measure them against its own switch-requested instant.
+ * Counts and timings only — never ids or paths.
+ */
+export interface HostStatusTimingMarks {
+  loadStartedAt: number | null;
+  enumeratedAt: number | null;
+  firstSnapshotAt: number | null;
+  /** One entry per live monitor that has emitted a status, unordered. */
+  firstStatusAt: number[];
+  monitorCount: number;
+}
+
+/**
  * Events sent from Workspace Host → Main.
  * Includes both responses to requests and spontaneous updates.
  */
@@ -898,6 +913,19 @@ export type WorkspaceHostEvent =
   // Re-armed by `retry-auth-fetch` / credential rotation so a later
   // re-confirmation can re-signal.
   | { type: "fetch-auth-failure-confirmed"; reason: import("./ipc/errors.js").GitOperationReason }
+  // A switched-to view's report that its worktree statuses landed (or that its
+  // deadline passed first), relayed by the host with its own load marks
+  // attached. Main folds it into the switch's `projectswitch.status-timing`
+  // record. Relayed on this port rather than sent to main directly so it stays
+  // FIFO behind every status the host emitted before it (#12461).
+  | {
+      type: "switch-status-timing";
+      switchId: string;
+      /** Wall-clock ms the view saw every worktree with a status; null on deadline. */
+      rendererAppliedAt: number | null;
+      rendererStatusCount: number;
+      host: HostStatusTimingMarks;
+    }
   // Fired when the topology watcher goes "dark": either the `@parcel/watcher`
   // subscribe() rejected at cold start (no events will ever arrive), or a 5s
   // pending-event safety valve expired without the watcher delivering the

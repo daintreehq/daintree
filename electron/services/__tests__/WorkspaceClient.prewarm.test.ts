@@ -199,7 +199,7 @@ describe("WorkspaceClient.prewarmProject", () => {
     await readyAndResolveLoadFake(0);
 
     const load = client.loadProject("/project-a", 1);
-    await load;
+    await expect(load).resolves.toBe("warm");
 
     // Only one host was ever created
     expect(mockHosts).toHaveLength(1);
@@ -216,7 +216,9 @@ describe("WorkspaceClient.prewarmProject", () => {
 
     // Complete the init
     await readyAndResolveLoadFake(0);
-    await loadPromise;
+    // Joined the prewarmed host rather than spawning one, even though it was
+    // still loading.
+    await expect(loadPromise).resolves.toBe("warm");
 
     // Still only one host
     expect(mockHosts).toHaveLength(1);

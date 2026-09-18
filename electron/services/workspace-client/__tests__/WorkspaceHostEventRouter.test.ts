@@ -32,6 +32,12 @@ vi.mock("../fileSearchCacheInvalidation.js", () => ({
   fileSearchCacheInvalidator: fileSearchCacheInvalidatorMock,
 }));
 
+const statusTimingMock = vi.hoisted(() => ({ complete: vi.fn() }));
+
+vi.mock("../../ProjectSwitchStatusTiming.js", () => ({
+  projectSwitchStatusTiming: statusTimingMock,
+}));
+
 import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
 import { gitServiceCache } from "../../GitServiceCache.js";
@@ -209,6 +215,36 @@ describe("WorkspaceHostEventRouter", () => {
       router.routeHostEvent(entryB, { type: "emfile-limit-reached" });
 
       expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("switch-status-timing (#12461)", () => {
+    it("hands the view's report to the switch timing without relaying it anywhere", () => {
+      const emit = vi.fn();
+      const localRouter = new WorkspaceHostEventRouter({
+        emit,
+        worktreePathToProject: new Map(),
+        copyTreeProgressCallbacks: new Map(),
+      });
+      const entry = makeEntry();
+      const event: Extract<WorkspaceHostEvent, { type: "switch-status-timing" }> = {
+        type: "switch-status-timing",
+        switchId: "switch-1",
+        rendererAppliedAt: 2_000,
+        rendererStatusCount: 1,
+        host: {
+          loadStartedAt: 100,
+          enumeratedAt: 200,
+          firstSnapshotAt: 210,
+          firstStatusAt: [1_900],
+          monitorCount: 1,
+        },
+      };
+      localRouter.routeHostEvent(entry, event);
+
+      expect(statusTimingMock.complete).toHaveBeenCalledWith(event);
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+      expect(emit).not.toHaveBeenCalled();
     });
   });
 

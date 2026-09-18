@@ -23,6 +23,10 @@ import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { notificationService } from "../../../services/NotificationService.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { logInfo } from "../../../utils/logger.js";
+import {
+  projectSwitchStatusTiming,
+  type HostLoadKind,
+} from "../../../services/ProjectSwitchStatusTiming.js";
 import { isPerformanceCaptureEnabled, markPerformance } from "../../../utils/performance.js";
 import { PERF_MARKS } from "../../../../shared/perf/marks.js";
 import {
@@ -71,6 +75,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:switch");
     const trace = resolveSwitchTrace(options?.trace);
+    const requestedAt = Date.now();
     markMainReceived(trace, operation);
 
     // After the capture but before anything acts on it. The capture is a pure
@@ -105,6 +110,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
           logPrefix: "[ProjectSwitch]",
           resumeWorkspace: true,
           trace,
+          requestedAt,
         });
         await persistOutgoing;
       } finally {
@@ -166,6 +172,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
 
     const operation = captureSwitchOperation(deps, ctx, projectId, "project:reopen");
     const trace = resolveSwitchTrace(options?.trace);
+    const requestedAt = Date.now();
     markMainReceived(trace, operation);
 
     await assertProjectRepositoryIntact(project);
@@ -191,6 +198,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
           markActive: true,
           resumeWorkspace: true,
           trace,
+          requestedAt,
         });
         await persistOutgoing;
       } finally {
@@ -564,6 +572,8 @@ type ActivateOptions = {
   markActive?: boolean;
   resumeWorkspace?: boolean;
   trace: ProjectSwitchTrace;
+  /** `Date.now()` when main received the request — the origin of the status timing. */
+  requestedAt: number;
 };
 
 async function activateProjectView(
@@ -596,15 +606,28 @@ async function activateProjectView(
   // surfaced here: the await below owns forward-fail (#8400). Reopen requires
   // the host to be resumed BEFORE loadProject so it is ready to accept
   // worktree IPC from the newly-active view.
-  let loadWorktrees: Promise<void> | null = null;
+  let loadWorktrees: Promise<HostLoadKind> | null = null;
+  let statusTimingDeadlineAt: number | undefined;
   if (deps.worktreeService && windowId !== undefined) {
+    statusTimingDeadlineAt = projectSwitchStatusTiming.begin(
+      trace.switchId,
+      projectId,
+      windowId,
+      options.requestedAt
+    );
     if (options.resumeWorkspace) {
       deps.worktreeService.resumeProject(project.path);
     }
     loadWorktrees = deps.worktreeService.loadProject(project.path, windowId);
-    // Observed at the await below; without this a load rejection while the
-    // swap is still in flight would be an unhandled rejection.
-    loadWorktrees.catch(() => {});
+    // Observed at the await below; without the rejection handler a load
+    // failure while the swap is still in flight would be an unhandled
+    // rejection. The timing is settled here, as the load settles, rather than
+    // at the await, which only runs once the swap is done.
+    const { switchId } = trace;
+    loadWorktrees.then(
+      (hostLoad) => projectSwitchStatusTiming.hostReady(switchId, hostLoad),
+      () => projectSwitchStatusTiming.fail(switchId, "load-failed")
+    );
   }
 
   // Multi-view path: swap WebContentsViews instead of resetting stores
@@ -662,6 +685,7 @@ async function activateProjectView(
           );
         });
     }
+    projectSwitchStatusTiming.fail(trace.switchId, "swap-failed");
     throw error;
   }
   const { view, isNew } = swapResult;
@@ -750,6 +774,7 @@ async function activateProjectView(
       switchId: trace.switchId,
       entryPoint: trace.entryPoint,
       cacheHit: !isNew,
+      ...(statusTimingDeadlineAt !== undefined && { statusTimingDeadlineAt }),
     });
   }
 
@@ -822,6 +847,7 @@ async function activateProjectView(
       } catch (err) {
         console.error(`${options.logPrefix} Failed to load worktrees:`, err);
         worktreeLoadError = formatErrorMessage(err, "Failed to load worktrees");
+        projectSwitchStatusTiming.fail(trace.switchId, "load-failed");
       }
       if (!view.webContents.isDestroyed()) {
         view.webContents.send(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
@@ -843,6 +869,7 @@ async function activateProjectView(
   const totalMs = Math.round(performance.now() - activateStart);
   logInfo("projectswitch.settled", {
     projectId,
+    switchId: trace.switchId,
     isNew,
     swapMs,
     totalMs,

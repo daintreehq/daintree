@@ -81,6 +81,7 @@ import type {
   MonitorConfig,
   CreateWorktreeOptions,
   BranchInfo,
+  HostStatusTimingMarks,
 } from "../../shared/types/workspace-host.js";
 import type {
   PluginWorktreeLinked,
@@ -101,6 +102,7 @@ import {
   parseIndexGitlinks,
 } from "../utils/submoduleInventory.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
+import { StatusTimingRecorder } from "./StatusTimingRecorder.js";
 import { branchRefName, readBranchCommitterDates } from "../utils/branchCommitterDates.js";
 import { withTimeout } from "../utils/withTimeout.js";
 import { detectWslPath, getDefaultWslDistro } from "../utils/wsl.js";
@@ -420,6 +422,7 @@ function samePath(a: string, b: string): boolean {
 
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
+  private readonly statusTiming = new StatusTimingRecorder();
   private pollQueue = new PQueue({
     concurrency: 3,
     timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
@@ -643,6 +646,15 @@ export class WorkspaceService {
    */
   getVersion(): { epoch: string; seq: number } {
     return { epoch: this.epoch, seq: this.seq };
+  }
+
+  getStatusTimingMarks(): HostStatusTimingMarks {
+    return this.statusTiming.getMarks(this.monitors.values());
+  }
+
+  /** The latest project load succeeded and installed every worktree's monitor. */
+  hasSettledLoad(): boolean {
+    return this.statusTiming.isLoaded();
   }
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
@@ -928,6 +940,7 @@ export class WorkspaceService {
       forgeRemote: string | null;
     }
   ): Promise<void> {
+    this.statusTiming.beginLoad();
     try {
       // E2E-only: hold the load so renderer hydration's worktree prefetch
       // deterministically observes the pre-load window where `get-all-states`
@@ -985,6 +998,8 @@ export class WorkspaceService {
       // `false`, which is exactly the deleted-`.git` case above.
       if (!(await this.isGitRepository())) {
         this.gitBacked = false;
+        this.statusTiming.markEnumerated();
+        this.statusTiming.markLoaded();
         this.sendEvent({ type: "load-project-result", requestId, success: true });
         return;
       }
@@ -1008,6 +1023,7 @@ export class WorkspaceService {
 
       const rawWorktrees = await this.listService.list();
       const worktrees = await this.listService.mapToWorktrees(rawWorktrees);
+      this.statusTiming.markEnumerated();
 
       await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
 
@@ -1033,6 +1049,7 @@ export class WorkspaceService {
       // owning project picks them up.
       this.pruneStaleWslGitEntries(worktrees);
 
+      this.statusTiming.markLoaded();
       this.sendEvent({ type: "load-project-result", requestId, success: true });
 
       void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
@@ -1931,7 +1948,8 @@ export class WorkspaceService {
     }
   }
 
-  private handleMonitorUpdate(_monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
+  private handleMonitorUpdate(monitor: WorktreeMonitor, snapshot: WorktreeSnapshot): void {
+    this.statusTiming.noteEmit(monitor, snapshot.worktreeChanges != null);
     this.sendEvent({
       type: "worktree-update",
       worktree: snapshot,
@@ -1988,14 +2006,7 @@ export class WorkspaceService {
   }
 
   private emitUpdate(monitor: WorktreeMonitor): void {
-    const snapshot = monitor.getSnapshot();
-    this.sendEvent({
-      type: "worktree-update",
-      worktree: snapshot,
-      epoch: this.epoch,
-      seq: this.nextSeq(),
-    });
-    events.emit("sys:worktree:update", snapshot);
+    this.handleMonitorUpdate(monitor, monitor.getSnapshot());
   }
 
   /**

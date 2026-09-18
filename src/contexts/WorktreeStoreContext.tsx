@@ -30,6 +30,7 @@ import { markSwitch, setActiveSwitchTrace } from "@/utils/switchTrace";
 import { scheduleRevealTextReraster } from "@/utils/revealTextReraster";
 import { notify } from "@/lib/notify";
 import { actionService } from "@/services/ActionService";
+import { attachSwitchStatusTimingStore } from "@/services/projectSwitchStatusTiming";
 import { logDebug } from "@/utils/logger";
 import {
   RENDERER_ACTIVATION_ORIGIN,
@@ -154,6 +155,8 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     setCurrentViewStore(store);
   }, [store]);
+
+  useEffect(() => attachSwitchStatusTimingStore(store), [store]);
 
   useEffect(() => {
     const { worktreePort } = window.electron;
