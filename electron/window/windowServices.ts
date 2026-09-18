@@ -800,7 +800,9 @@ export async function setupWindowServices(
     // worktree port (Phase 1).
     const outcome = await runStartupWorktreeLoad({
       loadProject: workspaceClient
-        ? () => workspaceClient.loadProject(projectPathForWorktrees, win.id)
+        ? async () => {
+            await workspaceClient.loadProject(projectPathForWorktrees, win.id);
+          }
         : null,
       getPortTarget: () => opts.initialAppView?.webContents ?? getAppWebContents(win) ?? null,
       getHost: () => workspaceClient?.getHostForProject(projectPathForWorktrees),

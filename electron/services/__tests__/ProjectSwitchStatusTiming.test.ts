@@ -138,6 +138,18 @@ describe("ProjectSwitchStatusTiming", () => {
     });
   });
 
+  it("records statuses that landed only after the deadline as a timeout", () => {
+    timing.begin("s1", "p1", 1, T0);
+    const late = T0 + STATUS_TIMING_DEADLINE_MS + 1;
+    vi.setSystemTime(late + 50);
+    timing.complete(report("s1", late));
+
+    expect(lastRecord()).toMatchObject({
+      outcome: "timeout",
+      statusAppliedMs: STATUS_TIMING_DEADLINE_MS + 1,
+    });
+  });
+
   it("writes a main-only record when no report arrives by the backstop", () => {
     timing.begin("s1", "p1", 1, T0);
     timing.hostReady("s1", "cold");

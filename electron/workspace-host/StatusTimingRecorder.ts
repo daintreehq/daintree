@@ -13,29 +13,27 @@ export class StatusTimingRecorder {
   private loadStartedAt: number | null = null;
   private enumeratedAt: number | null = null;
   private firstSnapshotAt: number | null = null;
-  private enumerating = false;
+  private loaded = false;
   private readonly firstStatusAt = new WeakMap<object, number>();
 
   beginLoad(now = Date.now()): void {
     this.loadStartedAt = now;
     this.enumeratedAt = null;
     this.firstSnapshotAt = null;
-    this.enumerating = true;
+    this.loaded = false;
   }
 
   markEnumerated(now = Date.now()): void {
     this.enumeratedAt = now;
-    this.enumerating = false;
   }
 
-  /** Ends the load whether or not it got as far as listing worktrees. */
-  endLoad(): void {
-    this.enumerating = false;
+  /** The load succeeded with every worktree's monitor installed. */
+  markLoaded(): void {
+    this.loaded = true;
   }
 
-  /** A load that has started but not yet listed its worktrees. */
-  isEnumerating(): boolean {
-    return this.enumerating;
+  isLoaded(): boolean {
+    return this.loaded;
   }
 
   noteEmit(monitor: object, hasStatus: boolean, now = Date.now()): void {
@@ -66,18 +64,25 @@ export class StatusTimingRecorder {
 }
 
 /**
- * Whether a view's "every worktree has a status" report describes this host's
- * current state. A view can hold a store from a previous host epoch (a cached
- * view whose host was recycled) or an empty pre-load answer, and either would
- * report success before a single status from this load had landed. A deadline
- * report (`appliedAt: null`) is always taken — it claims nothing.
+ * Whether a view's "every worktree has a status" report can describe this
+ * host. A view can be answered `[]` before the load has installed any monitor
+ * (its port is brokered as soon as the host exists), and after a host restart
+ * its store can mix the new epoch with rows the old host last described; both
+ * look complete before a single status from this host has landed. So the load
+ * must have settled, and this host must itself have emitted a status for every
+ * worktree it has. A deadline report (`appliedAt: null`) claims nothing and is
+ * always taken.
  */
 export function isStatusReportCurrent(
   report: { epoch: string; appliedAt: number | null; worktreeCount: number },
-  host: { epoch: string; monitorCount: number; enumerating: boolean }
+  host: { epoch: string; loaded: boolean; marks: HostStatusTimingMarks }
 ): boolean {
   if (report.appliedAt === null) return true;
+  const { monitorCount, firstStatusAt } = host.marks;
   return (
-    !host.enumerating && report.epoch === host.epoch && report.worktreeCount === host.monitorCount
+    host.loaded &&
+    report.epoch === host.epoch &&
+    report.worktreeCount === monitorCount &&
+    firstStatusAt.length === monitorCount
   );
 }

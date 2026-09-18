@@ -8,9 +8,7 @@ describe("StatusTimingRecorder", () => {
     const b = {};
 
     recorder.beginLoad(100);
-    expect(recorder.isEnumerating()).toBe(true);
     recorder.markEnumerated(250);
-    expect(recorder.isEnumerating()).toBe(false);
 
     recorder.noteEmit(a, false, 260);
     recorder.noteEmit(b, false, 261);
@@ -66,12 +64,19 @@ describe("StatusTimingRecorder", () => {
     });
   });
 
-  it("stops enumerating when a load ends without listing worktrees", () => {
+  it("is settled only between a successful load and the next one", () => {
     const recorder = new StatusTimingRecorder();
+    expect(recorder.isLoaded()).toBe(false);
+
     recorder.beginLoad(0);
-    recorder.endLoad();
-    expect(recorder.isEnumerating()).toBe(false);
-    expect(recorder.getMarks([]).enumeratedAt).toBeNull();
+    recorder.markEnumerated(10);
+    expect(recorder.isLoaded()).toBe(false);
+
+    recorder.markLoaded();
+    expect(recorder.isLoaded()).toBe(true);
+
+    recorder.beginLoad(500);
+    expect(recorder.isLoaded()).toBe(false);
   });
 
   it("does not stamp a first snapshot before any load began", () => {
@@ -82,10 +87,17 @@ describe("StatusTimingRecorder", () => {
 });
 
 describe("isStatusReportCurrent", () => {
-  const host = { epoch: "e2", monitorCount: 3, enumerating: false };
+  const marks = {
+    loadStartedAt: 0,
+    enumeratedAt: 10,
+    firstSnapshotAt: 20,
+    firstStatusAt: [300, 400, 500],
+    monitorCount: 3,
+  };
+  const host = { epoch: "e2", loaded: true, marks };
   const applied = { epoch: "e2", appliedAt: 1_000, worktreeCount: 3 };
 
-  it("accepts an applied report taken from this host's state", () => {
+  it("accepts an applied report once this host has emitted every status", () => {
     expect(isStatusReportCurrent(applied, host)).toBe(true);
   });
 
@@ -94,18 +106,29 @@ describe("isStatusReportCurrent", () => {
   });
 
   it("refuses a store whose worktree count differs from the host's", () => {
-    expect(isStatusReportCurrent({ ...applied, worktreeCount: 0 }, host)).toBe(false);
+    expect(isStatusReportCurrent({ ...applied, worktreeCount: 2 }, host)).toBe(false);
   });
 
-  it("refuses while the host is still listing worktrees", () => {
-    expect(isStatusReportCurrent(applied, { ...host, enumerating: true })).toBe(false);
+  it("refuses a complete-looking store before this host has emitted every status", () => {
+    // After a restart the store can carry the new epoch alongside a row the old
+    // host last described, so every row has a status that this host never sent.
+    expect(
+      isStatusReportCurrent(applied, { ...host, marks: { ...marks, firstStatusAt: [300, 400] } })
+    ).toBe(false);
+  });
+
+  it("refuses an empty store answered before the load settled", () => {
+    const empty = { ...marks, firstStatusAt: [], monitorCount: 0 };
+    const report = { ...applied, worktreeCount: 0 };
+    expect(isStatusReportCurrent(report, { ...host, loaded: false, marks: empty })).toBe(false);
+    expect(isStatusReportCurrent(report, { ...host, marks: empty })).toBe(true);
   });
 
   it("always accepts a deadline report", () => {
     expect(
       isStatusReportCurrent(
         { epoch: "e1", appliedAt: null, worktreeCount: 0 },
-        { ...host, enumerating: true }
+        { ...host, loaded: false }
       )
     ).toBe(true);
   });

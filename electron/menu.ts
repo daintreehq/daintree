@@ -6,6 +6,7 @@ import { openExternalUrl } from "./utils/openExternal.js";
 import { CHANNELS } from "./ipc/channels.js";
 import { broadcastProjectSwitchUpdates } from "./ipc/projectSwitchBroadcast.js";
 import { getProjectHistory } from "./services/ProjectHistoryService.js";
+import { projectSwitchStatusTiming } from "./services/ProjectSwitchStatusTiming.js";
 import { getEffectiveRegistry } from "../shared/config/agentRegistry.js";
 import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
@@ -908,6 +909,7 @@ export async function handleDirectoryOpen(
   cliAvailabilityService?: CliAvailabilityService
 ): Promise<void> {
   if (targetWindow.isDestroyed()) return;
+  const requestedAt = Date.now();
 
   try {
     const project = await projectStore.addProject(directoryPath);
@@ -924,10 +926,19 @@ export async function handleDirectoryOpen(
       // project row to be the current project of (#11936).
       const departingWorkspaceId = pvm.getActiveProjectId();
 
-      const { view, isNew } = await pvm.switchTo(project.id, project.path, {
-        switchId: randomUUID(),
-        entryPoint: "menu",
-      });
+      // One id for the swap's trace and the view's switch notice, so the view's
+      // status-timing report finds the record begun here. Timed only when a
+      // worktree load follows, as on the IPC switch path.
+      const switchId = randomUUID();
+      const statusTimingDeadlineAt = getWorkspaceClientRef()
+        ? projectSwitchStatusTiming.begin(switchId, project.id, targetWindow.id, requestedAt)
+        : undefined;
+      const { view, isNew } = await pvm
+        .switchTo(project.id, project.path, { switchId, entryPoint: "menu" })
+        .catch((error: unknown) => {
+          projectSwitchStatusTiming.fail(switchId, "swap-failed");
+          throw error;
+        });
       // Capture the outgoing project id before the pointer flips so we can
       // broadcast its bumped `lastOpened` to every cached view (#8561).
       const previousProjectId = projectStore.getCurrentProjectId();
@@ -958,7 +969,8 @@ export async function handleDirectoryOpen(
       if (!view.webContents.isDestroyed()) {
         view.webContents.send(CHANNELS.PROJECT_ON_SWITCH, {
           project: projectStore.getProjectById(project.id) ?? project,
-          switchId: randomUUID(),
+          switchId,
+          ...(statusTimingDeadlineAt !== undefined && { statusTimingDeadlineAt }),
         });
       }
 
@@ -973,13 +985,17 @@ export async function handleDirectoryOpen(
         const broker = getWorktreePortBrokerRef();
         if (wsClient) {
           try {
-            await wsClient.loadProject(project.path, targetWindow.id);
+            projectSwitchStatusTiming.hostReady(
+              switchId,
+              await wsClient.loadProject(project.path, targetWindow.id)
+            );
             wsClient.attachDirectPort(targetWindow.id, view.webContents);
             const host = wsClient.getHostForProject(project.path);
             if (host && broker) {
               broker.brokerPort(host, view.webContents);
             }
           } catch (err) {
+            projectSwitchStatusTiming.fail(switchId, "load-failed");
             console.error("[menu] Failed to restore worktree ports:", err);
           }
         }

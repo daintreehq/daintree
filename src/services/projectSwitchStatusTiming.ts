@@ -11,9 +11,19 @@ import type { WorktreeViewStore, WorktreeViewStoreApi } from "@/store/createWork
  * `worktree-update` traffic never pays for it.
  */
 
+/**
+ * How soon a refused report is judged again when nothing in the store moves.
+ * A load that settles without emitting anything — a folder with no repository,
+ * or a host that finishes installing monitors this view already has — would
+ * otherwise leave a refused view waiting out its whole deadline.
+ */
+const REFUSED_RETRY_MS = 500;
+
 interface ArmedSwitch {
   switchId: string;
+  deadlineAt: number;
   timer: ReturnType<typeof setTimeout>;
+  retry: ReturnType<typeof setTimeout> | null;
   unwatch: (() => void) | null;
   inFlight: boolean;
   /** The store or port changed while a report was in flight. */
@@ -38,7 +48,9 @@ export function armSwitchStatusTiming(switchId: string, deadlineAt: number): voi
   disarm();
   const entry: ArmedSwitch = {
     switchId,
+    deadlineAt,
     timer: setTimeout(() => expire(entry), Math.max(0, deadlineAt - Date.now())),
+    retry: null,
     unwatch: null,
     inFlight: false,
     dirty: false,
@@ -70,13 +82,21 @@ function watch(entry: ArmedSwitch): void {
       check(entry);
     }
   });
-  // Fires at once when the port is already up — a warm switch reuses it and
-  // never re-attaches, so its store is judged as it stands.
-  const offReady = window.electron.worktreePort.onReady(() => check(entry));
+  // `onReady` also fires at once when the port is already up. That call is
+  // skipped: a check that finishes the switch then would run before there is
+  // an unwatch to call, leaving both listeners behind.
+  let wired = false;
+  const offReady = window.electron.worktreePort.onReady(() => {
+    if (wired) check(entry);
+  });
   entry.unwatch = () => {
     offStore();
     offReady();
   };
+  wired = true;
+  // A warm switch reuses its port and never re-attaches, so the store is
+  // judged as it stands.
+  check(entry);
 }
 
 function unwatch(entry: ArmedSwitch): void {
@@ -89,6 +109,7 @@ function disarm(): void {
   if (!entry) return;
   armed = null;
   clearTimeout(entry.timer);
+  if (entry.retry !== null) clearTimeout(entry.retry);
   unwatch(entry);
 }
 
@@ -106,6 +127,12 @@ function check(entry: ArmedSwitch): void {
     entry.dirty = true;
     return;
   }
+  // A view that only arrives after its deadline has timed out, whatever its
+  // store says now.
+  if (Date.now() >= entry.deadlineAt) {
+    expire(entry);
+    return;
+  }
   if (!window.electron.worktreePort.isReady()) return;
   const state = store.getState();
   if (!state.isInitialized) return;
@@ -114,6 +141,10 @@ function check(entry: ArmedSwitch): void {
 
   entry.inFlight = true;
   entry.dirty = false;
+  if (entry.retry !== null) {
+    clearTimeout(entry.retry);
+    entry.retry = null;
+  }
   window.electron.worktreePort
     .request("report-switch-status-timing", {
       switchId: entry.switchId,
@@ -129,9 +160,15 @@ function check(entry: ArmedSwitch): void {
         if (accepted) {
           disarm();
         } else if (entry.dirty) {
-          // Refused as stale. Re-judge only if something moved meanwhile;
-          // otherwise the next store change or port attach will.
           check(entry);
+        } else {
+          // Refused as not yet describing this host. The next store change
+          // re-judges it at once; the retry covers a host that settles
+          // without changing the store.
+          entry.retry = setTimeout(() => {
+            entry.retry = null;
+            check(entry);
+          }, REFUSED_RETRY_MS);
         }
       },
       () => {
@@ -146,7 +183,7 @@ function expire(entry: ArmedSwitch): void {
   if (armed !== entry) return;
   const state = store?.getState();
   if (state && window.electron.worktreePort.isReady()) {
-    void window.electron.worktreePort
+    window.electron.worktreePort
       .request("report-switch-status-timing", {
         switchId: entry.switchId,
         epoch: state.version.epoch,

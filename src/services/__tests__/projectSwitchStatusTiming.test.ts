@@ -1,8 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createStore } from "zustand/vanilla";
 import type { WorktreeSnapshot } from "@shared/types";
-import type { WorktreeViewStoreApi } from "@/store/createWorktreeStore";
+import { createWorktreeStore, type WorktreeViewStoreApi } from "@/store/createWorktreeStore";
 import {
   armSwitchStatusTiming,
   attachSwitchStatusTimingStore,
@@ -19,27 +18,34 @@ let portReady: boolean;
 let readyCallbacks: Array<() => void>;
 let onSwitchListeners: OnSwitch[];
 let request: ReturnType<typeof vi.fn>;
+let seq = 0;
 
-function worktree(id: string, hasStatus: boolean): WorktreeSnapshot {
+function worktree(id: string, hasStatus: boolean, changedFileCount = 0): WorktreeSnapshot {
   return {
     id,
-    worktreeChanges: hasStatus ? { changedFileCount: 0 } : null,
-  } as unknown as WorktreeSnapshot;
+    worktreeId: id,
+    path: `/repo/${id}`,
+    name: id,
+    isCurrent: false,
+    worktreeChanges: hasStatus
+      ? { worktreeId: id, rootPath: `/repo/${id}`, changes: [], changedFileCount }
+      : null,
+  };
 }
 
-function makeStore(worktrees: WorktreeSnapshot[], isInitialized = true, epoch = "e1") {
-  return createStore(() => ({
-    worktrees: new Map(worktrees.map((w) => [w.id, w])),
-    isInitialized,
-    version: { epoch, seq: 1 },
-  })) as unknown as WorktreeViewStoreApi;
+function hydrate(store: WorktreeViewStoreApi, worktrees: WorktreeSnapshot[], epoch = "e1") {
+  store.getState().applySnapshot(worktrees, { epoch, seq: ++seq });
 }
 
-function setWorktrees(store: WorktreeViewStoreApi, worktrees: WorktreeSnapshot[]) {
-  store.setState({
-    worktrees: new Map(worktrees.map((w) => [w.id, w])),
-    version: { epoch: store.getState().version.epoch, seq: store.getState().version.seq + 1 },
-  });
+function update(store: WorktreeViewStoreApi, snapshot: WorktreeSnapshot, epoch?: string) {
+  const current = store.getState().version.epoch;
+  store.getState().applyUpdate(snapshot, { epoch: epoch ?? current, seq: ++seq });
+}
+
+function makeStore(worktrees: WorktreeSnapshot[], epoch = "e1"): WorktreeViewStoreApi {
+  const store = createWorktreeStore();
+  hydrate(store, worktrees, epoch);
+  return store;
 }
 
 function makePortReady() {
@@ -91,7 +97,9 @@ describe("projectSwitchStatusTiming", () => {
   });
 
   it("reports at once when a warm view already has every status", async () => {
-    const detach = attachSwitchStatusTimingStore(makeStore([worktree("a", true), worktree("b", true)]));
+    const detach = attachSwitchStatusTimingStore(
+      makeStore([worktree("a", true), worktree("b", true)])
+    );
     vi.setSystemTime(T0 + 40);
     armSwitchStatusTiming("s1", DEADLINE);
 
@@ -115,26 +123,26 @@ describe("projectSwitchStatusTiming", () => {
     armSwitchStatusTiming("s1", DEADLINE);
     expect(request).not.toHaveBeenCalled();
 
-    setWorktrees(store, [worktree("a", true), worktree("b", false)]);
+    update(store, worktree("a", true));
     expect(request).not.toHaveBeenCalled();
 
     vi.setSystemTime(T0 + 2_300);
-    setWorktrees(store, [worktree("a", true), worktree("b", true)]);
+    update(store, worktree("b", true));
     expect(request).toHaveBeenCalledTimes(1);
     expect(request.mock.calls[0]![1]).toMatchObject({ appliedAt: T0 + 2_300, statusCount: 2 });
 
     await settle();
-    setWorktrees(store, [worktree("a", true), worktree("b", true), worktree("c", true)]);
+    update(store, worktree("c", true));
     expect(request).toHaveBeenCalledTimes(1);
   });
 
   it("does not judge a store that has not been hydrated", () => {
-    const store = makeStore([], false);
+    const store = createWorktreeStore();
     attachSwitchStatusTimingStore(store);
     armSwitchStatusTiming("s1", DEADLINE);
     expect(request).not.toHaveBeenCalled();
 
-    store.setState({ isInitialized: true });
+    hydrate(store, []);
     expect(request).toHaveBeenCalledTimes(1);
     expect(request.mock.calls[0]![1]).toMatchObject({ worktreeCount: 0, statusCount: 0 });
   });
@@ -157,9 +165,9 @@ describe("projectSwitchStatusTiming", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("retries a refused report only after the store changes", async () => {
+  it("reports again from the new host's state after a refusal", async () => {
     request.mockResolvedValueOnce({ accepted: false });
-    const store = makeStore([worktree("a", true)], true, "old");
+    const store = makeStore([worktree("a", true)], "old");
     attachSwitchStatusTimingStore(store);
     armSwitchStatusTiming("s1", DEADLINE);
     expect(request).toHaveBeenCalledTimes(1);
@@ -167,13 +175,11 @@ describe("projectSwitchStatusTiming", () => {
     await settle();
     expect(request).toHaveBeenCalledTimes(1);
 
-    store.setState({
-      worktrees: new Map([["a", worktree("a", false)]]),
-      version: { epoch: "new", seq: 1 },
-    });
+    // The restarted host's statusless first snapshot, then its status.
+    update(store, worktree("a", false), "new");
     expect(request).toHaveBeenCalledTimes(1);
 
-    setWorktrees(store, [worktree("a", true)]);
+    update(store, worktree("a", true));
     expect(request).toHaveBeenCalledTimes(2);
     expect(request.mock.calls[1]![1]).toMatchObject({ epoch: "new" });
   });
@@ -185,12 +191,39 @@ describe("projectSwitchStatusTiming", () => {
     attachSwitchStatusTimingStore(store);
     armSwitchStatusTiming("s1", DEADLINE);
 
-    setWorktrees(store, [worktree("a", true)]);
+    update(store, worktree("a", true, 1));
     expect(request).toHaveBeenCalledTimes(1);
 
     refuse({ accepted: false });
     await settle();
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("judges a refused report again after a pause when the store never moves", async () => {
+    request.mockResolvedValueOnce({ accepted: false });
+    attachSwitchStatusTimingStore(makeStore([]));
+    armSwitchStatusTiming("s1", DEADLINE);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await settle();
+    vi.advanceTimersByTime(499);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(1);
+    expect(request).toHaveBeenCalledTimes(2);
+    await settle();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("reports a timeout, not success, when the switch arrives after its deadline", () => {
+    vi.setSystemTime(DEADLINE + 1_000);
+    attachSwitchStatusTimingStore(makeStore([worktree("a", true)]));
+    armSwitchStatusTiming("s1", DEADLINE);
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]![1]).toMatchObject({ appliedAt: null, statusCount: 1 });
+    expect(readyCallbacks).toHaveLength(0);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("reports what it has when the deadline passes first", () => {
@@ -225,7 +258,7 @@ describe("projectSwitchStatusTiming", () => {
     armSwitchStatusTiming("s2", DEADLINE + 500);
     expect(vi.getTimerCount()).toBe(1);
 
-    setWorktrees(store, [worktree("a", true)]);
+    update(store, worktree("a", true));
     expect(request).toHaveBeenCalledTimes(1);
     expect(request.mock.calls[0]![1]).toMatchObject({ switchId: "s2" });
   });
@@ -236,7 +269,7 @@ describe("projectSwitchStatusTiming", () => {
     armSwitchStatusTiming("s1", DEADLINE);
     detach();
 
-    setWorktrees(store, [worktree("a", true)]);
+    update(store, worktree("a", true));
     expect(request).not.toHaveBeenCalled();
     expect(readyCallbacks).toHaveLength(0);
   });

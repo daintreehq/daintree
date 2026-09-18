@@ -621,12 +621,12 @@ async function activateProjectView(
     loadWorktrees = deps.worktreeService.loadProject(project.path, windowId);
     // Observed at the await below; without the rejection handler a load
     // failure while the swap is still in flight would be an unhandled
-    // rejection. Host readiness is stamped here, as the load settles, rather
-    // than at the await, which only runs once the swap is done.
+    // rejection. The timing is settled here, as the load settles, rather than
+    // at the await, which only runs once the swap is done.
     const { switchId } = trace;
     loadWorktrees.then(
       (hostLoad) => projectSwitchStatusTiming.hostReady(switchId, hostLoad),
-      () => {}
+      () => projectSwitchStatusTiming.fail(switchId, "load-failed")
     );
   }
 

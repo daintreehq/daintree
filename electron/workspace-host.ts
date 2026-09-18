@@ -282,8 +282,8 @@ async function handleWorktreePortRequest(
         const host = workspaceService.getStatusTimingMarks();
         const accepted = isStatusReportCurrent(payload, {
           epoch: workspaceService.getVersion().epoch,
-          monitorCount: host.monitorCount,
-          enumerating: workspaceService.isLoadEnumerating(),
+          loaded: workspaceService.hasSettledLoad(),
+          marks: host,
         });
         if (accepted) {
           sendEvent({

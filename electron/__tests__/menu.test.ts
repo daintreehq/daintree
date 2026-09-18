@@ -139,7 +139,23 @@ vi.mock("../ipc/channels.js", () => ({
     MENU_ACTION: "menu-action",
     PROJECT_OPEN_GIT_INIT_DIALOG: "project:open-git-init-dialog",
     NOTIFICATION_SHOW_TOAST: "notification:show-toast",
+    PROJECT_ON_SWITCH: "project:on-switch",
   },
+}));
+
+const statusTimingMock = vi.hoisted(() => ({
+  begin: vi.fn((_switchId: string, _projectId: string, _windowId: number, requestedAt: number) => {
+    return requestedAt + 15_000;
+  }),
+  hostReady: vi.fn(),
+  fail: vi.fn(),
+  complete: vi.fn(),
+}));
+
+vi.mock("../services/ProjectSwitchStatusTiming.js", () => ({
+  STATUS_TIMING_DEADLINE_MS: 15_000,
+  STATUS_TIMING_REPORT_GRACE_MS: 5_000,
+  projectSwitchStatusTiming: statusTimingMock,
 }));
 
 vi.mock("../../shared/config/agentRegistry.js", () => ({
@@ -229,6 +245,7 @@ import {
 import { getBuildChannelLabel } from "../../shared/config/distribution.js";
 import { webContents, app, Menu, dialog } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
+import { getWorkspaceClientRef } from "../window/windowServices.js";
 import { AppError } from "../utils/errorTypes.js";
 
 function findMenuItem(
@@ -1008,6 +1025,96 @@ describe("handleDirectoryOpen window targeting", () => {
       entryPoint: "menu",
     });
     expect(newestManager.switchTo).not.toHaveBeenCalled();
+  });
+});
+
+describe("handleDirectoryOpen status timing (#12461)", () => {
+  const PROJECT = { id: "project-a", path: "/repos/alpha" };
+  const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+
+  function setup(workspace: { loadProject: () => Promise<unknown> } | null) {
+    const send = vi.fn();
+    const manager = {
+      switchTo: vi.fn(async (..._args: unknown[]) => ({
+        view: { webContents: { isDestroyed: () => false, send } },
+        isNew: true,
+      })),
+      getActiveProjectId: vi.fn<() => string | null>(() => null),
+      getOutgoingBridgeProjectId: vi.fn<() => string | null>(() => null),
+    };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) =>
+        id === 7 ? { services: { projectViewManager: manager } } : undefined,
+      getPrimary: () => ({ services: { projectViewManager: manager } }),
+    });
+    vi.mocked(getWorkspaceClientRef).mockReturnValue(
+      (workspace
+        ? {
+            loadProject: vi.fn(workspace.loadProject),
+            attachDirectPort: vi.fn(),
+            getHostForProject: vi.fn(() => undefined),
+          }
+        : null) as never
+    );
+    return { manager, send };
+  }
+
+  function onSwitchPayload(send: ReturnType<typeof vi.fn>) {
+    return send.mock.calls.find((c) => c[0] === CHANNELS.PROJECT_ON_SWITCH)![1] as {
+      switchId: string;
+      statusTimingDeadlineAt?: number;
+    };
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    projectStoreMock.addProject.mockResolvedValue(PROJECT);
+    projectStoreMock.getProjectById.mockReturnValue(PROJECT);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    resetProjectHistory(7);
+  });
+
+  afterEach(() => {
+    disposeProjectHistory(7);
+    vi.mocked(getWorkspaceClientRef).mockReturnValue(undefined as never);
+  });
+
+  it("times the switch under the id the view is told about", async () => {
+    const { manager, send } = setup({ loadProject: async () => "cold" });
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    const { switchId } = manager.switchTo.mock.calls[0]![2] as { switchId: string };
+    expect(statusTimingMock.begin).toHaveBeenCalledWith(
+      switchId,
+      PROJECT.id,
+      7,
+      expect.any(Number)
+    );
+    expect(onSwitchPayload(send)).toMatchObject({
+      switchId,
+      statusTimingDeadlineAt: statusTimingMock.begin.mock.results[0]!.value,
+    });
+    expect(statusTimingMock.hostReady).toHaveBeenCalledWith(switchId, "cold");
+  });
+
+  it("finishes the timing when the worktree load fails", async () => {
+    const { manager } = setup({
+      loadProject: async () => {
+        throw new Error("host failed");
+      },
+    });
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    const { switchId } = manager.switchTo.mock.calls[0]![2] as { switchId: string };
+    expect(statusTimingMock.fail).toHaveBeenCalledWith(switchId, "load-failed");
+  });
+
+  it("does not time a switch with no worktree load to follow", async () => {
+    const { send } = setup(null);
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    expect(statusTimingMock.begin).not.toHaveBeenCalled();
+    expect(onSwitchPayload(send)).not.toHaveProperty("statusTimingDeadlineAt");
   });
 });
 

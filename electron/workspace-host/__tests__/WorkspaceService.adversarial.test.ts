@@ -172,7 +172,39 @@ describe("WorkspaceService adversarial", () => {
   });
 
   describe("status timing marks (#12461)", () => {
-    it("ends the load's enumeration even when the load fails", async () => {
+    it("settles only once every monitor is installed", async () => {
+      const listService = service["listService"] as unknown as {
+        list: Mock;
+        mapToWorktrees: Mock;
+      };
+      listService.list = vi.fn().mockResolvedValue([]);
+      listService.mapToWorktrees = vi.fn().mockResolvedValue([]);
+      vi.spyOn(
+        service["topologyWatcher"] as unknown as { startWatcher: () => Promise<void> },
+        "startWatcher"
+      ).mockResolvedValue(undefined);
+      const observed: Array<{ enumerated: boolean; settled: boolean }> = [];
+      vi.spyOn(service, "syncMonitors").mockImplementation(async () => {
+        observed.push({
+          enumerated: service.getStatusTimingMarks().enumeratedAt !== null,
+          settled: service.hasSettledLoad(),
+        });
+      });
+
+      await service.loadProject("req-load", "/repo", "ws-test-project-id");
+
+      // Listed but still installing monitors: a view answered `[]` now must
+      // not be able to report every (zero) worktree as having a status.
+      expect(observed).toEqual([{ enumerated: true, settled: false }]);
+      expect(service.hasSettledLoad()).toBe(true);
+      expect(sentEvents).toContainEqual({
+        type: "load-project-result",
+        requestId: "req-load",
+        success: true,
+      });
+    });
+
+    it("never settles a load that fails", async () => {
       const listService = service["listService"] as unknown as {
         list: Mock;
         mapToWorktrees: Mock;
@@ -184,8 +216,7 @@ describe("WorkspaceService adversarial", () => {
 
       await service.loadProject("req-load", "/repo", "ws-test-project-id");
 
-      // A load stuck "enumerating" would refuse every later status report.
-      expect(service.isLoadEnumerating()).toBe(false);
+      expect(service.hasSettledLoad()).toBe(false);
       expect(service.getStatusTimingMarks()).toMatchObject({
         enumeratedAt: null,
         monitorCount: 0,
@@ -193,13 +224,13 @@ describe("WorkspaceService adversarial", () => {
       expect(service.getStatusTimingMarks().loadStartedAt).toEqual(expect.any(Number));
     });
 
-    it("counts a folder with no repository as enumerated with no worktrees", async () => {
+    it("settles a folder with no repository as enumerated with no worktrees", async () => {
       mockSimpleGit.checkIsRepo.mockResolvedValue(false);
 
       await service.loadProject("req-plain", "/downloads", "ws-plain");
 
       const marks = service.getStatusTimingMarks();
-      expect(service.isLoadEnumerating()).toBe(false);
+      expect(service.hasSettledLoad()).toBe(true);
       expect(marks.enumeratedAt).toEqual(expect.any(Number));
       expect(marks).toMatchObject({ firstStatusAt: [], monitorCount: 0 });
     });

@@ -1777,7 +1777,9 @@ describe("project:switch status timing (#12461)", () => {
     });
 
     const pending = invoke();
-    await vi.waitFor(() => expect(statusTimingMock.hostReady).toHaveBeenCalledWith("switch-1", "warm"));
+    await vi.waitFor(() =>
+      expect(statusTimingMock.hostReady).toHaveBeenCalledWith("switch-1", "warm")
+    );
 
     resolveSwap({
       view: { webContents: { id: 300, isDestroyed: () => false, send: vi.fn() } },
@@ -1796,6 +1798,27 @@ describe("project:switch status timing (#12461)", () => {
 
     expect(statusTimingMock.fail).toHaveBeenCalledWith("switch-1", "load-failed");
     expect(statusTimingMock.hostReady).not.toHaveBeenCalled();
+  });
+
+  it("records the load failure as it happens, not once the swap finishes", async () => {
+    let resolveSwap!: (v: { view: unknown; isNew: boolean }) => void;
+    const { invoke } = setup({
+      switchTo: () => new Promise((resolve) => (resolveSwap = resolve)),
+      loadProject: async () => {
+        throw new Error("Not a git repository");
+      },
+    });
+
+    const pending = invoke();
+    await vi.waitFor(() =>
+      expect(statusTimingMock.fail).toHaveBeenCalledWith("switch-1", "load-failed")
+    );
+
+    resolveSwap({
+      view: { webContents: { id: 300, isDestroyed: () => false, send: vi.fn() } },
+      isNew: false,
+    });
+    await pending;
   });
 
   it("finishes the timing as swap-failed when the view swap throws", async () => {

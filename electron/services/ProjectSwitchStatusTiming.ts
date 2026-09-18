@@ -17,12 +17,7 @@ export const STATUS_TIMING_REPORT_GRACE_MS = 5_000;
 export type HostLoadKind = "warm" | "cold";
 
 export type StatusTimingOutcome =
-  | "applied"
-  | "timeout"
-  | "no-report"
-  | "superseded"
-  | "load-failed"
-  | "swap-failed";
+  "applied" | "timeout" | "no-report" | "superseded" | "load-failed" | "swap-failed";
 
 type StatusTimingReport = Extract<WorkspaceHostEvent, { type: "switch-status-timing" }>;
 
@@ -68,7 +63,10 @@ export class ProjectSwitchStatusTiming {
       hostReadyAt: null,
       timer: setTimeout(
         () => this.finish(pending, "no-report"),
-        Math.max(0, requestedAt + STATUS_TIMING_DEADLINE_MS + STATUS_TIMING_REPORT_GRACE_MS - this.now())
+        Math.max(
+          0,
+          requestedAt + STATUS_TIMING_DEADLINE_MS + STATUS_TIMING_REPORT_GRACE_MS - this.now()
+        )
       ),
     };
     this.pending.set(switchId, pending);
@@ -91,7 +89,11 @@ export class ProjectSwitchStatusTiming {
   complete(report: StatusTimingReport): void {
     const pending = this.pending.get(report.switchId);
     if (!pending) return;
-    this.finish(pending, report.rendererAppliedAt === null ? "timeout" : "applied", report);
+    const { rendererAppliedAt } = report;
+    const applied =
+      rendererAppliedAt !== null &&
+      rendererAppliedAt <= pending.requestedAt + STATUS_TIMING_DEADLINE_MS;
+    this.finish(pending, applied ? "applied" : "timeout", report);
   }
 
   /** Test seam: live switch count, so suites can assert nothing leaked. */

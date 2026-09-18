@@ -652,9 +652,9 @@ export class WorkspaceService {
     return this.statusTiming.getMarks(this.monitors.values());
   }
 
-  /** True while a project load has started but not yet listed its worktrees. */
-  isLoadEnumerating(): boolean {
-    return this.statusTiming.isEnumerating();
+  /** The latest project load succeeded and installed every worktree's monitor. */
+  hasSettledLoad(): boolean {
+    return this.statusTiming.isLoaded();
   }
 
   constructor(private readonly sendEvent: (event: WorkspaceHostEvent) => void) {
@@ -999,6 +999,7 @@ export class WorkspaceService {
       if (!(await this.isGitRepository())) {
         this.gitBacked = false;
         this.statusTiming.markEnumerated();
+        this.statusTiming.markLoaded();
         this.sendEvent({ type: "load-project-result", requestId, success: true });
         return;
       }
@@ -1048,6 +1049,7 @@ export class WorkspaceService {
       // owning project picks them up.
       this.pruneStaleWslGitEntries(worktrees);
 
+      this.statusTiming.markLoaded();
       this.sendEvent({ type: "load-project-result", requestId, success: true });
 
       void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
@@ -1070,8 +1072,6 @@ export class WorkspaceService {
         success: false,
         error: formatErrorMessage(error, "Failed to load worktrees"),
       });
-    } finally {
-      this.statusTiming.endLoad();
     }
   }
 
