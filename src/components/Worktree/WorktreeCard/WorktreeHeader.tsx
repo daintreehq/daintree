@@ -16,6 +16,7 @@ import { DevServerIndicator } from "./DevServerIndicator";
 import { CollapsedSessionIndicators } from "./CollapsedSessionIndicators";
 import { CollapsedAlarmPill } from "./CollapsedAlarmPill";
 import { isExternalWorktree, isLiveDevServerStatus } from "@/lib/worktreeFilters";
+import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import type { DevPreviewSessionState } from "@shared/types/ipc/devPreview";
 import { WorktreeActionsToolbar } from "./WorktreeActionsToolbar";
 import { MainWorktreeSecondaryRow } from "./MainWorktreeSecondaryRow";
@@ -189,20 +190,16 @@ export function WorktreeHeader({
   gitStateIndicator,
   menu,
 }: WorktreeHeaderProps) {
-  // PR-originated worktrees (created from the PR dropdown, #8888) invert the
-  // default issue-first headline: the PR title leads, with the linked issue
-  // shown underneath. `sourcePrNumber` is the in-memory discriminator seeded at
-  // creation time.
-  const isPrOriginated = !!worktree.sourcePrNumber;
-  const prHeadlineTitle = worktree.linked?.pr?.title ?? worktree.prTitle;
-  const displayTitle = isPrOriginated
-    ? prHeadlineTitle
-    : (worktree.issueTitle ?? worktree.branchDerivedTitle);
-  // For PR-originated, the headline always renders (PRBadge handles the brief
-  // cold-title gap → "#NNN"); otherwise it needs both an issue number and title.
-  const hasDisplayTitle = isPrOriginated
-    ? !!worktree.sourcePrNumber
-    : !!(worktree.issueNumber && displayTitle);
+  // The headline cascade lives in `getWorktreeHeadline` so the compact surfaces
+  // that list worktrees render the same title this card does. PR-originated
+  // worktrees (created from the PR dropdown, #8888) invert the default
+  // issue-first headline: the PR title leads, with the linked issue shown
+  // underneath, and it renders even during the cold-title gap (→ "#NNN").
+  const headline = getWorktreeHeadline(worktree);
+  const isPrOriginated = headline.kind === "pr";
+  const hasDisplayTitle = headline.kind === "pr" || headline.kind === "issue";
+  const displayTitle =
+    headline.kind === "pr" || headline.kind === "issue" ? headline.title : undefined;
   const hasPlanFile = Boolean(worktree.hasPlanFile);
   const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
@@ -236,6 +233,11 @@ export function WorktreeHeader({
     worktree.fetchAuthFailed &&
     (worktree.matchedForgeProviderId != null || worktree.linked?.providerId != null)
   );
+  // Stays on the prop rather than `headline.kind === "main"`. The prop is the
+  // caller's override, and omitting it means "render the branch" even for a
+  // main worktree that would satisfy the rule on its own — `getWorktreeHeadline`
+  // derives that rule from the worktree alone, which is what a standalone
+  // consumer needs and what this component must not assume.
   const isMainStandardLayout = !!(isMainOnStandardBranch && !hasDisplayTitle);
   const isExternal = isExternalWorktree(worktree);
 
