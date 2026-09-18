@@ -944,7 +944,7 @@ describe("FileLinksAddon", () => {
       }
     );
 
-    it("ends a run where the token so far already reads as a whole file", async () => {
+    it("ends a run where a row's part of the token already reads as a whole file", async () => {
       // An indented list: the first entry's filename finished exactly at the
       // margin, so the next row starts a new token rather than extending it.
       const rows = ["open /tmp/abcdefghij", "  klmnopqrstuvwx.png", "  src/foo.ts"];
@@ -1103,17 +1103,34 @@ describe("FileLinksAddon", () => {
       }
     });
 
-    it("distrusts the tail of a run too long to judge", async () => {
-      // Past the rejoin budget the run can't be read end to end. Joining it
-      // anyway lets the budget clip the window, and a fragment flush against
-      // the cut isn't trusted to be a whole path.
-      const middle = `  ${"a".repeat(47)}/${"b".repeat(50)}`;
+    it.each([21, 24])("keeps %i whole paths that each fill a row apart", async (count) => {
+      // Every entry ends exactly at the margin, so each row's part of the
+      // token is already a whole file and no boundary is crossed, however
+      // long the list runs.
+      const path = `/tmp/${"a".repeat(88)}.ts`;
+      const rows = Array.from({ length: count }, () => `    ${path}`);
+      for (const hoveredRow of [0, 10, count - 1]) {
+        const links = await linksFor(rows, hoveredRow, 100);
+        expect(links).toHaveLength(1);
+        expect(readLink(links![0]!).absolutePath).toBe(path);
+        expect(links![0]!.range.start).toEqual({ x: 5, y: hoveredRow + 1 });
+        expect(links![0]!.range.end).toEqual({ x: 100, y: hoveredRow + 1 });
+      }
+    });
+
+    it("links nothing inside a run too long to judge", async () => {
+      // Past the rejoin budget the run can't be read end to end, so it is
+      // joined unjudged and the window is clipped inside it. The `:` stops the
+      // head's match short of the cut, and it must still not link as a path.
       const rows = [
         `open /tmp/${"c".repeat(90)}`,
-        ...Array.from({ length: 25 }, () => middle),
+        `  ${"a".repeat(90)}.ts:bbbb`,
+        ...Array.from({ length: 24 }, () => `  ${"d".repeat(98)}`),
         "  tail/file.ts ok",
       ];
-      expect(await linksFor(rows, rows.length - 1, 100)).toBeUndefined();
+      for (const hoveredRow of [0, rows.length - 1]) {
+        expect(await linksFor(rows, hoveredRow, 100)).toBeUndefined();
+      }
     });
 
     it("distrusts a continuation whose head the rejoin budget cut off", async () => {

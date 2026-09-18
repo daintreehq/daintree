@@ -362,6 +362,16 @@ function leadingRun(text: string, from: number): string {
   return text.slice(from, end === -1 ? text.length : end);
 }
 
+/** The unbroken run of text that ends a row. */
+function trailingRun(text: string): string {
+  return text.slice(text.lastIndexOf(" ") + 1);
+}
+
+/** Whether a token already reads as a whole file, sentence punctuation aside. */
+function endsAsFile(token: string): boolean {
+  return COMPLETE_FILE_TAIL.test(token.replace(TRAILING_PUNCTUATION, ""));
+}
+
 /**
  * Settle every app hard wrap in the run of rows one token crosses, starting
  * from the hard boundary below `upperRow`. The result maps each hard
@@ -376,14 +386,14 @@ function leadingRun(text: string, from: number): string {
  *
  * The run is found from shape alone. It walks up and down through every row
  * the token fills edge to edge, across xterm's own wraps as well as the app's.
- * Every boundary inside it arrives at the same run and the same verdicts, so
- * each row of a long path agrees whichever one the pointer is on.
+ * It never crosses a hard wrap where the upper row's part of the token already
+ * reads as a whole file (`src/a.ts`, then an unrelated indented line). That
+ * test looks at one row only, so every boundary of a run arrives at the same
+ * run and the same verdicts. Each row of a long path agrees whichever one the
+ * pointer is on.
  *
- * Joining is a guess, so each hard boundary has to earn it:
- * - A token that already reads as a whole file where it meets the margin
- *   (`src/a.ts`, then an unrelated indented line) ends there. The run is cut
- *   at that boundary and whatever follows is judged as its own token.
- * - Before its first hard boundary, the token must carry a path separator.
+ * Joining is a guess, so the run has to earn it:
+ * - Before its first hard wrap, the token must carry a path separator.
  * - A word-wrapper only splits a word that can't fit on a line, and the box
  *   runs from the continuation's indent to the pane's right edge. A token no
  *   longer than that was two words that happened to meet at the margin.
@@ -396,10 +406,12 @@ function leadingRun(text: string, from: number): string {
  * file and isn't joined. Both need the cut to land in exactly the wrong place,
  * and the alternative is to link every hard-wrapped path to the wrong file.
  *
- * A run too long to walk, or one whose start was trimmed out of scrollback,
- * can't be judged. It is joined anyway: the rejoin budget then clips the
- * window, and a fragment against a clipped edge is distrusted rather than
- * linked on its own.
+ * A run longer than the rejoin budget, or one whose start was trimmed out of
+ * scrollback, can't be read end to end, so it is joined without judging it.
+ * Nothing in it gets linked: the run is one token with no spaces in it, and it
+ * can't fit the window, so the budget clips the window somewhere inside that
+ * token. A match anywhere in the token then has no space between it and the
+ * clipped edge, and a fragment can't pass for a whole path.
  */
 function resolveHardWraps(
   read: RowReader,
@@ -409,12 +421,15 @@ function resolveHardWraps(
 ): Map<number, boolean> {
   type Join = "soft" | "hard";
   // How the token crosses from `upper` into `lower`, if it does.
-  const joinOf = (upper: RowSnapshot, lower: RowSnapshot): Join | null => {
-    if (!lower.isWrapped) return hardWrapIndent(upper, lower, cols) === indent ? "hard" : null;
-    const upperEnd = upper.text.length - 1;
-    return upper.text.charCodeAt(upperEnd) !== 32 && lower.text.charCodeAt(0) !== 32
-      ? "soft"
-      : null;
+  const crossing = (upper: RowSnapshot, lower: RowSnapshot): Join | null => {
+    if (lower.isWrapped) {
+      const upperEnd = upper.text.length - 1;
+      return upper.text.charCodeAt(upperEnd) !== 32 && lower.text.charCodeAt(0) !== 32
+        ? "soft"
+        : null;
+    }
+    if (hardWrapIndent(upper, lower, cols) !== indent) return null;
+    return endsAsFile(trailingRun(upper.text)) ? null : "hard";
   };
   // Where the token resumes on a row it crossed onto.
   const resumeAt = (join: Join): number => (join === "soft" ? 0 : indent);
@@ -422,7 +437,15 @@ function resolveHardWraps(
   const fills = (row: RowSnapshot, from: number): boolean =>
     row.text.length === cols && !hasSpaceIn(row.text, from, cols);
 
-  let span = 2 * cols;
+  const verdicts = new Map<number, boolean>();
+  if (endsAsFile(trailingRun(read(upperRow)!.text))) {
+    verdicts.set(upperRow, false);
+    return verdicts;
+  }
+
+  // The run's length as the rejoin will hold it: the head row whole, every
+  // row after it from where the token resumes.
+  let span = cols + cols - indent;
   let unjudgeable = false;
 
   const above: Join[] = [];
@@ -436,9 +459,9 @@ function resolveHardWraps(
       if (row.isWrapped && fills(row, 0)) unjudgeable = true;
       break;
     }
-    const join = joinOf(previous, row);
+    const join = crossing(previous, row);
     if (join === null || !fills(row, resumeAt(join))) break;
-    if ((span += cols) > MAX_LOGICAL_LINE_LENGTH) {
+    if ((span += cols - resumeAt(join)) > MAX_LOGICAL_LINE_LENGTH) {
       unjudgeable = true;
       break;
     }
@@ -452,9 +475,9 @@ function resolveHardWraps(
     const row = read(tail)!;
     if (!fills(row, resumeAt(below[below.length - 1]!))) break;
     const next = read(tail + 1);
-    const join = next ? joinOf(row, next) : null;
+    const join = next ? crossing(row, next) : null;
     if (join === null) break;
-    if ((span += cols) > MAX_LOGICAL_LINE_LENGTH) {
+    if ((span += cols - resumeAt(join)) > MAX_LOGICAL_LINE_LENGTH) {
       unjudgeable = true;
       break;
     }
@@ -464,44 +487,23 @@ function resolveHardWraps(
 
   // joins[k] is the boundary between rows `head + k` and `head + k + 1`.
   const joins = [...above.reverse(), ...below];
-  const verdicts = new Map<number, boolean>();
-  if (unjudgeable) {
-    joins.forEach((join, k) => {
-      if (join === "hard") verdicts.set(head + k, true);
-    });
-    return verdicts;
-  }
-
-  const headText = read(head)!.text;
-  let token = headText.slice(headText.lastIndexOf(" ") + 1);
-  let prefix: string | null = null;
-  let pending: number[] = [];
-  const settle = (): void => {
-    const joined =
+  let joined = unjudgeable;
+  if (!unjudgeable) {
+    let token = trailingRun(read(head)!.text);
+    let prefix: string | null = null;
+    for (const [k, join] of joins.entries()) {
+      if (join === "hard") prefix ??= token;
+      token += leadingRun(read(head + k + 1)!.text, resumeAt(join));
+    }
+    joined =
       prefix !== null &&
       (prefix.includes("/") || prefix.includes("\\")) &&
       token.length > cols - indent &&
       isWholePathToken(token);
-    for (const row of pending) verdicts.set(row, joined);
-  };
-
+  }
   joins.forEach((join, k) => {
-    const lower = read(head + k + 1)!.text;
-    if (join === "hard") {
-      if (COMPLETE_FILE_TAIL.test(token.replace(TRAILING_PUNCTUATION, ""))) {
-        settle();
-        verdicts.set(head + k, false);
-        token = leadingRun(lower, indent);
-        prefix = null;
-        pending = [];
-        return;
-      }
-      prefix ??= token;
-      pending.push(head + k);
-    }
-    token += leadingRun(lower, resumeAt(join));
+    if (join === "hard") verdicts.set(head + k, joined);
   });
-  settle();
   return verdicts;
 }
 
