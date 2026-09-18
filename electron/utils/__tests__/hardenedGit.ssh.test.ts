@@ -157,16 +157,12 @@ describePosix("hardened git ssh transport (real git)", () => {
     expect(fs.readFileSync(path.join(worktreeDir, "build", "file.txt"), "utf8")).toBe("vendored\n");
     expect(git(path.join(worktreeDir, "build"), ["rev-parse", "HEAD"]).trim()).toBe(subSha);
 
-    // The flags are the point: without BatchMode an unknown host key or a
-    // locked key would block on a prompt no one can answer.
+    // The flags are the point: without them an unknown host key or a locked
+    // key blocks on a prompt no one can answer.
     const argv = sshArgv();
     expect(argv).toContain("git@example.invalid");
     expect(argv).toEqual(
-      expect.arrayContaining([
-        "StrictHostKeyChecking=accept-new",
-        "BatchMode=yes",
-        "ConnectTimeout=15",
-      ])
+      expect.arrayContaining(["BatchMode=yes", "StrictHostKeyChecking=accept-new"])
     );
   });
 

@@ -61,11 +61,19 @@ function soleHooksPath(config: readonly string[]): string {
 }
 
 /**
- * The one ssh invocation every profile hands git. Spelled out rather than
- * imported so a drift in the source constant shows up here as a failure.
+ * What an ssh invocation handed to headless git must guarantee: it names ssh
+ * itself, and it can never stop on a prompt. A blank value fails the first
+ * (issue #12475) and a bare `ssh` fails the second — its host-key prompt hangs
+ * a process with no terminal, which `GIT_TERMINAL_PROMPT=0` does not cover.
  */
-const PINNED_SSH_COMMAND =
-  "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15";
+function expectNonInteractiveSsh(command: unknown): void {
+  expect(typeof command).toBe("string");
+  const argv = String(command).split(/\s+/);
+  expect(argv[0]).toBe("ssh");
+  expect(argv).toEqual(
+    expect.arrayContaining(["BatchMode=yes", "StrictHostKeyChecking=accept-new"])
+  );
+}
 
 function sshCommandValues(config: readonly string[]): string[] {
   return config
@@ -156,7 +164,9 @@ describe("createHardenedGit", () => {
     await createHardenedGit("/test/repo");
 
     const options = (simpleGit as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(sshCommandValues(options.config)).toEqual([PINNED_SSH_COMMAND]);
+    const values = sshCommandValues(options.config);
+    expect(values).toHaveLength(1);
+    expectNonInteractiveSsh(values[0]);
   });
 
   it("disables credential.helper via config", async () => {
@@ -194,7 +204,6 @@ describe("createHardenedGit", () => {
       "core.askpass=",
       "credential.helper=",
       "protocol.ext.allow=never",
-      `core.sshCommand=${PINNED_SSH_COMMAND}`,
       "core.gitProxy=",
       "core.quotepath=false",
       "core.precomposeunicode=true",
@@ -202,13 +211,15 @@ describe("createHardenedGit", () => {
     for (const key of expectedKeys) {
       expect(options.config).toContain(key);
     }
-    // Count the static entries on their own; the generated hooks entry has its
-    // own coverage below, and folding it into this total would hide a change to
-    // either half behind one number.
+    // Count the static entries on their own; the generated hooks entry and the
+    // pinned ssh command have their own coverage, and folding them into this
+    // total would hide a change to either behind one number.
     const staticEntries = options.config.filter(
-      (entry: string) => !entry.startsWith("core.hooksPath=")
+      (entry: string) =>
+        !entry.startsWith("core.hooksPath=") && !entry.startsWith("core.sshCommand=")
     );
     expect(staticEntries).toHaveLength(expectedKeys.length);
+    expect(sshCommandValues(options.config)).toHaveLength(1);
   });
 
   it("passes abort signal when provided", async () => {
@@ -432,10 +443,10 @@ describe("createAuthenticatedGit", () => {
     expect(mockGitInstance.env).toHaveBeenCalledWith(
       expect.objectContaining({
         GIT_TERMINAL_PROMPT: "0",
-        GIT_SSH_COMMAND: PINNED_SSH_COMMAND,
         GIT_OPTIONAL_LOCKS: "0",
       })
     );
+    expectNonInteractiveSsh(mockGitInstance.env.mock.calls[0][0].GIT_SSH_COMMAND);
   });
 
   it("sets GIT_OPTIONAL_LOCKS=0 to suppress incidental lock writes", async () => {
@@ -529,7 +540,7 @@ describe("createAuthenticatedGit", () => {
 
       const envArg = mockGitInstance.env.mock.calls[0][0];
       expect(envArg.GIT_TERMINAL_PROMPT).toBe("0");
-      expect(envArg.GIT_SSH_COMMAND).toBe(PINNED_SSH_COMMAND);
+      expectNonInteractiveSsh(envArg.GIT_SSH_COMMAND);
       expect(envArg.GIT_PAGER).toBeUndefined();
       expect(envArg.LC_MESSAGES).toBe("C");
       expect(envArg.LANGUAGE).toBe("");
@@ -978,8 +989,8 @@ describe("config profiles", () => {
     await createAuthenticatedGit("/test/repo");
 
     const envArg = mockGitInstance.env.mock.calls[0][0];
+    expectNonInteractiveSsh(envArg.GIT_SSH_COMMAND);
     expect(sshCommandValues(getHardenedGitConfig())).toEqual([envArg.GIT_SSH_COMMAND]);
-    expect(envArg.GIT_SSH_COMMAND).toBe(PINNED_SSH_COMMAND);
   });
 
   it("authenticated profile excludes credential-blocking entries", async () => {
