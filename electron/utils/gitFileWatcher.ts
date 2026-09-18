@@ -357,8 +357,8 @@ export class GitFileWatcher {
         }
         // FSEvents reports canonical paths, and Parcel only applies its globs
         // to events under the root it was given — so a root reached through a
-        // symlinked ancestor filtered nothing natively, and the literal
-        // exclusions below would resolve to paths FSEvents never matches.
+        // symlinked ancestor had every glob skipped natively, and each write
+        // under a nested node_modules or dist still reached this process.
         const watchRoot =
           process.platform === "darwin"
             ? (this.worktreeRealPath ?? this.worktreePath)

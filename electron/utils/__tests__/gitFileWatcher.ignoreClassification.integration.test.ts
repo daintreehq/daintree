@@ -185,20 +185,28 @@ describe("worktree burst ignore classification against real git", () => {
 
 describe("OS-level exclusion of hot directories", () => {
   it("drops writes under an excluded directory without hiding a source edit", async () => {
-    // mkdtemp lands under /var on macOS, a symlink to /private/var — the
-    // aliased-root shape where Parcel's globs and FSEvents' exclusions only
-    // apply if the watcher subscribes at the canonical root.
+    // mkdtemp lands under /var on macOS, a symlink to /private/var. The
+    // top-level node_modules is an OS-level exclusion; the nested one is only
+    // reachable by the globs, which Parcel applies natively only when the
+    // watcher subscribes at the canonical root.
     const { root, git } = makeRepo();
     writeFileSync(join(root, ".gitignore"), "node_modules/\n");
     writeFileSync(join(root, "src.txt"), "committed\n");
     mkdirSync(join(root, "node_modules"));
+    mkdirSync(join(root, "packages", "app", "node_modules"), { recursive: true });
+    writeFileSync(join(root, "packages", "app", "index.ts"), "export {};\n");
     git(["add", "-A"]);
     git(["commit", "-m", "init"]);
 
     const churn = await observe(root, () => {
       for (let i = 0; i < 15; i++) {
-        mkdirSync(join(root, "node_modules", `pkg-${i}`));
-        writeFileSync(join(root, "node_modules", `pkg-${i}`, "index.js"), `module ${i}\n`);
+        for (const modules of [
+          join(root, "node_modules"),
+          join(root, "packages", "app", "node_modules"),
+        ]) {
+          mkdirSync(join(modules, `pkg-${i}`));
+          writeFileSync(join(modules, `pkg-${i}`, "index.js"), `module ${i}\n`);
+        }
       }
     });
     expect(churn).toEqual({ changes: 0, fileSignals: 0 });
