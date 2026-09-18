@@ -442,7 +442,6 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // increase, not an allowance. `agentCapabilities.get` stays off every tier until its
   // source read is contained, and costs nothing here until then.
   const MAX_COHORT_TOTAL_BYTES = 56_057;
-
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
   async function cohortDefinitions() {
