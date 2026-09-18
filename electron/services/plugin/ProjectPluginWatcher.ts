@@ -6,6 +6,7 @@ import type { AsyncSubscription } from "@parcel/watcher";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import { subscribeParcelWatcher } from "../../utils/parcelWatcherBackend.js";
+import { isRescanRequest, removesWatchedRoot } from "../../utils/parcelWatcherRescan.js";
 import { ABSENT_FINGERPRINT, fingerprintPluginDir } from "./pluginArtifactFingerprint.js";
 import { getGitDir } from "../../utils/gitUtils.js";
 import {
@@ -50,6 +51,13 @@ const INVALID_MANIFEST_MAX_RETRIES = 5;
 const REARM_DELAY_MS = 1_000;
 const REARM_MAX_ATTEMPTS = 5;
 
+/**
+ * How long a re-armed subscription must stay up before it earns back the full
+ * re-arm budget. Resetting on the subscribe itself let a stream that dies
+ * seconds after every re-arm churn forever without tripping the ceiling.
+ */
+const REARM_HEALTHY_MS = 60_000;
+
 /** Overridable cadence, so tests do not have to spend real seconds on backoff. */
 export interface ProjectPluginWatcherTimings {
   debounceMs: number;
@@ -58,6 +66,9 @@ export interface ProjectPluginWatcherTimings {
   gitLockMaxDeferMs: number;
   invalidManifestRetryMs: number;
   invalidManifestMaxRetries: number;
+  rearmDelayMs: number;
+  rearmMaxAttempts: number;
+  rearmHealthyMs: number;
 }
 
 const DEFAULT_TIMINGS: ProjectPluginWatcherTimings = {
@@ -67,6 +78,9 @@ const DEFAULT_TIMINGS: ProjectPluginWatcherTimings = {
   gitLockMaxDeferMs: GIT_LOCK_MAX_DEFER_MS,
   invalidManifestRetryMs: INVALID_MANIFEST_RETRY_MS,
   invalidManifestMaxRetries: INVALID_MANIFEST_MAX_RETRIES,
+  rearmDelayMs: REARM_DELAY_MS,
+  rearmMaxAttempts: REARM_MAX_ATTEMPTS,
+  rearmHealthyMs: REARM_HEALTHY_MS,
 };
 
 export interface ProjectPluginWatcherDeps {
@@ -128,6 +142,8 @@ interface WatchState {
    */
   forceReconcile: boolean;
   rearmAttempts: number;
+  /** `performance.now()` when the current subscription was adopted. */
+  armedAt: number | null;
   arming: boolean;
   timer: ReturnType<typeof setTimeout> | null;
   /** Plugin directory names implicated by the current burst. */
@@ -249,6 +265,7 @@ export class ProjectPluginWatcher {
       sentinelTimer: null,
       forceReconcile: false,
       rearmAttempts: 0,
+      armedAt: null,
       arming: false,
       timer: null,
       changedDirs: new Set(),
@@ -369,6 +386,25 @@ export class ProjectPluginWatcher {
         pluginsRoot,
         (err, events) => {
           if (state.generation !== generation || state.stopped || this.disposed) return;
+          if (
+            err &&
+            isRescanRequest(err.message) &&
+            !removesWatchedRoot(events, state.pluginsRoot)
+          ) {
+            // FSEvents dropped events but the stream is still running. Tearing
+            // it down would rebuild a healthy client under exactly the churn
+            // that overflowed it, and spend the re-arm budget doing so. The
+            // lost events are unknowable, so rescan the whole folder instead —
+            // any events riding along with the notice are a subset of that.
+            // A batch that also removed the root stopped the stream, so that
+            // one takes the re-arm path below.
+            logger.debug("Project plugin watcher dropped events; rescanning", {
+              projectId: state.projectId,
+            });
+            state.reloadAll = true;
+            this.schedule(state, this.timings.debounceMs);
+            return;
+          }
           if (err) {
             // An error on an established subscription means it is no longer
             // reporting reliably — most often a deleted-and-recreated root,
@@ -416,7 +452,9 @@ export class ProjectPluginWatcher {
       return;
     }
     state.subscription = subscription;
-    state.rearmAttempts = 0;
+    // Not a budget reset: that waits until this subscription has proven it
+    // stays up (see `rearmAfterError`).
+    state.armedAt = performance.now();
     this.disarmSentinel(state);
   }
 
@@ -495,9 +533,20 @@ export class ProjectPluginWatcher {
     }
   }
 
-  /** Release an erroring subscription and try once more, up to a ceiling. */
+  /**
+   * Release an erroring subscription and try once more, up to a ceiling. The
+   * ceiling is only lifted by a subscription that stayed up for the healthy
+   * interval, so one that fails again shortly after every re-arm runs out.
+   */
   private rearmAfterError(state: WatchState, generation: number): void {
     if (this.isStale(state, generation)) return;
+    if (
+      state.armedAt !== null &&
+      performance.now() - state.armedAt >= this.timings.rearmHealthyMs
+    ) {
+      state.rearmAttempts = 0;
+    }
+    state.armedAt = null;
     const subscription = state.subscription;
     state.subscription = null;
     if (subscription) {
@@ -505,12 +554,12 @@ export class ProjectPluginWatcher {
         // The handle is already broken; there is nothing further to release.
       });
     }
-    if (state.rearmAttempts >= REARM_MAX_ATTEMPTS) return;
+    if (state.rearmAttempts >= this.timings.rearmMaxAttempts) return;
     state.rearmAttempts++;
     const timer = setTimeout(() => {
       if (this.isStale(state, generation)) return;
       void this.arm(state);
-    }, REARM_DELAY_MS);
+    }, this.timings.rearmDelayMs);
     timer.unref?.();
   }
 
