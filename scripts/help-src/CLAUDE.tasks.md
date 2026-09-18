@@ -7,6 +7,7 @@ These cover ~90% of what the assistant is asked to do. They all live in the defa
 1. `terminal.list` to find the target terminal (filter by `worktreeId` or focus state).
 2. `terminal.getStatus({ terminalIds: [<id>] })` — returns `agentState`, `waitingReason`, `lastTransitionAt`. Add `includeOutput: { lines: 30 }` when you also need scrollback.
 3. `agent.getState({ agentId })` is the agent-keyed alternative — useful only when there's a single agent of that kind in the project. With multiple Claude/Codex terminals it's ambiguous; prefer `terminal.getStatus` keyed by terminal ID.
+4. For an agent you launched, `terminal.readLastMessageOwned({ terminalId })` returns what it last wrote to its own transcript: its last reply, up to 24 KiB and keeping the end, and the tool calls since then that nothing has answered under `unansweredToolUses` (at most 8) — a question among them carries its options in `input` unless they were too large to include. Read it before replying for the agent. `message` is null when no reply had text; check `message.truncated` and whether `input` is there before treating either as complete. Claude Code only for now; any other agent answers `unavailable`. It reads the file, not the screen: a permission or trust dialog is never in it, so read recent output for those.
 
 ### Snapshot multiple terminals at once
 
