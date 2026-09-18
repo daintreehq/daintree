@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const dispatch = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
+import { usePanelStore } from "@/store/panelStore";
 import {
   __resetAgentRequestsForTests,
   cancelAgentRequests,
@@ -16,6 +17,12 @@ function terminal(agentState: string | null = null) {
   const sent: string[] = [];
   const launches: string[] = [];
   let state = agentState;
+  // What `terminal.getStatus` reports for a live agent session: which agent,
+  // and which pty generation. A restart changes `spawnedAt`; a demotion to a
+  // plain shell clears `agentId`.
+  let agentId: string | null = "claude";
+  let spawnedAt = 1_000;
+  let waitingReason: string | null = null;
   dispatch.mockImplementation(async (id: string, args: Record<string, unknown>) => {
     if (id === "agent.launch") {
       launches.push(String(args.agentId));
@@ -28,7 +35,10 @@ function terminal(agentState: string | null = null) {
           terminals: [
             {
               terminalId: "t1",
+              agentId,
+              spawnedAt,
               agentState: state,
+              ...(waitingReason === null ? {} : { waitingReason }),
               submission: args.submissionToken ? { phase: "pty_written" } : undefined,
             },
           ],
@@ -41,7 +51,49 @@ function terminal(agentState: string | null = null) {
     }
     throw new Error(`unexpected ${id}`);
   });
-  return { sent, launches, setState: (next: string) => (state = next) };
+  return {
+    sent,
+    launches,
+    setState: (next: string) => (state = next),
+    // What a real demotion looks like: the agent process exits and leaves its
+    // shell reading stdin. The pty never restarted, so `spawnedAt` holds, and
+    // `agentId` falls back to what the terminal was launched as — so only
+    // `agentState` says anything happened.
+    demoteToShell: () => {
+      state = "exited";
+    },
+    /** A pane that was never an agent at all. */
+    beNonAgent: () => (agentId = null),
+    setWaitingReason: (next: string) => (waitingReason = next),
+    restart: () => (spawnedAt += 1),
+  };
+}
+
+/**
+ * `verify` runs twice: once before the prompt is built, and once after
+ * readiness has been proved and immediately before the write. Only the second
+ * call sits in the window these tests are about, so `change` fires there.
+ */
+function verifyThenChange(change: () => void): () => Promise<string | null> {
+  let calls = 0;
+  return async () => {
+    if (++calls === 2) change();
+    return null;
+  };
+}
+
+/**
+ * Put one terminal panel in a worktree. Only the two fields
+ * `destinationStillEligible` reads are set; the store's panel type is far
+ * wider and nothing here touches the rest.
+ */
+function placePanel(terminalId: string, worktreeId: string): void {
+  usePanelStore.setState((prior) => ({
+    panelsById: {
+      ...prior.panelsById,
+      [terminalId]: { location: "grid", worktreeId } as (typeof prior.panelsById)[string],
+    },
+  }));
 }
 
 function sink() {
@@ -59,6 +111,9 @@ afterEach(() => {
   vi.useRealTimers();
   dispatch.mockReset();
   __resetAgentRequestsForTests();
+  // The worktree test seeds a panel; an entry left behind changes what
+  // `destinationStillEligible` sees in every test after it.
+  usePanelStore.setState({ panelsById: {} });
 });
 
 describe("deliverAgentRequest", () => {
@@ -91,11 +146,181 @@ describe("deliverAgentRequest", () => {
     });
   });
 
+  it("does not send to a destination that stopped being an agent while verifying", async () => {
+    // The audit's second reproduction: the picker offers agent terminals, but
+    // nothing held the destination to that between the offer and the write.
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+      // Readiness is proved before this runs and stale by the time it resolves.
+      verify: verifyThenChange(() => agent.demoteToShell()),
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude isn't an agent session any more — the request wasn't sent",
+    });
+  });
+
+  it("refuses a demoted shell even when the user said send anyway", async () => {
+    // "Send anyway" waives waiting for a readiness signal. It cannot waive the
+    // destination: the agent has exited and its shell is what would read this.
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+      verify: verifyThenChange(() => agent.demoteToShell()),
+    });
+    forceAgentRequest("owner-1\nwt-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude isn't an agent session any more — the request wasn't sent",
+    });
+  });
+
+  it("does not send to a destination that moved worktree while it was verifying", async () => {
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    placePanel("t1", "wt-1");
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+      verify: verifyThenChange(() => placePanel("t1", "wt-2")),
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude left this worktree — the request wasn't sent",
+    });
+  });
+
+  it("does not send into the session that replaced the one it bound to", async () => {
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+      // Same terminal id, same agent, different process.
+      verify: verifyThenChange(() => agent.restart()),
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude restarted before the request went out — nothing was sent",
+    });
+  });
+
+  it("does not send when readiness lapsed into a question during verification", async () => {
+    // The audit's first reproduction: ready, then an approval prompt appears
+    // while the source is being re-verified. Typing now answers the question.
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+      verify: verifyThenChange(() => agent.setWaitingReason("approval")),
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude is asking you something — the request wasn't sent",
+    });
+  });
+
+  it("lets send-anyway waive readiness but not the session it bound to", async () => {
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+      verify: verifyThenChange(() => agent.setWaitingReason("approval")),
+    });
+    forceAgentRequest("owner-1\nwt-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    // Waived: the request goes out despite the question.
+    expect(agent.sent).toEqual(["Make it pop"]);
+    expect(last(states)?.state.status).toBe("sent");
+
+    // Not waived: the same force against a restarted session still refuses.
+    const second = terminal("waiting");
+    const secondSink = sink();
+    const run2 = deliverAgentRequest({
+      ownerKey: "owner-2\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState: secondSink.onState,
+      buildPrompt: async () => "Make it pop",
+      verify: verifyThenChange(() => second.restart()),
+    });
+    forceAgentRequest("owner-2\nwt-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run2;
+
+    expect(second.sent).toEqual([]);
+    expect(last(secondSink.states)?.state).toEqual({
+      status: "failed",
+      message: "Claude restarted before the request went out — nothing was sent",
+    });
+  });
+
   it("keeps the request text and never retries when the write itself failed", async () => {
     terminal("waiting");
     dispatch.mockImplementation(async (id: string) => {
       if (id === "terminal.getStatus") {
-        return { ok: true, result: { terminals: [{ terminalId: "t1", agentState: "waiting" }] } };
+        return {
+          ok: true,
+          result: {
+            terminals: [
+              { terminalId: "t1", agentId: "claude", spawnedAt: 1_000, agentState: "waiting" },
+            ],
+          },
+        };
       }
       if (id === "terminal.sendCommand") {
         return { ok: false, error: { message: "The terminal stopped accepting input" } };

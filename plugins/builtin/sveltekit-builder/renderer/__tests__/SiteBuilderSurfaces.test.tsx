@@ -1048,6 +1048,8 @@ describe("stale selections", () => {
               terminals: [
                 {
                   terminalId: "term-9",
+                  agentId: "claude",
+                  spawnedAt: 1_000,
                   agentState: "waiting",
                   ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
                 },
@@ -1467,6 +1469,8 @@ describe("stale selections", () => {
             terminals: [
               {
                 terminalId: "t",
+                agentId: "claude",
+                spawnedAt: 1_000,
                 agentState: "waiting",
                 ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
               },
@@ -1930,6 +1934,8 @@ describe("delivery across the builder's lifetime", () => {
               terminals: [
                 {
                   terminalId: (args.terminalIds as string[])[0],
+                  agentId: "claude",
+                  spawnedAt: 1_000,
                   agentState: ready ? "waiting" : null,
                   ...(args.submissionToken ? { submission: { phase: "pty_written" } } : {}),
                 },
