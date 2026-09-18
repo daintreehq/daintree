@@ -970,6 +970,11 @@ export interface PtyHostTerminalInfo {
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
+  /**
+   * The most recent handback marker observed for a request this terminal held
+   * (#12488). Read off the record so main can report it without a renderer.
+   */
+  lastHandback?: TerminalHandback;
 }
 
 /** Payload for agent:spawned event */
