@@ -20,11 +20,18 @@ export const DETECT_APPS_CHANNEL = "detect-apps";
 const DETECTION_TTL_MS = 15_000;
 const detected = new Map<string, { at: number; pending: Promise<boolean> }>();
 
-function hasSvelteKitApp(worktreePath: string): Promise<boolean> {
+function hasSvelteKitApp(
+  projectId: string,
+  worktreeId: string,
+  worktreePath: string
+): Promise<boolean> {
   const cached = detected.get(worktreePath);
   if (cached && Date.now() - cached.at < DETECTION_TTL_MS) return cached.pending;
   const pending = window.electron.plugin
-    .invoke(BUTTON_PLUGIN_ID, DETECT_APPS_CHANNEL, { worktreePath })
+    // The ids, not just the path: main scans through a filesystem handle bound
+    // to this workspace, so a preview on a worktree the focused window does not
+    // own still gets a real answer rather than a denied read.
+    .invoke(BUTTON_PLUGIN_ID, DETECT_APPS_CHANNEL, { projectId, worktreeId, worktreePath })
     .then((result) => {
       const count = (result as { appCount?: unknown }).appCount;
       const found = typeof count === "number" && count > 0;
@@ -48,8 +55,12 @@ function hasSvelteKitApp(worktreePath: string): Promise<boolean> {
  * aimed at the builder.
  */
 export function siteBuilderApplies(context: DevPreviewToolContext): Promise<boolean> {
-  if (!context.worktreePath) return Promise.resolve(false);
-  return hasSvelteKitApp(context.worktreePath);
+  // No workspace to name means nothing to scope the scan to, and an unscoped
+  // scan is exactly what this avoids — so the answer is no, not a guess.
+  if (!context.projectId || !context.worktreeId || !context.worktreePath) {
+    return Promise.resolve(false);
+  }
+  return hasSvelteKitApp(context.projectId, context.worktreeId, context.worktreePath);
 }
 
 /** Why a command is refused where the builder does not apply. */

@@ -134,6 +134,57 @@ describe("activate", () => {
     ).rejects.toThrow(/WORKSPACE_FORBIDDEN/);
   });
 
+  it("scans for apps through the workspace the caller named, not the ambient handle", async () => {
+    sandbox = await createSandbox();
+    const test = createTestHost(sandbox.worktree);
+    await activate(test.host);
+
+    const result = await test.invoke<{ appCount: number }>(CHANNELS.detectApps, {
+      projectId: "p1",
+      worktreeId: "w1",
+      worktreePath: sandbox.worktree,
+    });
+
+    expect(result.appCount).toBe(1);
+    expect(test.scopes).toEqual([{ projectId: "p1", worktreeId: "w1" }]);
+    // The ambient handle follows the focused window, so a background worktree
+    // reads as having no app if discovery goes through it.
+    expect(test.readsVia.some((read) => read.via === "scoped")).toBe(true);
+    expect(test.readsVia.filter((read) => read.via === "ambient")).toEqual([]);
+  });
+
+  it("scans the worktree the caller named, not the sender window's active one", async () => {
+    sandbox = await createSandbox();
+    const test = createTestHost(sandbox.worktree);
+    await activate(test.host);
+
+    // The context reports the ACTIVE worktree; a preview sitting on a
+    // background worktree names a different one, and that is the one scanned.
+    await test.invoke(
+      CHANNELS.detectApps,
+      { projectId: "p1", worktreeId: "w1", worktreePath: sandbox.worktree },
+      { worktreeId: "w2" }
+    );
+
+    expect(test.scopes).toEqual([{ projectId: "p1", worktreeId: "w1" }]);
+  });
+
+  it("refuses an app scan on a project other than the invoking view's", async () => {
+    sandbox = await createSandbox();
+    const test = createTestHost(sandbox.worktree);
+    await activate(test.host);
+
+    await expect(
+      test.invoke(
+        CHANNELS.detectApps,
+        { projectId: "p2", worktreeId: "w1", worktreePath: sandbox.worktree },
+        { projectId: "p1" }
+      )
+    ).rejects.toThrow(/WORKSPACE_FORBIDDEN/);
+    expect(test.scopes).toEqual([]);
+    expect(test.reads).toEqual([]);
+  });
+
   it("refuses a workspace on a project other than the invoking view's", async () => {
     sandbox = await createSandbox();
     const test = createTestHost(sandbox.worktree);
