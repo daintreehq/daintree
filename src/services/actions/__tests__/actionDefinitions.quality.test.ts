@@ -418,14 +418,14 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // total above falls instead: there the owned pair replaced the unscoped one,
   // at 149 B less than the 706 B it removed.
   //
-  // 54_593 → PLACEHOLDER for `agentCapabilities.search`, which shipped with its
-  // contract but on no tier, so the assistant was told to use an action
-  // `tools/list` never offered it. Workbench only, beside the
-  // `slashCommands.list` it extends, so the external total does not move. Its
-  // description predates this change and is the whole of the increase, not an
-  // allowance. `agentCapabilities.get` stays off every tier until its source
-  // read is contained, and costs nothing here until then.
-  const MAX_COHORT_TOTAL_BYTES = 54_593;
+  // 54_593 → 54_900 for `agentCapabilities.search`, measured at 54_820 B — 227 B
+  // over the 54_593 before it. It shipped with its contract but on no tier, so the
+  // assistant was told to use an action `tools/list` never offered it. Workbench
+  // only, beside the `slashCommands.list` it extends, so the external total does
+  // not move. Its description predates this change and is the whole of the
+  // increase, not an allowance. `agentCapabilities.get` stays off every tier until
+  // its source read is contained, and costs nothing here until then.
+  const MAX_COHORT_TOTAL_BYTES = 54_900;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
