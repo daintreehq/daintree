@@ -81,6 +81,9 @@ export function MoveToWorktreePicker({
 
   const moveTo = useCallback(
     (worktreeId: string) => {
+      // Rows stay on screen through the exit animation, and by then the header
+      // may already speak for another panel; a closing picker moves nothing.
+      if (!isOpen) return;
       // Armed before the dispatch: the move takes this panel out of the grid,
       // and the button focus would return to goes with it.
       suppressCloseAutoFocusRef.current = true;
@@ -91,7 +94,7 @@ export function MoveToWorktreePicker({
         { source: "menu" }
       );
     },
-    [onOpenChange, panelId]
+    [isOpen, onOpenChange, panelId]
   );
 
   return (

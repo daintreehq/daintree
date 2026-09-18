@@ -565,6 +565,15 @@ describe("MoveToWorktreePicker", () => {
       expect(onPanelClick).not.toHaveBeenCalled();
     });
 
+    it("moves nothing from a row clicked while the picker is closing", () => {
+      render(<Harness />);
+      pressEscape();
+
+      fireEvent.click(option("fix/restore-recovery-cwd"));
+
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
     it("ignores the current worktree's row", () => {
       render(<Harness />);
       const row = option("#12431 Add systemPrompt to agent launch");
