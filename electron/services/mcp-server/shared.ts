@@ -1153,13 +1153,12 @@ const TAIL_TRUNCATION_MARKER = "[truncated]\n\n";
  * trims the text again cannot cut it off.
  */
 export function truncateTextTail(text: string, maxBytes: number = RESOURCE_TEXT_MAX_BYTES): string {
+  const limit = Math.max(0, Math.floor(maxBytes));
   const buffer = Buffer.from(text, "utf8");
-  if (buffer.length <= maxBytes) return text;
+  if (buffer.length <= limit) return text;
   // The marker is ASCII, so a character slice is a byte slice.
-  if (maxBytes <= TAIL_TRUNCATION_MARKER.length) {
-    return TAIL_TRUNCATION_MARKER.slice(0, Math.max(0, maxBytes));
-  }
-  const budget = maxBytes - TAIL_TRUNCATION_MARKER.length;
+  if (limit <= TAIL_TRUNCATION_MARKER.length) return TAIL_TRUNCATION_MARKER.slice(0, limit);
+  const budget = limit - TAIL_TRUNCATION_MARKER.length;
   let start = buffer.length - budget;
   if (buffer[start - 1] !== 0x0a) {
     const newline = buffer.indexOf(0x0a, start);

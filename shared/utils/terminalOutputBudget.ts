@@ -143,12 +143,16 @@ const TRUNCATED_FLAG_BYTES = utf8ByteLength(',"recentOutputTruncated":true');
  *
  * `recentOutputTruncated` is only ever set to `true`, and only on the tails that
  * are cut, so a whole tail pays nothing for it — at fleet scale a flag on every
- * row is what would tip a snapshot over. The flags a cut adds come out of the
- * same budget, which can cut more tails; that repeats until the cut set stops
- * growing, which it must within one round per terminal. When the status fields
- * alone overrun the cap every tail comes back empty and flagged, and the
- * transport cap handles the rest as before; that needs a narrower query, which
- * no tail budget can stand in for.
+ * row is what would tip a snapshot over. A tail no longer than the flag it would
+ * need costs less whole than cut, so it is never cut and its bytes are set aside
+ * first. The flags the remaining cuts add come out of the same budget, which can
+ * cut more tails; that repeats until the cut set stops growing, which it must
+ * within one round per terminal.
+ *
+ * If the budget is still negative once every tail that can shrink has, each row
+ * is already as small as an honest answer allows: the status fields alone
+ * overrun the cap, and the transport cap handles the rest as before. That needs
+ * a narrower query, which no tail budget can stand in for.
  */
 export function boundTerminalStatusOutput<T extends { terminals: TerminalStatusEntry[] }>(
   result: T,
@@ -167,32 +171,37 @@ export function boundTerminalStatusOutput<T extends { terminals: TerminalStatusE
     ),
   };
   const skeletonBytes = utf8ByteLength(JSON.stringify(skeleton));
-  const needsFlagBytes = result.terminals.map((entry) => entry.recentOutputTruncated === undefined);
+  // An entry already carrying the key pays nothing to flip it to `true`.
+  const flagCosts = result.terminals.map((entry) =>
+    entry.recentOutputTruncated === undefined ? TRUNCATED_FLAG_BYTES : 0
+  );
+  const demands = costs.map((cost, index) => (cost > flagCosts[index]! ? cost : 0));
+  const keptWhole = costs.reduce((sum, cost, index) => sum + cost - demands[index]!, 0);
 
   const cut = costs.map(() => false);
-  const flagBytes = () =>
+  const budget = () =>
     cut.reduce(
-      (sum, isCut, index) => sum + (isCut && needsFlagBytes[index] ? TRUNCATED_FLAG_BYTES : 0),
-      0
+      (remaining, isCut, index) => remaining - (isCut ? flagCosts[index]! : 0),
+      maxBytes - skeletonBytes - keptWhole
     );
-  let allowances = allocateFairly(costs, maxBytes - skeletonBytes);
+  let allowances = allocateFairly(demands, budget());
   for (;;) {
     let grew = false;
-    for (let index = 0; index < costs.length; index += 1) {
-      if (!cut[index] && costs[index]! > allowances[index]!) {
+    for (let index = 0; index < demands.length; index += 1) {
+      if (!cut[index] && demands[index]! > allowances[index]!) {
         cut[index] = true;
         grew = true;
       }
     }
     if (!grew) break;
-    allowances = allocateFairly(costs, maxBytes - skeletonBytes - flagBytes());
+    allowances = allocateFairly(demands, budget());
   }
 
   return {
     ...result,
     terminals: result.terminals.map((entry, index) => {
       const tail = tails[index];
-      if (typeof tail !== "string" || costs[index]! <= allowances[index]!) return entry;
+      if (typeof tail !== "string" || !cut[index]) return entry;
       const fitted = fitTailToJsonBytes(
         { content: tail, lineCount: 0, truncated: true },
         allowances[index]!

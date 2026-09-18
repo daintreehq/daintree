@@ -267,14 +267,18 @@ describe("boundTerminalStatusOutput", () => {
     };
     for (let round = 0; round < 60; round += 1) {
       const terminals = Array.from({ length: 1 + next(40) }, (_, i) => {
-        const shape = next(4);
+        const shape = next(6);
         if (shape === 0) return entry(`t${i}`);
         if (shape === 1) return entry(`t${i}`, null, { error: "e".repeat(next(200)) });
+        if (shape === 2) return entry(`t${i}`, "");
         const lines = Array.from(
           { length: 1 + next(50) },
           (_, j) => `${ESC}[3${j % 8}m${i}:${j} ${"🌳é界".repeat(next(30))}${ESC}[0m`
         );
-        return entry(`t${i}`, lines.join("\n"), { agentState: "working" });
+        // Some rows arrive already flagged by their line limit.
+        const extra: Partial<TerminalStatusEntry> =
+          shape === 3 ? { agentState: "working", recentOutputTruncated: true } : {};
+        return entry(`t${i}`, lines.join("\n"), extra);
       });
       const status = statusOf(terminals);
 
@@ -283,34 +287,76 @@ describe("boundTerminalStatusOutput", () => {
       expect(bytesOf(bounded)).toBeLessThanOrEqual(CAP);
       bounded.terminals.forEach((fitted, i) => {
         const original = status.terminals[i]!;
-        if (fitted === original) {
-          expect(fitted).not.toHaveProperty("recentOutputTruncated");
-          return;
-        }
+        if (fitted === original) return;
         expect(fitted.recentOutputTruncated).toBe(true);
+        expect(fitted.recentOutput).not.toBe(original.recentOutput);
         expect(original.recentOutput!.endsWith(fitted.recentOutput!)).toBe(true);
         expect(hasOrphanSurrogate(fitted.recentOutput!)).toBe(false);
         expect({ ...fitted, recentOutput: undefined, recentOutputTruncated: undefined }).toEqual({
           ...original,
           recentOutput: undefined,
+          recentOutputTruncated: undefined,
         });
       });
     }
   });
 
-  it("empties and flags every tail when the status fields alone overrun the cap", () => {
+  it("empties and flags every tail it can when the status fields alone overrun the cap", () => {
     const status = statusOf([
-      entry("a", "some output", { error: "e".repeat(CAP) }),
-      entry("b", "more output"),
+      entry("a", "some output that is longer than its flag", { error: "e".repeat(CAP) }),
+      entry("b", "ok"),
     ]);
 
     const bounded = boundTerminalStatusOutput(status, CAP);
 
-    for (const fitted of bounded.terminals) {
-      expect(fitted.recentOutput).toBe("");
-      expect(fitted.recentOutputTruncated).toBe(true);
-    }
+    expect(bounded.terminals[0]!.recentOutput).toBe("");
+    expect(bounded.terminals[0]!.recentOutputTruncated).toBe(true);
     expect(bounded.terminals[0]!.error).toBe(status.terminals[0]!.error);
+    // Cutting "ok" would add a 29-byte flag to save 2, so it stays whole.
+    expect(bounded.terminals[1]).toBe(status.terminals[1]);
+  });
+
+  it("keeps tails whole when cutting them would cost more than it saves", () => {
+    const status = statusOf([
+      entry("a", "x".repeat(20)),
+      entry("b", "y".repeat(20)),
+      entry("c", "z".repeat(1000)),
+    ]);
+    const skeleton = statusOf(status.terminals.map((e) => ({ ...e, recentOutput: "" })));
+    const maxBytes = bytesOf(skeleton) + 70;
+
+    const bounded = boundTerminalStatusOutput(status, maxBytes);
+
+    expect(bytesOf(bounded)).toBeLessThanOrEqual(maxBytes);
+    expect(bounded.terminals[0]).toBe(status.terminals[0]);
+    expect(bounded.terminals[1]).toBe(status.terminals[1]);
+    expect(bounded.terminals[2]!.recentOutputTruncated).toBe(true);
+    expect(bounded.terminals[2]!.recentOutput).not.toBe("");
+  });
+
+  it("fits any budget that each row's cheapest honest form fits", () => {
+    const flagBytes = Buffer.byteLength(',"recentOutputTruncated":true', "utf8");
+    let seed = 7;
+    const next = (bound: number) => {
+      seed = (seed * 48_271) % 2_147_483_647;
+      return seed % bound;
+    };
+    for (let round = 0; round < 200; round += 1) {
+      const terminals = Array.from({ length: 1 + next(12) }, (_, i) =>
+        entry(`t${i}`, "w".repeat(next(3) === 0 ? next(40) : next(400)))
+      );
+      const status = statusOf(terminals);
+      const skeleton = statusOf(terminals.map((e) => ({ ...e, recentOutput: "" })));
+      const cheapest = terminals.reduce(
+        (sum, e) => sum + Math.min(jsonStringBytes(e.recentOutput!), flagBytes),
+        bytesOf(skeleton)
+      );
+      const maxBytes = cheapest + next(300);
+
+      const bounded = boundTerminalStatusOutput(status, maxBytes);
+
+      expect(bytesOf(bounded)).toBeLessThanOrEqual(maxBytes);
+    }
   });
 
   it("flags a cut tail that carried no flag yet and stays within the cap", () => {

@@ -36,9 +36,9 @@ describe("truncateTextTail (#12450)", () => {
     expect(result).toBe(`${MARKER}${"x".repeat(9)}\n`);
   });
 
-  it("never exceeds budgets smaller than its own marker", () => {
+  it("never exceeds small or fractional budgets", () => {
     const text = "x".repeat(64);
-    for (let budget = 0; budget <= markerBytes + 2; budget += 1) {
+    for (let budget = 0; budget <= markerBytes + 2; budget += 0.5) {
       expect(Buffer.byteLength(truncateTextTail(text, budget), "utf8")).toBeLessThanOrEqual(budget);
     }
   });
