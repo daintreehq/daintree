@@ -36,17 +36,32 @@ interface FakeWebContents {
   wc: WebContents;
   send: ReturnType<typeof vi.fn>;
   setLoading: (loading: boolean) => void;
+  startLoading: () => void;
 }
 
+let nextWebContentsId = 1;
 function makeWebContents(): FakeWebContents {
   let loading = false;
+  const startListeners: Array<() => void> = [];
   const send = vi.fn();
   const wc = {
+    id: nextWebContentsId++,
     isDestroyed: () => false,
     isLoading: () => loading,
+    on: (event: string, listener: () => void) => {
+      if (event === "did-start-loading") startListeners.push(listener);
+    },
     send,
   } as unknown as WebContents;
-  return { wc, send, setLoading: (value) => (loading = value) };
+  return {
+    wc,
+    send,
+    setLoading: (value) => (loading = value),
+    startLoading: () => {
+      loading = true;
+      for (const listener of startListeners) listener();
+    },
+  };
 }
 
 function makeWindow(id: number, view: FakeWebContents): BrowserWindow {
@@ -74,14 +89,39 @@ describe("systemMemoryPressureDelivery", () => {
     const winB = makeWindow(2, b);
 
     publishSystemMemoryPressure(DEGRADED, [winA, winB]);
-    // A later project view in the same window must not re-raise it.
-    const next = makeWebContents();
-    deliverOpenSystemMemoryPressure(winA, next.wc);
+    // The same view finishing a load must not re-raise it.
+    deliverOpenSystemMemoryPressure(winA, a.wc);
 
     expect(a.send).toHaveBeenCalledTimes(1);
     expect(a.send).toHaveBeenCalledWith(...pushed(DEGRADED));
     expect(b.send).toHaveBeenCalledTimes(1);
-    expect(next.send).not.toHaveBeenCalled();
+  });
+
+  it("re-delivers the open episode to a view that reloaded mid-episode", () => {
+    const view = makeWebContents();
+    const win = makeWindow(1, view);
+    publishSystemMemoryPressure(DEGRADED, [win]);
+    expect(view.send).toHaveBeenCalledTimes(1);
+
+    // The reload discards the renderer's copy of the notice with its context.
+    view.startLoading();
+    view.setLoading(false);
+    deliverOpenSystemMemoryPressure(win, view.wc);
+
+    expect(view.send).toHaveBeenCalledTimes(2);
+    expect(view.send).toHaveBeenLastCalledWith(...pushed(DEGRADED));
+  });
+
+  it("re-delivers the open episode to a view replaced mid-episode", () => {
+    const view = makeWebContents();
+    const win = makeWindow(1, view);
+    publishSystemMemoryPressure(DEGRADED, [win]);
+
+    const replacement = makeWebContents();
+    appWebContentsByWindow.set(1, replacement.wc);
+    deliverOpenSystemMemoryPressure(win, replacement.wc);
+
+    expect(replacement.send).toHaveBeenCalledWith(...pushed(DEGRADED));
   });
 
   it("holds the opening edge for a view still loading and sends it once that view is ready", () => {
