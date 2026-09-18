@@ -69,7 +69,7 @@ describe("formatSystemMemoryPressureMessage", () => {
         { ...DEGRADED, swapKind: "commit", fseventsdRssMb: null },
         false
       )
-    ).toBe("Committed memory is at 91% of the system limit. Restarting your computer clears this.");
+    ).toBe("Committed memory is at 91% of its limit. Restarting your computer clears this.");
   });
 
   it("returns null when no figure was over threshold", async () => {
@@ -153,7 +153,8 @@ describe("useSystemMemoryPressureNotice", () => {
 
     expect(removeNotificationMock).toHaveBeenCalledWith("notice-1");
     expect(notifyMock).toHaveBeenCalledTimes(2);
-    const [[warning], [resolution]] = notifyMock.mock.calls;
+    const warning = notifyMock.mock.calls[0]![0];
+    const resolution = notifyMock.mock.calls[1]![0];
     expect(resolution).toMatchObject({
       type: "success",
       priority: "low",

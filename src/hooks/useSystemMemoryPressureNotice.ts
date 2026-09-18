@@ -29,7 +29,7 @@ export function formatSystemMemoryPressureMessage(
   if (payload.swapUsedPercent !== null) {
     observed.push(
       payload.swapKind === "commit"
-        ? `committed memory is at ${payload.swapUsedPercent}% of the system limit`
+        ? `committed memory is at ${payload.swapUsedPercent}% of its limit`
         : `swap is ${payload.swapUsedPercent}% full`
     );
   }
@@ -54,8 +54,8 @@ export function handleSystemMemoryPressure(payload: SystemMemoryPressurePayload)
       type: "success",
       priority: "low",
       supersedeKey: SUPERSEDE_KEY,
-      title: "System memory back to normal",
-      message: "Memory figures are back below their warning thresholds.",
+      title: "System memory readings recovered",
+      message: "Every monitored reading has stayed below its threshold for three samples in a row.",
       context: { eventKind: "host" },
     });
     return;

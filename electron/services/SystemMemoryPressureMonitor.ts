@@ -103,15 +103,16 @@ export function parseFseventsdRssMb(stdout: string): number {
  * after {@link EPISODE_OPEN_SAMPLES} consecutive ones and is published exactly
  * once; it closes, with one recovery record and one publish, after
  * {@link EPISODE_CLEAR_SAMPLES} consecutive fully observed clear samples. A
- * sample with a failed reading moves neither streak — a missing measurement
- * can neither open an episode nor prove recovery.
+ * sample with a failed reading breaks both runs — a missing measurement can
+ * neither open an episode nor prove recovery.
  *
  * Owns no timer: `startAppMetricsMonitor` drives it from its existing poll.
  */
 export function createSystemMemoryPressureMonitor(
   deps: SystemMemoryPressureMonitorDeps
 ): SystemMemoryPressureMonitor {
-  const now = deps.now ?? Date.now;
+  // Monotonic, so a wall-clock step backwards cannot stall sampling.
+  const now = deps.now ?? (() => performance.now());
   let lastSampleAt = Number.NEGATIVE_INFINITY;
   let inFlight: Promise<void> | null = null;
   let overStreak = 0;
@@ -153,6 +154,10 @@ export function createSystemMemoryPressureMonitor(
 
     const fullyObserved = swap !== null && (!deps.isDarwin || fseventsdRssMb !== null);
     if (!fullyObserved) {
+      // Breaks both runs: "consecutive" means consecutive observations. An
+      // open episode stays open — only observed clear samples close it.
+      overStreak = 0;
+      clearStreak = 0;
       logDebug("system-health-sample-incomplete", figures);
       return;
     }
@@ -208,7 +213,15 @@ function execText(file: string, args: string[], maxBuffer: number): Promise<stri
     execFile(
       file,
       args,
-      { encoding: "utf8", timeout: PROBE_TIMEOUT_MS, maxBuffer, windowsHide: true },
+      {
+        encoding: "utf8",
+        timeout: PROBE_TIMEOUT_MS,
+        maxBuffer,
+        windowsHide: true,
+        // sysctl formats swap with the user's LC_NUMERIC (`2048,00M` under
+        // de_DE), which the parser would reject as malformed.
+        env: { ...process.env, LC_ALL: "C" },
+      },
       (err, stdout) => {
         if (err) reject(err);
         else resolve(stdout);

@@ -37,6 +37,7 @@ import {
   hasSustainedRendererSaturation,
 } from "../services/ProcessMemoryMonitor.js";
 import { createDefaultSystemMemoryPressureMonitor } from "../services/SystemMemoryPressureMonitor.js";
+import { publishSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
 
 import { startDiskSpaceMonitor } from "../services/DiskSpaceMonitor.js";
 import { runScratchCleanup } from "../services/ScratchCleanupService.js";
@@ -587,20 +588,10 @@ export async function initGlobalServices(
       const systemMemoryPressure = isE2EMode
         ? null
         : createDefaultSystemMemoryPressureMonitor((payload) => {
-            const envelope = { name: "system:memory-pressure", payload };
-            if (payload.status === "normal") {
-              // Every view, cached ones included, so whichever one is showing
-              // the notice can clear it.
-              broadcastToRenderer(CHANNELS.EVENTS_PUSH, envelope);
-              return;
-            }
-            // Once per episode, to each window's visible view.
-            if (!windowRegistry) return;
-            for (const wCtx of windowRegistry.all()) {
-              if (!wCtx.browserWindow.isDestroyed()) {
-                sendToRenderer(wCtx.browserWindow, CHANNELS.EVENTS_PUSH, envelope);
-              }
-            }
+            publishSystemMemoryPressure(
+              payload,
+              windowRegistry ? windowRegistry.all().map((wCtx) => wCtx.browserWindow) : []
+            );
           });
       setStopAppMetricsMonitor(
         startAppMetricsMonitor({

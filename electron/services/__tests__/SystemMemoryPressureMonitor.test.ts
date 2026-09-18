@@ -27,6 +27,7 @@ import {
   parseDarwinSwapUsage,
   parseFseventsdRssMb,
   SAMPLE_INTERVAL_MS,
+  SWAP_USED_PERCENT_THRESHOLD,
 } from "../SystemMemoryPressureMonitor.js";
 
 const SWAP_TOTAL_MB = 4096;
@@ -36,6 +37,12 @@ const swapAt = (percent: number): SwapUsage => ({
 });
 const HEALTHY_SWAP = swapAt(20);
 const FULL_SWAP = swapAt(91);
+
+/** Yields `readings` in order (null included), then `rest` forever. */
+function sequence(readings: Array<SwapUsage | null>, rest: SwapUsage): () => SwapUsage | null {
+  let i = 0;
+  return () => (i < readings.length ? readings[i++]! : rest);
+}
 
 function systemHealthRecords(mock: typeof logWarn | typeof logInfo, state: "over" | "recovered") {
   return vi
@@ -285,13 +292,59 @@ describe("createSystemMemoryPressureMonitor", () => {
     expect(publish).not.toHaveBeenCalled();
   });
 
-  it("lets a failed reading move neither streak", async () => {
-    const readings: Array<SwapUsage | null> = [FULL_SWAP, FULL_SWAP, null, FULL_SWAP];
-    const { tick } = makeMonitor({ swap: () => readings.shift()!, fseventsdRssMb: () => 100 });
+  it("lets a failed reading break an over-threshold run", async () => {
+    const { tick } = makeMonitor({
+      swap: sequence([FULL_SWAP, FULL_SWAP, null, FULL_SWAP, FULL_SWAP], FULL_SWAP),
+    });
 
-    await tick(3);
+    await tick(5);
     expect(publish).not.toHaveBeenCalled();
     await tick(1);
+    expect(publish).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets a failed reading break a recovery run without closing the episode", async () => {
+    const readings: Array<SwapUsage | null> = [
+      ...Array<SwapUsage>(EPISODE_OPEN_SAMPLES).fill(FULL_SWAP),
+      HEALTHY_SWAP,
+      HEALTHY_SWAP,
+      null,
+      HEALTHY_SWAP,
+      HEALTHY_SWAP,
+    ];
+    const { tick } = makeMonitor({ swap: sequence(readings, HEALTHY_SWAP) });
+
+    await tick(EPISODE_OPEN_SAMPLES + 5);
+    expect(publish).toHaveBeenCalledTimes(1);
+    await tick(1);
+    expect(publish).toHaveBeenLastCalledWith(expect.objectContaining({ status: "normal" }));
+  });
+
+  it("lets a new over-threshold sample restart a partial recovery", async () => {
+    const readings: SwapUsage[] = [
+      ...Array<SwapUsage>(EPISODE_OPEN_SAMPLES).fill(FULL_SWAP),
+      HEALTHY_SWAP,
+      HEALTHY_SWAP,
+      FULL_SWAP,
+      HEALTHY_SWAP,
+      HEALTHY_SWAP,
+    ];
+    const { tick } = makeMonitor({ swap: sequence(readings, HEALTHY_SWAP) });
+
+    await tick(EPISODE_OPEN_SAMPLES + 5);
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(systemHealthRecords(logInfo, "recovered")).toHaveLength(0);
+    await tick(1);
+    expect(publish).toHaveBeenCalledTimes(2);
+  });
+
+  it("trips on swap just over the threshold but not exactly at it", async () => {
+    const atThreshold = makeMonitor({ swap: () => swapAt(SWAP_USED_PERCENT_THRESHOLD) });
+    await atThreshold.tick(EPISODE_OPEN_SAMPLES);
+    expect(publish).not.toHaveBeenCalled();
+
+    const justOver = makeMonitor({ swap: () => swapAt(SWAP_USED_PERCENT_THRESHOLD + 1) });
+    await justOver.tick(EPISODE_OPEN_SAMPLES);
     expect(publish).toHaveBeenCalledTimes(1);
   });
 
@@ -305,6 +358,28 @@ describe("createSystemMemoryPressureMonitor", () => {
 
     expect(publish).toHaveBeenCalledTimes(1);
     expect(systemHealthRecords(logInfo, "recovered")).toHaveLength(0);
+  });
+
+  it("survives a reader that throws synchronously and samples again next time", async () => {
+    const readSwap = vi
+      .fn<() => Promise<SwapUsage | null>>()
+      .mockImplementationOnce(() => {
+        throw new Error("not a promise");
+      })
+      .mockResolvedValue(HEALTHY_SWAP);
+    const monitor = createSystemMemoryPressureMonitor({
+      isDarwin: false,
+      swapKind: "swap",
+      readSwap,
+      readFseventsdRssMb: vi.fn(),
+      publish,
+      now: () => now,
+    });
+
+    await expect(monitor.sample()).resolves.toBeUndefined();
+    now += SAMPLE_INTERVAL_MS;
+    await monitor.sample();
+    expect(readSwap).toHaveBeenCalledTimes(2);
   });
 
   it("treats a rejected reader as a failed reading", async () => {
@@ -356,7 +431,7 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     clock = 1_000_000;
-    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    vi.spyOn(performance, "now").mockImplementation(() => clock);
   });
 
   afterEach(() => {
@@ -397,6 +472,30 @@ describe("createDefaultSystemMemoryPressureMonitor", () => {
       swapKind: "swap",
       fseventsdRssMb: 36 * 1024,
     });
+  });
+
+  it("runs the Darwin probes under the C locale and reads a failed spawn as missing", async () => {
+    setPlatform("darwin");
+    vi.mocked(execFile).mockImplementation(((
+      _file: string,
+      _args: string[],
+      _opts: unknown,
+      cb: (err: Error | null, stdout: string) => void
+    ) => {
+      cb(Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }), "");
+    }) as unknown as typeof execFile);
+    const publish = vi.fn();
+    const monitor = createDefaultSystemMemoryPressureMonitor(publish);
+
+    await expect(monitor.sample()).resolves.toBeUndefined();
+
+    const options = vi
+      .mocked(execFile)
+      .mock.calls.map((call) => (call as unknown[])[2] as { env?: NodeJS.ProcessEnv });
+    expect(options).toHaveLength(2);
+    for (const opts of options) expect(opts.env?.LC_ALL).toBe("C");
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(publish).not.toHaveBeenCalled();
   });
 
   it("spawns nothing on Windows and labels its swap figure as commit", async () => {
