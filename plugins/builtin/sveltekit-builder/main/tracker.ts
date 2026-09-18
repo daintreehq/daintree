@@ -1,7 +1,7 @@
 import path from "node:path";
 import type { PluginFsApi } from "../../../../shared/types/plugin.js";
 import type { SourceChangedPush } from "../shared/protocol.js";
-import { sha256Hex } from "./source.js";
+import { readRevision } from "./source.js";
 
 /**
  * Notices when a file this workspace has read changes underneath it —
@@ -21,7 +21,7 @@ export const MAX_WATCHED_DIRECTORIES = 64;
 
 interface TrackedFile {
   worktreeRelative: string;
-  /** Last revision this side read; null once the file is gone. */
+  /** Last revision this side read; null once the file is no longer readable source — deleted, or past the size cap. */
   revision: string | null;
   checking: boolean;
   recheckQueued: boolean;
@@ -135,12 +135,7 @@ export class SourceTracker {
     try {
       do {
         file.recheckQueued = false;
-        let revision: string | null;
-        try {
-          revision = sha256Hex(await this.options.fs.readFileBytes(absolutePath));
-        } catch {
-          revision = null;
-        }
+        const revision = await readRevision(this.options.fs, absolutePath);
         if (this.disposed || this.files.get(absolutePath) !== file) return;
         if (revision === file.revision) continue;
         file.revision = revision;
