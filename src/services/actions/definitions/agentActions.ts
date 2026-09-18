@@ -38,6 +38,7 @@ import {
   SYSTEM_PROMPT_MAX_LENGTH,
 } from "@shared/utils/agentSystemPrompt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import type { ActionContext, ActionId } from "@shared/types/actions";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
@@ -348,6 +349,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .describe(
           "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input."
         ),
+      handback: z
+        .boolean()
+        .optional()
+        .describe(
+          "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt`."
+        ),
       systemPrompt: z
         .string()
         .max(SYSTEM_PROMPT_MAX_LENGTH)
@@ -451,6 +458,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         cwd,
         worktreeId,
         prompt,
+        handback,
         systemPrompt,
         interactive,
         model,
@@ -471,6 +479,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         cwd?: string;
         worktreeId?: string;
         prompt?: string;
+        handback?: boolean;
         systemPrompt?: string;
         interactive?: boolean;
         model?: string;
@@ -510,11 +519,24 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
         );
       }
+      // The handback instruction rides the prompt, so there is nothing to attach
+      // it to without one — and a blank prompt is dropped by the launcher
+      // (#12488).
+      if (handback === true && (prompt === undefined || prompt.trim() === "")) {
+        throw new UnactionableTargetError(
+          "handback asks the agent to mark the end of its reply to `prompt`, so it needs a non-empty `prompt`. Pass one, or launch without handback."
+        );
+      }
+      const handbackCode = handback === true ? mintHandbackCode() : undefined;
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
         cwd,
         worktreeId,
-        prompt,
+        prompt:
+          handbackCode !== undefined && prompt !== undefined
+            ? appendHandbackInstruction(prompt, handbackCode)
+            : prompt,
+        ...(handbackCode !== undefined ? { handbackCode } : {}),
         systemPromptArgs: systemPromptArgs.args.length > 0 ? systemPromptArgs.args : undefined,
         interactive,
         modelId: model,

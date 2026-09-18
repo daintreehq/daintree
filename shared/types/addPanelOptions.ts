@@ -154,6 +154,11 @@ export interface AddPanelOptionsBase {
   exitBehavior?: PanelExitBehavior;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
+  /**
+   * Handback code minted for an `agent.launch` prompt (#12488), handed to the
+   * spawn and never stored on the panel — a restart does not re-ask.
+   */
+  handbackCode?: string;
   /** Process-level flags captured at launch time, persisted for session resume */
   agentLaunchFlags?: string[];
   /** Model ID selected at launch time for per-panel model selection */

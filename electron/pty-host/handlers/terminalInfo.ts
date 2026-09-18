@@ -83,6 +83,9 @@ export function mapTerminalInfo(
     everDetectedAgent: t.everDetectedAgent,
     detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
     detectedProcessId: t.detectedProcessIconId,
+    // Read here so a status or wait answered from main reports it without a
+    // renderer view (#12488). Only ever set on terminals someone asked about.
+    lastHandback: t.lastHandback,
     // Only when the query asked for a specific token (#12337). Undefined here
     // means either "not asked" or "no record", and the two are told apart by
     // the caller, which knows whether it passed a token.

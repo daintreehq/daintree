@@ -1,5 +1,6 @@
 import type { WaitingReason } from "./agent.js";
 import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "./terminalStatus.js";
+import { LAST_HANDBACK_DESCRIPTION, type TerminalHandback } from "./handback.js";
 
 /**
  * Default wait is a bounded long-poll, not an open-ended block. A tool call
@@ -82,6 +83,19 @@ export const WAIT_UNTIL_IDLE_TRACKING_STATES: readonly WaitUntilIdleTrackingStat
 const TRACKING_STATE_DESCRIPTION =
   "Separates an idle agent from a session that is gone: 'tracked' = a mapping is held, which is not proof of liveness or completion; 'closed' = a kill was observed; 'unknown' = no record kept (a plain shell, a poll that raced the spawn, or evicted history).";
 
+/** `lastHandback` for the hand-written wait output schemas (#12488). */
+const LAST_HANDBACK_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  description: LAST_HANDBACK_DESCRIPTION,
+  properties: {
+    message: { type: ["string", "null"] },
+    observedAt: { type: "number" },
+    submissionToken: { type: "string" },
+    truncated: { type: "boolean" },
+  },
+  required: ["message", "observedAt", "truncated"],
+};
+
 export type WaitUntilIdleResult = {
   terminalId: string;
   agentId?: string;
@@ -109,6 +123,12 @@ export type WaitUntilIdleResult = {
    * nothing or did not answer in time.
    */
   lastOutputChangeAt?: number;
+  /**
+   * The handback marker this terminal last printed for a submission that asked
+   * for one (#12488), read from the pty-host with `lastOutputChangeAt`. Strictly
+   * additive to `busyState`: absence never means still working.
+   */
+  lastHandback?: TerminalHandback;
   /**
    * Numeric process exit code, present only when `idleReason` is `"completed"`
    * or `"exited"`. `null` when the process was terminated by a signal without a
@@ -169,6 +189,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
     previousBusyState: { type: "string", enum: ["working", "idle"] },
     lastTransitionAt: { type: "number" },
     lastOutputChangeAt: { type: "number", description: LAST_OUTPUT_CHANGE_AT_DESCRIPTION },
+    lastHandback: LAST_HANDBACK_OUTPUT_SCHEMA,
     exitCode: {
       type: ["number", "null"],
       description:
@@ -222,6 +243,8 @@ export type WaitUntilIdleBatchEntry = {
   lastTransitionAt?: number;
   /** See {@link WaitUntilIdleResult.lastOutputChangeAt}. */
   lastOutputChangeAt?: number;
+  /** See {@link WaitUntilIdleResult.lastHandback}. */
+  lastHandback?: TerminalHandback;
   exitCode?: number | null;
   exitSignal?: number;
   /**
@@ -271,6 +294,7 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
           previousBusyState: { type: "string", enum: ["working", "idle"] },
           lastTransitionAt: { type: "number" },
           lastOutputChangeAt: { type: "number", description: LAST_OUTPUT_CHANGE_AT_DESCRIPTION },
+          lastHandback: LAST_HANDBACK_OUTPUT_SCHEMA,
           exitCode: { type: ["number", "null"] },
           exitSignal: { type: "number" },
           settled: {

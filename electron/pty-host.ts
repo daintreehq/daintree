@@ -1377,6 +1377,10 @@ events.on("agent:state-changed", (payload) => {
       ...(payload.temperature !== undefined ? { temperature: payload.temperature } : {}),
       ...(payload.heatAdded !== undefined ? { heatAdded: payload.heatAdded } : {}),
       ...(payload.changedChars !== undefined ? { changedChars: payload.changedChars } : {}),
+      // Parsed on this host at the settle, so the event is the only way either
+      // reaches main or a renderer's panel store (#10682, #12488).
+      ...(payload.lastCheckResult ? { lastCheckResult: payload.lastCheckResult } : {}),
+      ...(payload.lastHandback ? { lastHandback: payload.lastHandback } : {}),
     });
 
     if (

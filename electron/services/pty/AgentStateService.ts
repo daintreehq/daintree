@@ -16,6 +16,7 @@ import type { AgentActivityObservationResult } from "./AgentActivityTemperature.
 import type { TerminalInfo } from "./types.js";
 import { ActivityHeadlineGenerator } from "../ActivityHeadlineGenerator.js";
 import { checkResultsEqual, detectCheckResult } from "./CheckResultDetector.js";
+import { findHandback, rawHandbackText, type HandbackHit } from "./HandbackDetector.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
 
@@ -27,6 +28,13 @@ const CHECK_SETTLE_STATES: ReadonlySet<AgentState> = new Set([
   "completed",
   "exited",
 ]);
+
+// Settles a handback marker is looked for at (#12488). Narrower than the check
+// set: only a transition OUT of `working` counts, because a marker is only the
+// agent's answer once it has worked on the prompt, and an agent that mentions
+// the marker mid-task is still working. `idle` is left out — from `working` it
+// is only reachable by a kill.
+const HANDBACK_SETTLE_STATES: ReadonlySet<AgentState> = new Set(["waiting", "completed", "exited"]);
 
 // Hysteresis tunables. Window is conservative — long enough to absorb
 // sub-second flip races (timeout/heuristic firing right after input/output)
@@ -295,6 +303,15 @@ export class AgentStateService {
     // so working↔waiting flapping doesn't spam identical updates (issue #10682).
     // Stored on the terminal AFTER validation succeeds (see the commit block).
     const newCheckResult = this.detectCheckResultOnSettle(terminal, newState, event, timestamp);
+    // Same moment, for a handback marker a submission asked for (#12488).
+    // Stored, and its request retired, only once validation succeeds.
+    const handbackHit = this.detectHandbackOnSettle(
+      terminal,
+      previousState,
+      newState,
+      event,
+      timestamp
+    );
 
     const stateChangePayload = {
       agentId: effectiveAgentId,
@@ -332,6 +349,7 @@ export class AgentStateService {
           }
         : {}),
       ...(newCheckResult ? { lastCheckResult: newCheckResult } : {}),
+      ...(handbackHit ? { lastHandback: handbackHit.handback } : {}),
     };
 
     const validatedStateChange = AgentStateChangedSchema.safeParse(stateChangePayload);
@@ -365,6 +383,23 @@ export class AgentStateService {
       terminal.lastCheckResult = undefined;
     } else if (newCheckResult) {
       terminal.lastCheckResult = newCheckResult;
+    }
+
+    // A respawn is a new session: its predecessor's handback and any request
+    // still outstanding belong to a conversation that no longer exists (#12488).
+    // A hit fires its code once. An exit or kill ends the session too, after the
+    // exit settle has had its look.
+    if (event.type === "respawn") {
+      terminal.lastHandback = undefined;
+      terminal.handbackTracker?.clear();
+    } else {
+      if (handbackHit) {
+        terminal.lastHandback = handbackHit.handback;
+        terminal.handbackTracker?.retire(handbackHit.code);
+      }
+      if (event.type === "exit" || event.type === "kill") {
+        terminal.handbackTracker?.clear();
+      }
     }
 
     // Refresh the hysteresis lock only when a high-confidence transition
@@ -417,6 +452,37 @@ export class AgentStateService {
     }
 
     return detected;
+  }
+
+  /**
+   * Look for a handback marker as the agent settles out of "working" (#12488).
+   * Pure read — the caller stores the result and retires the request after
+   * validation. Returns immediately for a terminal holding no request, so the
+   * detector never runs for terminals nobody asked about. Only requests whose
+   * submission reached the pty are looked for, and only at a settle out of
+   * `working` — never mid-task. The screen still holds the echoed instruction,
+   * which the detector rejects by its placeholder. Skips respawns and kills,
+   * whose buffer belongs to a session that is gone or was cut short.
+   */
+  private detectHandbackOnSettle(
+    terminal: TerminalInfo,
+    previousState: AgentState,
+    newState: AgentState,
+    event: AgentEvent,
+    timestamp: number
+  ): HandbackHit | undefined {
+    const tracker = terminal.handbackTracker;
+    if (tracker === undefined) return undefined;
+    if (event.type === "respawn" || event.type === "kill") return undefined;
+    if (previousState !== "working" || !HANDBACK_SETTLE_STATES.has(newState)) return undefined;
+
+    const delivered = tracker.deliveredRequests();
+    if (delivered.length === 0) return undefined;
+    return findHandback(
+      [() => tracker.screenText(), () => rawHandbackText(terminal.semanticBuffer)],
+      delivered,
+      timestamp
+    );
   }
 
   /**

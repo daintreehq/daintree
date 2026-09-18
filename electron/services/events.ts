@@ -623,6 +623,8 @@ export type DaintreeEventMap = {
     changedChars?: number;
     /** Parsed test/lint/build result captured at this transition (#10682). Best-effort, not an authoritative exit code. */
     lastCheckResult?: import("../../shared/types/checkResult.js").TerminalCheckResult;
+    /** Handback marker first seen at this settle (#12488). `message` is terminal text — never log it. */
+    lastHandback?: import("../../shared/types/handback.js").TerminalHandback;
   }>;
 
   /**

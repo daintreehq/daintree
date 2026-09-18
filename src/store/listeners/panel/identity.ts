@@ -130,6 +130,22 @@ export function setupIdentityListeners(): DisposableStore {
           });
         }
 
+        // Same for a handback marker (#12488): present only on the settle where
+        // the agent's marker for a request was first seen.
+        if (data.lastHandback) {
+          const handback = data.lastHandback;
+          usePanelStore.setState((s) => {
+            const panel = s.panelsById[terminalId];
+            if (!panel || !isPtyPanel(panel)) return s;
+            return {
+              panelsById: {
+                ...s.panelsById,
+                [terminalId]: { ...panel, lastHandback: handback },
+              },
+            };
+          });
+        }
+
         // Snapshot baseline `changedFileCount` the first time an agent enters
         // "working" in a session. Subsequent working↔waiting cycles keep the
         // initial baseline so the comparison at completion reflects the full

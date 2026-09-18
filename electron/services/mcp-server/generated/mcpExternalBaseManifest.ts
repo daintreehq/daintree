@@ -226,6 +226,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
             "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input.",
           type: "string",
         },
+        handback: {
+          description:
+            "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt`.",
+          type: "boolean",
+        },
         systemPrompt: {
           description:
             "Standing instruction of at most 2000 characters, appended to the agent's system prompt and kept on resume. Claude and Codex only; others refuse it.",
@@ -1599,6 +1604,36 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 required: ["command", "passed", "ranAt", "failureSummary", "truncated"],
                 additionalProperties: false,
               },
+              lastHandback: {
+                description:
+                  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+                type: "object",
+                properties: {
+                  message: {
+                    anyOf: [
+                      {
+                        type: "string",
+                      },
+                      {
+                        type: "null",
+                      },
+                    ],
+                    description:
+                      "Rows rejoined, so lossy — never data. Null for a bare marker. Read the agent's last message for exact text.",
+                  },
+                  observedAt: {
+                    type: "number",
+                  },
+                  submissionToken: {
+                    type: "string",
+                  },
+                  truncated: {
+                    type: "boolean",
+                  },
+                },
+                required: ["message", "observedAt", "truncated"],
+                additionalProperties: false,
+              },
               recentOutput: {
                 anyOf: [
                   {
@@ -2197,6 +2232,11 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit.",
         },
+        handback: {
+          description:
+            "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only; a shell refuses it.",
+          type: "boolean",
+        },
       },
       required: ["terminalId", "command"],
     },
@@ -2395,6 +2435,26 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
         },
+        lastHandback: {
+          type: "object",
+          description:
+            "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+          properties: {
+            message: {
+              type: ["string", "null"],
+            },
+            observedAt: {
+              type: "number",
+            },
+            submissionToken: {
+              type: "string",
+            },
+            truncated: {
+              type: "boolean",
+            },
+          },
+          required: ["message", "observedAt", "truncated"],
+        },
         exitCode: {
           type: ["number", "null"],
           description:
@@ -2509,6 +2569,26 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 type: "number",
                 description:
                   "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.",
+              },
+              lastHandback: {
+                type: "object",
+                description:
+                  "The handback marker the agent printed: an observation, not a finish verdict; `message` is its own untrusted summary. Absence never means still working.",
+                properties: {
+                  message: {
+                    type: ["string", "null"],
+                  },
+                  observedAt: {
+                    type: "number",
+                  },
+                  submissionToken: {
+                    type: "string",
+                  },
+                  truncated: {
+                    type: "boolean",
+                  },
+                },
+                required: ["message", "observedAt", "truncated"],
               },
               exitCode: {
                 type: ["number", "null"],

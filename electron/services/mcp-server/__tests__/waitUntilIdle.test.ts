@@ -892,3 +892,81 @@ describe("lastOutputChangeAt on wait results (#12428)", () => {
     expect(result).not.toHaveProperty("lastOutputChangeAt");
   });
 });
+
+describe("lastHandback on wait results (#12488)", () => {
+  afterEach(() => {
+    setPtyClientRef(null);
+  });
+
+  type Handback = { message: string | null; observedAt: number; truncated: boolean };
+  const installPtyClient = (
+    getTerminalAsync: (
+      id: string
+    ) => Promise<{ lastOutputChangeAt?: number; lastHandback?: Handback } | null>
+  ) => {
+    const fake = {
+      getTerminalAsync: vi.fn(getTerminalAsync),
+      getTerminalProjectId: vi.fn(() => null),
+    };
+    setPtyClientRef(fake as unknown as PtyClient);
+    return fake;
+  };
+
+  it("attaches the terminal's own handback to a single wait that settled", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    const handback = { message: "done", observedAt: 1_000, truncated: false };
+    installPtyClient(async () => ({ lastOutputChangeAt: 900, lastHandback: handback }));
+
+    const pending = handleWaitUntilIdle(
+      { terminalId, timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(terminalId, agentId);
+    const result = await pending;
+
+    expect(result).toMatchObject({
+      busyState: "idle",
+      lastOutputChangeAt: 900,
+      lastHandback: handback,
+    });
+  });
+
+  it("keeps each batched row's handback to its own terminal, even for one agent type", async () => {
+    const asked = nextIds();
+    const other = nextIds();
+    seedWorkingAgent(asked.terminalId, asked.agentId);
+    seedWorkingAgent(other.terminalId, other.agentId);
+    const handback = { message: null, observedAt: 2_000, truncated: false };
+    installPtyClient(async (id) => (id === asked.terminalId ? { lastHandback: handback } : {}));
+
+    const pending = handleWaitUntilIdleBatch(
+      { terminalIds: [asked.terminalId, other.terminalId], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(asked.terminalId, asked.agentId);
+    emitIdle(other.terminalId, other.agentId);
+    const res = await pending;
+
+    const byId = new Map(res.results.map((entry) => [entry.terminalId, entry]));
+    expect(byId.get(asked.terminalId)?.lastHandback).toEqual(handback);
+    expect(byId.get(other.terminalId)).not.toHaveProperty("lastHandback");
+  });
+
+  it("leaves the field absent when the record holds no handback", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    installPtyClient(async () => ({ lastOutputChangeAt: 5 }));
+
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 20,
+    });
+
+    expect(result.lastOutputChangeAt).toBe(5);
+    expect(result).not.toHaveProperty("lastHandback");
+  });
+});

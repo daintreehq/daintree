@@ -369,9 +369,20 @@ export const terminalClient = {
    * that it was written — that has always been true and is the gap #12337
    * closes. Pass `submissionToken` to have the outcome tracked, then read it
    * back with {@link getSubmissions} or `terminal.getStatus`.
+   *
+   * `handbackCode` rides along when the caller asked for a handback (#12488);
+   * its instruction must already be in `text`. Passed only when present, so an
+   * ordinary submit crosses the bridge exactly as before.
    */
-  submit: (id: string, text: string, submissionToken?: string): Promise<void> => {
-    return window.electron.terminal.submit(id, text, submissionToken);
+  submit: (
+    id: string,
+    text: string,
+    submissionToken?: string,
+    handbackCode?: string
+  ): Promise<void> => {
+    return handbackCode === undefined
+      ? window.electron.terminal.submit(id, text, submissionToken)
+      : window.electron.terminal.submit(id, text, submissionToken, handbackCode);
   },
 
   /**

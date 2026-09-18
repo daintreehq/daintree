@@ -7501,6 +7501,23 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(confirmed).toBe(false);
     });
 
+    // #12488: whether to ask for a handback is the one other field it carries.
+    it("forwards a handback request alongside the text", async () => {
+      const { server, dispatchAction } = inputHarness("s-submit-handback");
+
+      await callTool(server, {
+        name: "terminal.sendCommandOwned",
+        arguments: { terminalId: "terminal-1", command: "fix it", handback: true },
+      });
+
+      const delegated = dispatchAction.mock.calls[0]![1] as Record<string, unknown>;
+      expect(delegated).toStrictEqual({
+        terminalId: "terminal-1",
+        command: "fix it",
+        handback: true,
+      });
+    });
+
     // An absent field is left absent rather than forwarded as `undefined`, so
     // the delegate's own schema is what rejects the missing text.
     it("forwards nothing for a field the caller left out", async () => {

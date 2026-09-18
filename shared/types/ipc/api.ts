@@ -287,9 +287,16 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      * Submit text as one submission. `submissionToken` is the caller's own
      * correlator (#12337): pass it here and read the outcome back through
      * `getSubmissions` or `terminal.getStatus`. Untokened submits are not
-     * tracked and retain nothing.
+     * tracked and retain nothing. `handbackCode` is the code minted for a
+     * submission that asked for a handback (#12488), whose instruction is
+     * already in `text`.
      */
-    submit(id: string, text: string, submissionToken?: string): Promise<void>;
+    submit(
+      id: string,
+      text: string,
+      submissionToken?: string,
+      handbackCode?: string
+    ): Promise<void>;
     /**
      * Resolve one submission token across several terminals (#12337). Answers
      * `found` / `absent` / `unreadable` per id — a terminal that could not be

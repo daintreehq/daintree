@@ -642,7 +642,7 @@ export class PtyManager extends EventEmitter {
    * Submit text as a command to the terminal.
    * Handles bracketed paste and CR timing on the backend for reliable execution.
    */
-  submit(id: string, text: string, submissionToken?: string): void {
+  submit(id: string, text: string, submissionToken?: string, handbackCode?: string): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
       logWarn(`Terminal ${id} not found, cannot submit`);
@@ -652,7 +652,7 @@ export class PtyManager extends EventEmitter {
       // that would answer for tokens this host never accepted.
       return;
     }
-    terminal.submit(text, submissionToken);
+    terminal.submit(text, submissionToken, handbackCode);
   }
 
   /**

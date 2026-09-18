@@ -127,6 +127,54 @@ describe("bridgePtyEvent", () => {
     expect(payloads[0]).not.toHaveProperty("exitSignal");
   });
 
+  it("forwards the settle's check result and handback onto the main bus (#10682, #12488)", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    events.on("agent:state-changed", (payload) => {
+      payloads.push(payload as unknown as Record<string, unknown>);
+    });
+    const lastCheckResult = {
+      command: "npm test",
+      passed: false,
+      ranAt: 1_700_000_000_000,
+      failureSummary: "1 failed",
+      truncated: false,
+    };
+    const lastHandback = {
+      message: "fixed the flaky test",
+      observedAt: 1_700_000_000_000,
+      submissionToken: "tok-1",
+      truncated: false,
+    };
+
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "term-settled",
+      agentId: "claude",
+      state: "waiting",
+      previousState: "working",
+      timestamp: Date.now(),
+      trigger: "activity",
+      confidence: 1.0,
+      lastCheckResult,
+      lastHandback,
+    });
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "term-settled",
+      agentId: "claude",
+      state: "working",
+      previousState: "waiting",
+      timestamp: Date.now(),
+      trigger: "activity",
+      confidence: 1.0,
+    });
+
+    expect(payloads[0]?.lastCheckResult).toEqual(lastCheckResult);
+    expect(payloads[0]?.lastHandback).toEqual(lastHandback);
+    expect(payloads[1]).not.toHaveProperty("lastCheckResult");
+    expect(payloads[1]).not.toHaveProperty("lastHandback");
+  });
+
   it("routes terminal-status events to bus and callback", () => {
     const terminalStatusPayloads: Array<{ id: string; status: string }> = [];
     events.on("terminal:status", (payload) => {

@@ -337,6 +337,19 @@ describe("buildViewlessTerminalStatus results", () => {
     expect(result.unavailableFields).not.toContain("lastOutputChangeAt");
   });
 
+  it("reports each terminal's own handback and never lists it as unavailable (#12488)", async () => {
+    const handback = { message: "shipped", observedAt: 4_000, truncated: false };
+    const result = await buildViewlessTerminalStatus(
+      deps([record({ id: "asked", lastHandback: handback }), record({ id: "plain" })]),
+      WORKSPACE,
+      { terminalIds: ["asked", "plain"] }
+    );
+
+    expect(result.terminals[0]?.lastHandback).toEqual(handback);
+    expect(result.terminals[1]).not.toHaveProperty("lastHandback");
+    expect(result.unavailableFields).not.toContain("lastHandback");
+  });
+
   it("keeps hasPty through the output attachment, in both polarities", async () => {
     // `recentOutput` is assigned onto the entry after `buildEntry` returns, so
     // the two must not clobber each other.

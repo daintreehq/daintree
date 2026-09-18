@@ -42,6 +42,8 @@ export interface SubmitExecutionContext {
 interface SubmitJob {
   text: string;
   token?: string;
+  /** Run once when this submission reaches `pty_written`, tokened or not (#12488). */
+  onPtyWritten?: () => void;
 }
 
 export interface WriteQueueOptions {
@@ -139,7 +141,7 @@ export class WriteQueue {
    * drain in FIFO order. The in-flight flag is set synchronously before the
    * first await so two callers cannot both pass the guard.
    */
-  submit(text: string, token?: string): void {
+  submit(text: string, token?: string, onPtyWritten?: () => void): void {
     if (this.disposed) {
       // A tracked submit into a disposed queue is answered rather than
       // forgotten: `cancelled` says Daintree dropped it, where silence would
@@ -162,7 +164,7 @@ export class WriteQueue {
     if (token !== undefined && !this.pendingSubmissions.has(token)) {
       this.pendingSubmissions.set(token, { token, phase: "queued", at: Date.now() });
     }
-    this.submitQueue.push({ text, token });
+    this.submitQueue.push({ text, token, onPtyWritten });
     if (this.submitInFlight) return;
     this.submitInFlight = true;
     void this.drainSubmitQueue();
@@ -424,6 +426,7 @@ export class WriteQueue {
           const work = this.options.performSubmit(next.text, {
             markPtyWritten: () => {
               if (token !== undefined) this.finalizeIfPending(token, "pty_written");
+              next.onPtyWritten?.();
             },
           });
           this.armSlowSubmitReporting(startedAt);

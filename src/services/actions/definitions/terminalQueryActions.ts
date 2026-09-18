@@ -35,6 +35,20 @@ import {
   isClientMetadataEligible,
 } from "@/store/slices/panelRegistry/panelCount";
 import { readClientMetadata } from "@shared/utils/mcpClientMetadata";
+import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
+import { isAgentTerminal } from "@/utils/terminalType";
+import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+
+/**
+ * The `handback` argument, shared by both submit tools so the two descriptions
+ * cannot drift (#12488).
+ */
+const HANDBACK_ARG_SCHEMA = z
+  .boolean()
+  .optional()
+  .describe(
+    "Ask the agent to end its reply with a Daintree marker, read back as `lastHandback`. Agent panes only; a shell refuses it."
+  );
 
 /**
  * Cap on the command text echoed back by `terminal.sendCommand` (#12337).
@@ -455,6 +469,9 @@ export function registerTerminalQueryActions(
           // Parsed test/lint/check result (issue #10682). Best-effort, not
           // authoritative — see TerminalCheckResult / the schema doc above.
           lastCheckResult: isPtyPanel(terminal) ? terminal.lastCheckResult : undefined,
+          // Handback marker the agent printed for a request (#12488). Set from
+          // agent:state-changed; an observation of printed text, not a verdict.
+          lastHandback: isPtyPanel(terminal) ? terminal.lastHandback : undefined,
           // Whether this terminal is in the fleet arming/broadcast set (#10695).
           armed: armedIds.has(terminal.id),
         };
@@ -736,11 +753,16 @@ export function registerTerminalQueryActions(
         .describe(
           "Text to submit. Runs as a shell command in a plain terminal, or is submitted as the next prompt/turn in an agent pane. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
         ),
+      handback: HANDBACK_ARG_SCHEMA,
     }),
     resultSchema: TerminalSendCommandResultSchema,
     mcpOutputSchema: true,
     run: async (args: unknown) => {
-      const { terminalId, command } = args as { terminalId: string; command: string };
+      const { terminalId, command, handback } = args as {
+        terminalId: string;
+        command: string;
+        handback?: boolean;
+      };
 
       // Verify terminal exists and is valid for command execution
       const terminal = usePanelStore.getState().panelsById[terminalId];
@@ -765,6 +787,14 @@ export function registerTerminalQueryActions(
         throw new Error("Terminal does not have PTY capability");
       }
 
+      // Refused rather than sent: a shell would run the instruction as a
+      // command, and nothing there will ever print the marker (#12488).
+      if (handback === true && !(isPtyPanel(terminal) && isAgentTerminal(terminal))) {
+        throw new UnactionableTargetError(
+          `handback needs an agent pane, and terminal '${terminalId}' has no agent running. Send without handback.`
+        );
+      }
+
       // Minted here rather than in main so the caller gets a correlator even if
       // the submit itself rejects — and minted after validation, so a token is
       // only ever handed out for a submission that was actually dispatched
@@ -774,7 +804,19 @@ export function registerTerminalQueryActions(
 
       // Send command via submit (handles bracketed paste). Resolving means
       // queued, not written — which is exactly why the token exists.
-      await terminalClient.submit(terminalId, command, submissionToken);
+      if (handback === true) {
+        // The code never leaves Daintree: the caller reads the marker back as
+        // `lastHandback`, so the receipt below still echoes its own text.
+        const handbackCode = mintHandbackCode();
+        await terminalClient.submit(
+          terminalId,
+          appendHandbackInstruction(command, handbackCode),
+          submissionToken,
+          handbackCode
+        );
+      } else {
+        await terminalClient.submit(terminalId, command, submissionToken);
+      }
 
       // Return a clear message so the AI model knows not to repeat this action
       return {
@@ -828,6 +870,7 @@ export function registerTerminalQueryActions(
         .describe(
           "Text to submit. Multi-line is delivered atomically and submitted with a single Enter, so interior newlines never prematurely submit."
         ),
+      handback: HANDBACK_ARG_SCHEMA,
     }),
     resultSchema: TerminalSendCommandResultSchema,
     mcpOutputSchema: true,

@@ -289,15 +289,15 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
   // Terminal input, scoped to panels this session created (#12407). Neither
   // keeps nor drops anything beyond the record an interrupt keeps: submitting to
   // a panel is not a claim it stopped existing. The submission is the one entry
-  // that forwards more than the id — its text — while the injection forwards
-  // nothing, because the context it writes is the active worktree's and never
-  // the caller's.
+  // that forwards more than the id — its text, and whether to ask for a
+  // handback (#12488) — while the injection forwards nothing, because the
+  // context it writes is the active worktree's and never the caller's.
   "terminal.sendCommandOwned": {
     resourceKind: "terminal",
     executor: "renderer",
     delegateTo: "terminal.sendCommand",
     idArg: "terminalId",
-    forwardArgs: ["command"],
+    forwardArgs: ["command", "handback"],
     releasesOwnership: false,
   },
   "terminal.injectOwned": {

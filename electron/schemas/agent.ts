@@ -91,6 +91,17 @@ export const AgentStateChangedSchema = z.extend(EventContextSchema, {
       truncated: z.boolean(),
     })
   ),
+  // Handback marker observed at this settle for a request the terminal held
+  // (#12488). Present only on the settle where a request's marker was first
+  // seen. `message` is terminal text the agent wrote — never log it.
+  lastHandback: z.optional(
+    z.object({
+      message: z.nullable(z.string()),
+      observedAt: positiveInt,
+      submissionToken: z.optional(z.string()),
+      truncated: z.boolean(),
+    })
+  ),
 });
 
 /**

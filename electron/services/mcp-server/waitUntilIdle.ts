@@ -15,19 +15,47 @@ import {
 import { mapAgentStateToBusyState, mapAgentStateToIdleReason } from "./shared.js";
 import type { AgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
+import type { TerminalHandback } from "../../../shared/types/handback.js";
 
 /**
- * Ceiling on the pty-host read that fills `lastOutputChangeAt` once a wait has
- * resolved. The wait's own answer is already decided by then, so a stalled
- * host costs the caller this much and the field, never the result.
+ * Ceiling on the pty-host read that fills `lastOutputChangeAt` and
+ * `lastHandback` once a wait has resolved. The wait's own answer is already
+ * decided by then, so a stalled host costs the caller this much and the
+ * fields, never the result.
  */
 export const OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS = 500;
 
+/** What the pty-host record adds to a resolved wait. Each field is absent when unobserved. */
+interface TerminalObservations {
+  /** When the visible content last changed (#12428). */
+  lastOutputChangeAt?: number;
+  /** The last handback marker seen for a request this terminal held (#12488). */
+  lastHandback?: TerminalHandback;
+}
+
+function pickObservations(
+  record: {
+    lastOutputChangeAt?: number;
+    lastHandback?: TerminalHandback;
+  } | null
+): TerminalObservations | undefined {
+  if (!record) return undefined;
+  const observations: TerminalObservations = {};
+  if (record.lastOutputChangeAt !== undefined) {
+    observations.lastOutputChangeAt = record.lastOutputChangeAt;
+  }
+  if (record.lastHandback !== undefined) observations.lastHandback = record.lastHandback;
+  return Object.keys(observations).length > 0 ? observations : undefined;
+}
+
 /**
- * Read when each terminal's visible content last changed (#12428), keyed by
- * terminal id rather than agent id — several terminals share an agent type.
- * A terminal whose record is missing, lacks the field, or does not answer
- * before the shared deadline is simply left out.
+ * Read when each terminal's visible content last changed (#12428) and the
+ * handback it last printed (#12488), keyed by terminal id rather than agent id
+ * — several terminals share an agent type, and a handback belongs to exactly
+ * one. The pty-host commits a handback before it emits the settle that ends a
+ * wait, so a read issued after that settle sees it. A terminal whose record is
+ * missing, lacks both fields, or does not answer before the shared deadline is
+ * simply left out.
  *
  * A workspace-bound session reads only terminals the spawn ledger places in its
  * own workspace, and that check runs before any RPC is issued. The wait itself
@@ -38,15 +66,15 @@ export const OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS = 500;
  * cannot place a terminal this main process never tracked, so those go
  * unread — the field is absent, never guessed.
  */
-async function readOutputProgress(
+async function readTerminalObservations(
   terminalIds: readonly string[],
   signal: AbortSignal,
   workspaceId: string | undefined
-): Promise<Map<string, number>> {
+): Promise<Map<string, TerminalObservations>> {
   // Checked before any early return: an abort that landed while the wait was
   // settling never fires the listener below.
   throwIfCancelled(signal);
-  const progress = new Map<string, number>();
+  const progress = new Map<string, TerminalObservations>();
   const ptyClient = getPtyClient();
   if (!ptyClient) return progress;
   const readable =
@@ -66,17 +94,14 @@ async function readOutputProgress(
     const readings = await Promise.all(
       readable.map((id) =>
         Promise.race([
-          ptyClient.getTerminalAsync(id).then(
-            (record) => record?.lastOutputChangeAt,
-            () => undefined
-          ),
+          ptyClient.getTerminalAsync(id).then(pickObservations, () => undefined),
           deadline,
         ])
       )
     );
     readable.forEach((id, index) => {
-      const at = readings[index];
-      if (at !== undefined) progress.set(id, at);
+      const observations = readings[index];
+      if (observations !== undefined) progress.set(id, observations);
     });
   } finally {
     clearTimeout(deadlineHandle);
@@ -122,7 +147,8 @@ export interface WaitUntilIdleOptions {
 }
 
 /**
- * Wait for one terminal to leave `working`, then attach its output progress.
+ * Wait for one terminal to leave `working`, then attach its output progress and
+ * the last handback it printed.
  *
  * The progress read runs only after the wait has settled and released its
  * subscriptions, so nothing arriving during it can change the answer. Only
@@ -136,9 +162,13 @@ export async function handleWaitUntilIdle(
 ): Promise<WaitUntilIdleResult> {
   const result = await waitForTerminalIdle(rawArgs, signal, options);
   if (result.trackingState !== "tracked") return result;
-  const progress = await readOutputProgress([result.terminalId], signal, options?.workspaceId);
-  const lastOutputChangeAt = progress.get(result.terminalId);
-  return lastOutputChangeAt === undefined ? result : { ...result, lastOutputChangeAt };
+  const observations = await readTerminalObservations(
+    [result.terminalId],
+    signal,
+    options?.workspaceId
+  );
+  const found = observations.get(result.terminalId);
+  return found === undefined ? result : { ...result, ...found };
 }
 
 async function waitForTerminalIdle(
@@ -498,13 +528,13 @@ export async function handleWaitUntilIdleBatch(
   const trackedIds = result.results
     .filter((entry) => entry.trackingState === "tracked")
     .map((entry) => entry.terminalId);
-  const progress = await readOutputProgress(trackedIds, signal, options?.workspaceId);
-  if (progress.size === 0) return result;
+  const observations = await readTerminalObservations(trackedIds, signal, options?.workspaceId);
+  if (observations.size === 0) return result;
   return {
     ...result,
     results: result.results.map((entry) => {
-      const lastOutputChangeAt = progress.get(entry.terminalId);
-      return lastOutputChangeAt === undefined ? entry : { ...entry, lastOutputChangeAt };
+      const found = observations.get(entry.terminalId);
+      return found === undefined ? entry : { ...entry, ...found };
     }),
   };
 }

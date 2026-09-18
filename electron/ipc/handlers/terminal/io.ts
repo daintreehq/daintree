@@ -20,6 +20,7 @@ import { events } from "../../../services/events.js";
 import { getProjectForWebContents } from "../../../window/webContentsRegistry.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
+import { isHandbackCode } from "../../../../shared/utils/handback.js";
 import { AppError } from "../../../utils/errorTypes.js";
 import type { TerminalSubmissionLookup } from "../../../../shared/types/terminalSubmission.js";
 
@@ -106,7 +107,8 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   const handleTerminalSubmit = async (
     id: string,
     text: string,
-    submissionToken?: string
+    submissionToken?: string,
+    handbackCode?: string
   ): Promise<void> => {
     try {
       if (typeof id !== "string" || typeof text !== "string") {
@@ -124,6 +126,15 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         throw new AppError({
           code: "VALIDATION",
           message: `submissionToken must be a non-empty string of at most ${MAX_SUBMISSION_TOKEN_LENGTH} characters`,
+          context: { terminalId: id },
+        });
+      }
+      // Minted by the caller's action (#12488) and kept on the pty-host as a
+      // literal to search for, so hold it to the grammar the markers promise.
+      if (handbackCode !== undefined && !isHandbackCode(handbackCode)) {
+        throw new AppError({
+          code: "VALIDATION",
+          message: "handbackCode must be six characters from [a-z0-9]",
           context: { terminalId: id },
         });
       }
@@ -163,7 +174,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
           context: { terminalId: id },
         });
       }
-      ptyClient.submit(id, text, submissionToken);
+      ptyClient.submit(id, text, submissionToken, handbackCode);
     } catch (error) {
       // Preserve AppError shape so the renderer sees the embedded errno
       // token in the message — wrapping would lose the prefix.

@@ -70,6 +70,11 @@ export interface TerminalSpawnOptions {
   /** Original user-selected preset ID; unchanged across fallback hops. */
   originalAgentPresetId?: string;
   /**
+   * Handback code minted for this launch's initial prompt (#12488); the
+   * instruction is already in `command`. Never persisted.
+   */
+  handbackCode?: string;
+  /**
    * Launch-time `ActionContext` snapshot, captured synchronously in the
    * renderer when the user launched the agent. Consumed only by the
    * `daintree-assistant` pinned-session path (#10647) to replay tool dispatch

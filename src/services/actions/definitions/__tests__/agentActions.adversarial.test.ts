@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildHandbackInstruction } from "@shared/utils/handback";
 import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
@@ -279,6 +280,54 @@ describe("agentActions adversarial", () => {
         systemPromptArgs: ["-c", 'developer_instructions="Be terse"'],
       })
     );
+  });
+
+  // #12488: the instruction rides the prompt and the code rides the spawn.
+  it("agent.launch appends the handback instruction to the prompt and hands the code to the launcher", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    const result = await callAction(actions, "agent.launch", {
+      agentId: "claude",
+      prompt: "Fix the flaky test",
+      handback: true,
+    });
+
+    const options: unknown = callbacks.onLaunchAgent.mock.calls[0]?.[1];
+    const code: unknown =
+      typeof options === "object" && options !== null
+        ? Reflect.get(options, "handbackCode")
+        : undefined;
+    expect(code).toEqual(expect.stringMatching(/^[a-z0-9]{6}$/));
+    expect(options).toMatchObject({
+      prompt: `Fix the flaky test\n\n${buildHandbackInstruction(String(code))}`,
+    });
+    // The public result is unchanged: the caller never sees the code.
+    expect(result).toEqual(launchedResult());
+  });
+
+  it("agent.launch refuses handback without a prompt, before launching", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claude", handback: true })
+    ).rejects.toThrow(/needs a non-empty `prompt`/);
+    await expect(
+      callAction(actions, "agent.launch", { agentId: "claude", prompt: "  \n", handback: true })
+    ).rejects.toThrow(/needs a non-empty `prompt`/);
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("agent.launch leaves the prompt alone when handback is not asked for", async () => {
+    const callbacks = makeCallbacks();
+    const actions = setupActions(callbacks);
+
+    await callAction(actions, "agent.launch", { agentId: "claude", prompt: "hi", handback: false });
+
+    const options: unknown = callbacks.onLaunchAgent.mock.calls[0]?.[1];
+    expect(options).toMatchObject({ prompt: "hi" });
+    expect(options).not.toHaveProperty("handbackCode");
   });
 
   it("agent.launch treats a blank systemPrompt as absent, for any agent", async () => {

@@ -80,3 +80,89 @@ describe("projectAuditResult — terminal.readLastMessageOwned (#12479)", () => 
     expect(projectAuditResult("__proto__", result)).toBe(result);
   });
 });
+
+describe("projectAuditResult — handback carriers (#12488)", () => {
+  const HANDBACK_TEXT = "HANDBACK-SENTINEL fixed the auth bug";
+  const handback = {
+    message: HANDBACK_TEXT,
+    observedAt: 1_700_000_000_000,
+    submissionToken: "tok-1",
+    truncated: false,
+  };
+  const reduced = {
+    messageChars: HANDBACK_TEXT.length,
+    observedAt: 1_700_000_000_000,
+    submissionToken: "tok-1",
+    truncated: false,
+  };
+
+  it("reduces the handback on each status row and keeps everything else", () => {
+    const result = {
+      terminals: [
+        { terminalId: "t1", agentState: "waiting", lastHandback: handback },
+        { terminalId: "t2", agentState: "working" },
+      ],
+      source: "renderer",
+      unavailableFields: [],
+    };
+
+    const projected = projectAuditResult("terminal.getStatus", result);
+
+    expect(projected).toEqual({
+      terminals: [
+        { terminalId: "t1", agentState: "waiting", lastHandback: reduced },
+        { terminalId: "t2", agentState: "working" },
+      ],
+      source: "renderer",
+      unavailableFields: [],
+    });
+    expect(JSON.stringify(projected)).not.toContain("SENTINEL");
+  });
+
+  it("reduces the handback on a single wait and on each batched row", () => {
+    const single = projectAuditResult("terminal.waitUntilIdle", {
+      terminalId: "t1",
+      busyState: "idle",
+      trackingState: "tracked",
+      timedOut: false,
+      lastHandback: handback,
+    });
+    const batch = projectAuditResult("terminal.waitUntilIdleBatch", {
+      mode: "first",
+      results: [{ terminalId: "t1", settled: true, lastHandback: handback }],
+      settledTerminalIds: ["t1"],
+      timedOut: false,
+    });
+
+    expect(single).toMatchObject({ terminalId: "t1", lastHandback: reduced });
+    expect(batch).toMatchObject({ results: [{ terminalId: "t1", lastHandback: reduced }] });
+    expect(JSON.stringify([single, batch])).not.toContain("SENTINEL");
+  });
+
+  it("records a bare handback as having no message", () => {
+    const projected = projectAuditResult("terminal.waitUntilIdle", {
+      terminalId: "t1",
+      lastHandback: { message: null, observedAt: 5, truncated: false },
+    });
+
+    expect(projected).toEqual({
+      terminalId: "t1",
+      lastHandback: {
+        messageChars: null,
+        observedAt: 5,
+        submissionToken: undefined,
+        truncated: false,
+      },
+    });
+  });
+
+  it("leaves a result without a handback untouched", () => {
+    const result = {
+      terminalId: "t1",
+      busyState: "idle",
+      trackingState: "tracked",
+      timedOut: false,
+    };
+    expect(projectAuditResult("terminal.waitUntilIdle", result)).toEqual(result);
+  });
+});

@@ -154,6 +154,11 @@ export interface LaunchAgentOptions {
   worktreeId?: string;
   prompt?: string;
   /**
+   * Handback code already appended to `prompt` by `agent.launch` (#12488).
+   * Handed to the spawn so the pty-host looks for its marker.
+   */
+  handbackCode?: string;
+  /**
    * Raw argv pair that appends a standing instruction to the agent's system
    * prompt (#12431), already mapped for this agent by
    * `resolveSystemPromptArgs`. Persisted with the launch flags so every
@@ -674,6 +679,7 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
               agentLaunchFlags: launchFlags,
               agentModelId: launchOptions?.modelId,
               agentSessionId: assignedSessionId,
+              handbackCode: launchOptions?.handbackCode,
               agentPresetId: preset?.id,
               agentPresetColor: preset?.color,
               env: presetEnv,
