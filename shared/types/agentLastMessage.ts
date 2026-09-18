@@ -1,7 +1,4 @@
-import type {
-  AgentSubagentUnavailableReason,
-  SubagentProvider,
-} from "./ipc/agentSubagents.js";
+import type { AgentSubagentUnavailableReason, SubagentProvider } from "./ipc/agentSubagents.js";
 
 /**
  * What an agent last wrote to its own transcript, read by the host for a panel

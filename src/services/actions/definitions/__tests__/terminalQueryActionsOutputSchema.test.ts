@@ -365,7 +365,11 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
     const missing = await service.dispatch(ID as ActionId, {}, { source: "agent" });
     expect(missing.ok === false && missing.error.code).toBe("VALIDATION_ERROR");
 
-    const routed = await service.dispatch(ID as ActionId, { terminalId: "t-1" }, { source: "agent" });
+    const routed = await service.dispatch(
+      ID as ActionId,
+      { terminalId: "t-1" },
+      { source: "agent" }
+    );
     expect(routed.ok).toBe(false);
     expect(routed.ok === false && routed.error.message).toMatch(/main-process path/);
   });
@@ -431,7 +435,9 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
         [record("m", [question({ questions: [{ question: "x".repeat(9_000) }] })])],
         [
           record("m", [{ type: "text", text: "\u0001".repeat(60_000) }]),
-          record("m", [{ type: "tool_use", id: "toolu_b", name: "Bash", input: { command: "ls" } }]),
+          record("m", [
+            { type: "tool_use", id: "toolu_b", name: "Bash", input: { command: "ls" } },
+          ]),
         ],
       ];
       const read = () => readClaudeLastMessage({ projectsRoot, cwd, sessionId });

@@ -204,7 +204,12 @@ async function openVerified(
 async function readFully(handle: FileHandle, buffer: Buffer, position: number): Promise<void> {
   let offset = 0;
   while (offset < buffer.length) {
-    const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, position + offset);
+    const { bytesRead } = await handle.read(
+      buffer,
+      offset,
+      buffer.length - offset,
+      position + offset
+    );
     // The file shrank under the read. Claude Code only appends, so this is a
     // rewrite nobody can account for, and the bytes already read may not
     // belong to the file that is there now.
@@ -338,7 +343,8 @@ function parseSessionRecord(line: string): SessionRecord | null {
       if (!block || typeof block !== "object") continue;
       const entry = block as Record<string, unknown>;
       if (entry.type !== "tool_result" && entry.type !== "tool_use") {
-        isPrompt ||= entry.type !== "text" || (typeof entry.text === "string" && entry.text.trim().length > 0);
+        isPrompt ||=
+          entry.type !== "text" || (typeof entry.text === "string" && entry.text.trim().length > 0);
       }
       if (entry.type === "tool_use") {
         const id = typeof entry.id === "string" ? entry.id : "";
@@ -639,7 +645,10 @@ export async function readClaudeLastMessage(
 
     let message: AgentLastMessageOk["message"] = null;
     if (found) {
-      const tail = tailWithinJsonBytes(found.texts.reverse().join("\n\n"), LAST_MESSAGE_TEXT_MAX_BYTES);
+      const tail = tailWithinJsonBytes(
+        found.texts.reverse().join("\n\n"),
+        LAST_MESSAGE_TEXT_MAX_BYTES
+      );
       message = {
         id: found.id,
         text: tail.text,

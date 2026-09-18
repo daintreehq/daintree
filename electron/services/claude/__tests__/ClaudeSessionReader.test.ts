@@ -364,7 +364,10 @@ describe("readClaudeLastMessage — unanswered tool uses", () => {
   // The case that makes the tool worth having: the question is a tool call,
   // never text, and often comes with no prose at all.
   it("returns a question with no prose before it, with its input", async () => {
-    await seed([prompt("set it up"), assistant("msg_1", [toolUse("toolu_q", "AskUserQuestion", QUESTION)])]);
+    await seed([
+      prompt("set it up"),
+      assistant("msg_1", [toolUse("toolu_q", "AskUserQuestion", QUESTION)]),
+    ]);
 
     const result = ok(await read());
 
@@ -419,7 +422,9 @@ describe("readClaudeLastMessage — unanswered tool uses", () => {
 
   // Tool input is where file contents live.
   it("returns only the name for any tool other than a question", async () => {
-    await seed([assistant("msg_1", [toolUse("toolu_w", "Write", { content: "SECRET FILE BODY" })])]);
+    await seed([
+      assistant("msg_1", [toolUse("toolu_w", "Write", { content: "SECRET FILE BODY" })]),
+    ]);
 
     const result = ok(await read());
 
@@ -504,10 +509,7 @@ describe("readClaudeLastMessage — reading from the end", () => {
   // One tool result can carry a whole file on a single line. Reaching past it
   // for an older reply would hand that reply back as current.
   it("reports the cap rather than an older reply when a huge line hides the latest one", async () => {
-    await seed([
-      assistant("msg_1", [text("Old reply.")]),
-      toolResult("toolu_1", "x".repeat(4096)),
-    ]);
+    await seed([assistant("msg_1", [text("Old reply.")]), toolResult("toolu_1", "x".repeat(4096))]);
 
     expect(await read({ chunkBytes: 512, maxScanBytes: 2048 })).toEqual({
       status: "unavailable",

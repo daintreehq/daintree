@@ -7304,7 +7304,9 @@ describe("session-scoped resource ownership (#11909)", () => {
 
     it("refuses a panel the session did not create, without reading anything", async () => {
       const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-foreign");
-      store.resourceOwnership.record("other-session", [{ kind: "terminal", id: "terminal-theirs" }]);
+      store.resourceOwnership.record("other-session", [
+        { kind: "terminal", id: "terminal-theirs" },
+      ]);
 
       const result = await callTool(server, {
         name: "terminal.readLastMessageOwned",
@@ -7331,7 +7333,10 @@ describe("session-scoped resource ownership (#11909)", () => {
 
     it("keeps ownership, so the panel can be read again", async () => {
       const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-twice");
-      const args = { name: "terminal.readLastMessageOwned", arguments: { terminalId: "terminal-1" } };
+      const args = {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      };
 
       expect((await callTool(server, args)).isError).toBeUndefined();
       expect((await callTool(server, args)).isError).toBeUndefined();
@@ -7343,7 +7348,10 @@ describe("session-scoped resource ownership (#11909)", () => {
     // An unavailable answer is still an answer — the caller asked and was told
     // why not — so it is a structured success, not a tool error.
     it("returns an unavailable answer as a structured result", async () => {
-      const unavailable: AgentLastMessageResult = { status: "unavailable", reason: "store-unknown" };
+      const unavailable: AgentLastMessageResult = {
+        status: "unavailable",
+        reason: "store-unknown",
+      };
       const { server } = readHarness("s-read-unavailable", () => Promise.resolve(unavailable));
 
       const result = await callTool(server, {
