@@ -197,6 +197,20 @@ describe("dev preview tool sessions", () => {
     expect(session?.disposals).toBe(1);
   });
 
+  it("switches the tool off and disposes when its manifest stops declaring it", () => {
+    switchOn();
+    const session = live();
+    expect(session).not.toBeNull();
+    // The same plugin, still enabled, whose refreshed meta no longer names the tool.
+    usePluginRuntimeStore.setState({
+      pluginMetaById: new Map([
+        [PLUGIN, { devMode: false, displayName: "Acme", previewToolIds: new Set<string>() }],
+      ]),
+    });
+    expect(useDevPreviewToolStore.getState().activeByPanel).toEqual({});
+    expect(session?.disposals).toBe(1);
+  });
+
   it("does not build a session while the owning plugin is disabled", () => {
     usePluginRuntimeStore.setState({ disabledPluginIds: new Set([PLUGIN]) });
     switchOn();

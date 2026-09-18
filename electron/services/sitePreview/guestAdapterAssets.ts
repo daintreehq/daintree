@@ -56,7 +56,7 @@ export function isSafeGuestEntryPath(value: string): boolean {
   if (value.startsWith("/") || path.isAbsolute(value)) return false;
   if (!/\.(ts|tsx|js|mjs)$/.test(value)) return false;
   const segments = value.split("/");
-  if (segments[0] === GUEST_ASSET_DIR) return false;
+  if (segments[0]?.toLowerCase() === GUEST_ASSET_DIR) return false;
   return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 

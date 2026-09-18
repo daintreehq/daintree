@@ -261,12 +261,20 @@ function reconcileOnce(): void {
 function enforceLifetime(): void {
   const active = useDevPreviewToolStore.getState().activeByPanel;
   const panels = usePanelStore.getState();
-  const { disabledPluginIds } = usePluginRuntimeStore.getState();
+  const { disabledPluginIds, pluginMetaById } = usePluginRuntimeStore.getState();
   for (const [panelId, toolId] of Object.entries(active)) {
     const panel = panels.panelsById[panelId];
     const gone = panel === undefined || panel.location === "trash";
     const tool = getDevPreviewTool(toolId);
-    if (gone || (tool !== undefined && disabledPluginIds.has(tool.pluginId))) {
+    const disabled = tool !== undefined && disabledPluginIds.has(tool.pluginId);
+    // A manifest refresh that no longer declares the tool takes its surfaces
+    // away; the session must go with them, or a request it holds could still
+    // send after nothing is left to show it.
+    const undeclared =
+      tool !== undefined &&
+      pluginMetaById.has(tool.pluginId) &&
+      getAvailableDevPreviewTool(toolId) === undefined;
+    if (gone || disabled || undeclared) {
       // Each write re-enters `reconcile`, which either runs now or asks the
       // pass in progress to go round again; both end on what the store says.
       useDevPreviewToolStore.getState().setActive(panelId, null);

@@ -85,6 +85,9 @@ describe("isSafeGuestEntryPath", () => {
     // over the compiled asset the host reads back.
     expect(isSafeGuestEntryPath("guest/entry.ts")).toBe(false);
     expect(isSafeGuestEntryPath("guest/nested/entry.ts")).toBe(false);
+    // The same directory on a case-insensitive filesystem.
+    expect(isSafeGuestEntryPath("Guest/entry.ts")).toBe(false);
+    expect(isSafeGuestEntryPath("GUEST/entry.ts")).toBe(false);
     // `path.isAbsolute` calls these relative on POSIX; Windows does not.
     expect(isSafeGuestEntryPath("C:/renderer/entry.ts")).toBe(false);
     expect(isSafeGuestEntryPath("renderer/a:b.ts")).toBe(false);

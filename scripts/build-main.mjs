@@ -123,7 +123,8 @@ function isSafeGuestEntryPath(value) {
   if (!/\.(ts|tsx|js|mjs)$/.test(value)) return false;
   const segments = value.split("/");
   // The bundler's own output directory — see PLUGIN_EXTRA_ASSET_SKIP_DIRS.
-  if (segments[0] === "guest") return false;
+  // Case-insensitively, as the copy step below compares.
+  if (segments[0]?.toLowerCase() === "guest") return false;
   return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
 }
 
@@ -337,7 +338,9 @@ export function copyPluginExtraAssets(srcPluginDir, destPluginDir) {
   fs.mkdirSync(destPluginDir, { recursive: true });
   for (const entry of fs.readdirSync(srcPluginDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    if (PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(entry.name)) continue;
+    // Lower-cased: on a case-insensitive filesystem `Guest/` would be copied
+    // over the bundle the guest build just emitted into `guest/`.
+    if (PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(entry.name.toLowerCase())) continue;
     const src = path.join(srcPluginDir, entry.name);
     const dest = path.join(destPluginDir, entry.name);
     fs.cpSync(src, dest, { recursive: true });

@@ -489,11 +489,13 @@ describe("findMissingGuestAssets", () => {
   });
 
   it("finds the asset the real build emits for every shipped declaration", () => {
-    // The repo's own manifests, against the repo's own output tree. Skipped on a
-    // cold checkout where `dist-electron/` has never been built.
+    // The manifests the build copied into the output tree, against that same
+    // tree: what shipped must be complete. Reading the source manifests instead
+    // would fail on any checkout whose last build predates a new declaration.
+    // Skipped on a cold checkout where `dist-electron/` has never been built.
     const dist = path.join(repoRoot, "dist-electron/plugins");
     if (!fs.existsSync(dist)) return;
-    expect(findMissingGuestAssets(repoRoot, dist)).toEqual([]);
+    expect(findMissingGuestAssets(path.join(repoRoot, "dist-electron"), dist)).toEqual([]);
   });
 });
 
