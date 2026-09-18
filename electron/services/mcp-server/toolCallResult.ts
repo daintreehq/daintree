@@ -82,7 +82,7 @@ function exceedsDepth(value: unknown, maxDepth: number): boolean {
 function utf8BoundaryEnd(buffer: Buffer, maxBytes: number): number {
   if (buffer.length <= maxBytes) return buffer.length;
   let end = maxBytes;
-  for (let i = 0; i < 3 && end > 0 && (buffer[end] & 0xc0) === 0x80; i += 1) {
+  for (let i = 0; i < 3 && end > 0 && (buffer.readUInt8(end) & 0xc0) === 0x80; i += 1) {
     end -= 1;
   }
   return end;
