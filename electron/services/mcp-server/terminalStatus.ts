@@ -246,6 +246,12 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
     entry.hasPty = record.hasPty;
   }
 
+  // Absent means no content change has been observed yet, so there is nothing
+  // to report rather than a time to invent (#12428).
+  if (record.lastOutputChangeAt !== undefined) {
+    entry.lastOutputChangeAt = record.lastOutputChangeAt;
+  }
+
   if (agentState === "waiting" && record.waitingReason !== undefined) {
     entry.waitingReason = record.waitingReason;
   }

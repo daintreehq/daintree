@@ -65,6 +65,7 @@ export function mapTerminalInfo(
     agentState: t.agentState,
     waitingReason: t.waitingReason,
     lastStateChange: t.lastStateChange,
+    lastOutputChangeAt: t.lastOutputChangeAt,
     lastInputTime: t.lastInputTime,
     lastOutputTime: t.lastOutputTime,
     spawnedAt: t.spawnedAt,

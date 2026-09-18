@@ -527,7 +527,7 @@ export function registerTerminalQueryActions(
       // fallback answers in (#12316), so a client reads one shape whether or not
       // its workspace had a live view.
       //
-      // `hasPty` is the one field this richer surface cannot observe (#12336).
+      // `hasPty` is a field this richer surface cannot observe (#12336).
       // `PtyPanelData.hasPty` exists on the type but nothing in the renderer
       // ever writes it — not `addPanel`, not `statePatcher` on restore or
       // reconnect, and not the `onExit` listener in `store/listeners/panel/
@@ -536,7 +536,9 @@ export function registerTerminalQueryActions(
       // nothing while claiming a view saw everything; deriving it from
       // `runtimeStatus` would publish an interpretation as a process fact. The
       // pty-host computes it, so the reduced answer reports it and this one
-      // says it could not look.
+      // says it could not look. `lastOutputChangeAt` is the same case: it is
+      // read off the pty-host's viewport tracker (#12428), and fetching it here
+      // would put an IPC on every default poll.
       //
       // Tails are fitted last, once every other field is in place, so the
       // budget they split is what the rest of the snapshot leaves (#12450).
@@ -544,7 +546,7 @@ export function registerTerminalQueryActions(
         {
           terminals: entries,
           source: "renderer" as const,
-          unavailableFields: ["hasPty" as const],
+          unavailableFields: ["hasPty" as const, "lastOutputChangeAt" as const],
         },
         MCP_RESPONSE_TEXT_MAX_BYTES
       );

@@ -141,12 +141,12 @@ export interface HttpLifecycleDeps {
   handleWaitUntilIdle: (
     rawArgs: unknown,
     signal: AbortSignal,
-    options?: { maxTimeoutMs?: number }
+    options?: { maxTimeoutMs?: number; workspaceId?: string }
   ) => Promise<import("./shared.js").WaitUntilIdleResult>;
   handleWaitUntilIdleBatch: (
     rawArgs: unknown,
     signal: AbortSignal,
-    options?: { maxTimeoutMs?: number }
+    options?: { maxTimeoutMs?: number; workspaceId?: string }
   ) => Promise<import("../../../shared/types/terminalWaitUntilIdle.js").WaitUntilIdleBatchResult>;
   handleSkillsSearch: (
     rawArgs: unknown

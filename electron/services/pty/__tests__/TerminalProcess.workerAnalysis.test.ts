@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import { AnalysisWorkerPool, type WorkerLike } from "../analysis/AnalysisWorkerPool.js";
@@ -232,5 +232,54 @@ describe("TerminalProcess mirror geometry divergence (#11719)", () => {
       warn.mock.calls.filter((call) => String(call[0]).includes("Mirror grid diverged")).length
     ).toBe(1);
     warn.mockRestore();
+  });
+});
+
+describe("TerminalProcess worker-mode output progress (#12428)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const viewport = (lines: string[]): WorkerToHostMessage => ({
+    type: "viewport",
+    terminalId: "t1",
+    lines,
+    cursorLine: null,
+  });
+
+  it("stamps the record from the worker's viewport digest", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(10_000);
+    const { terminal, worker } = createWorkerModeTerminal();
+    expect(terminal.getPublicState().lastOutputChangeAt).toBeUndefined();
+
+    worker.emit("message", viewport(["● Done.", "✻ Thinking… (2s · esc to interrupt)"]));
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(10_000);
+    expect(terminal.getInfo().lastOutputChangeAt).toBe(10_000);
+
+    // Only the footer moved.
+    vi.setSystemTime(20_000);
+    worker.emit("message", viewport(["● Done.", "✽ Thinking… (12s · esc to interrupt)"]));
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(10_000);
+
+    vi.setSystemTime(30_000);
+    worker.emit(
+      "message",
+      viewport(["● Done.", "● Next step.", "✶ Thinking… (22s · esc to interrupt)"])
+    );
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(30_000);
+  });
+
+  it("re-baselines on the digest that follows a resize instead of stamping it", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(10_000);
+    const { terminal, worker } = createWorkerModeTerminal();
+    worker.emit("message", viewport(["a line long enough to wrap"]));
+
+    terminal.resize(120, 40);
+    vi.setSystemTime(10_300);
+    worker.emit("message", viewport(["a line long", "enough to wrap"]));
+
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(10_000);
   });
 });

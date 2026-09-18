@@ -143,6 +143,8 @@ interface TerminalInfoResponse {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Last visible-content change, ignoring spinner and timer redraws (#12428). */
+  lastOutputChangeAt?: number;
   lastInputTime?: number;
   lastOutputTime?: number;
   spawnedAt: number;

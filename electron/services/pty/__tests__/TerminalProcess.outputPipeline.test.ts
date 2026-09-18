@@ -198,3 +198,106 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     expect(snapshotSpy.mock.calls.length).toBe(afterDispose);
   });
 });
+
+describe("TerminalProcess output progress, in-thread (#12428)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  const spinnerFrame = (glyph: string, seconds: number) =>
+    `\r\x1b[2K${glyph} Thinking… (${seconds}s · esc to interrupt)`;
+
+  it("stamps a content change once the burst settles, and not a spinner redraw", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const writtenAt = Date.now();
+
+    ptyOnDataCallback!("● The fix is in src/app.ts.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    const stamped = terminal.getPublicState().lastOutputChangeAt;
+    // Sampled on the trailing timer, so after the write and before now.
+    expect(stamped).toBeGreaterThan(writtenAt);
+    expect(stamped).toBeLessThanOrEqual(Date.now());
+
+    // A frozen turn: only the working footer moves, for well past the sample
+    // cadence.
+    for (let i = 0; i < 10; i++) {
+      ptyOnDataCallback!(spinnerFrame(i % 2 === 0 ? "✻" : "✽", 12 + i));
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(stamped);
+
+    // New output lands beside the still-animating footer.
+    ptyOnDataCallback!(`\r\x1b[2KRunning the tests now.\r\n${spinnerFrame("✶", 23)}`);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getPublicState().lastOutputChangeAt).toBeGreaterThan(stamped!);
+
+    terminal.dispose();
+  });
+
+  it("does not report a resize's reflow as output", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(`${"wrapped ".repeat(8)}\r\n`);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamped = terminal.getPublicState().lastOutputChangeAt;
+    expect(stamped).toBeDefined();
+
+    // The 64-column line rewraps at 40. The footer redraw is what makes the
+    // in-thread path sample the reflowed screen.
+    terminal.resize(40, 24);
+    ptyOnDataCallback!(spinnerFrame("✻", 1));
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(spinnerFrame("✽", 2));
+    await vi.advanceTimersByTimeAsync(2_000);
+    ptyOnDataCallback!(spinnerFrame("✶", 3));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(stamped);
+    terminal.dispose();
+  });
+
+  it("baselines the reflowed screen on resize even when no output follows it", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(`${"wrapped ".repeat(8)}\r\n`);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamped = terminal.getPublicState().lastOutputChangeAt;
+    expect(stamped).toBeDefined();
+
+    // Nothing is written until the quiet window has long closed, so only the
+    // resize itself can have sampled the rewrapped frame.
+    terminal.resize(40, 24);
+    await vi.advanceTimersByTimeAsync(3_000);
+    ptyOnDataCallback!(spinnerFrame("✻", 1));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(stamped);
+    terminal.dispose();
+  });
+
+  it("settles a pending sample at dispose instead of leaving it armed", async () => {
+    // A preserved exit drains its final output and then releases the mirror;
+    // that frame must be observed before the mirror goes, not dropped with it.
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const internals = terminal as unknown as { outputProgressTimer: unknown };
+
+    ptyOnDataCallback!("the final answer\r\n");
+    await vi.advanceTimersByTimeAsync(1);
+    expect(internals.outputProgressTimer).not.toBeNull();
+    expect(terminal.getPublicState().lastOutputChangeAt).toBeUndefined();
+
+    terminal.dispose();
+    const settled = terminal.getPublicState().lastOutputChangeAt;
+    expect(settled).toBe(Date.now());
+    expect(internals.outputProgressTimer).toBeNull();
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(settled);
+  });
+});

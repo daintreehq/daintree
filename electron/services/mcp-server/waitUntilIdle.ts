@@ -14,6 +14,85 @@ import {
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import { mapAgentStateToBusyState, mapAgentStateToIdleReason } from "./shared.js";
 import type { AgentAvailabilityStore } from "../AgentAvailabilityStore.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
+
+/**
+ * Ceiling on the pty-host read that fills `lastOutputChangeAt` once a wait has
+ * resolved. The wait's own answer is already decided by then, so a stalled
+ * host costs the caller this much and the field, never the result.
+ */
+export const OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS = 500;
+
+/**
+ * Read when each terminal's visible content last changed (#12428), keyed by
+ * terminal id rather than agent id — several terminals share an agent type.
+ * A terminal whose record is missing, lacks the field, or does not answer
+ * before the shared deadline is simply left out.
+ *
+ * A workspace-bound session reads only terminals the spawn ledger places in its
+ * own workspace, and that check runs before any RPC is issued. The wait itself
+ * already answered from a global store; output timing is finer-grained than
+ * busy/idle, and the pty fabric shards by owning project, so routing a foreign
+ * id at its owner's shard would leak through latency even with the field
+ * withheld (the same reasoning as `buildViewlessTerminalStatus`). The ledger
+ * cannot place a terminal this main process never tracked, so those go
+ * unread — the field is absent, never guessed.
+ */
+async function readOutputProgress(
+  terminalIds: readonly string[],
+  signal: AbortSignal,
+  workspaceId: string | undefined
+): Promise<Map<string, number>> {
+  // Checked before any early return: an abort that landed while the wait was
+  // settling never fires the listener below.
+  throwIfCancelled(signal);
+  const progress = new Map<string, number>();
+  const ptyClient = getPtyClient();
+  if (!ptyClient) return progress;
+  const readable =
+    workspaceId === undefined
+      ? terminalIds
+      : terminalIds.filter((id) => ptyClient.getTerminalProjectId(id) === workspaceId);
+  if (readable.length === 0) return progress;
+
+  let deadlineHandle: ReturnType<typeof setTimeout> | undefined;
+  let abortListener: (() => void) | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    deadlineHandle = setTimeout(() => resolve(undefined), OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS);
+    abortListener = () => resolve(undefined);
+    signal.addEventListener("abort", abortListener, { once: true });
+  });
+  try {
+    const readings = await Promise.all(
+      readable.map((id) =>
+        Promise.race([
+          ptyClient.getTerminalAsync(id).then(
+            (record) => record?.lastOutputChangeAt,
+            () => undefined
+          ),
+          deadline,
+        ])
+      )
+    );
+    readable.forEach((id, index) => {
+      const at = readings[index];
+      if (at !== undefined) progress.set(id, at);
+    });
+  } finally {
+    clearTimeout(deadlineHandle);
+    if (abortListener) signal.removeEventListener("abort", abortListener);
+  }
+  throwIfCancelled(signal);
+  return progress;
+}
+
+// Same outcome as a cancel mid-wait: the caller gave up, so nothing it would
+// read as a successful answer goes back.
+function throwIfCancelled(signal: AbortSignal): void {
+  if (signal.aborted) {
+    throw new McpError(ErrorCode.RequestTimeout, "Request was cancelled.");
+  }
+}
 
 /**
  * Classify a terminal we hold no agent mapping for. The store drops the mapping
@@ -35,9 +114,34 @@ export interface WaitUntilIdleOptions {
    * human is sitting in; external (api-key) sessions get the global max.
    */
   maxTimeoutMs?: number;
+  /**
+   * The workspace a bound session is pinned to. When set, output progress is
+   * read only for terminals the spawn ledger places in it.
+   */
+  workspaceId?: string;
 }
 
+/**
+ * Wait for one terminal to leave `working`, then attach its output progress.
+ *
+ * The progress read runs only after the wait has settled and released its
+ * subscriptions, so nothing arriving during it can change the answer. Only
+ * tracked terminals are read: an untracked id is one the store never mapped to
+ * an agent, and a closed one has no live screen left to report on.
+ */
 export async function handleWaitUntilIdle(
+  rawArgs: unknown,
+  signal: AbortSignal,
+  options?: WaitUntilIdleOptions
+): Promise<WaitUntilIdleResult> {
+  const result = await waitForTerminalIdle(rawArgs, signal, options);
+  if (result.trackingState !== "tracked") return result;
+  const progress = await readOutputProgress([result.terminalId], signal, options?.workspaceId);
+  const lastOutputChangeAt = progress.get(result.terminalId);
+  return lastOutputChangeAt === undefined ? result : { ...result, lastOutputChangeAt };
+}
+
+async function waitForTerminalIdle(
   rawArgs: unknown,
   signal: AbortSignal,
   options?: WaitUntilIdleOptions
@@ -384,6 +488,28 @@ function buildBatchResult(
  * may block for hours), same tier-clamped ceiling via `options.maxTimeoutMs`.
  */
 export async function handleWaitUntilIdleBatch(
+  rawArgs: unknown,
+  signal: AbortSignal,
+  options?: WaitUntilIdleOptions
+): Promise<WaitUntilIdleBatchResult> {
+  const result = await waitForBatchIdle(rawArgs, signal, options);
+  // Every row, settled or not: a row still `working` is the one whose output
+  // progress a caller most needs (#12428).
+  const trackedIds = result.results
+    .filter((entry) => entry.trackingState === "tracked")
+    .map((entry) => entry.terminalId);
+  const progress = await readOutputProgress(trackedIds, signal, options?.workspaceId);
+  if (progress.size === 0) return result;
+  return {
+    ...result,
+    results: result.results.map((entry) => {
+      const lastOutputChangeAt = progress.get(entry.terminalId);
+      return lastOutputChangeAt === undefined ? entry : { ...entry, lastOutputChangeAt };
+    }),
+  };
+}
+
+async function waitForBatchIdle(
   rawArgs: unknown,
   signal: AbortSignal,
   options?: WaitUntilIdleOptions
