@@ -18,6 +18,7 @@ import type {
   ForgeCredentialImportPreviewResult,
 } from "../../../shared/types/ipc/forge.js";
 import { logWarn } from "../../utils/logger.js";
+import { raceAbort } from "../../utils/raceAbort.js";
 
 // Bounds the whole operation: PATH refresh, the CLI's own deadline, a live
 // validation and provider activation all fit well inside it. When it fires the
@@ -51,8 +52,14 @@ function failure(reason: unknown): ForgeCredentialImportFailure {
   };
 }
 
+/** Unique, trimmed, non-empty strings — the renderer keys scope lists by value. */
 function toStringArray(value: unknown): string[] {
-  return Array.isArray(value) ? value.filter((v): v is string => typeof v === "string") : [];
+  if (!Array.isArray(value)) return [];
+  const strings = value
+    .filter((v): v is string => typeof v === "string")
+    .map((v) => v.trim())
+    .filter(Boolean);
+  return [...new Set(strings)];
 }
 
 /**
@@ -87,7 +94,9 @@ async function withImportSignal<T>(
   const abort = () => controller.abort();
   const timer = setTimeout(abort, IMPORT_DEADLINE_MS);
   const sender = ctx.event.sender;
-  sender.once("destroyed", abort);
+  // `destroyed` never fires again for a sender that is already gone.
+  if (sender.isDestroyed()) abort();
+  else sender.once("destroyed", abort);
   try {
     return await run(controller.signal);
   } finally {
@@ -121,11 +130,16 @@ export const forgeCredentialImportNamespace = defineIpcNamespace({
         }
         return withImportSignal(ctx, async (signal) => {
           try {
-            const impl = await resolveCredentialProvider(providerId);
+            const cancelled = failure("cancelled");
+            const impl = await raceAbort(resolveCredentialProvider(providerId), signal, undefined);
+            if (signal.aborted) return cancelled;
             if (!impl) return failure("provider-unavailable");
             const capability = impl.credentialImport;
             if (!capability) return failure("unsupported");
-            return projectPreview(await capability.preview(signal));
+            // Raced as well: a provider that ignores the signal must not hold
+            // the request open past the deadline.
+            const result = await raceAbort(capability.preview(signal), signal, null);
+            return result === null ? cancelled : projectPreview(result);
           } catch (error) {
             logContainedFailure("preview", providerId, error);
             return failure("cli-failed");

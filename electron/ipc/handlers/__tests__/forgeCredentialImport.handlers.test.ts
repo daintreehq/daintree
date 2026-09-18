@@ -97,7 +97,18 @@ function getHandler(channel: string): Handler {
   return fn as Handler;
 }
 
-function fakeEvent(sender: EventEmitter = new EventEmitter()): Electron.IpcMainInvokeEvent {
+class FakeSender extends EventEmitter {
+  destroyed = false;
+  isDestroyed(): boolean {
+    return this.destroyed;
+  }
+  destroy(): void {
+    this.destroyed = true;
+    this.emit("destroyed");
+  }
+}
+
+function fakeEvent(sender: FakeSender = new FakeSender()): Electron.IpcMainInvokeEvent {
   return { sender: sender as unknown as Electron.WebContents } as Electron.IpcMainInvokeEvent;
 }
 
@@ -131,14 +142,43 @@ function candidate(account = "octo") {
   };
 }
 
+/**
+ * Flatten a value to text, including what `JSON.stringify` drops: an Error's
+ * message, stack and cause are non-enumerable, so a logged `new Error(secret)`
+ * would otherwise serialize to `{}` and slip past the leak checks.
+ */
+function textOf(value: unknown, seen = new Set<unknown>()): string {
+  if (value === null || value === undefined) return String(value);
+  if (typeof value !== "object") return String(value);
+  if (seen.has(value)) return "";
+  seen.add(value);
+  const parts: string[] = [];
+  if (value instanceof Error) {
+    parts.push(value.name, value.message, value.stack ?? "", textOf(value.cause, seen));
+  }
+  for (const key of Object.keys(value)) {
+    parts.push(key, textOf((value as Record<string, unknown>)[key], seen));
+  }
+  return parts.join(" ");
+}
+
+const consoleSpies = {
+  log: vi.spyOn(console, "log").mockImplementation(() => {}),
+  warn: vi.spyOn(console, "warn").mockImplementation(() => {}),
+  error: vi.spyOn(console, "error").mockImplementation(() => {}),
+};
+
 /** Everything the handlers wrote anywhere a secret could leak. */
 function observableOutput(result: unknown, appendSpy?: ReturnType<typeof vi.spyOn>): string {
-  return JSON.stringify([
+  return textOf([
     result,
     loggerMock.logWarn.mock.calls,
     loggerMock.logError.mock.calls,
     loggerMock.logInfo.mock.calls,
     loggerMock.logDebug.mock.calls,
+    consoleSpies.log.mock.calls,
+    consoleSpies.warn.mock.calls,
+    consoleSpies.error.mock.calls,
     appendSpy?.mock.calls ?? [],
   ]);
 }
@@ -159,6 +199,12 @@ describe("registerForgeCredentialImportHandlers", () => {
   afterEach(() => {
     for (const cleanup of cleanups) cleanup();
     vi.useRealTimers();
+  });
+
+  it("detects a secret hidden inside a logged Error", () => {
+    // Guards the guard: the leak checks below are only as good as this.
+    loggerMock.logWarn("oops", { error: new Error("wrapped", { cause: new Error(SECRET) }) });
+    expect(observableOutput(undefined)).toContain(SECRET);
   });
 
   it("registers the preview and commit channels", () => {
@@ -263,7 +309,7 @@ describe("registerForgeCredentialImportHandlers", () => {
     });
 
     it("aborts the provider's signal when the requesting window is destroyed", async () => {
-      const sender = new EventEmitter();
+      const sender = new FakeSender();
       let seen: AbortSignal | undefined;
       registryMock.getForgeProviderImpl.mockReturnValue(
         makeImpl({
@@ -274,7 +320,7 @@ describe("registerForgeCredentialImportHandlers", () => {
                 signal?.addEventListener("abort", () =>
                   resolve({ unavailable: true, reason: "cancelled" })
                 );
-                sender.emit("destroyed");
+                sender.destroy();
               })
           ),
         })
@@ -288,6 +334,46 @@ describe("registerForgeCredentialImportHandlers", () => {
       expect(seen?.aborted).toBe(true);
       expect(result).toEqual({ unavailable: true, reason: "cancelled" });
       expect(sender.listenerCount("destroyed")).toBe(0);
+    });
+
+    it("cancels without calling the provider when the window is already gone", async () => {
+      const previewFn = vi.fn();
+      registryMock.getForgeProviderImpl.mockReturnValue(makeImpl({ preview: previewFn }));
+      const sender = new FakeSender();
+      sender.destroyed = true;
+
+      const result = await getHandler("forge:preview-credential-import")(
+        fakeEvent(sender),
+        PROVIDER_ID
+      );
+
+      expect(result).toEqual({ unavailable: true, reason: "cancelled" });
+      expect(previewFn).not.toHaveBeenCalled();
+      expect(sender.listenerCount("destroyed")).toBe(0);
+    });
+
+    it("settles at the deadline even when plugin startup never finishes", async () => {
+      vi.useFakeTimers();
+      pluginServiceMock.waitForInit.mockReturnValueOnce(new Promise(() => {}));
+      const sender = new FakeSender();
+
+      const pending = getHandler("forge:preview-credential-import")(fakeEvent(sender), PROVIDER_ID);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(pending).resolves.toEqual({ unavailable: true, reason: "cancelled" });
+      expect(sender.listenerCount("destroyed")).toBe(0);
+    });
+
+    it("settles at the deadline when a provider ignores the signal", async () => {
+      vi.useFakeTimers();
+      registryMock.getForgeProviderImpl.mockReturnValue(
+        makeImpl({ preview: vi.fn(() => new Promise<never>(() => {})) })
+      );
+
+      const pending = preview(PROVIDER_ID);
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      await expect(pending).resolves.toEqual({ unavailable: true, reason: "cancelled" });
     });
 
     it("aborts the provider's signal once the import deadline passes", async () => {
@@ -395,10 +481,10 @@ describe("registerForgeCredentialImportHandlers", () => {
     });
 
     it("saves nothing when the signal aborts after the provider returned the credential", async () => {
-      const sender = new EventEmitter();
+      const sender = new FakeSender();
       const impl = makeImpl({
         commit: vi.fn(async () => {
-          sender.emit("destroyed");
+          sender.destroy();
           return candidate();
         }),
       });
@@ -411,6 +497,24 @@ describe("registerForgeCredentialImportHandlers", () => {
       );
 
       expect(result).toEqual({ unavailable: true, reason: "cancelled" });
+      expect(storeMock.set).not.toHaveBeenCalled();
+      expect(impl.setCredentials).not.toHaveBeenCalled();
+    });
+
+    it("saves nothing when a provider that ignores the signal outlives the deadline", async () => {
+      vi.useFakeTimers();
+      let finish: (value: ReturnType<typeof candidate>) => void = () => {};
+      const impl = makeImpl({
+        commit: vi.fn(() => new Promise<ReturnType<typeof candidate>>((r) => (finish = r))),
+      });
+      registryMock.getForgeProviderImpl.mockReturnValue(impl);
+
+      const pending = commit(PROVIDER_ID, { account: "octo" });
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(pending).resolves.toEqual({ unavailable: true, reason: "cancelled" });
+
+      finish(candidate());
+      await vi.advanceTimersByTimeAsync(0);
       expect(storeMock.set).not.toHaveBeenCalled();
       expect(impl.setCredentials).not.toHaveBeenCalled();
     });
@@ -482,6 +586,38 @@ describe("registerForgeCredentialImportHandlers", () => {
       });
       expect(storeMock.set).not.toHaveBeenCalled();
     });
+  });
+
+  it("re-picks a pasted credential's primary field once activation registers the provider", async () => {
+    cleanups.push(registerForgeSettingsHandlers());
+    const entries: ForgeProviderEntry[] = [
+      {
+        pluginId: "acme",
+        contribution: {
+          id: "gitea",
+          name: "Gitea",
+          matches: ["gitea.example.com"],
+          credentialFields: [
+            { id: "baseUrl", label: "Base URL", type: "text" },
+            { id: "token", label: "API token", type: "password" },
+          ],
+        },
+      },
+    ];
+    // Unregistered before startup settles, so the pre-check sees no declared
+    // fields and falls back to the first value.
+    registryMock.getRegisteredForgeProviders.mockReturnValueOnce([]).mockReturnValue(entries);
+    const impl = makeImpl();
+    registryMock.getForgeProviderImpl.mockReturnValue(impl);
+
+    const result = await getHandler("forge:set-credential")(fakeEvent(), "acme.gitea", {
+      baseUrl: "https://gitea.example.com",
+      token: "",
+    });
+
+    expect(result).toEqual({ valid: false, error: "Credential is required" });
+    expect(impl.validateToken).not.toHaveBeenCalled();
+    expect(storeMock.set).not.toHaveBeenCalled();
   });
 
   it("shares one rate-limit budget with setCredential across all three channels", async () => {

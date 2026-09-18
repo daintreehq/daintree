@@ -61,7 +61,7 @@ export function describeImportFailure(reason: ForgeCredentialImportFailureReason
 function ScopeList({ scopes }: { scopes: string[] }) {
   return (
     <span className="inline-flex flex-wrap gap-1 align-middle">
-      {scopes.map((scope) => (
+      {[...new Set(scopes)].map((scope) => (
         <code
           key={scope}
           className="text-text-secondary bg-surface-canvas px-1 rounded-[var(--radius-sm)]"

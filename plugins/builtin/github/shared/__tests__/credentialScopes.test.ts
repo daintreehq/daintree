@@ -1,11 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { GITHUB_REQUIRED_SCOPES, findMissingGitHubScopes } from "../credentialScopes.js";
+import { findMissingGitHubScopes } from "../credentialScopes.js";
 
 describe("findMissingGitHubScopes", () => {
-  it("requires repo and read:org", () => {
-    expect(GITHUB_REQUIRED_SCOPES).toEqual(["repo", "read:org"]);
-  });
-
   it("reports nothing missing when both are held", () => {
     expect(findMissingGitHubScopes(["repo", "read:org"])).toEqual([]);
   });

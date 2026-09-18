@@ -84,10 +84,9 @@ describe("GitHubAuth", () => {
     (globalThis as unknown as { fetch: Mock }).fetch = fetchMock;
     const controller = new AbortController();
 
-    const pending = GitHubAuth.validate(
-      "ghp_validtoken012345678901234567890123456789",
-      controller.signal
-    );
+    const pending = GitHubAuth.validate("ghp_validtoken012345678901234567890123456789", {
+      signal: controller.signal,
+    });
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
     controller.abort();
     const result = await pending;
@@ -103,10 +102,9 @@ describe("GitHubAuth", () => {
       })
     );
 
-    const result = await GitHubAuth.validate(
-      "gho_validtoken012345678901234567890123456789",
-      new AbortController().signal
-    );
+    const result = await GitHubAuth.validate("gho_validtoken012345678901234567890123456789", {
+      signal: new AbortController().signal,
+    });
 
     expect(result).toMatchObject({
       valid: true,
@@ -294,6 +292,30 @@ describe("GitHubAuth", () => {
 
     // Should not mark blocked since remaining=4999 > 0.
     expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+  });
+
+  it("detached validation leaves the configured token's rate-limit and auth state alone", async () => {
+    (globalThis as unknown as { fetch: Mock }).fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ login: "someone-else", avatar_url: "" }),
+      headers: new Headers({
+        "x-oauth-scopes": "repo",
+        "x-ratelimit-remaining": "0",
+        "x-ratelimit-reset": String(Math.floor(Date.now() / 1000) + 60),
+        "github-authentication-token-expiration": "2030-01-01 00:00:00 UTC",
+      }),
+    });
+    gitHubRateLimitService._resetForTests();
+
+    const result = await GitHubAuth.validate("gho_validtoken012345678901234567890123456789", {
+      detached: true,
+    });
+
+    expect(result).toMatchObject({ valid: true, username: "someone-else" });
+    // The same response through a non-detached validate registers a primary
+    // block (see the next test); another account's exhausted quota must not.
+    expect(gitHubRateLimitService.shouldBlockRequest().blocked).toBe(false);
+    expect(getLastAuthMetadata()).toBeNull();
   });
 
   it("validate captures primary rate limit when remaining=0", async () => {

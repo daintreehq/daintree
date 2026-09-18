@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { ReactNode } from "react";
 import { render, screen, fireEvent, waitFor, act } from "@testing-library/react";
+import { create } from "zustand";
 import { GitHubSettingsTab } from "../components/GitHubSettingsTab";
 import { SettingsValidationProvider } from "@/components/Settings/SettingsValidationRegistry";
 
@@ -74,17 +75,25 @@ const systemMock = {
   getHealthCheckSpecs: vi.fn(),
   checkTool: vi.fn(),
 };
-const updateConfig = vi.fn();
+// A real store, so a config update re-renders the tab the way the app does.
+const configStore = create<{ config: Record<string, unknown> }>()(() => ({
+  config: { hasToken: false },
+}));
+const updateConfig = vi.fn((config: Record<string, unknown>) => configStore.setState({ config }));
 
 function setupStore(config: Record<string, unknown> = { hasToken: false }) {
-  mockedUseGitHubConfigStore.mockReturnValue({
-    config,
-    isLoading: false,
-    error: null,
-    initialize: vi.fn(),
-    refresh: vi.fn(),
-    updateConfig,
-  } as unknown as ReturnType<typeof useGitHubConfigStore>);
+  configStore.setState({ config });
+  mockedUseGitHubConfigStore.mockImplementation(
+    () =>
+      ({
+        config: configStore((state) => state.config),
+        isLoading: false,
+        error: null,
+        initialize: vi.fn(),
+        refresh: vi.fn(),
+        updateConfig,
+      }) as unknown as ReturnType<typeof useGitHubConfigStore>
+  );
 }
 
 function ghDetected(available: boolean) {
@@ -167,6 +176,15 @@ describe("GitHubSettingsTab — import from GitHub CLI", () => {
     expect(dialog.textContent).toContain("including ones Daintree doesn't use:");
     expect(dialog.textContent).toMatch(/Missing\s*read:org/);
     expect(dialog.textContent).not.toContain("replaces the token");
+
+    // A missing scope warns; it never blocks the import.
+    forgeMock.commitCredentialImport.mockResolvedValue({
+      unavailable: false,
+      account: "octocat",
+      scopes: ["repo", "gist", "workflow"],
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Import token" }));
+    await waitFor(() => expect(forgeMock.commitCredentialImport).toHaveBeenCalled());
   });
 
   it("says scopes are unknown rather than missing when GitHub reported none", async () => {
@@ -244,7 +262,32 @@ describe("GitHubSettingsTab — import from GitHub CLI", () => {
       expect.objectContaining({ source: "user" })
     );
     expect(await screen.findByText("Token saved")).toBeTruthy();
+    expect(await screen.findByText("GitHub connected as @octocat")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("can't be dismissed or confirmed twice while the commit runs", async () => {
+    let finish: (value: unknown) => void = () => {};
+    forgeMock.commitCredentialImport.mockReturnValue(new Promise((resolve) => (finish = resolve)));
+    await openPreview({
+      unavailable: false,
+      account: "octocat",
+      scopes: ["repo", "read:org"],
+      missingScopes: [],
+      source: "gh",
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Import token" }));
+
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "Import token" }) as HTMLButtonElement).disabled
+      ).toBe(true)
+    );
+    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect(forgeMock.commitCredentialImport).toHaveBeenCalledTimes(1);
+
+    await act(async () => finish({ unavailable: false, account: "octocat", scopes: [] }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
   it("shows the fix for a gh that isn't signed in, without opening the confirm", async () => {

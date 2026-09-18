@@ -162,16 +162,39 @@ describe("readGhToken", () => {
     await expect(readGhToken()).resolves.toEqual({ token: TOKEN });
   });
 
+  const NO_TOKEN = "no oauth token found for github.com";
+
   it.each([
-    ["a missing gh binary", { code: "ENOENT" }, "cli-not-found"],
-    ["a non-zero exit", { code: 1 }, "not-signed-in"],
-    ["output over the buffer cap", { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" }, "invalid-output"],
-    ["an unrecognised failure", { code: "EACCES" }, "cli-failed"],
-  ])("maps %s to a fixed reason", async (_label, fields, reason) => {
-    ghAnswers(execError(fields), TOKEN, `no token found for github.com ${TOKEN}`);
+    ["a missing gh binary", { code: "ENOENT" }, "", "cli-not-found"],
+    ["gh reporting no login", { code: 1 }, NO_TOKEN, "not-signed-in"],
+    ["gh's newer no-login wording", { code: 1 }, "no token found for github.com", "not-signed-in"],
+    [
+      "a non-zero exit gh doesn't explain",
+      { code: 1 },
+      "failed to read configuration",
+      "cli-failed",
+    ],
+    [
+      "output over the buffer cap",
+      { code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" },
+      "",
+      "invalid-output",
+    ],
+    ["an unrecognised failure", { code: "EACCES" }, "", "cli-failed"],
+  ])("maps %s to a fixed reason", async (_label, fields, stderr, reason) => {
+    ghAnswers(execError(fields), TOKEN, `${stderr} ${TOKEN}`);
     const result = await readGhToken();
     expect(result).toEqual({ unavailable: true, reason });
     expect(JSON.stringify(result)).not.toContain(TOKEN);
+  });
+
+  it("stops waiting on a PATH refresh that hangs once the caller aborts", async () => {
+    environmentMock.refreshPath.mockImplementation(() => new Promise(() => {}));
+    const controller = new AbortController();
+    const pending = readGhToken(controller.signal);
+    controller.abort();
+    await expect(pending).resolves.toEqual({ unavailable: true, reason: "cancelled" });
+    expect(childProcessMock.execFile).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -247,7 +270,11 @@ describe("credentialImportCapability.preview", () => {
       source: "gh",
     });
     expect(JSON.stringify(result)).not.toContain(TOKEN);
-    expect(tokenMock.validateGitHubToken).toHaveBeenCalledWith(TOKEN, undefined);
+    // Detached: the gh account may not be the configured one.
+    expect(tokenMock.validateGitHubToken).toHaveBeenCalledWith(TOKEN, {
+      signal: undefined,
+      detached: true,
+    });
   });
 
   it("reports missing scopes, and none when GitHub reported no scopes at all", async () => {
@@ -269,7 +296,10 @@ describe("credentialImportCapability.preview", () => {
     validAs("octocat");
     const controller = new AbortController();
     await credentialImportCapability.preview(controller.signal);
-    expect(tokenMock.validateGitHubToken).toHaveBeenCalledWith(TOKEN, controller.signal);
+    expect(tokenMock.validateGitHubToken).toHaveBeenCalledWith(TOKEN, {
+      signal: controller.signal,
+      detached: true,
+    });
   });
 
   it("drops the validator's error text and returns a fixed code", async () => {
@@ -315,8 +345,26 @@ describe("credentialImportCapability.preview", () => {
     });
   });
 
+  it("stops waiting on a validation still queued when the caller aborts", async () => {
+    ghAnswers(null, TOKEN);
+    tokenMock.validateGitHubToken.mockImplementation(() => new Promise(() => {}));
+    const controller = new AbortController();
+    const pending = credentialImportCapability.preview(controller.signal);
+    await vi.waitFor(() => expect(tokenMock.validateGitHubToken).toHaveBeenCalled());
+    controller.abort();
+    await expect(pending).resolves.toEqual({ unavailable: true, reason: "cancelled" });
+  });
+
+  it("reports each scope once", async () => {
+    ghAnswers(null, TOKEN);
+    validAs("octocat", ["repo", " repo", "read:org", "read:org"]);
+    await expect(credentialImportCapability.preview()).resolves.toMatchObject({
+      scopes: ["repo", "read:org"],
+    });
+  });
+
   it("passes a CLI failure straight through without validating", async () => {
-    ghAnswers(execError({ code: 1 }));
+    ghAnswers(execError({ code: 1 }), "", "no oauth token found for github.com");
     await expect(credentialImportCapability.preview()).resolves.toEqual({
       unavailable: true,
       reason: "not-signed-in",

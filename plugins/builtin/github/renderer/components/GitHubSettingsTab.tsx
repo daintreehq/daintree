@@ -52,19 +52,16 @@ function ForgeSettingBlock({
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
+// Holds no token — main discards it after validating — so it is safe to keep
+// in component state.
 interface CliImportPreview {
   account: string;
   scopes: string[];
   missingScopes: string[];
+  replacesToken: boolean;
 }
 
-// The preview holds no token — main discards it after validating — so it is
-// safe to keep in component state until the user confirms or cancels.
-type CliImportState =
-  | { phase: "idle" }
-  | { phase: "previewing" }
-  | { phase: "confirming"; preview: CliImportPreview }
-  | { phase: "committing"; preview: CliImportPreview };
+type CliImportPhase = "idle" | "previewing" | "confirming" | "committing";
 
 const SCOPE_DESCRIPTIONS: Record<(typeof GITHUB_REQUIRED_SCOPES)[number], string> = {
   repo: "Access repository data",
@@ -85,11 +82,15 @@ export function GitHubSettingsTab() {
   const [validationResult, setValidationResult] = useState<ValidationResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const isGhAvailable = useGitHubCliAvailable();
-  const [cliImport, setCliImport] = useState<CliImportState>({ phase: "idle" });
+  const [isClearing, setIsClearing] = useState(false);
+  const [cliImportPhase, setCliImportPhase] = useState<CliImportPhase>("idle");
+  // Kept after the dialog closes so its exit animation still shows what was
+  // confirmed; replaced by the next preview.
+  const [cliImportPreview, setCliImportPreview] = useState<CliImportPreview | null>(null);
   // Unlike validation feedback this doesn't clear on a timer: it carries the
   // fix (e.g. "Run gh auth login"), which a user may still be reading.
   const [cliImportError, setCliImportError] = useState<string | null>(null);
-  const isImporting = cliImport.phase !== "idle";
+  const isImporting = cliImportPhase !== "idle";
 
   // initialize() is singleflight via the store's `initPromise` — calling it
   // again on retry returns the hung promise. refresh() always issues a fresh
@@ -149,6 +150,7 @@ export function GitHubSettingsTab() {
   };
 
   const handleClearToken = async () => {
+    setIsClearing(true);
     try {
       await window.electron.forge.clearCredential(BUILTIN_GITHUB_PROVIDER_ID);
       updateConfig({ hasToken: false });
@@ -158,6 +160,8 @@ export function GitHubSettingsTab() {
       logError("Failed to clear GitHub token", error);
       setValidationResult("error");
       setErrorMessage("Couldn't clear token");
+    } finally {
+      setIsClearing(false);
     }
   };
 
@@ -208,41 +212,43 @@ export function GitHubSettingsTab() {
   // only from this click — never on mount.
   const handlePreviewCliImport = async () => {
     setCliImportError(null);
-    setCliImport({ phase: "previewing" });
+    // A fresh "Token saved" must restart its own clear timer rather than
+    // inherit one still running from an earlier save.
+    setValidationResult(null);
+    setErrorMessage(null);
+    setCliImportPhase("previewing");
     try {
       const preview = await window.electron.forge.previewCredentialImport(
         BUILTIN_GITHUB_PROVIDER_ID
       );
       if (preview.unavailable) {
-        setCliImport({ phase: "idle" });
+        setCliImportPhase("idle");
         setCliImportError(describeImportFailure(preview.reason));
         return;
       }
-      setCliImport({
-        phase: "confirming",
-        preview: {
-          account: preview.account,
-          scopes: preview.scopes,
-          missingScopes: preview.missingScopes,
-        },
+      setCliImportPreview({
+        account: preview.account,
+        scopes: preview.scopes,
+        missingScopes: preview.missingScopes,
+        replacesToken: Boolean(githubConfig?.hasToken),
       });
+      setCliImportPhase("confirming");
     } catch (error) {
       logError("Failed to preview GitHub CLI token import", error);
-      setCliImport({ phase: "idle" });
+      setCliImportPhase("idle");
       setCliImportError("Couldn't read the GitHub CLI token.");
     }
   };
 
   const handleConfirmCliImport = async () => {
-    if (cliImport.phase !== "confirming") return;
-    const { preview } = cliImport;
-    setCliImport({ phase: "committing", preview });
+    if (cliImportPhase !== "confirming" || !cliImportPreview) return;
+    setCliImportPhase("committing");
     try {
       const result = await window.electron.forge.commitCredentialImport(
         BUILTIN_GITHUB_PROVIDER_ID,
-        { account: preview.account }
+        { account: cliImportPreview.account }
       );
-      setCliImport({ phase: "idle" });
+      setCliImportPhase("idle");
       if (result.unavailable) {
         setCliImportError(describeImportFailure(result.reason));
         return;
@@ -258,13 +264,10 @@ export function GitHubSettingsTab() {
       });
     } catch (error) {
       logError("Failed to import GitHub CLI token", error);
-      setCliImport({ phase: "idle" });
+      setCliImportPhase("idle");
       setCliImportError("Couldn't save the imported token.");
     }
   };
-
-  const cliImportPreview =
-    cliImport.phase === "confirming" || cliImport.phase === "committing" ? cliImport.preview : null;
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
@@ -302,7 +305,7 @@ export function GitHubSettingsTab() {
           />
           <Button
             onClick={handleTestToken}
-            disabled={isValidating || isImporting || !githubToken.trim()}
+            disabled={isValidating || isClearing || isImporting || !githubToken.trim()}
             loading={isTesting}
             variant="outline"
             size="sm"
@@ -314,7 +317,7 @@ export function GitHubSettingsTab() {
           </Button>
           <Button
             onClick={handleSaveToken}
-            disabled={isTesting || isImporting || !githubToken.trim()}
+            disabled={isTesting || isClearing || isImporting || !githubToken.trim()}
             loading={isValidating}
             size="sm"
             aria-label="Save token"
@@ -326,6 +329,7 @@ export function GitHubSettingsTab() {
             <Button
               onClick={handleClearToken}
               disabled={isImporting}
+              loading={isClearing}
               variant="outline"
               size="sm"
               aria-label="Clear token"
@@ -384,8 +388,8 @@ export function GitHubSettingsTab() {
           {isGhAvailable && (
             <Button
               onClick={handlePreviewCliImport}
-              disabled={isValidating || isTesting || cliImport.phase === "committing"}
-              loading={cliImport.phase === "previewing"}
+              disabled={isValidating || isTesting || isClearing || cliImportPhase === "committing"}
+              loading={cliImportPhase === "previewing"}
               variant="outline"
               size="sm"
               className="text-text-primary border-border-default hover:bg-border-default"
@@ -417,15 +421,13 @@ export function GitHubSettingsTab() {
       </ForgeSettingBlock>
 
       <ConfirmDialog
-        isOpen={cliImportPreview !== null}
-        onClose={
-          cliImport.phase === "committing" ? undefined : () => setCliImport({ phase: "idle" })
-        }
+        isOpen={cliImportPhase === "confirming" || cliImportPhase === "committing"}
+        onClose={cliImportPhase === "committing" ? undefined : () => setCliImportPhase("idle")}
         title={`Import token for @${cliImportPreview?.account ?? ""}?`}
         description="Daintree saves its own copy of the token the GitHub CLI holds for this account, stored in plain text in Daintree's settings."
         confirmLabel="Import token"
         onConfirm={handleConfirmCliImport}
-        isConfirmLoading={cliImport.phase === "committing"}
+        isConfirmLoading={cliImportPhase === "committing"}
         variant="default"
         zIndex="nested"
       >
@@ -433,7 +435,7 @@ export function GitHubSettingsTab() {
           <GitHubCliImportDetails
             scopes={cliImportPreview.scopes}
             missingScopes={cliImportPreview.missingScopes}
-            replacesToken={Boolean(githubConfig?.hasToken)}
+            replacesToken={cliImportPreview.replacesToken}
           />
         )}
       </ConfirmDialog>

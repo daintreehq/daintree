@@ -26,6 +26,7 @@ import type {
   ForgeProviderImpl,
 } from "../../../shared/types/forge.js";
 import { logWarn } from "../../utils/logger.js";
+import { raceAbort } from "../../utils/raceAbort.js";
 
 /**
  * Read the persisted global default provider id, normalizing legacy forms
@@ -212,19 +213,21 @@ export type PersistCredentialResult =
  * so both get the same audit, live-impl delivery, health re-probe and
  * workspace sync.
  *
- * `signal` is checked immediately before the store write, with nothing
- * awaited in between: a caller that has already reported failure must never
- * find the credential saved afterwards. Once the write happens the rest of the
- * pipeline runs to completion.
+ * `signal` bounds everything before the write — provider activation and the
+ * import commit are raced against it, since neither can be relied on to stop
+ * by itself — and is checked again immediately before the store write, with
+ * nothing awaited in between: a caller that has already reported failure must
+ * never find the credential saved afterwards. Once the write happens the rest
+ * of the pipeline runs to completion.
  */
 export async function persistCredential(
   providerId: string,
   source: CredentialSource,
   signal?: AbortSignal
 ): Promise<PersistCredentialResult> {
-  const impl = await resolveCredentialProvider(providerId);
-  if (!impl) return { saved: false, reason: "provider-unavailable" };
+  const impl = await raceAbort(resolveCredentialProvider(providerId), signal, undefined);
   if (signal?.aborted) return { saved: false, reason: "cancelled" };
+  if (!impl) return { saved: false, reason: "provider-unavailable" };
 
   let record: Record<string, string>;
   let primaryValue: string;
@@ -232,7 +235,16 @@ export async function persistCredential(
 
   if (source.kind === "fields") {
     record = source.credentials;
+    // Re-picked now that activation has registered the provider's declared
+    // fields, matching how `buildStoredCredentials` reads the record back.
     primaryValue = pickPrimaryValue(credentialFieldsFor(providerId), record).trim();
+    if (primaryValue.length === 0) {
+      return {
+        saved: false,
+        reason: "validation-failed",
+        validation: { valid: false, error: "Credential is required" },
+      };
+    }
     validation = await auditForgeCall(
       { providerId, methodName: "validateToken", argsSummary: "" },
       () => impl.validateToken(primaryValue),
@@ -253,7 +265,10 @@ export async function persistCredential(
       { providerId, methodName: "credentialImport.commit", argsSummary: "" },
       async (): Promise<CredentialImportCandidate | CredentialImportUnavailable> => {
         try {
-          return await capability.commit(source.expected, signal);
+          return await raceAbort(capability.commit(source.expected, signal), signal, {
+            unavailable: true as const,
+            reason: "cancelled" as const,
+          });
         } catch {
           return { unavailable: true, reason: "cli-failed" };
         }
