@@ -46,6 +46,7 @@ async function setUp() {
     mode,
     guestReady: true,
     droppedMessages: 0,
+    suspended: false,
   });
 
   let id = 0;

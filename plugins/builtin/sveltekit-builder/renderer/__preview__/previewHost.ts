@@ -148,6 +148,7 @@ export function createPreviewHost() {
     mode,
     guestReady: false,
     droppedMessages: 0,
+    suspended: false,
   });
 
   /** Held open by the `connecting` fixture, which is about the wait itself. */

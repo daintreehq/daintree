@@ -117,6 +117,12 @@ export interface SitePreviewBindingState {
   guestReady: boolean;
   /** Envelopes rejected by validation since the binding opened. */
   droppedMessages: number;
+  /**
+   * True while the preview shows a document outside the adapter's origin
+   * policy. The binding is kept, nothing is installed, and the next document
+   * back inside the policy installs normally.
+   */
+  suspended: boolean;
 }
 
 export type SitePreviewDetachReason =
@@ -141,6 +147,18 @@ export type SitePreviewPushPayload =
       event: SiteGuestEvent;
     }
   | { kind: "epoch-advanced"; sessionId: string; projectId: string; documentEpoch: number }
+  /**
+   * The preview navigated across the adapter's origin policy: `suspended` is
+   * true when the document it now shows is outside it and the runtime was
+   * withheld, false once a later document is back inside and installed.
+   */
+  | {
+      kind: "origin-policy";
+      sessionId: string;
+      projectId: string;
+      documentEpoch: number;
+      suspended: boolean;
+    }
   | {
       kind: "detached";
       sessionId: string;

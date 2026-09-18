@@ -12,6 +12,7 @@
  */
 
 import { AppError } from "../../utils/errorTypes.js";
+import type { GuestOriginPolicy } from "./originPolicy.js";
 
 export interface GuestAdapter {
   /** Stable id the renderer binds by. */
@@ -27,6 +28,12 @@ export interface GuestAdapter {
    * happened to be on disk at the first bind for the rest of the session.
    */
   cache: boolean;
+  /**
+   * Where the runtime may run; `local-preview` when absent. The bridge checks
+   * the guest's URL on every install and suspends the binding on a document
+   * outside the policy rather than putting the runtime into it.
+   */
+  origins?: GuestOriginPolicy;
 }
 
 /**

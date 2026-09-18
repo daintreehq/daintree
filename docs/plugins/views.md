@@ -181,7 +181,7 @@ Custom elements are the strict case because registration is irreversible. Other 
 | `bind({ panelId, adapterId, mode })` | Installs the named host-registered guest runtime into the page and returns a binding with a host-issued session id |
 | `setMode({ sessionId, mode })` | Switches between `browse` (the page behaves normally) and `select` |
 | `getState({ sessionId })`, `detach({ sessionId })` | Read or release the binding |
-| `onEvent(cb)` | Guest events with a host-validated envelope, epoch advances, and detaches |
+| `onEvent(cb)` | Guest events with a host-validated envelope, epoch advances, origin-policy suspensions, and detaches |
 
 Things that shape how you use it:
 
@@ -189,6 +189,7 @@ Things that shape how you use it:
 - **You name a runtime; you do not supply one.** `adapterId` selects a guest adapter main registered at startup, and main loads that adapter's asset itself. Nothing a view sends becomes script in the page. Adapters are host-owned today: a plugin that wants its own runtime needs one registered in main, not a body on the wire.
 - **There is no "evaluate in the page" call, on purpose.** The runtime is installed by the host on every document the preview shows, and the host wraps it in a prelude that addresses and numbers each message. A general evaluate method would hand every renderer-side caller a standing arbitrary-execution channel into whatever site the user is previewing.
 - **The host validates the envelope; you validate the payload.** Core checks protocol version, session, epoch, sequence and size, and that the event carries a `type` — plus the shape of the one lifecycle event it acts on, `documentReady`. Everything else in an event is forwarded uninterpreted, so parse `payload.event` against your adapter's own schema before you read a field of it, and drop what fails. That is also why a new adapter needs no change in core: the event union belongs to the adapter, not to `shared/types/ipc/sitePreview.ts`.
+- **An adapter runs only where it was declared to.** Every registered adapter carries an origin policy, `local-preview` unless it says otherwise: loopback, `*.localhost`, `*.local` and private-network addresses. The host checks the guest's URL on every install — at bind and after each navigation — and when the preview shows a page outside the policy it withholds the runtime, removes what the previous document left behind, and pushes `{ kind: "origin-policy", suspended: true }`; the binding survives, and the next document back inside the policy installs on its own and pushes `suspended: false`. Show that as an observation, not a fault.
 - **Everything from the page is an observation, never an instruction.** The page is an application under development, and it shares the main world with your runtime, so it can forge messages for its own binding. That reaches nothing beyond that binding's observations — the host validates session, epoch, sequence and size — but never act on a file path, range or revision a page supplied without resolving it yourself.
 - **Key state on each event's `documentEpoch`, not on arrival order.** The new runtime's own ready event for a document can arrive before the host's epoch-advance notice for it. A hot-module update that does not navigate does not advance the epoch at all, so "the page reloaded" and "the page shows your latest source" are different claims.
 

@@ -56,6 +56,11 @@ import {
   resolveGuestAdapter,
   type GuestAdapter,
 } from "./sitePreview/guestAdapters.js";
+import {
+  DEFAULT_GUEST_ORIGIN_POLICY,
+  originPolicyAllows,
+  type GuestOriginPolicy,
+} from "./sitePreview/originPolicy.js";
 
 const DEV_PREVIEW_PANEL_KIND = "dev-preview";
 
@@ -118,7 +123,9 @@ export interface SitePreviewBridgeDeps {
   newSessionId: () => string;
   newBindingName: () => string;
   /** The guest runtime registry. Injected so tests need no real asset on disk. */
-  resolveGuestAdapter: (adapterId: string) => Pick<GuestAdapter, "id" | "pluginId"> | null;
+  resolveGuestAdapter: (
+    adapterId: string
+  ) => Pick<GuestAdapter, "id" | "pluginId" | "origins"> | null;
   loadGuestAdapterSource: (adapterId: string) => Promise<string>;
 }
 
@@ -133,6 +140,15 @@ interface Binding {
   pluginId: string;
   /** The adapter's body, resolved host-side at bind time. */
   runtimeSource: string;
+  /** Where the adapter may run; checked against the guest's URL on every install. */
+  origins: GuestOriginPolicy;
+  /**
+   * True while the guest shows a document outside `origins`. The binding stays
+   * — the user's preview is still the same panel — but nothing is installed,
+   * the CDP binding is removed, and guest traffic is ignored until a document
+   * back inside the policy is installed.
+   */
+  suspended: boolean;
   mode: SitePreviewMode;
   documentEpoch: number;
   /** Highest sequence accepted in the current epoch; -1 before the first. */
@@ -378,6 +394,8 @@ export class SitePreviewBridge {
       adapterId,
       pluginId: adapter.pluginId,
       runtimeSource,
+      origins: adapter.origins ?? DEFAULT_GUEST_ORIGIN_POLICY,
+      suspended: false,
       mode,
       documentEpoch: 0,
       lastSequence: -1,
@@ -563,6 +581,10 @@ export class SitePreviewBridge {
     params: Record<string, unknown>
   ): void {
     if (binding.detached) return;
+    // The CDP binding is removed on suspension, so nothing should arrive; a
+    // call that raced the removal is from a document the policy excluded, and
+    // it is not even worth counting.
+    if (binding.suspended) return;
 
     // Execution contexts are tracked by the CDP lease service, not here: the
     // `Runtime.enable` that replays them is sent once, by whichever consumer
@@ -709,6 +731,15 @@ export class SitePreviewBridge {
     // in the queue; installing then leaves a runtime in the guest that nothing
     // owns or removes.
     if (binding.detached || this.closed) return;
+    // The policy is checked per document, not per binding: the preview can
+    // navigate anywhere, and the runtime goes only where the adapter said. It
+    // is checked before the double-install guard below, because an install
+    // that read its epoch under a navigation has satisfied that guard for a
+    // document it never looked at.
+    if (!originPolicyAllows(binding.origins, wc.getURL())) {
+      await this.suspend(binding, wc);
+      return;
+    }
     // A navigation can queue a reinstall while the bind's own install is still
     // awaiting CDP; by the time both run they read the same epoch. Installing
     // twice for one epoch restarts the prelude's sequence at 0 and the host then
@@ -747,6 +778,20 @@ export class SitePreviewBridge {
     // Teardown's bounded wait can expire under that read; it has released the
     // lease by then, and a binding added now would outlive everything else.
     if (binding.detached || this.closed) return;
+
+    if (binding.suspended) {
+      // Cleared before the install, not after: the runtime reports
+      // `documentReady` from inside the evaluate below, and a message arriving
+      // on a still-suspended binding would be ignored.
+      binding.suspended = false;
+      this.deps.push({
+        kind: "origin-policy",
+        sessionId: binding.sessionId,
+        projectId: binding.projectId,
+        documentEpoch: binding.documentEpoch,
+        suspended: false,
+      });
+    }
 
     await this.send(wc, "Runtime.addBinding", { name: binding.bindingName });
 
@@ -788,6 +833,12 @@ export class SitePreviewBridge {
     binding.scriptIdentifier = identifier;
     binding.installId = installId;
 
+    // A navigation under the awaits above can have replaced the document with
+    // one outside the policy. The reinstall it queued will remove the script
+    // just registered; the evaluate is what would put the runtime into the
+    // live document, and that is the one thing not to do.
+    if (!originPolicyAllows(binding.origins, wc.getURL())) return;
+
     // The new-document script only runs on the *next* document, so evaluate it
     // once into the current one. Without this, binding would require a reload.
     const evaluated = (await this.send(wc, "Runtime.evaluate", {
@@ -816,6 +867,48 @@ export class SitePreviewBridge {
         timeout: GUEST_EVALUATE_TIMEOUT_MS,
       });
     }
+  }
+
+  /**
+   * Withhold the runtime from a document outside the adapter's origins. The
+   * new-document script registered for the previous document has already run
+   * in this one by the time the navigation is observed, so this is a removal,
+   * not just a skipped install: the script goes, the CDP binding goes (which
+   * is what closes the tap), and the runtime already in the page is told to
+   * dispose itself, as on teardown. The binding itself survives, so a document
+   * back inside the policy installs without the renderer rebinding.
+   */
+  private async suspend(binding: Binding, wc: Electron.WebContents): Promise<void> {
+    // A second document outside the policy has nothing of ours in it: the
+    // first suspension removed the script, so nothing ran there.
+    if (binding.suspended) return;
+    if (binding.scriptIdentifier) {
+      await this.tryCdp(wc, "Page.removeScriptToEvaluateOnNewDocument", {
+        identifier: binding.scriptIdentifier,
+      });
+      binding.scriptIdentifier = null;
+    }
+    // Before the first install there is no lease, no binding and no runtime;
+    // the CDP calls would only fail against a domain nothing enabled.
+    if (binding.lease) {
+      await this.tryCdp(wc, "Runtime.removeBinding", { name: binding.bindingName });
+      if (binding.installId > 0) {
+        await this.tryCdp(wc, "Runtime.evaluate", {
+          expression: buildDisposeSource(binding.installId),
+          timeout: GUEST_EVALUATE_TIMEOUT_MS,
+        });
+      }
+    }
+    binding.guestReady = false;
+    if (binding.detached || this.closed) return;
+    binding.suspended = true;
+    this.deps.push({
+      kind: "origin-policy",
+      sessionId: binding.sessionId,
+      projectId: binding.projectId,
+      documentEpoch: binding.documentEpoch,
+      suspended: true,
+    });
   }
 
   private async send(
@@ -937,6 +1030,7 @@ function toState(binding: Binding): SitePreviewBindingState {
     mode: binding.mode,
     guestReady: binding.guestReady,
     droppedMessages: binding.droppedMessages,
+    suspended: binding.suspended,
   };
 }
 

@@ -1574,6 +1574,7 @@ describe("stale selections", () => {
       mode,
       guestReady: false,
       droppedMessages: 0,
+      suspended: false,
     }));
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     await screen.findByText("Select again — the page reloaded");
@@ -1751,6 +1752,40 @@ describe("preview reattach", () => {
     await screen.findByRole("button", { name: "Browse" });
   });
 
+  it("says it paused while the preview shows a page outside the local dev server, and picks up again", async () => {
+    await mountBound();
+
+    await act(async () =>
+      host.pushPreview({
+        kind: "origin-policy",
+        sessionId: "session-1",
+        projectId: "p1",
+        documentEpoch: 1,
+        suspended: true,
+      })
+    );
+    await screen.findByText("Paused — this page isn't at a local address");
+    // An observation, not a fault: the binding is intact, so nothing to click
+    // and no reconnect attempt of the controller's own.
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
+
+    await act(async () =>
+      host.pushPreview({
+        kind: "origin-policy",
+        sessionId: "session-1",
+        projectId: "p1",
+        documentEpoch: 2,
+        suspended: false,
+      })
+    );
+    await waitFor(() =>
+      expect(screen.queryByText("Paused — this page isn't at a local address")).toBeNull()
+    );
+    expect(host.sitePreview.bind).toHaveBeenCalledTimes(1);
+  });
+
   it("stays disconnected when the user asked to disconnect", async () => {
     await mountBound();
 
@@ -1815,6 +1850,7 @@ describe("builder lifetime while switched on", () => {
         mode: request.mode ?? "select",
         guestReady: false,
         droppedMessages: 0,
+        suspended: false,
       };
     });
     mount();
