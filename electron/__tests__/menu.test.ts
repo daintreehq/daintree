@@ -73,6 +73,7 @@ vi.mock("electron", () => ({
     }),
     setApplicationMenu: vi.fn(),
     getApplicationMenu: vi.fn(() => mockApplicationMenu),
+    sendActionToFirstResponder: vi.fn(),
   },
   dialog: {
     showOpenDialog: vi.fn(),
@@ -243,6 +244,7 @@ import {
   resetProjectHistory,
 } from "../services/ProjectHistoryService.js";
 import { getBuildChannelLabel } from "../../shared/config/distribution.js";
+import { getPluginMenuItems } from "../services/pluginMenuRegistry.js";
 import { webContents, app, Menu, dialog } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getWorkspaceClientRef } from "../window/windowServices.js";
@@ -550,6 +552,187 @@ describe("createApplicationMenu", () => {
       const item = findMenuItem(capturedTemplate, "View", "Zoom In");
       item!.click!({} as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
       expect(mockWebContents.setZoomLevel).toHaveBeenCalledWith(1.5);
+    });
+  });
+});
+
+describe("File menu layout (#12473)", () => {
+  const originalPlatform = process.platform;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedTemplate = [];
+  });
+
+  afterEach(() => {
+    Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    // mockReturnValue survives vi.clearAllMocks(), so restore the defaults.
+    vi.mocked(getPluginMenuItems).mockReturnValue([]);
+    windowRefMock.getWindowRegistry.mockReturnValue(null);
+  });
+
+  function buildFileMenu(platform: NodeJS.Platform): Electron.MenuItemConstructorOptions[] {
+    Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    createApplicationMenu(mockBrowserWindow as unknown as Electron.BrowserWindow);
+    const fileMenu = capturedTemplate.find((m) => m.label === "File");
+    expect(fileMenu).toBeDefined();
+    return fileMenu!.submenu as Electron.MenuItemConstructorOptions[];
+  }
+
+  /** Labels in order with each separator as "---", so the grouping is part of the assertion. */
+  function layout(items: Electron.MenuItemConstructorOptions[]): string[] {
+    return items.map((i) => (i.type === "separator" ? "---" : String(i.label)));
+  }
+
+  function item(items: Electron.MenuItemConstructorOptions[], label: string) {
+    const found = items.find((i) => i.label === label);
+    expect(found).toBeDefined();
+    return found!;
+  }
+
+  it("on macOS groups getting a project open, the open project, the window, then closing", () => {
+    expect(layout(buildFileMenu("darwin"))).toEqual([
+      "Open Project…",
+      "Open Recent",
+      "Clone Repository…",
+      "---",
+      "New Worktree…",
+      "Project Settings…",
+      "---",
+      "New Window",
+      "---",
+      "Close Project",
+      "Close Window",
+    ]);
+  });
+
+  it.each(["win32", "linux"] as const)(
+    "on %s puts app Settings in its own group and keeps Exit last",
+    (platform) => {
+      expect(layout(buildFileMenu(platform))).toEqual([
+        "Open Project…",
+        "Open Recent",
+        "Clone Repository…",
+        "---",
+        "New Worktree…",
+        "Project Settings…",
+        "---",
+        "New Window",
+        "---",
+        "Settings…",
+        "Plugin Manager…",
+        "---",
+        "Close Project",
+        "Close Window",
+        "---",
+        "Exit",
+      ]);
+    }
+  );
+
+  const NON_MAC_WITH_PLUGIN = [
+    "Open Project…",
+    "Open Recent",
+    "Clone Repository…",
+    "---",
+    "New Worktree…",
+    "Project Settings…",
+    "---",
+    "New Window",
+    "---",
+    "Settings…",
+    "Plugin Manager…",
+    "---",
+    "Acme Export…",
+    "---",
+    "Close Project",
+    "Close Window",
+    "---",
+    "Exit",
+  ];
+
+  it.each([
+    [
+      "darwin",
+      [
+        "Open Project…",
+        "Open Recent",
+        "Clone Repository…",
+        "---",
+        "New Worktree…",
+        "Project Settings…",
+        "---",
+        "New Window",
+        "---",
+        "Acme Export…",
+        "---",
+        "Close Project",
+        "Close Window",
+      ],
+    ],
+    ["win32", NON_MAC_WITH_PLUGIN],
+    ["linux", NON_MAC_WITH_PLUGIN],
+  ] as const)(
+    "on %s gives plugin File items their own group ahead of the close group",
+    (platform, expected) => {
+      vi.mocked(getPluginMenuItems).mockReturnValue([
+        {
+          pluginId: "acme",
+          item: { label: "Acme Export…", actionId: "app.settings", location: "file" },
+        },
+        {
+          pluginId: "acme",
+          item: { label: "Acme Panel", actionId: "app.settings", location: "view" },
+        },
+      ]);
+
+      expect(layout(buildFileMenu(platform))).toEqual(expected);
+    }
+  );
+
+  it("keeps Cmd+O on the item that opens the folder picker", async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: true, filePaths: [] });
+    const cmdO = buildFileMenu("darwin").filter((i) => i.accelerator === "CommandOrControl+O");
+    expect(cmdO.map((i) => i.label)).toEqual(["Open Project…"]);
+
+    await cmdO[0].click!({} as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
+
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith(
+      mockBrowserWindow,
+      expect.objectContaining({ title: "Open Folder" })
+    );
+  });
+
+  it("keeps New Window's accelerator and leaves New Worktree… on its chord, with no Cmd+N", () => {
+    const items = buildFileMenu("darwin");
+    expect(item(items, "New Window").accelerator).toBe("CommandOrControl+Shift+Alt+N");
+    expect(item(items, "New Worktree…").accelerator).toBeUndefined();
+  });
+
+  describe("Close Window", () => {
+    it("on macOS is not role close, so it carries no automatic icon, but still closes the key window", () => {
+      const closeWindow = item(buildFileMenu("darwin"), "Close Window");
+      expect(closeWindow.role).toBeUndefined();
+      expect(closeWindow.id).toBe("file-close-window");
+      expect(closeWindow.accelerator).toBe("Command+W");
+
+      closeWindow.click!({} as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
+      expect(Menu.sendActionToFirstResponder).toHaveBeenCalledWith("performClose:");
+    });
+
+    it.each(["win32", "linux"] as const)("on %s keeps role close", (platform) => {
+      const closeWindow = item(buildFileMenu(platform), "Close Window");
+      expect(closeWindow.role).toBe("close");
+      expect(closeWindow.registerAccelerator).toBe(false);
+      expect(closeWindow.id).toBe("file-close-window");
+    });
+
+    it("is enabled while a window is open and disabled once the app is windowless", () => {
+      windowRefMock.getWindowRegistry.mockReturnValue({ getPrimary: () => ({ services: {} }) });
+      expect(item(buildFileMenu("darwin"), "Close Window").enabled).toBe(true);
+
+      windowRefMock.getWindowRegistry.mockReturnValue({ getPrimary: () => undefined });
+      expect(item(buildFileMenu("darwin"), "Close Window").enabled).toBe(false);
     });
   });
 });
