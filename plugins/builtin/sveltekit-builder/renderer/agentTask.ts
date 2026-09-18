@@ -247,7 +247,7 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
       `- App: ${place.appPath === "" ? "the worktree root" : place.appPath} (${stack.join(", ")})`
     );
     // Version skew is the agent's problem, not ours to hide: the locations
-    // below were resolved by a compiler that never saw this Svelte, so the
+    // below were resolved by a compiler tested against other majors, so the
     // agent is told to check the file rather than trust the line number.
     const untested = untestedVersionNotes(place.versions);
     if (untested.length > 0) lines.push(untestedToolchainPromptLine(untested));
