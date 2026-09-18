@@ -702,10 +702,39 @@ export type ForgeResolveProviderResult =
  * Events sent from Workspace Host → Main.
  * Includes both responses to requests and spontaneous updates.
  */
+/**
+ * What a disposing host is still waiting on, as last observed by the host.
+ * Scalars only — it rides a message the parent logs if it has to kill.
+ */
+export interface WorkspaceHostDisposePending {
+  /** Parcel subscriptions registered and not yet asked to unsubscribe. */
+  parcelSubscriptions: number;
+  /** Serialized native subscribe/unsubscribe operations running or queued. */
+  parcelLifecycleOps: number;
+}
+
+export type WorkspaceHostDisposePhase = "disposing-services" | "settling";
+
 export type WorkspaceHostEvent =
   // Lifecycle events
   | { type: "ready" }
   | { type: "pong" }
+  // Teardown reports, sent only after the parent's `dispose` request. The
+  // parent keeps the latest progress so a force-kill can say what the host was
+  // stuck on, and treats `disposed` as the host's promise to exit next tick.
+  | {
+      type: "dispose-progress";
+      phase: WorkspaceHostDisposePhase;
+      elapsedMs: number;
+      pending: WorkspaceHostDisposePending;
+    }
+  | {
+      type: "disposed";
+      elapsedMs: number;
+      /** False when the watcher drain hit its bound rather than finishing. */
+      settled: boolean;
+      pending: WorkspaceHostDisposePending;
+    }
   | { type: "error"; error: string; requestId?: string }
   // Project lifecycle responses
   | { type: "load-project-result"; requestId: string; success: boolean; error?: string }

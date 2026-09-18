@@ -1006,6 +1006,48 @@ describe("RepoFetchCoordinator", () => {
     expect(onFetchSuccess).not.toHaveBeenCalled();
   });
 
+  it("destroy() aborts the in-flight fetch's git signal and caches no failure (#12460)", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let fetchSignal: AbortSignal | undefined;
+    mockCreateBackgroundFetchGit.mockImplementation(
+      (_path: string, opts: { signal: AbortSignal }) => {
+        fetchSignal = opts.signal;
+        // Stands in for simple-git: the abort kills git and rejects the task.
+        return makeMockGit(
+          () =>
+            new Promise<void>((_res, rej) => {
+              opts.signal.addEventListener("abort", () => {
+                const err = new Error("the operation was aborted");
+                err.name = "GitError";
+                rej(err);
+              });
+            })
+        );
+      }
+    );
+
+    const onFetchSuccess = vi.fn();
+    const coord = new RepoFetchCoordinator({ onFetchSuccess });
+
+    const inFlight = coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(fetchSignal?.aborted).toBe(false);
+
+    coord.destroy();
+    expect(fetchSignal?.aborted).toBe(true);
+
+    const result = await inFlight;
+    expect(result.status).toBe("skipped");
+    expect(result.skipReason).toBe("stale-generation");
+    expect(onFetchSuccess).not.toHaveBeenCalled();
+    expect(coord.hasFailureFor("/repo/.git")).toBe(false);
+
+    // The coordinator stays usable after destroy (project switch reuses it).
+    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+    const next = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(next.status).toBe("success");
+  });
+
   it("destroy() during the async commondir resolution discards the fetch and creates no state", async () => {
     let resolveCommonDir: ((value: string | null) => void) | undefined;
     mockGetGitCommonDir.mockImplementation(

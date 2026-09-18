@@ -16,7 +16,10 @@ const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
   defaultTTL: 15000, // 15s to cover 10s background polling + margin
 });
 
-const inFlightWorktreeChanges = new Map<string, Promise<WorktreeChanges>>();
+const inFlightWorktreeChanges = new Map<
+  string,
+  { promise: Promise<WorktreeChanges>; signal: AbortSignal | undefined }
+>();
 
 export function invalidateWorktreeCache(cwd: string): void {
   GIT_WORKTREE_CHANGES_CACHE.invalidate(cwd);
@@ -538,6 +541,12 @@ export interface GetWorktreeChangesOptions {
    * UNC). Set only on Windows for worktrees the user has opted into.
    */
   wsl?: WslGitInvocation;
+  /**
+   * Kills the status git children when aborted. Polling callers pass their
+   * monitor's signal so stopping the monitor (and host teardown) stops the
+   * processes instead of abandoning them.
+   */
+  signal?: AbortSignal;
 }
 
 async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Promise<SimpleGit> {
@@ -545,13 +554,13 @@ async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Prom
     try {
       // `await` so a rejected factory promise lands in this catch and falls
       // back, matching the previous synchronous-throw behaviour.
-      return await createWslHardenedGit(opts.wsl);
+      return await createWslHardenedGit(opts.wsl, opts.signal);
     } catch {
       // Fall back to native git if the WSL invocation is rejected (e.g. wrong
       // platform, missing distro). Polling continues using the slower path.
     }
   }
-  return createHardenedGit(cwd);
+  return createHardenedGit(cwd, opts.signal);
 }
 
 export async function getWorktreeChangesWithStats(
@@ -577,9 +586,11 @@ export async function getWorktreeChangesWithStats(
       };
     }
 
+    // An aborted run is on its way to rejecting with its owner's cancellation;
+    // a caller that was not cancelled must not inherit that.
     const inFlight = inFlightWorktreeChanges.get(cwd);
-    if (inFlight) {
-      return inFlight;
+    if (inFlight && !inFlight.signal?.aborted) {
+      return inFlight.promise;
     }
   }
 
@@ -983,6 +994,10 @@ export async function getWorktreeChangesWithStats(
       if (error instanceof WorktreeRemovedError) {
         throw error;
       }
+      // Cancelled by the caller: expected, not a git failure worth logging.
+      if (options.signal?.aborted) {
+        throw error;
+      }
 
       const errorMessage = formatErrorMessage(error, "Git worktree changes failed");
       if (
@@ -1006,13 +1021,13 @@ export async function getWorktreeChangesWithStats(
   })();
 
   if (!forceRefresh) {
-    inFlightWorktreeChanges.set(cwd, fetchPromise);
+    inFlightWorktreeChanges.set(cwd, { promise: fetchPromise, signal: options.signal });
   }
 
   try {
     return await fetchPromise;
   } finally {
-    if (inFlightWorktreeChanges.get(cwd) === fetchPromise) {
+    if (inFlightWorktreeChanges.get(cwd)?.promise === fetchPromise) {
       inFlightWorktreeChanges.delete(cwd);
     }
   }

@@ -2,7 +2,7 @@
 import os from "node:os";
 import { type WebContents } from "electron";
 import path from "path";
-import { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
+import { WorkspaceHostProcess, type WorkspaceHostDisposeReason } from "../WorkspaceHostProcess.js";
 import { store } from "../../store.js";
 import { computeDefaultWarmWorkspaceHosts } from "../../utils/warmWorkspaceHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
@@ -245,7 +245,7 @@ export class WorkspaceHostPool {
       // ready-failed entry, which it detects itself on the same code path).
       if (isStale()) return;
       if (isReadyFailed) {
-        existingEntry.host.dispose();
+        existingEntry.host.dispose("ready-failed");
         this.entries.delete(normalizedPath);
       } else {
         this.entries.delete(normalizedPath);
@@ -311,7 +311,7 @@ export class WorkspaceHostPool {
         this.entries.delete(normalizedPath);
         newEntry.windowIds.delete(windowId);
         newEntry.refCount--;
-        newEntry.host.dispose();
+        newEntry.host.dispose("init-failed");
       }
       throw error;
     }
@@ -381,7 +381,7 @@ export class WorkspaceHostPool {
     initPromise.catch(() => {
       if (this.entries.get(normalizedPath) === entry) {
         this.entries.delete(normalizedPath);
-        entry.host.dispose();
+        entry.host.dispose("init-failed");
       }
     });
   }
@@ -498,7 +498,7 @@ export class WorkspaceHostPool {
     const normalized = this.normalizeProjectPath(projectPath);
     const entry = this.entries.get(normalized);
     if (!entry || entry.refCount > 0) return false;
-    this.evictEntry(normalized, entry);
+    this.evictEntry(normalized, entry, "evicted");
     return true;
   }
 
@@ -517,18 +517,22 @@ export class WorkspaceHostPool {
   evictProjectForRelocation(projectPath: string): void {
     const normalized = this.normalizeProjectPath(projectPath);
     const entry = this.entries.get(normalized);
-    if (entry) this.evictEntry(normalized, entry);
+    if (entry) this.evictEntry(normalized, entry, "relocation");
     for (const [worktreePath, rootPath] of this.worktreePathToProject) {
       if (rootPath === normalized) this.worktreePathToProject.delete(worktreePath);
     }
   }
 
-  private evictEntry(projectPath: string, entry: ProcessEntry): void {
+  private evictEntry(
+    projectPath: string,
+    entry: ProcessEntry,
+    reason: WorkspaceHostDisposeReason
+  ): void {
     if (entry.cleanupTimeout) {
       clearTimeout(entry.cleanupTimeout);
       entry.cleanupTimeout = null;
     }
-    entry.host.dispose();
+    entry.host.dispose(reason);
     this.entries.delete(projectPath);
   }
 
@@ -543,7 +547,7 @@ export class WorkspaceHostPool {
     while (dormantCount > this.config.maxWarmEntries) {
       for (const [path, entry] of this.entries) {
         if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
-          this.evictEntry(path, entry);
+          this.evictEntry(path, entry, "warm-cap");
           dormantCount--;
           break;
         }
@@ -556,7 +560,7 @@ export class WorkspaceHostPool {
       clearTimeout(entry.cleanupTimeout);
     }
     entry.cleanupTimeout = setTimeout(() => {
-      entry.host.dispose();
+      entry.host.dispose("idle-grace");
       this.entries.delete(projectPath);
     }, CLEANUP_GRACE_MS);
     this.enforceDormantCap();
@@ -726,7 +730,7 @@ export class WorkspaceHostPool {
       if (entry.cleanupTimeout) {
         clearTimeout(entry.cleanupTimeout);
       }
-      entry.host.dispose();
+      entry.host.dispose("pool-dispose");
     }
     this.entries.clear();
     this.windowToProject.clear();

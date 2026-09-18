@@ -16,7 +16,12 @@ vi.mock("@parcel/watcher", () => ({
   default: { subscribe: subscribeMock },
 }));
 
-import { parcelWatcherBackendOption, subscribeParcelWatcher } from "../parcelWatcherBackend.js";
+import {
+  closeAllParcelWatcherSubscriptions,
+  getParcelWatcherLifecycleStats,
+  parcelWatcherBackendOption,
+  subscribeParcelWatcher,
+} from "../parcelWatcherBackend.js";
 
 const originalPlatform = process.platform;
 
@@ -72,6 +77,31 @@ describe("subscribeParcelWatcher", () => {
 
     expect(subscribeMock).toHaveBeenCalledTimes(2);
     await second.unsubscribe();
+  });
+
+  it("reports a native teardown as pending until it finishes, not when it is requested (#12460)", async () => {
+    await closeAllParcelWatcherSubscriptions();
+    expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 0, lifecycleOps: 0 });
+
+    const stop = deferred<void>();
+    subscribeMock.mockResolvedValueOnce({ unsubscribe: vi.fn(() => stop.promise) });
+    const subscription = await subscribeParcelWatcher("/repo", vi.fn());
+    expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 1, lifecycleOps: 0 });
+
+    const stopping = subscription.unsubscribe();
+    expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 0, lifecycleOps: 1 });
+
+    let drained = false;
+    const draining = closeAllParcelWatcherSubscriptions().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false);
+
+    stop.resolve();
+    await stopping;
+    await draining;
+    expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 0, lifecycleOps: 0 });
   });
 
   it("coalesces repeated unsubscribe calls onto one native teardown", async () => {

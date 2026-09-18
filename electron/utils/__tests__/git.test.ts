@@ -43,6 +43,7 @@ import {
   __clearLastCommitLogCacheForTesting,
 } from "../git.js";
 import { createHardenedGit } from "../hardenedGit.js";
+import { logError } from "../logger.js";
 import { promises as fs } from "fs";
 
 describe("getLatestTrackedFileMtime", () => {
@@ -1179,5 +1180,71 @@ describe("listCommits", () => {
     expect(result.items).toEqual([]);
     expect(result.hasMore).toBe(false);
     expect(result.total).toBe(0);
+  });
+});
+
+describe("getWorktreeChangesWithStats cancellation (#12460)", () => {
+  const emptyStatus = {
+    modified: [],
+    created: [],
+    deleted: [],
+    renamed: [],
+    staged: [],
+    conflicted: [],
+    not_added: [],
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGit.revparse.mockResolvedValue("/test/cancel\n");
+    mockGit.raw.mockResolvedValue("100\t0\tsome msg");
+    mockGit.diff.mockResolvedValue("");
+    (fs.stat as ReturnType<typeof vi.fn>).mockResolvedValue({ mtimeMs: 1000 });
+  });
+
+  it("hands the caller's signal to the status git so aborting kills the child", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const controller = new AbortController();
+    mockGit.status.mockResolvedValue(emptyStatus);
+
+    await getWorktreeChangesWithStats(cwd, { forceRefresh: true, signal: controller.signal });
+
+    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledWith(cwd, controller.signal);
+  });
+
+  it("rethrows a cancelled read as-is without logging it as a git failure", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const controller = new AbortController();
+    let rejectStatus!: (error: unknown) => void;
+    mockGit.status.mockReturnValue(new Promise((_res, rej) => (rejectStatus = rej)));
+
+    const call = getWorktreeChangesWithStats(cwd, { signal: controller.signal });
+    await vi.waitFor(() => expect(mockGit.status).toHaveBeenCalled());
+    controller.abort();
+    const abortError = new Error("the operation was aborted");
+    rejectStatus(abortError);
+
+    await expect(call).rejects.toBe(abortError);
+    expect(vi.mocked(logError)).not.toHaveBeenCalled();
+  });
+
+  it("does not hand an uncancelled caller a read its owner already aborted", async () => {
+    const cwd = "/cancel-test/" + Math.random();
+    const controller = new AbortController();
+    let rejectStatus!: (error: unknown) => void;
+    mockGit.status
+      .mockReturnValueOnce(new Promise((_res, rej) => (rejectStatus = rej)))
+      .mockResolvedValueOnce(emptyStatus);
+
+    const cancelled = getWorktreeChangesWithStats(cwd, { signal: controller.signal });
+    await vi.waitFor(() => expect(mockGit.status).toHaveBeenCalledTimes(1));
+    controller.abort();
+
+    const fresh = getWorktreeChangesWithStats(cwd, {});
+    rejectStatus(new Error("the operation was aborted"));
+
+    await expect(cancelled).rejects.toThrow("aborted");
+    await expect(fresh).resolves.toMatchObject({ changedFileCount: 0 });
+    expect(vi.mocked(createHardenedGit)).toHaveBeenCalledTimes(2);
   });
 });

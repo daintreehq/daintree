@@ -479,6 +479,33 @@ describe("GitStatusPass", () => {
     expect(pass.lastActivityTimestamp).toBe(commitTime);
   });
 
+  it("passes the monitor's signal to status git and reads a cancelled pass as no result (#12460)", async () => {
+    const controller = new AbortController();
+    mockGetWorktreeChangesWithStats.mockImplementation(async () => {
+      controller.abort();
+      throw new Error("the operation was aborted");
+    });
+    const { pass, host } = makePass({ abortSignal: controller.signal });
+
+    await expect(pass.run(true)).resolves.toBeUndefined();
+
+    expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledWith(
+      "/test/worktree",
+      expect.objectContaining({ signal: controller.signal })
+    );
+    expect(host.mood).toBe("stable");
+    expect(host.emitUpdate).not.toHaveBeenCalled();
+    expect(host.isUpdating).toBe(false);
+  });
+
+  it("still surfaces a status failure the monitor did not cancel", async () => {
+    mockGetWorktreeChangesWithStats.mockRejectedValue(new Error("fatal: bad object"));
+    const { pass, host } = makePass();
+
+    await expect(pass.run(true)).rejects.toThrow("bad object");
+    expect(host.mood).toBe("error");
+  });
+
   it("is a no-op single-flight guard while a pass is already in flight", async () => {
     const { pass, host } = makePass({ isUpdating: true });
     await pass.run(false);
