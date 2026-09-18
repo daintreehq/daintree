@@ -109,6 +109,19 @@ export default defineConfig({
       retries: isCI ? 2 : 0,
     },
     {
+      // Local only, and deliberately in NO npm script or workflow.
+      //
+      // These drive the REAL engine against a REAL backend, so every run spends model
+      // calls and depends on services this machine happens to be running. That is the
+      // whole point — it is where the thing is checked end to end as a user meets it —
+      // and it is also exactly why it must never be a gate. Run it by name:
+      //   npx playwright test --project=local
+      name: "local",
+      testDir: "./e2e/local",
+      timeout: 10 * 60 * 1000,
+      retries: 0,
+    },
+    {
       name: "full-resilience",
       testDir: "./e2e/full/resilience",
       timeout: coreTimeout,

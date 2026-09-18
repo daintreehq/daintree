@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
+import { assistantStoreForSlot, releaseAssistantStore } from "@/store/assistantStore";
 import { useState } from "react";
-import { render, fireEvent } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { render, fireEvent, act, waitFor } from "@testing-library/react";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { HelpSessionTabs, helpSessionTabId, type HelpSessionTab } from "../HelpSessionTabs";
 
 /**
@@ -690,5 +691,40 @@ describe("HelpSessionTabs", () => {
 
     expect(tabs(container)).toHaveLength(1);
     expect(document.activeElement).toBe(getByText("elsewhere"));
+  });
+});
+
+afterEach(() => {
+  releaseAssistantStore(1);
+});
+
+describe("native session tab state", () => {
+  it("updates the native lane from its own store while preserving a terminal sibling", async () => {
+    assistantStoreForSlot(1).getState().reset("ses_b");
+    const { getByRole, container } = renderStrip({
+      tabs: [
+        { slot: 0, label: "Session 1", agentState: "working", native: false },
+        { slot: 1, label: "Session 2", agentState: "working", native: true },
+      ],
+    });
+    const terminal = getByRole("tab", { name: "Session 1" });
+    const native = getByRole("tab", { name: "Session 2" });
+    expect(terminal.getAttribute("aria-describedby")).not.toBe(null);
+    expect(native.getAttribute("aria-describedby")).toBe(null);
+    act(() => {
+      assistantStoreForSlot(1).getState().applyEvent({
+        type: "turn:phase",
+        sessionId: "ses_b",
+        seq: 2,
+        phase: "Thinking",
+      });
+    });
+    await waitFor(() => expect(native.getAttribute("aria-describedby")).not.toBe(null));
+    expect(
+      container.querySelector(`#${native.getAttribute("aria-describedby")}`)?.textContent
+    ).toContain("working");
+    expect(
+      container.querySelector(`#${terminal.getAttribute("aria-describedby")}`)?.textContent
+    ).toContain("working");
   });
 });

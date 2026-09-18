@@ -208,6 +208,21 @@ module.exports = async function () {
       // different problem (identical Mach-O prebuilds present in both slices).
       extraResources: [
         { from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" },
+        // The Daintree Assistant engine — the Go binary vendored as the
+        // `vendor/daintree-assistant` submodule and built by
+        // `scripts/build-assistant.mjs`. It ships as an extraResource rather than
+        // being resolved from PATH because its wire protocol moves in LOCKSTEP with
+        // Daintree's host code: a separately-installed copy is free to be any
+        // version, which is exactly how the v1/v2 protocol skew happened. The
+        // submodule SHA pins the two together.
+        //
+        // The `to` name drops the platform/arch suffix so the main process resolves
+        // one fixed path. On a macOS universal build @electron/universal lipos the
+        // two same-named Mach-O slices into one binary.
+        {
+          from: "resources/assistant/daintree-assistant-darwin-${arch}",
+          to: "assistant/daintree-assistant",
+        },
         // Finder "Open in Daintree" Quick Action. Rides in the sealed bundle as
         // an inert resource and becomes user data only once the user installs
         // it into ~/Library/Services from the app menu, so it carries no
@@ -238,6 +253,10 @@ module.exports = async function () {
       binaries: [
         "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper",
         "Contents/Resources/app.asar.unpacked/node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor",
+        // The assistant engine is a nested executable: it must be signed with the
+        // hardened runtime like any other, or notarization rejects the whole app
+        // with "The executable does not have the Hardened Runtime enabled".
+        "Contents/Resources/assistant/daintree-assistant",
       ],
       category: "public.app-category.developer-tools",
       icon: "build/icon.icns",
@@ -319,6 +338,14 @@ module.exports = async function () {
       // The other Windows arch is pruned in afterPack.cjs (#11829).
       files: [...baseFiles(), "!node_modules/better-sqlite3/prebuilds/{darwin,linux,linuxmusl}-*.node"],
       artifactName: "${productName}-${version}-${arch}-setup.${ext}",
+      // See the mac note: vendored engine, pinned by submodule SHA. Windows needs
+      // the .exe suffix; the main process appends it from process.platform.
+      extraResources: [
+        {
+          from: "resources/assistant/daintree-assistant-win32-${arch}.exe",
+          to: "assistant/daintree-assistant.exe",
+        },
+      ],
       target: [
         { target: "appx", arch: ["x64"] },
         { target: "nsis", arch: ["x64", "arm64"] },
@@ -392,6 +419,11 @@ module.exports = async function () {
       extraResources: [
         { from: "scripts/daintree-cli.sh", to: "daintree-cli.sh" },
         { from: "build/linux/daintree.apparmor", to: "daintree.apparmor" },
+        // See the mac note: vendored engine, pinned by submodule SHA.
+        {
+          from: "resources/assistant/daintree-assistant-linux-${arch}",
+          to: "assistant/daintree-assistant",
+        },
       ],
     },
     deb: {

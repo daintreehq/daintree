@@ -29,6 +29,12 @@ interface UseEditorDomHandlersParams {
   sendFromEditor: () => void;
   rootRef: React.RefObject<HTMLDivElement | null>;
   setActiveCompletionContext: (value: null) => void;
+  /**
+   * Whether the bar this editor belongs to is one of a terminal pane's focus
+   * surfaces, and may therefore record the session-wide preference on focus.
+   * See `HybridInputBarProps.participatesInTerminalFocus`.
+   */
+  participatesInTerminalFocusRef: React.RefObject<boolean>;
 }
 
 export function useEditorDomHandlers({
@@ -42,6 +48,7 @@ export function useEditorDomHandlers({
   sendFromEditor,
   rootRef,
   setActiveCompletionContext,
+  participatesInTerminalFocusRef,
 }: UseEditorDomHandlersParams) {
   "use no memo";
   const sendFromEditorRef = useRef(sendFromEditor);
@@ -62,7 +69,18 @@ export function useEditorDomHandlers({
           // landing on the hybrid input across panes. Idempotent: the slice
           // setter no-ops when the value is already "hybridInput", so a burst
           // of focus events from re-renders does not churn subscribers.
-          usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+          //
+          // Only for a bar that IS a terminal pane surface. Every focused
+          // TerminalPane used to SUBSCRIBE to this value, so a write from the
+          // assistant composer — which is not one of the surfaces being chosen
+          // between — re-ran their focus effects and pulled the caret straight
+          // back out of the panel the user had just clicked into. Those panes
+          // now sample it instead, and this stays gated anyway: the preference
+          // describes which terminal surface the user is working in, and a bar
+          // that is not one has no standing to answer that.
+          if (participatesInTerminalFocusRef.current) {
+            usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+          }
           return false;
         },
         drop: (event) => {

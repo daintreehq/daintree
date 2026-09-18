@@ -1961,6 +1961,52 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
     ): () => void;
   };
+  /**
+   * The native assistant engine (protocol v3). Invoke methods start/stop a session
+   * and send commands; the event stream arrives on the subscriptions below, each a
+   * targeted push to this view.
+   */
+  assistantHost: {
+    start(
+      payload: import("./assistantHostIpc.js").AssistantHostStartPayload
+    ): Promise<import("./assistantHostIpc.js").AssistantHostStartResult>;
+    send(
+      command: import("./assistantHost.js").AssistantHostCommand
+    ): Promise<{ delivered: boolean }>;
+    /**
+     * Detaches THIS surface. The engine stops when the last one leaves, so the
+     * attachment id is required: without it a stale teardown could end a session a
+     * live surface is still using.
+     */
+    stop(sessionId: string, attachmentId: string): Promise<{ stopped: boolean }>;
+    /**
+     * The lanes of this workspace with a conversation their next start would continue,
+     * and whether each one's panel was open when its engine went down with the view
+     * (#12365).
+     */
+    listResumable(
+      projectId: string
+    ): Promise<import("./assistantHostIpc.js").AssistantHostResumableLane[]>;
+    /** Forgets the conversation a lane would continue. What Stop and closing its tab mean. */
+    discardResume(projectId: string, slot: number): Promise<{ discarded: boolean }>;
+    /** One validated protocol event from the engine. */
+    onEvent(callback: (event: import("./assistantHost.js").AssistantHostEvent) => void): () => void;
+    /**
+     * A gap in the engine's monotonic sequence: frames were lost, so the transcript is
+     * incomplete from here. Surfaced rather than absorbed.
+     */
+    onSequenceGap(
+      callback: (payload: import("./assistantHostIpc.js").AssistantHostGapPayload) => void
+    ): () => void;
+    onExit(
+      callback: (payload: import("./assistantHostIpc.js").AssistantHostExitPayload) => void
+    ): () => void;
+    /** A prompt another surface sent to the session this view is watching. */
+    onPeerPrompt(
+      callback: (payload: import("./assistantHostIpc.js").AssistantHostPeerPromptPayload) => void
+    ): () => void;
+  };
+
   // Invoke methods come from GeneratedElectronAPI; the rest are
   // renderer-only event subscriptions.
   mcpServer: GeneratedElectronAPI["mcpServer"] & {
@@ -2511,13 +2557,6 @@ export interface HelpAssistantSettings {
    * Memory Saver tiers).
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
-  /**
-   * Enable the Daintree Assistant's own full-fidelity debug log for new
-   * sessions, by setting `DAINTREE_ASSISTANT_DEBUG_LOG=1` in the spawn env.
-   * Only the `daintree-assistant` backend reads this var (per-session trace to
-   * `~/.daintree/logs`); it is a no-op for other assistant agents. Defaults to false.
-   */
-  debugLogging: boolean;
 }
 
 /**

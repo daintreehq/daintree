@@ -39,7 +39,11 @@ const { focusMock, helpPanelState, panelStoreState, hybridHandle } = vi.hoisted(
     width: 380,
     terminalId: "t-1" as string | null,
     agentId: "claude" as string | null,
-    preferredAgentId: null as string | null,
+    // "claude" rather than null: these suites exercise the PTY LAUNCH path, and the
+    // Daintree Assistant is now the default surface when no agent is chosen — a null
+    // preference renders the native panel and never launches a terminal at all. Naming
+    // a terminal-backed agent keeps each test about the thing it is testing.
+    preferredAgentId: "claude" as string | null,
     sessionId: null as string | null,
     introDismissed: true,
     conversationTouched: false,
@@ -303,6 +307,7 @@ vi.mock("../FigureRail", () => ({ FigureRail: () => null }));
 
 import { HelpPanel } from "../HelpPanel";
 import { __resetHelpSessionControllersForTests } from "@/controllers/helpSessionControllerRegistry";
+import { useMacroFocusStore } from "@/store/macroFocusStore";
 import {
   _resetForTests as resetTooltipDismissRegistry,
   isTooltipFocusOpenSuppressed,
@@ -326,7 +331,41 @@ let foreignEditor: HTMLTextAreaElement;
 function focusForeignEditor(): void {
   act(() => {
     foreignEditor.focus();
+    // Losing the macro region is part of clicking into another pane, and it is not the
+    // focus() call that does it: `AppLayout`'s window-level capture mousedown handler
+    // clears the claim whenever a press lands outside the focused region's ref. Nothing
+    // in this file mounts AppLayout, so the same effect is applied here — otherwise the
+    // assistant keeps a region it no longer has any claim to and every "another pane
+    // owns focus" assertion below is testing the wrong state.
+    useMacroFocusStore.setState({ focusedRegion: null });
   });
+}
+
+/**
+ * The assistant taking ownership the way a user does: a press inside the panel.
+ *
+ * NOT `panelRoot.focus()`, which is what this used to do. The panel root deliberately
+ * carries no `tabindex` at rest — a permanently focusable region collapses any selection
+ * drag started inside it — so focusing it is now a no-op, and a test that did it would
+ * assert against an ownership state the app can no longer be in. The press is the real
+ * path: `HelpPanel`'s own `onMouseDown` claims the macro region from it.
+ */
+function claimAssistantFocus(): void {
+  const root = document.getElementById("daintree-assistant-panel");
+  if (!root) throw new Error("the assistant panel is not rendered");
+  // A press on non-focusable panel chrome does two things in a browser, and both matter
+  // to what the reveal effect decides: it BLURS whatever child held focus, and it claims
+  // the macro region. jsdom performs neither for a synthetic event, so both are done by
+  // hand — the blur first, because "focus is parked on the panel rather than in the
+  // editor" is the precondition these tests are setting up.
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && root.contains(active)) active.blur();
+  root.dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
+  if (useMacroFocusStore.getState().focusedRegion !== "assistant") {
+    throw new Error(
+      `the press did not claim the macro region (got ${String(useMacroFocusStore.getState().focusedRegion)})`
+    );
+  }
 }
 
 function setPanel(id: string, spawnStatus = "ready", agentState = "idle"): void {
@@ -411,6 +450,19 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
+        // The native assistant panel mounts whenever no terminal-backed agent is
+        // chosen, so the HelpPanel harness has to model its IPC namespace. Without
+        // it the panel throws on subscribe and every test in the file fails for a
+        // reason that has nothing to do with what it asserts.
+        assistantHost: {
+          start: vi.fn().mockResolvedValue({ sessionId: "assistant-test-session" }),
+          send: vi.fn().mockResolvedValue({ delivered: true }),
+          stop: vi.fn().mockResolvedValue({ stopped: true }),
+          onEvent: vi.fn(() => () => {}),
+          onPeerPrompt: () => () => {},
+          onSequenceGap: vi.fn(() => () => {}),
+          onExit: vi.fn(() => () => {}),
+        },
         help: { getPinnedActionContext: vi.fn().mockResolvedValue({}) },
         app: { onViewRevealed: () => () => {} },
       },
@@ -504,7 +556,7 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       act(() => flushFrame());
       act(() => flushFrame());
       act(() => {
-        document.getElementById("daintree-assistant-panel")?.focus();
+        claimAssistantFocus();
       });
       clearFocusSpies();
 
@@ -530,7 +582,7 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       act(() => flushFrame());
       act(() => flushFrame());
       act(() => {
-        document.getElementById("daintree-assistant-panel")?.focus();
+        claimAssistantFocus();
       });
       clearFocusSpies();
 
@@ -602,7 +654,7 @@ describe("HelpPanel — reveal focus ownership (#11472)", () => {
       act(() => flushFrame());
       act(() => flushFrame());
       act(() => {
-        document.getElementById("daintree-assistant-panel")?.focus();
+        claimAssistantFocus();
       });
       clearFocusSpies();
 

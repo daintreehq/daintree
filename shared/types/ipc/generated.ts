@@ -8,6 +8,47 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: boolean;
   };
+  "agent-capabilities:get": {
+    args: [
+      request: {
+        agentId: string;
+        worktreePath: string;
+        id: string;
+        catalogRevision?: string | undefined;
+        offset?: number | undefined;
+        sourceRevision?: string | undefined;
+      },
+    ];
+    result: {
+      capability: {
+        id: string;
+        label: string;
+        description: string;
+        scope: string;
+        agentId: string;
+        kind: "command" | "skill" | "plugin" | "app";
+        insertText: string;
+        trigger: "/" | "$" | "@";
+        sourcePath?: string | undefined;
+        aliases?: string[] | undefined;
+      };
+      invocation: {
+        token: string;
+        channel: "interactive-command" | "prompt-reference";
+        startupSupport: "unverified";
+        requiresTask: boolean;
+        argumentHint?: string | undefined;
+      };
+      sourceRevision: string;
+      instructions: string;
+      truncated: boolean;
+      context: { agentId: string; worktreePath: string };
+      catalogRevision: string;
+      coverage: "partial" | "unsupported";
+      warnings: string[];
+      nextOffset?: number | undefined;
+    };
+  };
   "agent-capabilities:get-agent-ids": {
     args: [];
     result: string[];
@@ -31,6 +72,39 @@ export interface GeneratedIpcInvokeMap {
   "agent-capabilities:is-agent-enabled": {
     args: [agentId: string];
     result: boolean;
+  };
+  "agent-capabilities:search": {
+    args: [
+      request: {
+        agentId: string;
+        worktreePath: string;
+        query: string;
+        kinds?: ("command" | "skill" | "plugin" | "app")[] | undefined;
+        limit?: number | undefined;
+        cursor?: string | undefined;
+        refresh?: boolean | undefined;
+      },
+    ];
+    result: {
+      items: {
+        id: string;
+        label: string;
+        description: string;
+        scope: string;
+        agentId: string;
+        kind: "command" | "skill" | "plugin" | "app";
+        insertText: string;
+        trigger: "/" | "$" | "@";
+        sourcePath?: string | undefined;
+        aliases?: string[] | undefined;
+      }[];
+      total: number;
+      context: { agentId: string; worktreePath: string };
+      catalogRevision: string;
+      coverage: "partial" | "unsupported";
+      warnings: string[];
+      nextCursor?: string | undefined;
+    };
   };
   "agent-session:clear": {
     args: [payload: { worktreeId?: string | undefined }];
@@ -113,6 +187,34 @@ export interface GeneratedIpcInvokeMap {
   "artifact:save-to-file": {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
+  };
+  "assistant-host:discard-resume": {
+    args: [projectId: string, slot: number];
+    result: { discarded: boolean };
+  };
+  "assistant-host:list-resumable": {
+    args: [projectId: string];
+    result: import("./assistantHostIpc.js").AssistantHostResumableLane[];
+  };
+  "assistant-host:send": {
+    args: [raw: unknown];
+    result: { delivered: boolean };
+  };
+  "assistant-host:start": {
+    args: [payload: import("./assistantHostIpc.js").AssistantHostStartPayload];
+    result: import("./assistantHostIpc.js").AssistantHostStartResult;
+  };
+  "assistant-host:stop": {
+    args: [sessionId: string, attachmentId: string];
+    result: { stopped: boolean };
+  };
+  "assistant-timers:cancel": {
+    args: [projectId: string, timerId: string, slot?: number | undefined];
+    result: import("./assistantTimers.js").DaemonTimerCancelResult;
+  };
+  "assistant-timers:list": {
+    args: [projectId: string, slot?: number | undefined];
+    result: import("./assistantTimers.js").ProjectTimersResult;
   };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
@@ -755,7 +857,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "help-assistant:set-settings": {
     args: [patch: Partial<import("./api.js").HelpAssistantSettings>];
-    result: void;
+    result: import("./api.js").HelpAssistantSettings;
   };
   "help:get-folder-path": {
     args: [];
@@ -1896,7 +1998,7 @@ export interface GeneratedIpcInvokeMap {
               scratchName?: string | undefined;
               scratchPath?: string | undefined;
               dispatchSource?:
-                "user" | "menu" | "keybinding" | "agent" | "context-menu" | "plugin" | undefined;
+                "plugin" | "user" | "menu" | "keybinding" | "agent" | "context-menu" | undefined;
             }
           | undefined;
       },

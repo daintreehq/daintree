@@ -132,3 +132,18 @@ planning/
 # Perf results history: ~5k lines rewritten per canonical run, and the filename
 # carries a machine label. Local to whoever ran it.
 scripts/perf/history/*.json
+
+# Built Daintree Assistant engine binaries (scripts/build-assistant.mjs).
+# Compiled from the vendor/daintree-assistant submodule at build time; never committed.
+resources/assistant/
+
+# Declaration source maps are always tsc emit, never hand-written — a stray `tsc -b`
+# drops them (and their .d.ts) beside the source it compiled.
+*.d.ts.map
+
+# Screenshots, wherever a suite drops them. Regenerated on demand, never committed:
+# they are large, they change with every theme tweak, and they are evidence for a
+# person looking at them now rather than a fixture anything asserts on. The specs that
+# PRODUCE them live in e2e/screenshots/ and are tracked — only the .png output is not.
+e2e/screenshots/**/*.png
+e2e/screenshots/local/

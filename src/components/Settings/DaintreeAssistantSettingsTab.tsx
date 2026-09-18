@@ -7,16 +7,18 @@ import {
   ChevronRight,
   Copy,
   FolderOpen,
+  Info,
   KeyRound,
   Moon,
   RefreshCw,
-  ScrollText,
   ShieldAlert,
   Sliders,
   Wrench,
   X,
 } from "lucide-react";
 import * as semver from "semver";
+import { assistantPlatformSupport } from "@shared/config/assistantPlatform";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { DaintreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
@@ -43,7 +45,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
-import type { AgentModelConfig } from "@shared/config/agentRegistry";
+import { DAINTREE_ASSISTANT_AGENT_ID, type AgentModelConfig } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import type {
   HelpAssistantIdleHibernateMinutes,
@@ -73,7 +75,6 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   modelId: "",
   customArgs: "",
   idleHibernateMinutes: 5,
-  debugLogging: false,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -247,6 +248,24 @@ function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassC
   };
 }
 
+/**
+ * The values a patch's own keys held before it was applied.
+ *
+ * Used to undo exactly one failed write and nothing else — a blanket revert to a whole
+ * snapshot would drag a concurrent write's successful result back with it. `for...in`
+ * over a `Partial<T>` keeps the key typed, which `Object.keys` (widening to `string`)
+ * would not.
+ */
+function undoOf<T extends object>(patch: Partial<T>, previous: T): Partial<T> {
+  const undo: Partial<T> = {};
+  // Own keys only. `for...in` would also walk inherited enumerable properties, and an
+  // undo assembled from a prototype's keys is not an undo of this write.
+  for (const key in patch) {
+    if (Object.hasOwn(patch, key)) undo[key] = previous[key];
+  }
+  return undo;
+}
+
 export function DaintreeAssistantSettingsTab() {
   const [settings, setSettings] = useState<HelpAssistantSettings>(DEFAULT_SETTINGS);
   const [mcpStatus, setMcpStatus] = useState<McpStatusSnapshot | null>(null);
@@ -313,12 +332,22 @@ export function DaintreeAssistantSettingsTab() {
     required: string;
   } | null>(null);
 
+  /** Whether the built-in engine can run here — see `assistantPlatformSupport`. */
+  const platformSupport = assistantPlatformSupport();
+
   const agentOptions = useMemo(() => {
-    return getAssistantSupportedAgentIds().map((id) => ({
-      value: id,
-      label: getAgentConfig(id)?.name ?? id,
-    }));
-  }, []);
+    return (
+      getAssistantSupportedAgentIds()
+        // The built-in engine is not an option where it cannot run. Leaving it selectable
+        // — right above a banner saying it is unavailable — makes the banner read as
+        // advisory when it is not.
+        .filter((id) => platformSupport.supported || id !== DAINTREE_ASSISTANT_AGENT_ID)
+        .map((id) => ({
+          value: id,
+          label: getAgentConfig(id)?.name ?? id,
+        }))
+    );
+  }, [platformSupport.supported]);
   // Track the persisted choice exactly — falling back to a default would visually
   // suggest a value is set when it isn't, leaving onChange unfired and the help
   // panel still in its empty state. The placeholder makes "no selection" explicit.
@@ -639,18 +668,37 @@ export function DaintreeAssistantSettingsTab() {
     setShowClearAuditConfirm(false);
   };
 
+  /**
+   * Writes a patch, then reconciles against what main says is now stored.
+   *
+   * The optimistic update stays — a toggle that waits for an IPC round trip before
+   * moving reads as a broken toggle — but it is no longer the last word. Main answers
+   * with the settings as they ACTUALLY stand, which differs from the request whenever a
+   * field was rejected, sanitised, or canonicalised; taking the request as the outcome
+   * left the panel displaying a value nothing had saved. A failure reverts to the last
+   * state we know landed, so the switch goes back rather than lying.
+   */
   const persist = useCallback(
-    async (patch: Partial<HelpAssistantSettings>) => {
-      const next = { ...settings, ...patch } as HelpAssistantSettings;
-      setSettings(next);
+    async (patch: Partial<HelpAssistantSettings>): Promise<HelpAssistantSettings | null> => {
+      const previous = settings;
+      // Functional updates throughout, because two writes can be in flight at once —
+      // switching the environment and then flicking a toggle is an ordinary thing to
+      // do. Merging into a captured `settings` would make the second write's snapshot
+      // the last word, silently undoing whatever the first one had already landed.
+      setSettings((current) => ({ ...current, ...patch }) as HelpAssistantSettings);
       try {
-        await window.electron.helpAssistant.setSettings(patch);
+        const stored = await window.electron.helpAssistant.setSettings(patch);
+        setSettings(stored);
+        return stored;
       } catch (err) {
+        // Revert only the fields THIS write touched, back to what they were when it
+        // started. A blanket revert to the whole snapshot would drag a concurrent
+        // write's successful result back with it.
+        setSettings((current) => ({ ...current, ...undoOf(patch, previous) }));
         setError(formatErrorMessage(err, "Couldn't save assistant settings"));
         logError("Failed to save Daintree Assistant settings", err);
+        return null;
       }
-      // settings is intentionally read at call time via the closure; no stale risk
-      // because we set it synchronously above.
     },
     [settings]
   );
@@ -670,10 +718,6 @@ export function DaintreeAssistantSettingsTab() {
 
   const toggleBypassPermissions = () => {
     void persist({ bypassPermissions: !settings.bypassPermissions });
-  };
-
-  const toggleDebugLogging = () => {
-    void persist({ debugLogging: !settings.debugLogging });
   };
 
   const setRetention = (value: string) => {
@@ -734,10 +778,12 @@ export function DaintreeAssistantSettingsTab() {
   // still captures the in-flight value.
   useSettingsTabFlush(
     "assistant",
-    () => {
+    async () => {
       const pending = pendingCustomArgsRef.current;
       if (pending === null) return;
-      return persist({ customArgs: pending });
+      // The settings persist() answers with are of no use to a flush — the dialog is
+      // closing, and the only thing the caller needs is the write finishing.
+      await persist({ customArgs: pending });
     },
     isCustomArgsDirty
   );
@@ -808,6 +854,20 @@ export function DaintreeAssistantSettingsTab() {
           </p>
         </div>
       </header>
+
+      {/* Before everything else, because it changes what all of it means: the settings
+          below configure an engine that will not start here. The picker is on this page,
+          so no action is needed — the description already names what to do with it. */}
+      {!platformSupport.supported && (
+        <InlineStatusBanner
+          severity="warning"
+          icon={Info}
+          title={platformSupport.reason}
+          description={platformSupport.detail}
+          role="status"
+          ariaLive="polite"
+        />
+      )}
 
       {/* Agent */}
       <SettingsSection
@@ -918,18 +978,6 @@ export function DaintreeAssistantSettingsTab() {
           onChange={handleCustomArgsChange}
           disabled={loading}
         />
-        {preferredAgentId === "daintree-assistant" && (
-          <SettingsSwitchCard
-            variant="compact"
-            icon={ScrollText}
-            title="Debug logging"
-            subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs. Applies to new assistant sessions."
-            isEnabled={settings.debugLogging}
-            onChange={toggleDebugLogging}
-            ariaLabel="Enable Daintree Assistant debug logging"
-            disabled={loading}
-          />
-        )}
       </SettingsSection>
 
       {/* Behavior */}
@@ -1044,7 +1092,7 @@ export function DaintreeAssistantSettingsTab() {
 
         {/* The stored preference is agent-agnostic but its effect is not, so the
             card only renders once an agent with a real bypass mechanism is
-            selected — mirroring the agent-gated Debug logging switch above. */}
+            selected. */}
         {bypassCopy && (
           <SettingsSwitchCard
             variant="compact"

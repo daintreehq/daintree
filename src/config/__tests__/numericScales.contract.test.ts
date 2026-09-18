@@ -158,6 +158,13 @@ const EXCEPTIONS: {
   prefix?: boolean;
 }[] = [
   {
+    file: "src/components/AssistantPanel/assistant-panel.css",
+    match: "font-size: var(--assistant-font-size, 12px)",
+    count: 1,
+    reason:
+      "The TERMINAL's font size, not the app's. It is a live user setting pushed in as a custom property, and the 12px is only the shipped terminal default covering the first paint before hydration. Putting it on the app type scale would decouple the panel from the pane beside it, which is the one thing this surface exists not to do",
+  },
+  {
     file: "src/components/Setup/AgentSetupWizard.tsx",
     match: "text-[6px]",
     count: 3,

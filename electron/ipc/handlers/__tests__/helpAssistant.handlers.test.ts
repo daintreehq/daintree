@@ -85,7 +85,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelId: "",
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
     });
   });
 
@@ -108,7 +107,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelId: "",
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
     });
   });
 
@@ -159,6 +157,43 @@ describe("registerHelpAssistantHandlers", () => {
     expect(result).toMatchObject({ tier: "action", bypassPermissions: false });
   });
 
+  /**
+   * `setSettings` answers with the settings as they now stand, not with the patch.
+   *
+   * The two differ exactly when it matters — a rejected field, a sanitised value, a
+   * stored id this build canonicalises — and a `void` reply reported success for a write
+   * that did not happen. The renderer updates optimistically, so it had nothing to
+   * reconcile against and went on displaying a value nothing had saved.
+   */
+  describe("setSettings readback", () => {
+    it("answers with the stored settings, not with the patch it was handed", async () => {
+      // A stored value that is NOT the default, and a patch that does not mention it:
+      // the reply can only carry `tier: "system"` if it was read back from the store.
+      // An echo of the request would carry `docSearch` and nothing else.
+      storeMock.get.mockReturnValue({ tier: "system" });
+      registerHelpAssistantHandlers();
+      const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+      const result = (await handler(null, { docSearch: false })) as HelpAssistantSettings;
+      expect(result.tier).toBe("system");
+    });
+
+    it("does not echo a field it refused to write", async () => {
+      storeMock.get.mockReturnValue({ tier: "system" });
+      registerHelpAssistantHandlers();
+      const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
+
+      const result = (await handler(null, {
+        tier: "godmode" as unknown as HelpAssistantSettings["tier"],
+      })) as HelpAssistantSettings;
+
+      // Refused — and the answer says so by reporting what is still true, which is the
+      // whole reason this returns the settings rather than nothing.
+      expect(storeMock.set).not.toHaveBeenCalled();
+      expect(result.tier).toBe("system");
+    });
+  });
+
   it("persists each touched key under helpAssistant.<field>", async () => {
     registerHelpAssistantHandlers();
     const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
@@ -168,27 +203,6 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.docSearch", false);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.bypassPermissions", true);
     expect(storeMock.set).toHaveBeenCalledTimes(2);
-  });
-
-  it("persists debugLogging and rejects a non-boolean value", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { debugLogging: true });
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.debugLogging", true);
-
-    storeMock.set.mockClear();
-    await handler(null, { debugLogging: "yes" as unknown as boolean });
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("returns a stored debugLogging=true over the default", async () => {
-    storeMock.get.mockReturnValue({ debugLogging: true });
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-    const result = await handler(null);
-    expect(result).toMatchObject({ debugLogging: true });
   });
 
   it("persists tier when set to a valid value", async () => {
@@ -346,7 +360,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelId: "",
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
     });
   });
 

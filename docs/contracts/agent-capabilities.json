@@ -1,0 +1,191 @@
+[
+  {
+    "name": "agentCapabilities.search",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "query": { "type": "string", "maxLength": 256 },
+        "kinds": {
+          "description": "Restrict results to these kinds, up to 4. Omit for all.",
+          "maxItems": 4,
+          "type": "array",
+          "items": { "type": "string", "enum": ["command", "skill", "plugin", "app"] }
+        },
+        "limit": { "type": "integer", "minimum": 1, "maximum": 50 },
+        "cursor": { "type": "string", "maxLength": 512 },
+        "refresh": { "type": "boolean" },
+        "terminalId": {
+          "description": "Existing agent terminal. Use this alone to resolve its agent and directory.",
+          "type": "string",
+          "minLength": 1
+        },
+        "agentId": {
+          "description": "Exact agent ID, required with an explicit worktree when no terminal is given.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "worktreeId": { "type": "string", "minLength": 1 },
+        "worktreePath": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      },
+      "required": ["query"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "context": {
+          "type": "object",
+          "properties": {
+            "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "worktreePath": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          },
+          "required": ["agentId", "worktreePath"],
+          "additionalProperties": false
+        },
+        "catalogRevision": { "type": "string" },
+        "coverage": { "type": "string", "enum": ["partial", "unsupported"] },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "label": { "type": "string" },
+              "description": { "type": "string" },
+              "scope": { "type": "string" },
+              "agentId": { "type": "string" },
+              "sourcePath": { "type": "string" },
+              "kind": { "type": "string", "enum": ["command", "skill", "plugin", "app"] },
+              "insertText": { "type": "string" },
+              "trigger": { "type": "string", "enum": ["/", "$", "@"] },
+              "aliases": { "type": "array", "items": { "type": "string" } }
+            },
+            "required": [
+              "id",
+              "label",
+              "description",
+              "scope",
+              "agentId",
+              "kind",
+              "insertText",
+              "trigger"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "total": { "type": "integer", "minimum": -9007199254740991, "maximum": 9007199254740991 },
+        "nextCursor": { "type": "string" }
+      },
+      "required": ["context", "catalogRevision", "coverage", "warnings", "items", "total"],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "agentCapabilities.get",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 256 },
+        "catalogRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "offset": { "type": "integer", "minimum": 0, "maximum": 262144 },
+        "sourceRevision": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "terminalId": {
+          "description": "Existing agent terminal. Use this alone to resolve its agent and directory.",
+          "type": "string",
+          "minLength": 1
+        },
+        "agentId": {
+          "description": "Exact agent ID, required with an explicit worktree when no terminal is given.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "worktreeId": { "type": "string", "minLength": 1 },
+        "worktreePath": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      },
+      "required": ["id"],
+      "additionalProperties": false
+    },
+    "outputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "context": {
+          "type": "object",
+          "properties": {
+            "agentId": { "type": "string", "minLength": 1, "maxLength": 128 },
+            "worktreePath": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          },
+          "required": ["agentId", "worktreePath"],
+          "additionalProperties": false
+        },
+        "catalogRevision": { "type": "string" },
+        "coverage": { "type": "string", "enum": ["partial", "unsupported"] },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "capability": {
+          "type": "object",
+          "properties": {
+            "id": { "type": "string" },
+            "label": { "type": "string" },
+            "description": { "type": "string" },
+            "scope": { "type": "string" },
+            "agentId": { "type": "string" },
+            "sourcePath": { "type": "string" },
+            "kind": { "type": "string", "enum": ["command", "skill", "plugin", "app"] },
+            "insertText": { "type": "string" },
+            "trigger": { "type": "string", "enum": ["/", "$", "@"] },
+            "aliases": { "type": "array", "items": { "type": "string" } }
+          },
+          "required": [
+            "id",
+            "label",
+            "description",
+            "scope",
+            "agentId",
+            "kind",
+            "insertText",
+            "trigger"
+          ],
+          "additionalProperties": false
+        },
+        "invocation": {
+          "type": "object",
+          "properties": {
+            "token": { "type": "string" },
+            "channel": { "type": "string", "enum": ["interactive-command", "prompt-reference"] },
+            "argumentHint": { "type": "string" },
+            "startupSupport": { "type": "string", "const": "unverified" },
+            "requiresTask": { "type": "boolean" }
+          },
+          "required": ["token", "channel", "startupSupport", "requiresTask"],
+          "additionalProperties": false
+        },
+        "sourceRevision": { "type": "string" },
+        "instructions": { "type": "string" },
+        "nextOffset": {
+          "type": "integer",
+          "minimum": -9007199254740991,
+          "maximum": 9007199254740991
+        },
+        "truncated": { "type": "boolean" }
+      },
+      "required": [
+        "context",
+        "catalogRevision",
+        "coverage",
+        "warnings",
+        "capability",
+        "invocation",
+        "sourceRevision",
+        "instructions",
+        "truncated"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

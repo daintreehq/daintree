@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import type { HelpAssistantSettings } from "@shared/types/ipc/api";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -63,6 +64,27 @@ interface SettingsSelectStubOption {
   label: string;
 }
 
+/**
+ * A complete `HelpAssistantSettings`, as main would return it.
+ *
+ * Typed rather than a loose object literal so a field added to the interface surfaces
+ * here as a compile error. It matters because `persist` now replaces state WHOLESALE
+ * from main's answer — a mock missing a field would silently blank it, and the test
+ * would be exercising a shape the real handler never produces.
+ */
+function settingsFixture(): HelpAssistantSettings {
+  return {
+    docSearch: true,
+    daintreeControl: true,
+    tier: "action",
+    bypassPermissions: false,
+    auditRetention: 7,
+    customArgs: "",
+    modelId: "",
+    idleHibernateMinutes: 0,
+  };
+}
+
 vi.mock("../SettingsSelect", () => ({
   SettingsSelect: ({
     label,
@@ -70,17 +92,26 @@ vi.mock("../SettingsSelect", () => ({
     value,
     onValueChange,
     options,
+    disabled,
   }: {
     label: string;
     description?: React.ReactNode;
     value: string;
     onValueChange: (v: string) => void;
     options: SettingsSelectStubOption[];
+    disabled?: boolean;
   }) => (
     <label>
       {label}
       {description != null && <span>{description}</span>}
-      <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+      {/* `disabled` is forwarded deliberately: it is part of what the component
+          promises, and a stub that drops it makes every lock look untested. */}
+      <select
+        aria-label={label}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onValueChange(e.target.value)}
+      >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
@@ -213,16 +244,15 @@ function installApi(
   mcpServer: Partial<McpServerApi> = {},
   system: Partial<SystemApi> = {}
 ) {
+  const storedSettings = settingsFixture();
   const helpDefaults: HelpAssistantApi = {
-    getSettings: vi.fn().mockResolvedValue({
-      docSearch: true,
-      daintreeControl: true,
-      tier: "action" as const,
-      bypassPermissions: false,
-      auditRetention: 7,
-      customArgs: "",
+    getSettings: vi.fn().mockResolvedValue({ ...storedSettings }),
+    // Answers with the settings as they now stand, like the real handler: it reads
+    // back rather than echoing the patch, so a caller can tell what actually landed.
+    setSettings: vi.fn(async (patch: Record<string, unknown>) => {
+      Object.assign(storedSettings, patch);
+      return { ...storedSettings };
     }),
-    setSettings: vi.fn().mockResolvedValue(undefined),
     getLiveSessionStatus: vi
       .fn()
       .mockResolvedValue({ connected: false, tier: "workbench", activeGrants: [] }),
@@ -334,40 +364,6 @@ describe("DaintreeAssistantSettingsTab", () => {
 
     await waitFor(() => {
       expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({ docSearch: false });
-    });
-  });
-
-  it("hides the debug logging toggle unless the Daintree Assistant agent is selected", async () => {
-    helpPanelState.preferredAgentId = "claude";
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    expect(screen.queryByLabelText("Enable Daintree Assistant debug logging")).toBeNull();
-  });
-
-  it("shows the debug logging toggle for the Daintree Assistant agent and persists debugLogging=true", async () => {
-    helpPanelState.preferredAgentId = "daintree-assistant";
-    const { container } = render(
-      <SettingsValidationProvider>
-        <DaintreeAssistantSettingsTab />
-      </SettingsValidationProvider>
-    );
-    await waitForContent(container, "Search documentation");
-
-    const toggle = screen.getByLabelText("Enable Daintree Assistant debug logging");
-    await waitFor(() => {
-      expect(toggle.hasAttribute("disabled")).toBe(false);
-    });
-    fireEvent.click(toggle);
-
-    await waitFor(() => {
-      expect(window.electron.helpAssistant.setSettings).toHaveBeenCalledWith({
-        debugLogging: true,
-      });
     });
   });
 
