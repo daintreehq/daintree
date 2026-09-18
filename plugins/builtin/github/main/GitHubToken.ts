@@ -27,6 +27,6 @@ export async function getGitHubConfigAsync() {
   return GitHubAuth.getConfigAsync();
 }
 
-export async function validateGitHubToken(token: string) {
-  return GitHubAuth.validate(token);
+export async function validateGitHubToken(token: string, signal?: AbortSignal) {
+  return GitHubAuth.validate(token, signal);
 }

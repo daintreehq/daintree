@@ -1,11 +1,18 @@
 import { useState, useEffect, type ComponentType, type ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { Key, Check, AlertCircle, FlaskConical, ExternalLink } from "lucide-react";
+import { Key, Check, AlertCircle, FlaskConical, ExternalLink, Import } from "lucide-react";
 import { GitHubIcon } from "@/components/icons/brands";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import { actionService } from "@/services/ActionService";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import type { GitHubTokenValidation } from "../../shared/types.js";
+import { GITHUB_REQUIRED_SCOPES } from "../../shared/credentialScopes.js";
+import {
+  GitHubCliImportDetails,
+  describeImportFailure,
+  useGitHubCliAvailable,
+} from "./GitHubCliImport";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { useSettingsTabValidation } from "@/components/Settings/SettingsValidationRegistry";
 import { useTabLoad } from "@/hooks";
@@ -45,6 +52,25 @@ function ForgeSettingBlock({
 
 type ValidationResult = "success" | "error" | "test-success" | "test-error" | null;
 
+interface CliImportPreview {
+  account: string;
+  scopes: string[];
+  missingScopes: string[];
+}
+
+// The preview holds no token — main discards it after validating — so it is
+// safe to keep in component state until the user confirms or cancels.
+type CliImportState =
+  | { phase: "idle" }
+  | { phase: "previewing" }
+  | { phase: "confirming"; preview: CliImportPreview }
+  | { phase: "committing"; preview: CliImportPreview };
+
+const SCOPE_DESCRIPTIONS: Record<(typeof GITHUB_REQUIRED_SCOPES)[number], string> = {
+  repo: "Access repository data",
+  "read:org": "Read organization membership (for private repos)",
+};
+
 export function GitHubSettingsTab() {
   const {
     config: githubConfig,
@@ -58,6 +84,12 @@ export function GitHubSettingsTab() {
   const [isTesting, setIsTesting] = useState(false);
   const [validationResult, setValidationResult] = useState<ValidationResult>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const isGhAvailable = useGitHubCliAvailable();
+  const [cliImport, setCliImport] = useState<CliImportState>({ phase: "idle" });
+  // Unlike validation feedback this doesn't clear on a timer: it carries the
+  // fix (e.g. "Run gh auth login"), which a user may still be reading.
+  const [cliImportError, setCliImportError] = useState<string | null>(null);
+  const isImporting = cliImport.phase !== "idle";
 
   // initialize() is singleflight via the store's `initPromise` — calling it
   // again on retry returns the hung promise. refresh() always issues a fresh
@@ -96,7 +128,10 @@ export function GitHubSettingsTab() {
       if (validation.valid) {
         setGithubToken("");
         setValidationResult("success");
-        updateConfig({ hasToken: true });
+        updateConfig({
+          hasToken: true,
+          ...(validation.account ? { username: validation.account } : {}),
+        });
         void actionService.dispatch("worktree.refresh", undefined, {
           source: "user",
         });
@@ -163,11 +198,73 @@ export function GitHubSettingsTab() {
     void actionService.dispatch(
       "system.openExternal",
       {
-        url: "https://github.com/settings/tokens/new?scopes=repo,read:org&description=Daintree",
+        url: `https://github.com/settings/tokens/new?scopes=${GITHUB_REQUIRED_SCOPES.join(",")}&description=Daintree`,
       },
       { source: "user" }
     );
   };
+
+  // Reading gh's token can raise an OS keychain prompt, so the preview runs
+  // only from this click — never on mount.
+  const handlePreviewCliImport = async () => {
+    setCliImportError(null);
+    setCliImport({ phase: "previewing" });
+    try {
+      const preview = await window.electron.forge.previewCredentialImport(
+        BUILTIN_GITHUB_PROVIDER_ID
+      );
+      if (preview.unavailable) {
+        setCliImport({ phase: "idle" });
+        setCliImportError(describeImportFailure(preview.reason));
+        return;
+      }
+      setCliImport({
+        phase: "confirming",
+        preview: {
+          account: preview.account,
+          scopes: preview.scopes,
+          missingScopes: preview.missingScopes,
+        },
+      });
+    } catch (error) {
+      logError("Failed to preview GitHub CLI token import", error);
+      setCliImport({ phase: "idle" });
+      setCliImportError("Couldn't read the GitHub CLI token.");
+    }
+  };
+
+  const handleConfirmCliImport = async () => {
+    if (cliImport.phase !== "confirming") return;
+    const { preview } = cliImport;
+    setCliImport({ phase: "committing", preview });
+    try {
+      const result = await window.electron.forge.commitCredentialImport(
+        BUILTIN_GITHUB_PROVIDER_ID,
+        { account: preview.account }
+      );
+      setCliImport({ phase: "idle" });
+      if (result.unavailable) {
+        setCliImportError(describeImportFailure(result.reason));
+        return;
+      }
+      // An imported token is a saved token: same confirmation, and the
+      // connected line above names the account it belongs to.
+      setGithubToken("");
+      setErrorMessage(null);
+      setValidationResult("success");
+      updateConfig({ hasToken: true, username: result.account, scopes: result.scopes });
+      void actionService.dispatch("worktree.refresh", undefined, {
+        source: "user",
+      });
+    } catch (error) {
+      logError("Failed to import GitHub CLI token", error);
+      setCliImport({ phase: "idle" });
+      setCliImportError("Couldn't save the imported token.");
+    }
+  };
+
+  const cliImportPreview =
+    cliImport.phase === "confirming" || cliImport.phase === "committing" ? cliImport.preview : null;
 
   useSettingsTabValidation("code-forge", Boolean(loadError));
 
@@ -179,12 +276,14 @@ export function GitHubSettingsTab() {
         id="github-token"
         icon={Key}
         title="Personal access token"
-        description="Used for repository statistics, issue/PR detection, and linking worktrees to GitHub. Eliminates the need for the gh CLI."
+        description="Used for repository statistics, issue/PR detection, and linking worktrees to GitHub. Daintree keeps its own copy, so forge features don't depend on the gh CLI."
       >
         {githubConfig?.hasToken && (
           <div className="flex items-center gap-1 text-xs text-text-secondary">
             <Check className="w-3 h-3" />
-            GitHub connected
+            {githubConfig.username
+              ? `GitHub connected as @${githubConfig.username}`
+              : "GitHub connected"}
           </div>
         )}
 
@@ -199,11 +298,11 @@ export function GitHubSettingsTab() {
             aria-label="GitHub personal access token"
             autoComplete="new-password"
             className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
-            disabled={isValidating || isTesting}
+            disabled={isValidating || isTesting || isImporting}
           />
           <Button
             onClick={handleTestToken}
-            disabled={isValidating || !githubToken.trim()}
+            disabled={isValidating || isImporting || !githubToken.trim()}
             loading={isTesting}
             variant="outline"
             size="sm"
@@ -215,7 +314,7 @@ export function GitHubSettingsTab() {
           </Button>
           <Button
             onClick={handleSaveToken}
-            disabled={isTesting || !githubToken.trim()}
+            disabled={isTesting || isImporting || !githubToken.trim()}
             loading={isValidating}
             size="sm"
             aria-label="Save token"
@@ -226,6 +325,7 @@ export function GitHubSettingsTab() {
           {githubConfig?.hasToken && (
             <Button
               onClick={handleClearToken}
+              disabled={isImporting}
               variant="outline"
               size="sm"
               aria-label="Clear token"
@@ -264,32 +364,79 @@ export function GitHubSettingsTab() {
 
       <ForgeSettingBlock
         icon={GitHubIcon}
-        title="Create a new token"
-        description="To create a personal access token with the required scopes, click the button below. This will open GitHub in your browser."
+        title={isGhAvailable ? "Get a token" : "Create a new token"}
+        description={
+          isGhAvailable
+            ? "Import the token the GitHub CLI already holds, or create one with the required scopes on GitHub."
+            : "To create a personal access token with the required scopes, click the button below. This will open GitHub in your browser."
+        }
       >
-        <Button
-          onClick={openGitHubTokenPage}
-          variant="outline"
-          size="sm"
-          className="text-text-primary border-border-default hover:bg-border-default"
-        >
-          <ExternalLink />
-          Create token on GitHub
-        </Button>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            onClick={openGitHubTokenPage}
+            variant="outline"
+            size="sm"
+            className="text-text-primary border-border-default hover:bg-border-default"
+          >
+            <ExternalLink />
+            Create token on GitHub
+          </Button>
+          {isGhAvailable && (
+            <Button
+              onClick={handlePreviewCliImport}
+              disabled={isValidating || isTesting || cliImport.phase === "committing"}
+              loading={cliImport.phase === "previewing"}
+              variant="outline"
+              size="sm"
+              className="text-text-primary border-border-default hover:bg-border-default"
+            >
+              <Import aria-hidden="true" />
+              Import from GitHub CLI
+            </Button>
+          )}
+        </div>
+        {cliImportError && (
+          <p className="text-xs text-status-error flex items-start gap-1 select-text" role="alert">
+            <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+            {cliImportError}
+          </p>
+        )}
         <div className="space-y-1">
           <p className="text-xs text-text-secondary">Required scopes:</p>
           <ul className="text-xs text-text-secondary list-disc list-inside space-y-0.5">
-            <li>
-              <code className="text-text-secondary bg-surface-canvas px-1 rounded">repo</code> —
-              Access repository data
-            </li>
-            <li>
-              <code className="text-text-secondary bg-surface-canvas px-1 rounded">read:org</code> —
-              Read organization membership (for private repos)
-            </li>
+            {GITHUB_REQUIRED_SCOPES.map((scope) => (
+              <li key={scope}>
+                <code className="text-text-secondary bg-surface-canvas px-1 rounded-[var(--radius-sm)]">
+                  {scope}
+                </code>{" "}
+                — {SCOPE_DESCRIPTIONS[scope]}
+              </li>
+            ))}
           </ul>
         </div>
       </ForgeSettingBlock>
+
+      <ConfirmDialog
+        isOpen={cliImportPreview !== null}
+        onClose={
+          cliImport.phase === "committing" ? undefined : () => setCliImport({ phase: "idle" })
+        }
+        title={`Import token for @${cliImportPreview?.account ?? ""}?`}
+        description="Daintree saves its own copy of the token the GitHub CLI holds for this account, stored in plain text in Daintree's settings."
+        confirmLabel="Import token"
+        onConfirm={handleConfirmCliImport}
+        isConfirmLoading={cliImport.phase === "committing"}
+        variant="default"
+        zIndex="nested"
+      >
+        {cliImportPreview && (
+          <GitHubCliImportDetails
+            scopes={cliImportPreview.scopes}
+            missingScopes={cliImportPreview.missingScopes}
+            replacesToken={Boolean(githubConfig?.hasToken)}
+          />
+        )}
+      </ConfirmDialog>
     </div>
   );
 }

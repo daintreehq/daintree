@@ -72,6 +72,49 @@ describe("GitHubAuth", () => {
     expect(result.error).toBe("Cannot reach GitHub. Check your internet connection.");
   });
 
+  it("aborts the /user request when the caller's signal aborts", async () => {
+    const fetchMock = vi.fn(
+      (_url: string, init: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener("abort", () =>
+            reject(new DOMException("This operation was aborted", "AbortError"))
+          );
+        })
+    );
+    (globalThis as unknown as { fetch: Mock }).fetch = fetchMock;
+    const controller = new AbortController();
+
+    const pending = GitHubAuth.validate(
+      "ghp_validtoken012345678901234567890123456789",
+      controller.signal
+    );
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalled());
+    controller.abort();
+    const result = await pending;
+
+    expect(result.valid).toBe(false);
+  });
+
+  it("returns the login and scopes of a valid token", async () => {
+    (globalThis as unknown as { fetch: Mock }).fetch = vi.fn().mockResolvedValue(
+      new Response('{"login":"octocat"}', {
+        status: 200,
+        headers: { "x-oauth-scopes": "repo, read:org" },
+      })
+    );
+
+    const result = await GitHubAuth.validate(
+      "gho_validtoken012345678901234567890123456789",
+      new AbortController().signal
+    );
+
+    expect(result).toMatchObject({
+      valid: true,
+      username: "octocat",
+      scopes: ["repo", "read:org"],
+    });
+  });
+
   it("returns 'Invalid or expired token' for a 401 with 'Bad credentials' in the body", async () => {
     (globalThis as unknown as { fetch: Mock }).fetch = vi
       .fn()

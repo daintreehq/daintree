@@ -18,6 +18,7 @@ vi.mock("../GitHubAuth.js", () => ({
     // Read paths that must not coalesce across a credential switch fold the
     // token version into their single-flight key.
     getTokenVersion: vi.fn(() => 0),
+    validate: vi.fn(),
   },
   GITHUB_API_TIMEOUT_MS: 5000,
 }));
@@ -2209,6 +2210,59 @@ describe("getRepoActivityProbe", () => {
   it("throws when no GitHub token is configured", async () => {
     vi.mocked(GitHubAuth.getToken).mockReturnValueOnce(undefined);
     await expect(githubForgeProvider.getRepoActivityProbe!(repo)).rejects.toThrow();
+  });
+});
+
+describe("validation account", () => {
+  it("projects the validated login as the account", async () => {
+    vi.mocked(GitHubAuth.validate).mockResolvedValueOnce({
+      valid: true,
+      scopes: ["repo"],
+      username: "octocat",
+      avatarUrl: "https://example.com/a.png",
+    });
+
+    await expect(githubForgeProvider.validateToken(" gho_token ")).resolves.toEqual({
+      valid: true,
+      scopes: ["repo"],
+      expiresAt: null,
+      account: "octocat",
+    });
+    expect(GitHubAuth.validate).toHaveBeenCalledWith("gho_token", undefined);
+  });
+
+  it("carries no account for a rejected token", async () => {
+    vi.mocked(GitHubAuth.validate).mockResolvedValueOnce({
+      valid: false,
+      scopes: [],
+      error: "Invalid or expired token",
+    });
+
+    await expect(githubForgeProvider.validateToken("gho_token")).resolves.toEqual({
+      valid: false,
+      scopes: [],
+      expiresAt: null,
+      error: "Invalid or expired token",
+    });
+  });
+
+  it("projects the account from stored-credential validation too", async () => {
+    vi.mocked(GitHubAuth.validate).mockResolvedValueOnce({
+      valid: true,
+      scopes: [],
+      username: "octocat",
+    });
+
+    await expect(githubForgeProvider.validateCredentials()).resolves.toMatchObject({
+      valid: true,
+      account: "octocat",
+    });
+  });
+
+  it("exposes the gh credential-import capability", () => {
+    expect(githubForgeProvider.credentialImport).toBeTruthy();
+    expect(typeof githubForgeProvider.credentialImport?.preview).toBe("function");
+    expect(typeof githubForgeProvider.credentialImport?.commit).toBe("function");
   });
 });
 

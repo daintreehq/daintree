@@ -1557,7 +1557,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   };
   // milestones is generated — see GeneratedElectronAPI.
   // shortcutHints is generated — see GeneratedElectronAPI.
-  forge: {
+  // previewCredentialImport / commitCredentialImport are generated.
+  forge: GeneratedElectronAPI["forge"] & {
     /** Read the persisted forge settings (global default provider id). */
     getSettings(): Promise<{ defaultProviderId: string | null }>;
     /**

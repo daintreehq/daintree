@@ -325,7 +325,11 @@ export class GitHubAuth {
     });
   }
 
-  static async validate(token: string): Promise<GitHubTokenValidation> {
+  /**
+   * Validate a token against `GET /user`. `signal` lets a caller abandon the
+   * check early; the built-in timeout still applies either way.
+   */
+  static async validate(token: string, signal?: AbortSignal): Promise<GitHubTokenValidation> {
     if (!token || token.trim() === "") {
       return { valid: false, scopes: [], error: "Token is empty" };
     }
@@ -348,7 +352,9 @@ export class GitHubAuth {
           "User-Agent": "Daintree-Electron",
           "X-GitHub-Api-Version": "2022-11-28",
         },
-        signal: AbortSignal.timeout(GITHUB_AUTH_TIMEOUT_MS),
+        signal: signal
+          ? AbortSignal.any([signal, AbortSignal.timeout(GITHUB_AUTH_TIMEOUT_MS)])
+          : AbortSignal.timeout(GITHUB_AUTH_TIMEOUT_MS),
         // Validation must succeed even when a previous token left the
         // circuit-breaker in a blocked state — otherwise the user can never
         // recover by entering a new token. The semaphore still applies so

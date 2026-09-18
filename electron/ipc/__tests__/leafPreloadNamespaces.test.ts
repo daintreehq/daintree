@@ -46,6 +46,10 @@ import {
   FORGE_RECOMMENDATION_METHOD_CHANNELS,
   buildForgeRecommendationPreloadBindings,
 } from "../handlers/forgeRecommendation.preload.js";
+import {
+  FORGE_CREDENTIAL_IMPORT_METHOD_CHANNELS,
+  buildForgeCredentialImportPreloadBindings,
+} from "../handlers/forgeCredentialImport.preload.js";
 import { CLI_METHOD_CHANNELS, buildCliPreloadBindings } from "../handlers/cli.preload.js";
 import { GEMINI_METHOD_CHANNELS, buildGeminiPreloadBindings } from "../handlers/gemini.preload.js";
 import {
@@ -194,6 +198,15 @@ describe("leaf preload namespace bindings", () => {
       );
       expect(FORGE_RECOMMENDATION_METHOD_CHANNELS.markDismissed).toBe(
         CHANNELS.FORGE_RECOMMENDATION_MARK_DISMISSED
+      );
+    });
+
+    it("forgeCredentialImport matches", () => {
+      expect(FORGE_CREDENTIAL_IMPORT_METHOD_CHANNELS.previewCredentialImport).toBe(
+        CHANNELS.FORGE_PREVIEW_CREDENTIAL_IMPORT
+      );
+      expect(FORGE_CREDENTIAL_IMPORT_METHOD_CHANNELS.commitCredentialImport).toBe(
+        CHANNELS.FORGE_COMMIT_CREDENTIAL_IMPORT
       );
     });
 
@@ -645,6 +658,37 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("forge-recommendation:mark-dismissed", "/tmp/project");
+    });
+  });
+
+  describe("forgeCredentialImport", () => {
+    it("routes previewCredentialImport(providerId) to forge:preview-credential-import", async () => {
+      const invoke = vi.fn().mockResolvedValue({ unavailable: true, reason: "not-signed-in" });
+      const bindings = buildForgeCredentialImportPreloadBindings(invoke);
+
+      await bindings.previewCredentialImport("daintree.github.github");
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith(
+        "forge:preview-credential-import",
+        "daintree.github.github"
+      );
+    });
+
+    it("routes commitCredentialImport(providerId, expected) to forge:commit-credential-import", async () => {
+      const invoke = vi
+        .fn()
+        .mockResolvedValue({ unavailable: false, account: "octocat", scopes: [] });
+      const bindings = buildForgeCredentialImportPreloadBindings(invoke);
+
+      await bindings.commitCredentialImport("daintree.github.github", { account: "octocat" });
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith(
+        "forge:commit-credential-import",
+        "daintree.github.github",
+        { account: "octocat" }
+      );
     });
   });
 

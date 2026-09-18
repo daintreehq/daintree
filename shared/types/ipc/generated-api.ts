@@ -222,6 +222,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["fleet:unsnooze-run"]["args"]
     ): Promise<IpcInvokeMap["fleet:unsnooze-run"]["result"]>;
   };
+  forge: {
+    commitCredentialImport(
+      ...args: IpcInvokeMap["forge:commit-credential-import"]["args"]
+    ): Promise<IpcInvokeMap["forge:commit-credential-import"]["result"]>;
+    previewCredentialImport(
+      ...args: IpcInvokeMap["forge:preview-credential-import"]["args"]
+    ): Promise<IpcInvokeMap["forge:preview-credential-import"]["result"]>;
+  };
   forgeAudit: {
     clearLog(
       ...args: IpcInvokeMap["forge-audit:clear-log"]["args"]

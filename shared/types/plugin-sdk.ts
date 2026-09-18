@@ -208,6 +208,12 @@ export type {
   CheckRun,
   CheckRunStatus,
   CheckRunConclusion,
+  CredentialImportCapability,
+  CredentialImportCandidate,
+  CredentialImportExpected,
+  CredentialImportFailureReason,
+  CredentialImportPreview,
+  CredentialImportUnavailable,
 } from "./forge.js";
 
 // ── Plugin-managed process stream events ────────────────────────────
