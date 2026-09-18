@@ -200,6 +200,13 @@ describe("getWorktreeType", () => {
     const worktree = createMockWorktree({ branch: "FEATURE/uppercase" });
     expect(getWorktreeType(worktree)).toBe("feature");
   });
+
+  it.each(["constructor-injection", "Constructor/refactor", "__proto__/x"])(
+    "returns 'other' for a prefix that names an Object.prototype member (%s)",
+    (branch) => {
+      expect(getWorktreeType(createMockWorktree({ branch }))).toBe("other");
+    }
+  );
 });
 
 describe("compareWorktreeNames", () => {
@@ -1932,6 +1939,12 @@ describe("orderWorktreesLikeSidebar", () => {
     expect(ids(input)).toEqual(ids(all));
     expect(pins).toEqual(pinnedWorktrees);
     expect(manual).toEqual(manualOrder);
+  });
+
+  it("keeps a worktree whose branch prefix names an Object.prototype member when grouping", () => {
+    const inherited = wt("c1", "constructor-injection", "constructor-injection", 90, 90);
+    const result = orderWorktreesLikeSidebar([main, featureTwo, inherited], prefs("alpha", true));
+    expect(ids(result)).toEqual(["m", "f2", "c1"]);
   });
 
   it("keeps main first when main is also reported from outside the project", () => {

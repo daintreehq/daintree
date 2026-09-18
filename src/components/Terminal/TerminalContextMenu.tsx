@@ -5,7 +5,8 @@ import { type PanelLocation } from "@/types";
 import { usePanelStore } from "@/store";
 import { useVoiceRecordingStore } from "@/store/voiceRecordingStore";
 
-import { useWorktrees } from "@/hooks/useWorktrees";
+import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";
+import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import {
@@ -113,7 +114,7 @@ export function TerminalContextMenu({
     }
   }, [maximizeTarget, terminalId, getPanelGroup]);
 
-  const { worktrees } = useWorktrees();
+  const worktrees = useSidebarWorktreeOrder();
 
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
@@ -595,8 +596,6 @@ export function TerminalContextMenu({
           <ContextMenuSubContent>
             {worktrees.map((wt) => {
               const isCurrent = wt.id === terminal.worktreeId;
-              const label =
-                (wt.isMainWorktree ? wt.name : wt.branch || wt.name).trim() || "Untitled worktree";
               return (
                 <ContextMenuItem
                   key={wt.id}
@@ -604,7 +603,7 @@ export function TerminalContextMenu({
                   onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
                 >
                   <FolderGit2 className={ICON_CLASS} />
-                  {label}
+                  {getWorktreeHeadline(wt).label}
                 </ContextMenuItem>
               );
             })}
