@@ -109,7 +109,15 @@ describe("OutputProgressTracker", () => {
     const tracker = new OutputProgressTracker();
     tracker.observe(["● Bash(npm test)", "  ⎿  Running… (59s)"], 0);
     expect(tracker.observe(["● Bash(npm test)", "  ⎿  Running… (1m 0s)"], 1_000)).toBe(false);
-    expect(tracker.observe(["● Bash(npm test)", "  ⎿  Running… (1:01)"], 2_000)).toBe(false);
+  });
+
+  it("ignores a working footer that a narrow pane wrapped across two rows", () => {
+    // Neither row holds the whole interrupt hint or a closed pair of parens.
+    const tracker = new OutputProgressTracker();
+    tracker.observe([...answer, "✻ Thinking… (2m 39s · esc to i", "nterrupt)"], 0);
+    expect(tracker.observe([...answer, "✽ Thinking… (2m 40s · esc to i", "nterrupt)"], 1_000)).toBe(
+      false
+    );
   });
 
   it("keeps durations and token counts in ordinary output", () => {
@@ -125,22 +133,27 @@ describe("OutputProgressTracker", () => {
     expect(tracker.observe([...answer, "░░░░██░░░░ Waiting for claude-sonnet"], 1_000)).toBe(false);
   });
 
-  it("sees an indentation-only change", () => {
+  it("ignores a right-aligned counter re-padding its row", () => {
     const tracker = new OutputProgressTracker();
-    tracker.observe(["def f():", "return 1"], 0);
-    expect(tracker.observe(["def f():", "    return 1"], 200)).toBe(true);
+    tracker.observe(["      Usage (99 tokens)"], 0);
+    expect(tracker.observe(["     Usage (100 tokens)"], 1_000)).toBe(false);
   });
 });
 
 describe("normalizeProgressLines", () => {
-  it("drops hinted status rows, masks tickers inside parentheses, and collapses interior spacing", () => {
+  it("drops hinted status rows, masks tickers only inside parentheses, and collapses spacing", () => {
     expect(
       normalizeProgressLines([
         "✻ Thinking… (2m 39s · esc to interrupt)",
         "  ⎿  Running…   (1h2m3s · ↓ 12.5k tokens)  ",
         "Used 12.5k tokens in v1.2m",
+        "Release (v1.2m) at (2025-01-01 12:34)",
         "   ",
       ])
-    ).toEqual(["  ⎿ Running… (# ~ ↓ #)", "Used 12.5k tokens in v1.2m"]);
+    ).toEqual([
+      "⎿ Running… (# ~ ↓ #)",
+      "Used 12.5k tokens in v1.2m",
+      "Release (v1.2m) at (2025-01-01 12:34)",
+    ]);
   });
 });

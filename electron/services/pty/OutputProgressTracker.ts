@@ -30,12 +30,14 @@ const STATUS_LINE_PATTERNS: readonly RegExp[] = [
 const SPINNER_GLYPHS = /[⠀-⣿·*✢✳✶✻✽✼✾◐◓◑◒\u{1F311}-\u{1F318}]/gu;
 
 // Agents put their tickers in parentheses — "(12s)", "(2m 39s · ↓ 1.2k
-// tokens)", "(0:42)" — so counters are only masked there, and a whole elapsed
-// run collapses to one placeholder so "59s" → "1m 0s" reads as unchanged.
-// Numbers in ordinary output are left alone.
-const PARENTHESIZED = /\([^()\n]*\)/g;
+// tokens)" — so counters are only masked there, and a whole elapsed run
+// collapses to one placeholder so "59s" → "1m 0s" reads as unchanged. Numbers
+// in ordinary output are left alone. A span left open at either edge of a row
+// counts too: a narrow pane wraps "(2m 39s · esc to interrupt)" across rows,
+// and neither half then holds a full hint or a closed pair.
+const PARENTHESIZED = /\([^()]*(?:\)|$)|^[^()]*\)/g;
 const COUNTER_SPANS =
-  /(?<![\w.])(?:\d+(?:\.\d+)?\s?(?:ms|[hms])(?![a-z])(?:\s*\d+(?:\.\d+)?\s?(?:ms|[hms])(?![a-z]))*|\d+(?::\d{2})+|\d+(?:[.,]\d+)?\s*k?\s*tokens?\b)/giu;
+  /(?<![\w.])(?:\d+(?:\.\d+)?\s?(?:ms|[hms])(?![a-z])(?:\s?\d+(?:\.\d+)?\s?(?:ms|[hms])(?![a-z]))*|\d+(?:[.,]\d+)?\s?k?\s?tokens?\b)/giu;
 
 const EMPTY_FINGERPRINT = hashStrings([]);
 
@@ -50,15 +52,14 @@ export function normalizeProgressLines(lines: readonly string[]): string[] {
   const normalized: string[] = [];
   for (const line of lines) {
     if (isStatusLine(line)) continue;
+    // Spacing goes first: footers re-pad as a counter inside them changes
+    // width, and a right-aligned row shifts its leading padding the same way.
     const masked = line
+      .replace(/\s+/g, " ")
+      .trim()
       .replace(SPINNER_GLYPHS, "~")
-      .replace(PARENTHESIZED, (span) => span.replace(COUNTER_SPANS, "#"))
-      .trimEnd();
-    if (masked.trim() === "") continue;
-    // Right-aligned footers re-pad as their contents change width, so interior
-    // runs collapse; leading indentation is content and is kept.
-    const indent = /^\s*/.exec(masked)?.[0] ?? "";
-    normalized.push(indent + masked.slice(indent.length).replace(/\s+/g, " "));
+      .replace(PARENTHESIZED, (span) => span.replace(COUNTER_SPANS, "#"));
+    if (masked !== "") normalized.push(masked);
   }
   return normalized;
 }

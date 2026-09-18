@@ -839,16 +839,39 @@ describe("lastOutputChangeAt on wait results (#12428)", () => {
   it("rejects as cancelled when the request is aborted during the read", async () => {
     const { terminalId, agentId } = nextIds();
     seedWorkingAgent(terminalId, agentId);
-    installPtyClient(() => new Promise(() => {}));
+    let readStarted!: () => void;
+    const reading = new Promise<void>((resolve) => (readStarted = resolve));
+    installPtyClient(() => {
+      readStarted();
+      return new Promise(() => {});
+    });
     const controller = new AbortController();
 
-    const started = Date.now();
     const pending = handleWaitUntilIdle({ terminalId }, controller.signal, { maxTimeoutMs: 20 });
-    // Past the 20ms wait, inside the lookup ceiling.
-    setTimeout(() => controller.abort(), 60);
+    await reading;
+    controller.abort();
+
+    // Without the abort this would resolve successfully at the lookup ceiling.
+    await expect(pending).rejects.toMatchObject({ message: expect.stringMatching(/cancelled/) });
+  });
+
+  it("rejects as cancelled when the abort lands while the wait is settling", async () => {
+    // The wait has already picked its answer when the abort arrives, so the
+    // read's own listener would never fire; it must not report success.
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    const fake = installPtyClient(async () => ({ lastOutputChangeAt: 1 }));
+    const controller = new AbortController();
+
+    const pending = handleWaitUntilIdle({ terminalId }, controller.signal, {
+      maxTimeoutMs: 5_000,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(terminalId, agentId);
+    controller.abort();
 
     await expect(pending).rejects.toMatchObject({ message: expect.stringMatching(/cancelled/) });
-    expect(Date.now() - started).toBeLessThan(OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS);
+    expect(fake.getTerminalAsync).not.toHaveBeenCalled();
   });
 
   it("keeps the wait's answer when the pty-host read fails", async () => {

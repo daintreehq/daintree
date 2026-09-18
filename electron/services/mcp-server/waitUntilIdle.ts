@@ -43,6 +43,9 @@ async function readOutputProgress(
   signal: AbortSignal,
   workspaceId: string | undefined
 ): Promise<Map<string, number>> {
+  // Checked before any early return: an abort that landed while the wait was
+  // settling never fires the listener below.
+  throwIfCancelled(signal);
   const progress = new Map<string, number>();
   const ptyClient = getPtyClient();
   if (!ptyClient) return progress;
@@ -79,12 +82,16 @@ async function readOutputProgress(
     clearTimeout(deadlineHandle);
     if (abortListener) signal.removeEventListener("abort", abortListener);
   }
-  // Same outcome as a cancel mid-wait: the caller gave up, so nothing it would
-  // read as a successful answer goes back.
+  throwIfCancelled(signal);
+  return progress;
+}
+
+// Same outcome as a cancel mid-wait: the caller gave up, so nothing it would
+// read as a successful answer goes back.
+function throwIfCancelled(signal: AbortSignal): void {
   if (signal.aborted) {
     throw new McpError(ErrorCode.RequestTimeout, "Request was cancelled.");
   }
-  return progress;
 }
 
 /**

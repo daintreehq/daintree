@@ -262,6 +262,25 @@ describe("TerminalProcess output progress, in-thread (#12428)", () => {
     terminal.dispose();
   });
 
+  it("baselines the reflowed screen on resize even when no output follows it", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(`${"wrapped ".repeat(8)}\r\n`);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamped = terminal.getPublicState().lastOutputChangeAt;
+    expect(stamped).toBeDefined();
+
+    // Nothing is written until the quiet window has long closed, so only the
+    // resize itself can have sampled the rewrapped frame.
+    terminal.resize(40, 24);
+    await vi.advanceTimersByTimeAsync(3_000);
+    ptyOnDataCallback!(spinnerFrame("✻", 1));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(stamped);
+    terminal.dispose();
+  });
+
   it("settles a pending sample at dispose instead of leaving it armed", async () => {
     // A preserved exit drains its final output and then releases the mirror;
     // that frame must be observed before the mirror goes, not dropped with it.
