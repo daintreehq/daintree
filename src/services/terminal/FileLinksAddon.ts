@@ -150,22 +150,47 @@ interface ScopedDirCandidate extends DirCandidate {
   relativePath: string;
 }
 
-/** A soft-wrapped run of buffer rows, rejoined into the line the user sees. */
+/** A wrapped run of buffer rows, rejoined into the line the user sees. */
 interface LogicalLine {
   text: string;
   /** 0-based buffer index of the first row in the window. */
   startRow: number;
   /** Where each row's text begins in `text`, indexed from `startRow`. */
   rowOffsets: number[];
+  /**
+   * The buffer column each row's text begins at, indexed from `startRow`.
+   * Zero except past an app's own hard wrap, whose hanging indent is layout
+   * rather than content and is left out of `text`.
+   */
+  rowColumns: number[];
   /** No real line start ended the window — `^` is a lie at `text`'s start. */
   clippedStart: boolean;
   /** No real line end ended the window — `$` is a lie at `text`'s end. */
   clippedEnd: boolean;
 }
 
+/** What the rejoin needs from a buffer row. */
+interface RowSnapshot {
+  /** Untrimmed, so a row's length is its width in cells for ASCII content. */
+  text: string;
+  isWrapped: boolean;
+}
+
+type RowReader = (row: number) => RowSnapshot | undefined;
+
 // Matches xterm's own web-link provider: a rejoin budget that keeps a pathological
 // unwrapped paste from turning every hover into a megabyte of string building.
 const MAX_LOGICAL_LINE_LENGTH = 2048;
+
+// A token longer than this many rows isn't a path an agent printed, and
+// bounding the chain walk keeps a wall of full-width output cheap to hover.
+const MAX_HARD_WRAP_ROWS = 16;
+
+// Sentence punctuation an agent leaves glued to the end of a path token.
+const TRAILING_PUNCTUATION = /[,.;:!?)\]}'"`>]+$/;
+
+// A token that already reads as a whole file: `.ext`, maybe `:line[:col]`.
+const COMPLETE_FILE_TAIL = /\.\w+(?::\d+(?::\d+)?)?$/;
 
 function overlapsClaimed(
   claimed: ReadonlyArray<[number, number]>,
@@ -186,7 +211,7 @@ function mapToRow(logical: LogicalLine, index: number): { row: number; column: n
   }
   return {
     row: logical.startRow + offsetIndex,
-    column: index - logical.rowOffsets[offsetIndex]!,
+    column: index - logical.rowOffsets[offsetIndex]! + logical.rowColumns[offsetIndex]!,
   };
 }
 
@@ -199,21 +224,28 @@ function mapToRow(logical: LogicalLine, index: number): { row: number; column: n
  * never leaves the row. Handing it a logical-line index typechecks fine and
  * silently stops shielding anything, so both scanning passes come through here
  * instead of doing the arithmetic themselves.
+ *
+ * The span is intersected with the row's own segment of the logical line
+ * before it is shifted by `rowColumn`: a match ending on the row above ends
+ * exactly where this row's segment begins, and shifting first would land it on
+ * the dropped indent as if it touched this row.
  */
 function projectToRow(
   rowOffset: number,
+  rowColumn: number,
   rowLength: number,
   startIndex: number,
   endIndex: number
 ): [number, number] | null {
+  const segmentLength = rowLength - rowColumn;
   const localStart = startIndex - rowOffset;
   const localEnd = endIndex - rowOffset;
   // Only tokens touching THIS row are ours to report. xterm projects a
   // returned range onto the requested row and evicts lower-priority links that
   // intersect it, so handing back a sibling row's link would blank a web link
   // the user can actually see.
-  if (localEnd <= 0 || localStart >= rowLength) return null;
-  return [Math.max(0, localStart), Math.min(rowLength, localEnd)];
+  if (localEnd <= 0 || localStart >= segmentLength) return null;
+  return [rowColumn + Math.max(0, localStart), rowColumn + Math.min(segmentLength, localEnd)];
 }
 
 /** Whether any cell between `from` and `to` is a space. */
@@ -275,8 +307,130 @@ function sameLogicalLine(a: LogicalLine, b: LogicalLine): boolean {
     a.clippedStart === b.clippedStart &&
     a.clippedEnd === b.clippedEnd &&
     a.rowOffsets.length === b.rowOffsets.length &&
-    a.rowOffsets.every((offset, index) => offset === b.rowOffsets[index])
+    a.rowOffsets.every((offset, index) => offset === b.rowOffsets[index]) &&
+    a.rowColumns.every((column, index) => column === b.rowColumns[index])
   );
+}
+
+/** Index of a row's first non-space character, or -1 for a blank row. */
+function firstNonSpace(text: string): number {
+  for (let index = 0; index < text.length; index++) {
+    if (text.charCodeAt(index) !== 32) return index;
+  }
+  return -1;
+}
+
+/**
+ * Whether `lower` could be an app's own continuation of `upper`: the
+ * indent it would carry, or null.
+ *
+ * Shape only. `upper` must run to the right edge and `lower` must be a row the
+ * terminal didn't wrap, opening with a hanging indent of spaces. Both rows
+ * must be exactly `cols` characters, which is a row's width in cells only
+ * while every cell holds one character: a row carrying a wide character
+ * comes up short and is turned away, because columns derived from its text
+ * would put the underline on the wrong cells.
+ */
+function hardWrapIndent(upper: RowSnapshot, lower: RowSnapshot, cols: number): number | null {
+  if (lower.isWrapped) return null;
+  if (upper.text.length !== cols || upper.text.charCodeAt(cols - 1) === 32) return null;
+  if (lower.text.length !== cols) return null;
+  const indent = firstNonSpace(lower.text);
+  return indent >= 1 ? indent : null;
+}
+
+/**
+ * Whether a joined token is one path from end to end: a single file-path or
+ * `file://` match that opens the token and runs to its end, apart from
+ * trailing sentence punctuation. A match that only crosses the join proves
+ * nothing, because the row edge can land anywhere inside unrelated text. A
+ * token carrying a scheme must be a file URL, so a web URL at the margin never
+ * absorbs a path from the next row.
+ */
+function isWholePathToken(token: string): boolean {
+  const body = token.replace(TRAILING_PUNCTUATION, "");
+  const regex = body.includes("://") ? FILE_URL_REGEX : FILE_PATH_REGEX;
+  const first = body.matchAll(regex).next();
+  if (first.done) return false;
+  const match = first.value;
+  const capture = match[1];
+  if (match.index !== 0 || capture === undefined) return false;
+  return match[0].indexOf(capture) + capture.length === body.length;
+}
+
+/**
+ * The hanging indent of row `upperRow + 1` when it continues a token an app
+ * split at `upperRow`'s right edge itself, or null.
+ *
+ * Agent TUIs (Claude Code's Ink, for one) wrap their own output: a word longer
+ * than the text box is cut at the margin and resumed on the next row after a
+ * hanging indent, with an explicit newline in between. xterm only flags
+ * `isWrapped` for its own autowrap, so nothing in the buffer records that the
+ * two rows are one token. Scanning them apart links the tail as a relative path
+ * under the cwd, which is a live link to the wrong file.
+ *
+ * Joining is a guess from the rows' shape, so it has to earn it:
+ * - A word-wrapper only splits a word that can't fit on a line, and the box
+ *   runs from the continuation's indent to the pane's right edge. A token no
+ *   longer than that width is two words that happened to meet at the margin.
+ * - The head must already look like a path (it carries a separator) and must
+ *   not already read as a whole file (`src/a.ts` ending exactly at the margin
+ *   followed by an unrelated word).
+ * - The joined token must be one path from end to end.
+ *
+ * The rows can't record where a newline really was, so a coincidence can still
+ * pass. An extensionless path ending exactly at the margin, followed by an
+ * indented path, joins the two. That takes an exact fit at the margin, and the
+ * alternative is to link every hard-wrapped path to the wrong file.
+ *
+ * The verdict belongs to the token, not the boundary: the chain is walked to
+ * both ends through rows the token fills edge to edge, so every row of a long
+ * path agrees whichever one the pointer is on.
+ */
+function hardWrapContinuation(read: RowReader, cols: number, upperRow: number): number | null {
+  const upper = read(upperRow);
+  const lower = read(upperRow + 1);
+  if (!upper || !lower) return null;
+  const indent = hardWrapIndent(upper, lower, cols);
+  if (indent === null) return null;
+
+  // A row the token fills from the indent to the edge carries it through.
+  const fillsRow = (row: RowSnapshot): boolean =>
+    row.text.length === cols && !hasSpaceIn(row.text, indent, cols);
+
+  let rows = 2;
+  let head = upperRow;
+  for (;;) {
+    const headRow = read(head)!;
+    if (firstNonSpace(headRow.text) !== indent || !fillsRow(headRow)) break;
+    const above = read(head - 1);
+    if (!above || hardWrapIndent(above, headRow, cols) !== indent) break;
+    if (++rows > MAX_HARD_WRAP_ROWS) return null;
+    head--;
+  }
+  let tail = upperRow + 1;
+  for (;;) {
+    const tailRow = read(tail)!;
+    if (!fillsRow(tailRow)) break;
+    const below = read(tail + 1);
+    if (!below || hardWrapIndent(tailRow, below, cols) !== indent) break;
+    if (++rows > MAX_HARD_WRAP_ROWS) return null;
+    tail++;
+  }
+
+  const headText = read(head)!.text;
+  const headToken = headText.slice(headText.lastIndexOf(" ") + 1);
+  if (!headToken.includes("/") && !headToken.includes("\\")) return null;
+  if (COMPLETE_FILE_TAIL.test(headToken.replace(TRAILING_PUNCTUATION, ""))) return null;
+
+  let token = headToken;
+  for (let row = head + 1; row <= tail; row++) {
+    const text = read(row)!.text;
+    const end = text.indexOf(" ", indent);
+    token += text.slice(indent, end === -1 ? text.length : end);
+  }
+  if (token.length <= cols - indent) return null;
+  return isWholePathToken(token) ? indent : null;
 }
 
 /**
@@ -337,8 +491,15 @@ export class FileLinksAddon implements ILinkProvider {
     // _activeLine cache, fires when the pointer crosses a new row), so this is
     // scroll-feel regex/GC cost, not write throughput. A wrapped row is exempt:
     // the tail of `file:///tmp/long/` + `shot.png` carries no separator of its
-    // own, and skipping it would leave half the URL unclickable.
-    if (!partOfWrappedLine && !lineText.includes("/") && !lineText.includes("\\")) {
+    // own, and skipping it would leave half the URL unclickable. So is a row
+    // that may continue an app's own hard wrap — only as the continuation,
+    // though: a hard wrap's head needs a separator of its own.
+    if (
+      !partOfWrappedLine &&
+      !lineText.includes("/") &&
+      !lineText.includes("\\") &&
+      !this._mayContinueHardWrap(bufferLineNumber - 1)
+    ) {
       callback(undefined);
       return;
     }
@@ -359,11 +520,13 @@ export class FileLinksAddon implements ILinkProvider {
       callback(undefined);
       return;
     }
-    // The hovered row's offset into the joined text, for translating a match
-    // back into `lineText` coordinates — the space `claimed` and the row-local
-    // directory pass both speak. The window is anchored on this row, so the
-    // lookup always lands.
-    const rowOffset = logical.rowOffsets[bufferLineNumber - 1 - logical.startRow]!;
+    // The hovered row's offset into the joined text and the buffer column its
+    // text starts at, for translating a match back into `lineText`
+    // coordinates — the space `claimed` and the row-local directory pass both
+    // speak. The window is anchored on this row, so the lookup always lands.
+    const rowSlot = bufferLineNumber - 1 - logical.startRow;
+    const rowOffset = logical.rowOffsets[rowSlot]!;
+    const rowColumn = logical.rowColumns[rowSlot]!;
 
     // `file://` URLs are scanned first so their spans are claimed before the
     // bare-path and directory passes. The gate stays: a line with no scheme
@@ -371,11 +534,11 @@ export class FileLinksAddon implements ILinkProvider {
     // can't be hiding the rest of one. provideLinks is pointer-driven across
     // every visible terminal, so the common line still runs no URL regex.
     // `://` (not `file://`) keeps the guard case-insensitive without a copy.
-    if (lineText.includes("://") || partOfWrappedLine) {
-      this._collectUrlLinks(logical, rowOffset, lineText, links, claimed);
+    if (lineText.includes("://") || partOfWrappedLine || logical.rowOffsets.length > 1) {
+      this._collectUrlLinks(logical, rowOffset, rowColumn, lineText, links, claimed);
     }
 
-    this._collectBarePathLinks(logical, rowOffset, lineText, links, claimed);
+    this._collectBarePathLinks(logical, rowOffset, rowColumn, lineText, links, claimed);
 
     const candidates = this._collectDirCandidates(lineText, claimed);
     if (candidates.length === 0) {
@@ -463,6 +626,7 @@ export class FileLinksAddon implements ILinkProvider {
   private _collectUrlLinks(
     logical: LogicalLine,
     rowOffset: number,
+    rowColumn: number,
     lineText: string,
     links: ILink[],
     claimed: Array<[number, number]>
@@ -477,7 +641,7 @@ export class FileLinksAddon implements ILinkProvider {
       const startIndex = match.index + match[0]!.indexOf(url);
       const endIndex = startIndex + url.length;
 
-      const local = projectToRow(rowOffset, lineText.length, startIndex, endIndex);
+      const local = projectToRow(rowOffset, rowColumn, lineText.length, startIndex, endIndex);
       if (!local) continue;
       claimed.push(local);
 
@@ -522,6 +686,7 @@ export class FileLinksAddon implements ILinkProvider {
   private _collectBarePathLinks(
     logical: LogicalLine,
     rowOffset: number,
+    rowColumn: number,
     lineText: string,
     links: ILink[],
     claimed: Array<[number, number]>
@@ -536,7 +701,7 @@ export class FileLinksAddon implements ILinkProvider {
       const startIndex = match.index + match[0]!.indexOf(fullMatch);
       const endIndex = startIndex + fullMatch.length;
 
-      const local = projectToRow(rowOffset, lineText.length, startIndex, endIndex);
+      const local = projectToRow(rowOffset, rowColumn, lineText.length, startIndex, endIndex);
       if (!local) continue;
 
       // A `(` is legal inside a file URL and is also this regex's boundary
@@ -568,9 +733,11 @@ export class FileLinksAddon implements ILinkProvider {
   }
 
   /**
-   * Rejoin the soft-wrapped rows around `rowIndex` into the logical line the
-   * user actually sees, remembering where each row's text starts so matches
-   * can be mapped back to buffer coordinates.
+   * Rejoin the wrapped rows around `rowIndex` into the logical line the user
+   * actually sees, remembering where each row's text starts so matches can be
+   * mapped back to buffer coordinates. Rows are joined where xterm wrapped
+   * them itself, and where an app hard-wrapped a path at the margin (see
+   * `hardWrapContinuation`), minus that continuation's indent.
    *
    * The window is anchored on `rowIndex` and grows outward on a shared budget,
    * rather than starting at the logical line's first row: a run longer than
@@ -582,9 +749,13 @@ export class FileLinksAddon implements ILinkProvider {
    * trusted to be whole.
    */
   private _readLogicalLine(rowIndex: number): LogicalLine | null {
-    const buffer = this._terminal.buffer.active;
-    const current = buffer.getLine(rowIndex);
+    const read = this._rowReader();
+    const current = read(rowIndex);
     if (!current) return null;
+    const cols = this._terminal.cols;
+    // The indent a hard-wrapped continuation of `upperRow` carries, or null.
+    const hardIndent = (upperRow: number): number | null =>
+      typeof cols === "number" && cols > 0 ? hardWrapContinuation(read, cols, upperRow) : null;
 
     // trimRight is deliberately OFF for the rejoin. A wrapped row is full by
     // definition, so trimming can only delete real trailing spaces — and those
@@ -593,45 +764,67 @@ export class FileLinksAddon implements ILinkProvider {
     // The cost is the inverse of xterm's tradeoff: a wide char that wrapped
     // early leaves a placeholder space mid-token, so that (rare, ASCII-free)
     // URL goes unlinked. Missing a link beats linking the wrong file.
-    const texts = [current.translateToString(false)];
+    const texts = [current.text];
+    const columns = [0];
     let startRow = rowIndex;
-    let budget = MAX_LOGICAL_LINE_LENGTH - texts[0]!.length;
+    let budget = MAX_LOGICAL_LINE_LENGTH - current.text.length;
     let clippedStart = false;
     let clippedEnd = false;
 
-    // `isWrapped` marks a row as the CONTINUATION of the one above it.
-    while (buffer.getLine(startRow)?.isWrapped === true) {
-      // Row 0 still claiming to continue something means the rows carrying the
-      // token's head were trimmed out of scrollback — xterm keeps the flag
-      // when its circular buffer evicts the row above. The window then opens
-      // mid-token exactly the way the budget cutoff does, and a headless
-      // fragment resolves against the cwd just as happily as a whole path.
-      if (startRow === 0) {
-        clippedStart = true;
-        break;
+    // `isWrapped` marks a row as the CONTINUATION of the one above it. A row
+    // without it can still continue its predecessor through an app's hard wrap.
+    for (;;) {
+      const top = read(startRow)!;
+      if (top.isWrapped) {
+        // Row 0 still claiming to continue something means the rows carrying
+        // the token's head were trimmed out of scrollback — xterm keeps the
+        // flag when its circular buffer evicts the row above. The window then
+        // opens mid-token exactly the way the budget cutoff does, and a
+        // headless fragment resolves against the cwd just as happily as a
+        // whole path.
+        if (startRow === 0) {
+          clippedStart = true;
+          break;
+        }
+      } else {
+        const indent = hardIndent(startRow - 1);
+        if (indent === null) break;
+        // The indent goes before the budget check: a join the budget refuses
+        // must still leave the fragment flush against the clipped edge, or the
+        // indent's spaces would read as the start of a whole token.
+        texts[0] = texts[0]!.slice(indent);
+        columns[0] = indent;
+        budget += indent;
       }
-      const above = buffer.getLine(startRow - 1);
+      const above = read(startRow - 1);
       if (!above) break;
-      const text = above.translateToString(false);
-      if (text.length > budget) {
+      if (above.text.length > budget) {
         clippedStart = true;
         break;
       }
-      budget -= text.length;
-      texts.unshift(text);
+      budget -= above.text.length;
+      texts.unshift(above.text);
+      columns.unshift(0);
       startRow--;
     }
 
     for (let row = rowIndex + 1; ; row++) {
-      const below = buffer.getLine(row);
-      if (!below || below.isWrapped !== true) break;
-      const text = below.translateToString(false);
+      const below = read(row);
+      if (!below) break;
+      let indent = 0;
+      if (!below.isWrapped) {
+        const hard = hardIndent(row - 1);
+        if (hard === null) break;
+        indent = hard;
+      }
+      const text = below.text.slice(indent);
       if (text.length > budget) {
         clippedEnd = true;
         break;
       }
       budget -= text.length;
       texts.push(text);
+      columns.push(indent);
     }
 
     const rowOffsets: number[] = [];
@@ -640,7 +833,41 @@ export class FileLinksAddon implements ILinkProvider {
       rowOffsets.push(text.length);
       text += rowText;
     }
-    return { text, startRow, rowOffsets, clippedStart, clippedEnd };
+    return { text, startRow, rowOffsets, rowColumns: columns, clippedStart, clippedEnd };
+  }
+
+  /**
+   * A reader over the active buffer that reads each row at most once. The
+   * rejoin and the hard-wrap chain walk revisit the same rows.
+   */
+  private _rowReader(): RowReader {
+    const buffer = this._terminal.buffer.active;
+    const cache = new Map<number, RowSnapshot | undefined>();
+    return (row) => {
+      if (row < 0) return undefined;
+      if (cache.has(row)) return cache.get(row);
+      const line = buffer.getLine(row);
+      const snapshot = line
+        ? { text: line.translateToString(false), isWrapped: line.isWrapped === true }
+        : undefined;
+      cache.set(row, snapshot);
+      return snapshot;
+    };
+  }
+
+  /**
+   * Cheap test for whether `rowIndex` could continue the row above through an
+   * app's own hard wrap. It lets a row with no separator past the fast path,
+   * the way a middle or tail fragment of a long path must be. The full
+   * verdict is `hardWrapContinuation`'s.
+   */
+  private _mayContinueHardWrap(rowIndex: number): boolean {
+    const cols = this._terminal.cols;
+    if (typeof cols !== "number" || cols <= 0 || rowIndex === 0) return false;
+    const read = this._rowReader();
+    const above = read(rowIndex - 1);
+    const current = read(rowIndex);
+    return !!above && !!current && hardWrapIndent(above, current, cols) !== null;
   }
 
   private _collectDirCandidates(

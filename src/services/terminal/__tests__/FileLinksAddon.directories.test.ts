@@ -53,6 +53,29 @@ function makeTerminal(rows: string[], wrapped?: boolean[]): Terminal {
   } as unknown as Terminal;
 }
 
+/**
+ * An agent TUI's own wrapping: rows padded to `cols`, none flagged
+ * `isWrapped`. Read live like `makeTerminal`, so a test can rewrite a row.
+ */
+function makeGrid(rows: string[], cols: number): Terminal {
+  return {
+    cols,
+    buffer: {
+      active: {
+        getLine: vi.fn((index: number): IBufferLine | undefined => {
+          const row = rows[index];
+          if (row === undefined) return undefined;
+          const text = row.padEnd(cols);
+          return {
+            translateToString: (trimRight?: boolean) => (trimRight ? text.trimEnd() : text),
+            isWrapped: false,
+          } as IBufferLine;
+        }),
+      },
+    },
+  } as unknown as Terminal;
+}
+
 function provide(addon: FileLinksAddon, bufferLineNumber = 1): Promise<ILink[] | undefined> {
   return new Promise((resolve) => {
     addon.provideLinks(bufferLineNumber, resolve);
@@ -302,6 +325,47 @@ describe("FileLinksAddon directory links", () => {
 
     expect(await provide(addon, 2)).toBeUndefined();
     expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
+  });
+
+  it("never validates the head of a path an app hard-wrapped as a directory", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    vi.mocked(fileBrowserClient.statPaths).mockResolvedValue(["directory"]);
+
+    // Cut at the margin and resumed under an indent (#12449). On its own the
+    // head is a real directory and would validate, but it's only the first
+    // half of the file path the line names.
+    const head = `open ${root}/src/components`;
+    const addon = new FileLinksAddon(
+      makeGrid([head, "  /Button.tsx now"], head.length),
+      () => root
+    );
+    const links = await provide(addon);
+
+    expect(links).toHaveLength(1);
+    const link = links![0]! as ILink & { kind: string; absolutePath: string };
+    expect(link.kind).toBe("file");
+    expect(link.absolutePath).toBe(`${root}/src/components/Button.tsx`);
+    expect(fileBrowserClient.statPaths).not.toHaveBeenCalled();
+  });
+
+  it("drops the reply when a hard-wrapped continuation row was rewritten", async () => {
+    const root = nextRoot();
+    bindWorktrees(new Map([[root, { id: root, path: root }]]));
+    const stat = pendingStat();
+
+    // The hovered row never changes; only the app's continuation of its
+    // path does, so the reply would link a file the buffer no longer names.
+    const rows = ["src/generated at /tmp/shots/abcdefghij", "  klmnopqrstuv.png ok"];
+    const addon = new FileLinksAddon(makeGrid(rows, rows[0]!.length), () => root);
+    const callback = vi.fn();
+    addon.provideLinks(1, callback);
+    await vi.waitFor(() => expect(fileBrowserClient.statPaths).toHaveBeenCalled());
+    expect(callback).not.toHaveBeenCalled();
+    rows[1] = "  klmnopqrstuw.png ok";
+    stat.resolve(["directory"]);
+    await vi.waitFor(() => expect(callback).toHaveBeenCalled());
+    expect(callback.mock.calls).toEqual([[undefined]]);
   });
 
   it("stays silent after disposal", async () => {
