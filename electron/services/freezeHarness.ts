@@ -525,12 +525,26 @@ async function measureIdleCachedCpu(
   }
 
   await delay(IDLE_CPU_SETTLE_MS);
+  const freezeAtStart = pvm.efficiencyFreezeEnabled;
   const start = readCpuSample(refreshAppMetricsSnapshot(), pid, Date.now());
   await delay(IDLE_CPU_WINDOW_MS);
   const end = readCpuSample(refreshAppMetricsSnapshot(), pid, Date.now());
+  const freezeAtEnd = pvm.efficiencyFreezeEnabled;
 
   if (cached.state !== "cached" || cachedWc.isDestroyed()) {
     log("FAILED — project B's view left the cached state mid-window (%s)", cached.state);
+    return false;
+  }
+  // `ResourceProfileService` can turn efficiency back on at any point. A frozen
+  // B would not hide the #12456 spin, which runs frozen or not, but it would
+  // hide ordinary task work — and this leg claims an unfrozen idle view.
+  if (freezeAtStart || freezeAtEnd) {
+    log(
+      "FAILED — efficiency freeze was re-enabled around the idle window (start=%s end=%s); " +
+        "the reading may be of a frozen view",
+      String(freezeAtStart),
+      String(freezeAtEnd)
+    );
     return false;
   }
 

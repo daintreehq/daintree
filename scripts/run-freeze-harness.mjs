@@ -17,9 +17,11 @@
  * assertion live in `electron/services/freezeHarness.ts` — this file only
  * launches and adjudicates.
  *
- * Platform coverage: measured on macOS only. The finding is Chromium/CDP
- * semantics so it should hold cross-platform, but that is an inference. Windows
- * is the platform most likely to differ and is unverified.
+ * Platform coverage: the freeze legs are measured on macOS only. The finding is
+ * Chromium/CDP semantics so it should hold cross-platform, but that is an
+ * inference. Windows is the platform most likely to differ and is unverified.
+ * The idle-CPU leg (#12456) has not been run yet on any platform; its ceiling
+ * comes from the spin measured in that issue, not from a harness run.
  */
 
 import { spawn, spawnSync } from "child_process";

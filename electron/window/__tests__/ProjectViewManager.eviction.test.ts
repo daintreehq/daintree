@@ -226,7 +226,12 @@ import { events } from "../../services/events.js";
 import { logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
-import { freezeWebContents, unthrottleCpuWebContents } from "../../utils/webContentsLifecycle.js";
+import {
+  freezeWebContents,
+  unfreezeWebContents,
+  purgeMemoryWebContents,
+  unthrottleCpuWebContents,
+} from "../../utils/webContentsLifecycle.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
 import { MIN_PRESSURE_EVICTION_AGE_MS } from "../ProjectViewEvictionController.js";
 
@@ -2220,8 +2225,15 @@ describe("ProjectViewManager — onViewCached (freeze risk mitigation)", () => {
     await flushImmediates();
 
     // CDP CPU throttling busy-spins the renderer it "slows" (#12456): caching
-    // the host sends its guests no CPU-rate command at all.
-    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(guest);
+    // the host hands its guests to no lifecycle helper at all.
+    for (const helper of [
+      unthrottleCpuWebContents,
+      freezeWebContents,
+      unfreezeWebContents,
+      purgeMemoryWebContents,
+    ]) {
+      expect(vi.mocked(helper)).not.toHaveBeenCalledWith(guest);
+    }
 
     // Reactivate proj-a — its guest's rate is reset along with the host's.
     await manager.switchTo("proj-a", "/path/a");

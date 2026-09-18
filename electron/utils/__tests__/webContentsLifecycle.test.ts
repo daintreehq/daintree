@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 
+import * as lifecycle from "../webContentsLifecycle.js";
+
 import {
   freezeWebContents,
   unfreezeWebContents,
@@ -236,6 +238,25 @@ describe("webContentsLifecycle", () => {
     });
   });
 
+  it("exposes no helper that raises the CPU throttling rate (#12456)", async () => {
+    // Module-level rather than per caller: guest call sites run inside
+    // forEachGuest's catch, so a caller-side test can miss a re-added
+    // throttle. Chromium's throttler busy-spins the renderer at any rate > 1.
+    const exported = Object.entries(lifecycle).filter(
+      (entry): entry is [string, (wc: Electron.WebContents) => unknown] =>
+        typeof entry[1] === "function"
+    );
+    expect(exported.length).toBeGreaterThan(0);
+    for (const [, helper] of exported) {
+      const wc = createMockWc({ attached: true });
+      await helper(wc as unknown as Electron.WebContents);
+      const rates = wc.debugger.sendCommand.mock.calls
+        .filter((call: unknown[]) => call[0] === "Emulation.setCPUThrottlingRate")
+        .map((call: unknown[]) => (call[1] as { rate: number }).rate);
+      expect(rates.every((rate: number) => rate === 1)).toBe(true);
+    }
+  });
+
   describe("purgeMemoryWebContents", () => {
     it("sends only the HeapProfiler GC sequence", async () => {
       const wc = createMockWc();
@@ -262,7 +283,7 @@ describe("webContentsLifecycle", () => {
       expect(methods).not.toContain("Memory.forciblyPurgeJavaScriptMemory");
     });
 
-    it("skips entirely when Windows E2E disables cached-view CDP throttles", async () => {
+    it("skips entirely when Windows E2E disables cached-view CDP commands", async () => {
       vi.stubEnv("DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE", "1");
       const wc = createMockWc();
       await purgeMemoryWebContents(wc as unknown as Electron.WebContents);

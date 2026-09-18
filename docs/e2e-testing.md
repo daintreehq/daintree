@@ -238,7 +238,7 @@ All three measurement windows have to close before the cached view's first memor
 
 Reference numbers (macOS, Electron 42, 3s windows): control ~54,000 ticks, frozen **0**, recovered ~52,000. With `freezeWebContents` neutered the same run reads control 54,026 / frozen 53,875 — a ratio of 1.0x against 54,000x, so the harness is discriminating by a wide margin.
 
-**Measured on macOS only.** The mechanism is Chromium/CDP semantics and should be platform-independent, but that is an inference; Windows is unverified and is the platform most likely to differ. The harness is not wired into any workflow yet — run it on demand.
+**Freeze legs measured on macOS only.** The mechanism is Chromium/CDP semantics and should be platform-independent, but that is an inference; Windows is unverified and is the platform most likely to differ. The idle-CPU leg has not been run on any platform yet: its 10% ceiling comes from the 25–40% spin measured in #12456, so record the first real reading here. The harness is not wired into any workflow yet — run it on demand.
 
 ## Smoke Audit Cadence
 

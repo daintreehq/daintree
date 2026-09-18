@@ -289,6 +289,11 @@ describe("readCpuSample", () => {
     expect(readCpuSample([metric(10)], 10, 0)).toBeNull();
     expect(readCpuSample([metric(10, Number.NaN)], 10, 0)).toBeNull();
   });
+
+  it("returns null when the metric has no cpu block at all", () => {
+    const bare = { pid: 10, type: "Tab", creationTime: 1 } as unknown as Electron.ProcessMetric;
+    expect(readCpuSample([bare], 10, 0)).toBeNull();
+  });
 });
 
 describe("evaluateIdleCpu", () => {
@@ -351,6 +356,14 @@ describe("evaluateIdleCpu", () => {
     const pidReused = evaluateIdleCpu({ start, end: { ...end, creationTime: 8 }, cachedAtMs });
     expect(pidReused.passed).toBe(false);
     expect(pidReused.failures.join("\n")).toContain("replaced mid-window");
+  });
+
+  it("fails a zero-length window rather than dividing by it", () => {
+    const { start } = windowAt(1);
+    const verdict = evaluateIdleCpu({ start, end: { ...start }, cachedAtMs });
+    expect(verdict.passed).toBe(false);
+    expect(Number.isNaN(verdict.cpuPercent)).toBe(true);
+    expect(verdict.failures.join("\n")).toContain("?% of a core");
   });
 
   it("fails a window shorter than required", () => {

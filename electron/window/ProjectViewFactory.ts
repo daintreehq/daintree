@@ -57,7 +57,7 @@ export interface LoadViewTimings {
  *
  * The entry is deliberately left `"loading"`. A caller that has not finished
  * booting the view must not publish it as `"cached"`: cached views are
- * throttled, purge-scheduled and passed over by the crash handler's
+ * hidden, freeze-eligible, purge-scheduled and passed over by the crash handler's
  * still-loading delegation.
  */
 export function createRegisteredView(

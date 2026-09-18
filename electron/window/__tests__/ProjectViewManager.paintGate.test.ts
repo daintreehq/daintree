@@ -415,7 +415,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       // The healthy outgoing view is still the attached, active one — and it
       // was never detached in the first place. Asserting only that it ends up
       // attached would also pass if the branch detached it and the rollback put
-      // it back, which still fires the cache/throttle/freeze side effects and
+      // it back, which still fires the cache/hide/freeze side effects and
       // flashes the blank frame this whole path exists to prevent.
       expect(manager.getActiveProjectId()).toBe("proj-a");
       const outgoing = manager.getActiveView();

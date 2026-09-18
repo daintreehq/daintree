@@ -263,8 +263,7 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // invoke it — disabling skips its startup wiring. The feature is "Translate" (the
 // old "TranslateUI" name was renamed in Chromium ~M86 and is a no-op now).
 // (CalculateNativeWinOcclusion was considered and rejected: it's a runtime power
-// lever, not a boot win, and disabling it fights the per-view CDP throttling
-// ProjectViewManager already does.)
+// lever, not a boot win.)
 const disabledFeatures = ["BackForwardCache", "Translate"];
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 
