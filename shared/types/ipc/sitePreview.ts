@@ -3,9 +3,16 @@
  * dev-preview guest page and the Site Builder plugin.
  *
  * Structural only, and deliberately free of any `electron/` import: the zod
- * schemas that actually validate guest traffic live in
+ * schemas that actually validate the envelope live in
  * `electron/services/sitePreview/guestProtocol.ts`, which asserts mutual
- * assignability against {@link SiteGuestEvent} so the two cannot drift.
+ * assignability against {@link SiteGuestDocumentReady} so the shape the two
+ * halves share cannot drift.
+ *
+ * The envelope is host-owned and framework-neutral. Event *payloads* are not:
+ * apart from the one lifecycle event the host interprets, a guest event crosses
+ * this boundary as an opaque body carrying a `type`, and the adapter that
+ * installed the runtime is what validates it. So a second framework adapter
+ * needs no member here.
  */
 
 export type SitePreviewMode = "browse" | "select";
@@ -38,9 +45,12 @@ export interface SiteGuestViewport {
 }
 
 /**
- * One node as the guest saw it. No file path, range or revision is trusted from
- * here — the host re-resolves source identity itself. `loc` and `ancestry` are
- * verbatim `__svelte_meta` readings, which a hostile page can fabricate.
+ * One node as the guest saw it. Part of the SvelteKit adapter's own payload
+ * vocabulary, not of the host envelope — the host neither validates nor reads
+ * it; it is declared here only because the adapter's renderer half and the
+ * panel surfaces share it. No file path, range or revision is trusted from
+ * here: `loc` and `ancestry` are verbatim `__svelte_meta` readings, which a
+ * hostile page can fabricate, and source identity is re-resolved from source.
  */
 export interface SiteGuestNodeObservation {
   runtimeOccurrenceId: string;
@@ -63,35 +73,29 @@ export interface SiteGuestNodeObservation {
   unmapped: boolean;
 }
 
-export type SiteGuestEvent =
-  | {
-      type: "documentReady";
-      routeId: string | null;
-      url: string;
-      viewport: SiteGuestViewport;
-    }
-  | {
-      type: "selectionChanged";
-      nodes: SiteGuestNodeObservation[];
-      /** Who moved it; absent from older runtimes. */
-      cause?: "user" | "document" | "reselect";
-      scope?: "component";
-      component?: {
-        file: string;
-        line: number;
-        column: number;
-        name: string;
-      };
-    }
-  | { type: "hoverChanged"; node: SiteGuestNodeObservation | null }
-  | { type: "mappingRevisionSeen"; revision: string }
-  | {
-      type: "runtimeIssue";
-      code: "no-svelte-meta" | "not-dev-build" | "overlay-blocked" | "internal";
-      detail: string;
-    }
-  /** What the page's Svelte dev metadata supports, probed once per document. */
-  | { type: "metadataProbed"; locations: boolean; ancestry: boolean };
+/**
+ * The one guest event the host itself reads: it flips the binding's readiness.
+ * Validated by the host, exactly, and by the adapter too — the one payload the
+ * two halves share, so nothing may be added to it on one side alone.
+ */
+export type SiteGuestDocumentReady = {
+  type: "documentReady";
+  routeId: string | null;
+  url: string;
+  viewport: SiteGuestViewport;
+};
+
+/**
+ * Any other guest event. The host validated the envelope around it and that it
+ * carries a `type`; the body is data it never interpreted, so treat every field
+ * as unproven until the adapter's own schema has parsed it.
+ */
+export type SiteGuestEnvelopeEvent = {
+  type: string;
+  [key: string]: unknown;
+};
+
+export type SiteGuestEvent = SiteGuestDocumentReady | SiteGuestEnvelopeEvent;
 
 /** A dev-preview panel this project could bind to. */
 export interface SitePreviewCandidate {

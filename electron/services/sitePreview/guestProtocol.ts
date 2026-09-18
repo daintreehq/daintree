@@ -1,20 +1,33 @@
 /**
- * Core-side mirror of the guest half of the Site Builder wire contract.
+ * The host's half of the guest wire contract: the envelope, and nothing about
+ * what an adapter puts inside it.
  *
- * The plugin owns the canonical declaration in
- * `plugins/builtin/sveltekit-builder/shared/protocol.ts`, but `electron/` may
- * not import from `plugins/` — so the shape is restated here and
- * `SitePreviewBridgeProtocolDrift.test.ts` fails if the two ever disagree.
+ * The split is deliberate. The host owns transport — protocol version, session,
+ * document epoch, sequence, byte ceiling — and the single lifecycle event it
+ * acts on (`documentReady`, which flips a binding's readiness). Every other
+ * event is opaque here: a `type` the host can route and count, and a body it
+ * forwards without interpreting. The adapter that installed the guest runtime
+ * validates that body against its own schema before using it — for the
+ * SvelteKit builder, `GuestEventSchema` in
+ * `plugins/builtin/sveltekit-builder/shared/protocol.ts`, parsed in its
+ * renderer controller. So a React or CSS inspector adds no member here, which
+ * is the point: `electron/` may not import from `plugins/`, and the old mirror
+ * of the plugin's payload union made core carry Svelte-shaped types it could
+ * not maintain. `SitePreviewBridgeProtocolDrift.test.ts` pins what still has to
+ * agree across the split.
  *
  * Everything below describes traffic from an untrusted page. A dev preview runs
  * whatever the user is building, and a same-origin compromise can forge any
  * field. These schemas therefore only establish that a message is *well formed
- * and current*; they confer no authority. Source identity is re-resolved by the
- * host from the guest's raw `__svelte_meta` reading, never taken on trust.
+ * and current*; they confer no authority. Source identity is re-resolved from
+ * source, never taken from a guest's `__svelte_meta` reading.
  */
 
 import { z } from "zod";
-import type { SiteGuestEvent } from "../../../shared/types/ipc/sitePreview.js";
+import type {
+  SiteGuestDocumentReady,
+  SiteGuestEvent,
+} from "../../../shared/types/ipc/sitePreview.js";
 
 /**
  * Bumped whenever a guest-visible shape changes. The host refuses envelopes
@@ -26,22 +39,8 @@ export const GUEST_PROTOCOL_VERSION = 1;
 /** Hard ceiling on one envelope, enforced on the raw string before parsing. */
 export const MAX_GUEST_MESSAGE_BYTES = 256 * 1024;
 
-const SourceLocationSchema = z
-  .object({
-    file: z.string().min(1),
-    line: z.number().int().positive(),
-    column: z.number().int().nonnegative(),
-  })
-  .strict();
-
-const RectSchema = z
-  .object({
-    x: z.number(),
-    y: z.number(),
-    width: z.number().nonnegative(),
-    height: z.number().nonnegative(),
-  })
-  .strict();
+/** The only event type the host itself interprets. */
+export const DOCUMENT_READY = "documentReady";
 
 const ViewportSchema = z
   .object({
@@ -51,128 +50,38 @@ const ViewportSchema = z
   })
   .strict();
 
-export const GuestNodeObservationSchema = z
-  .object({
-    runtimeOccurrenceId: z.string().min(1).max(128),
-    loc: SourceLocationSchema.nullable(),
-    ancestry: z
-      .array(
-        z
-          .object({
-            type: z.string().min(1).max(32),
-            file: z.string().min(1).max(1024),
-            line: z.number().int().positive(),
-            column: z.number().int().nonnegative(),
-            componentTag: z.string().min(1).max(128).optional(),
-          })
-          .strict()
-      )
-      .max(64),
-    tagName: z.string().min(1).max(64),
-    sameLocCount: z.number().int().positive().max(100_000),
-    /** The page stopped counting at its scan bound: `sameLocCount` is a floor. */
-    sameLocCountPartial: z.literal(true).optional(),
-    /** Which of those this node is, in document order; absent from older runtimes. */
-    locIndex: z.number().int().nonnegative().max(100_000).optional(),
-    /** Where the node sits in its template, for a page whose `loc` is a neighbour's; absent from older runtimes. */
-    structure: z
-      .object({
-        /** The file the template was compiled from; an unstamped node takes it from its template's stamped kin. */
-        file: z.string().min(1).max(1024),
-        path: z
-          .array(
-            z
-              .object({
-                tag: z.string().min(1).max(64),
-                index: z.number().int().nonnegative().max(100_000),
-              })
-              .strict()
-          )
-          .min(1)
-          .max(64),
-      })
-      .strict()
-      .optional(),
-    label: z.string().max(200),
-    bounds: z.array(RectSchema).max(32),
-    unmapped: z.boolean(),
-  })
-  .strict();
+/**
+ * The lifecycle event the host understands. Validated here, not left to the
+ * adapter, because the bridge acts on it: a well-formed `documentReady` is what
+ * marks a binding ready.
+ *
+ * Strict, unlike every other event, and deliberately: this one shape is shared
+ * with the adapter, whose own declaration is strict too. Were the host lenient
+ * about extras the two would accept different languages, and a readiness event
+ * the host admitted could be one the adapter drops — the host calling a binding
+ * ready for a document the panel never received. Extending it is a change to
+ * the host contract, which is what the drift test makes visible.
+ */
+export const GuestDocumentReadySchema = z.strictObject({
+  type: z.literal(DOCUMENT_READY),
+  routeId: z.string().max(512).nullable(),
+  url: z.string().max(2048),
+  viewport: ViewportSchema,
+});
 
-export const GuestEventSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("documentReady"),
-      routeId: z.string().max(512).nullable(),
-      url: z.string().max(2048),
-      viewport: ViewportSchema,
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("selectionChanged"),
-      nodes: z.array(GuestNodeObservationSchema).max(32),
-      /**
-       * Who moved the selection: the user (a click, a key, Escape), the
-       * document (a node the page was showing left it), or the host's own
-       * `reselect`. Recovery after a write listens to the last two only — a
-       * user's Escape is an answer, not a symptom.
-       */
-      cause: z.enum(["user", "document", "reselect"]).optional(),
-      /** Present when the nodes are one component invocation's rendered roots. */
-      scope: z.literal("component").optional(),
-      /**
-       * The call site of the component that was selected, as it appears on the
-       * primary node's parent chain. A location, not a position in the chain: a
-       * dropped or truncated frame must not make it name a different component.
-       * A wrapper with no element of its own shares its roots with the component
-       * inside it, so the roots alone cannot say which one was meant.
-       */
-      component: z
-        .object({
-          file: z.string().min(1).max(1024),
-          line: z.number().int().positive(),
-          column: z.number().int().nonnegative(),
-          /** The tag it was written as at that call site. */
-          name: z.string().min(1).max(128),
-        })
-        .strict()
-        .optional(),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("hoverChanged"),
-      node: GuestNodeObservationSchema.nullable(),
-    })
-    .strict(),
-  z
-    .object({ type: z.literal("mappingRevisionSeen"), revision: z.string().min(1).max(128) })
-    .strict(),
-  z
-    .object({
-      type: z.literal("runtimeIssue"),
-      code: z.enum(["no-svelte-meta", "not-dev-build", "overlay-blocked", "internal"]),
-      detail: z.string().max(512),
-    })
-    .strict(),
-  /**
-   * What the page's Svelte dev metadata turned out to support, probed once per
-   * document from the first stamped elements found. `locations` is whether an
-   * element names its source; `ancestry` whether the parent chain names the
-   * component invocations above it. A shape the runtime does not recognise
-   * reports false rather than nothing, so the host narrows what it offers
-   * instead of assuming the whole major behaves like the version it was built
-   * against.
-   */
-  z
-    .object({
-      type: z.literal("metadataProbed"),
-      locations: z.boolean(),
-      ancestry: z.boolean(),
-    })
-    .strict(),
-]);
+/**
+ * Every other event, as far as the host is concerned: a routable `type` and an
+ * uninspected body. `documentReady` is excluded so a malformed lifecycle event
+ * is rejected outright rather than quietly demoted to an opaque event the host
+ * would still take readiness from.
+ */
+const GuestOpaqueEventSchema = z
+  .looseObject({ type: z.string().min(1).max(64) })
+  .refine((event) => event.type !== DOCUMENT_READY, {
+    message: `${DOCUMENT_READY} must match the lifecycle shape`,
+  });
+
+export const GuestEventSchema = z.union([GuestDocumentReadySchema, GuestOpaqueEventSchema]);
 
 export const GuestEnvelopeSchema = z
   .object({
@@ -187,13 +96,22 @@ export const GuestEnvelopeSchema = z
 export type GuestEnvelope = z.infer<typeof GuestEnvelopeSchema>;
 
 // The shared structural type and the schema here must describe the same value.
-// Both directions are asserted so neither side can gain or lose a member
-// unnoticed; a mismatch is a compile error rather than a runtime surprise.
+// It has to be asserted on `documentReady` specifically: an opaque event is a
+// `type` plus anything, so it subsumes every object and an assertion against
+// the union as a whole would hold however wrong the lifecycle fields were.
+// Both directions, so neither side can gain, lose or retype a field unnoticed.
+type _ReadySchemaSatisfiesShared =
+  z.infer<typeof GuestDocumentReadySchema> extends SiteGuestDocumentReady ? true : never;
+type _SharedReadySatisfiesSchema =
+  SiteGuestDocumentReady extends z.infer<typeof GuestDocumentReadySchema> ? true : never;
+// And that the envelope's event still satisfies the shared type at all.
 type _SchemaSatisfiesShared =
   z.infer<typeof GuestEventSchema> extends SiteGuestEvent ? true : never;
-type _SharedSatisfiesSchema =
-  SiteGuestEvent extends z.infer<typeof GuestEventSchema> ? true : never;
-const _guestEventShapesAgree: [_SchemaSatisfiesShared, _SharedSatisfiesSchema] = [true, true];
+const _guestEventShapesAgree: [
+  _ReadySchemaSatisfiesShared,
+  _SharedReadySatisfiesSchema,
+  _SchemaSatisfiesShared,
+] = [true, true, true];
 void _guestEventShapesAgree;
 
 export type GuestEnvelopeRejection =
@@ -232,8 +150,9 @@ export function validateGuestEnvelope(
   raw: string,
   expectation: GuestEnvelopeExpectation
 ): GuestEnvelopeVerdict {
-  // Code-unit length first: it is O(1) and never smaller than the UTF-8 byte
-  // count, so an absurd body is rejected without scanning it.
+  // Code-unit length first: it is O(1) and never larger than the UTF-8 byte
+  // count, so a string past the cap in code units is past it in bytes too and
+  // an absurd body is rejected without scanning it.
   if (raw.length > MAX_GUEST_MESSAGE_BYTES) {
     return { ok: false, reason: "oversized" };
   }

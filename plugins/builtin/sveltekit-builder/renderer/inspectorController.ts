@@ -29,6 +29,7 @@ import {
   CHANNELS,
   ComponentDefinitionsResultSchema,
   GUEST_ADAPTER_ID,
+  GuestEventSchema,
   SourceRevisionsResultSchema,
   ProjectModelResultSchema,
   IssuePushSchema,
@@ -352,6 +353,7 @@ export class InspectorController implements DevPreviewToolSession {
   private chosenAppRoot: string | undefined;
   private recoveringWorkspace: string | null = null;
   private disposed = false;
+  private warnedUnusableGuestEvent = false;
 
   constructor(
     panelId: string,
@@ -582,6 +584,7 @@ export class InspectorController implements DevPreviewToolSession {
       void this.deps.sitePreview.detach({ sessionId: previous.sessionId }).catch(() => undefined);
     }
     this.bufferedEvents = [];
+    this.warnedUnusableGuestEvent = false;
     this.patchState({
       binding: { status: "binding", panelId: previewPanelId },
       epoch: null,
@@ -741,6 +744,20 @@ export class InspectorController implements DevPreviewToolSession {
     }
   }
 
+  /**
+   * Said once per binding attempt: a page emitting one unusable event will emit
+   * thousands, and the first is the only informative one. Scoped to the
+   * binding, not the controller's whole life, so junk from one document cannot
+   * silence the next one's.
+   */
+  private warnUnusableGuestEvent(type: string): void {
+    if (this.warnedUnusableGuestEvent) return;
+    this.warnedUnusableGuestEvent = true;
+    console.warn(
+      `[site-builder] dropped a guest "${type}" event whose payload did not match the adapter schema; further ones are silent`
+    );
+  }
+
   private isBoundTo(sessionId: string): boolean {
     const binding = this.state.binding;
     return binding.status === "bound" && binding.sessionId === sessionId;
@@ -749,9 +766,20 @@ export class InspectorController implements DevPreviewToolSession {
   private handlePreviewPush(payload: SitePreviewPushPayload): void {
     const binding = this.state.binding;
     if (binding.status === "binding") {
-      // Hover traffic is worthless after the fact; keep the newest of the rest,
-      // since readiness and epoch pushes are what the replay needs most.
-      if (payload.kind === "guest-event" && payload.event.type === "hoverChanged") return;
+      if (payload.kind === "guest-event") {
+        // Hover traffic is worthless after the fact; keep the newest of the
+        // rest, since readiness and epoch pushes are what the replay needs
+        // most.
+        if (payload.event.type === "hoverChanged") return;
+        // An event whose body we cannot read is never worth a buffer slot: it
+        // would evict a readiness push and then be dropped on replay anyway.
+        // The replay parses again rather than carrying the parsed value, which
+        // keeps one parse the authority for everything downstream of it.
+        if (!GuestEventSchema.safeParse(payload.event).success) {
+          this.warnUnusableGuestEvent(String(payload.event.type));
+          return;
+        }
+      }
       this.bufferedEvents.push(payload);
       if (this.bufferedEvents.length > MAX_BUFFERED_EVENTS) this.bufferedEvents.shift();
       return;
@@ -805,10 +833,20 @@ export class InspectorController implements DevPreviewToolSession {
     payload: Extract<SitePreviewPushPayload, { kind: "guest-event" }>
   ): void {
     const epoch = payload.documentEpoch;
+    // Epoch bookkeeping comes off the envelope, which the host validated, so it
+    // holds even for an event whose body turns out to be unusable.
     this.noteEpoch(epoch);
     if (this.state.epoch !== null && epoch < this.state.epoch) return;
 
-    const event = payload.event;
+    // The host validated the envelope and that the event has a `type`; the body
+    // is ours to prove. Nothing below may read a field before this parse.
+    const parsed = GuestEventSchema.safeParse(payload.event);
+    if (!parsed.success) {
+      this.warnUnusableGuestEvent(String(payload.event.type));
+      return;
+    }
+
+    const event = parsed.data;
     switch (event.type) {
       case "documentReady": {
         // The page reports itself again on a client-side navigation or a

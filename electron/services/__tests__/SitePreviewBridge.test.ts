@@ -305,6 +305,57 @@ describe("SitePreviewBridge", () => {
     expect(harness.bridge.getState(PROJECT_ID, "session-1")?.droppedMessages).toBe(0);
   });
 
+  it("forwards an event type it has never heard of, verbatim", async () => {
+    // The host owns the envelope, not the payload: an adapter for another
+    // framework emits its own events and core is not a party to them. Only the
+    // lifecycle event it acts on has a shape here.
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    announceContexts(harness.wc);
+    harness.pushed.length = 0;
+
+    callBinding(
+      harness.wc,
+      envelope({ event: { type: "ariaTreeChanged", roles: ["main"], depth: 3 } })
+    );
+
+    const [pushed] = harness.pushed;
+    expect(pushed).toMatchObject({
+      kind: "guest-event",
+      event: { type: "ariaTreeChanged", roles: ["main"], depth: 3 },
+    });
+    expect(harness.bridge.getState(PROJECT_ID, "session-1")?.droppedMessages).toBe(0);
+    // An unknown event says nothing about readiness.
+    expect(harness.bridge.getState(PROJECT_ID, "session-1")?.guestReady).toBe(false);
+  });
+
+  it("drops an event with no usable type, and a malformed lifecycle event", async () => {
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    announceContexts(harness.wc);
+    harness.pushed.length = 0;
+
+    callBinding(harness.wc, envelope({ event: { revision: "rev-1" } }));
+    callBinding(harness.wc, envelope({ sequence: 1, event: { type: "" } }));
+    // Readiness is the one payload fact the host acts on, so a `documentReady`
+    // missing the fields that describe the document must not be admitted as an
+    // opaque event and still flip the flag.
+    callBinding(harness.wc, envelope({ sequence: 2, event: { type: "documentReady" } }));
+
+    expect(harness.pushed).toHaveLength(0);
+    const state = harness.bridge.getState(PROJECT_ID, "session-1");
+    expect(state?.droppedMessages).toBe(3);
+    expect(state?.guestReady).toBe(false);
+  });
+
   it("drops mismatched-session, replayed, stale, wrong-version, sub-frame and oversized traffic", async () => {
     await harness.bridge.bind({
       projectId: PROJECT_ID,
