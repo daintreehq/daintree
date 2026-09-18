@@ -280,7 +280,7 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     const strip = window.getByRole("toolbar", { name: "Site Builder" });
     await expect(strip).toBeVisible({ timeout: PLUGIN_TIMEOUT });
     await expect(window.locator("webview")).toBeAttached({ timeout: DEV_SERVER_TIMEOUT });
-    await expect(strip.getByText("Click an element to edit it or ask an agent")).toBeVisible({
+    await expect(strip.getByText("Click an element to ask an agent about it")).toBeVisible({
       timeout: DEV_SERVER_TIMEOUT,
     });
   });
