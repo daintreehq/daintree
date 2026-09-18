@@ -1118,19 +1118,21 @@ describe("FileLinksAddon", () => {
       }
     });
 
-    it("links nothing inside a run too long to judge", async () => {
-      // Past the rejoin budget the run can't be read end to end, so it is
-      // joined unjudged and the window is clipped inside it. The `:` stops the
-      // head's match short of the cut, and it must still not link as a path.
+    it("never joins a run too long to judge", async () => {
+      // Past the rejoin budget the run can't be read end to end, so no join in
+      // it has been earned. Its rows read as they stand; in particular the
+      // head's match, stopped short by the `:`, never fuses across rows.
       const rows = [
         `open /tmp/${"c".repeat(90)}`,
         `  ${"a".repeat(90)}.ts:bbbb`,
         ...Array.from({ length: 24 }, () => `  ${"d".repeat(98)}`),
         "  tail/file.ts ok",
       ];
-      for (const hoveredRow of [0, rows.length - 1]) {
-        expect(await linksFor(rows, hoveredRow, 100)).toBeUndefined();
-      }
+      expect(await linksFor(rows, 1, 100)).toBeUndefined();
+      const tail = await linksFor(rows, rows.length - 1, 100);
+      expect(tail).toHaveLength(1);
+      expect(tail![0]!.range.start.y).toBe(rows.length);
+      expect(tail![0]!.range.end.y).toBe(rows.length);
     });
 
     it("distrusts a continuation whose head the rejoin budget cut off", async () => {

@@ -407,11 +407,10 @@ function endsAsFile(token: string): boolean {
  * and the alternative is to link every hard-wrapped path to the wrong file.
  *
  * A run longer than the rejoin budget, or one whose start was trimmed out of
- * scrollback, can't be read end to end, so it is joined without judging it.
- * Nothing in it gets linked: the run is one token with no spaces in it, and it
- * can't fit the window, so the budget clips the window somewhere inside that
- * token. A match anywhere in the token then has no space between it and the
- * clipped edge, and a fragment can't pass for a whole path.
+ * scrollback, can't be read end to end, so it isn't joined: every join is one
+ * the token has earned. Its rows are scanned as they stand, the way every hard
+ * wrap was before this existed. That leaves a token over 2048 characters to
+ * the row-by-row reading, and no path is that long.
  */
 function resolveHardWraps(
   read: RowReader,
@@ -487,7 +486,7 @@ function resolveHardWraps(
 
   // joins[k] is the boundary between rows `head + k` and `head + k + 1`.
   const joins = [...above.reverse(), ...below];
-  let joined = unjudgeable;
+  let joined = false;
   if (!unjudgeable) {
     let token = trailingRun(read(head)!.text);
     let prefix: string | null = null;
