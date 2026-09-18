@@ -31,6 +31,7 @@ import {
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
 import { MCP_WORKSPACE_ID_HEADER as MCP_WORKSPACE_ID_HEADER_CANONICAL } from "../../../shared/config/mcpClientConfigs.js";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
 import { buildToolCallTextResult } from "./toolCallResult.js";
 
@@ -795,7 +796,7 @@ export const RESOURCE_BACKING_ACTIONS: Readonly<Record<ResourceKind, string>> = 
  */
 export const WORKSPACE_BINDING_RESOURCE_URI = "daintree://workspace/current/binding";
 
-export const RESOURCE_TEXT_MAX_BYTES = 50 * 1024;
+export const RESOURCE_TEXT_MAX_BYTES = MCP_RESPONSE_TEXT_MAX_BYTES;
 
 export const RESOURCE_SCROLLBACK_TAIL_LINES = 200;
 
@@ -1140,6 +1141,34 @@ export function truncateText(text: string, maxBytes: number = RESOURCE_TEXT_MAX_
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
   const sliced = Buffer.from(text, "utf8").subarray(0, maxBytes).toString("utf8");
   return `${sliced}\n\n[truncated]`;
+}
+
+const TAIL_TRUNCATION_MARKER = "[truncated]\n\n";
+
+/**
+ * Tail-preserving counterpart of {@link truncateText}, for text whose newest
+ * end is the part a reader asked for (#12450). Keeps whole trailing lines within
+ * `maxBytes`, marker included; a single line too long to fit keeps its trailing
+ * bytes, started on a character boundary. The marker leads so a client that
+ * trims the text again cannot cut it off.
+ */
+export function truncateTextTail(text: string, maxBytes: number = RESOURCE_TEXT_MAX_BYTES): string {
+  const limit = Math.max(0, Math.floor(maxBytes));
+  const buffer = Buffer.from(text, "utf8");
+  if (buffer.length <= limit) return text;
+  // The marker is ASCII, so a character slice is a byte slice.
+  if (limit <= TAIL_TRUNCATION_MARKER.length) return TAIL_TRUNCATION_MARKER.slice(0, limit);
+  const budget = limit - TAIL_TRUNCATION_MARKER.length;
+  let start = buffer.length - budget;
+  if (buffer[start - 1] !== 0x0a) {
+    const newline = buffer.indexOf(0x0a, start);
+    if (newline !== -1 && newline + 1 < buffer.length) {
+      start = newline + 1;
+    } else {
+      while (start < buffer.length && (buffer[start]! & 0xc0) === 0x80) start += 1;
+    }
+  }
+  return `${TAIL_TRUNCATION_MARKER}${buffer.subarray(start).toString("utf8")}`;
 }
 
 export function readStringField(value: unknown, keys: readonly string[]): string | undefined {

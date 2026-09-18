@@ -41,6 +41,12 @@ export interface TerminalStatusEntry {
   spawnedAt?: number;
   lastCheckResult?: TerminalCheckResult;
   recentOutput?: string | null;
+  /**
+   * `true` when older output was left out of `recentOutput`, by the requested
+   * line count or by the shared response budget (#12450). Never sent as
+   * `false`: absent beside a string `recentOutput` means the tail is complete.
+   */
+  recentOutputTruncated?: boolean;
   armed?: boolean;
   hasPty?: boolean;
   /**

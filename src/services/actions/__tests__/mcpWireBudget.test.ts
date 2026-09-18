@@ -510,7 +510,16 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // and a client needs the `submissionToken` in validated structured content to
   // check delivery at all. The external ceiling above does not move — there the
   // owned pair replaced the unscoped one.
-  const MAX_COHORT_PAYLOAD_BYTES = 214_000;
+  //
+  // 214_000 → 214_300 for #12450, measured at 214_286 B. Terminal tails are now
+  // fitted under the 50 KiB response budget instead of being cut into unparseable
+  // JSON, so fewer lines can come back than were asked for, and the only way a
+  // caller can tell is the output schema: `terminal.getStatus` gains
+  // `recentOutputTruncated` and both `truncated` flags say what cut the tail.
+  // Without that a short answer reads as a quiet terminal, which is the
+  // misreading the issue was filed over. Both tools are on the external tier,
+  // which absorbed the same spend inside its existing headroom.
+  const MAX_COHORT_PAYLOAD_BYTES = 214_300;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

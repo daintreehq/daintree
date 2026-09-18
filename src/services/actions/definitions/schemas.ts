@@ -524,6 +524,12 @@ export const TerminalStatusEntrySchema = z.object({
       "A best-effort reading of the agent's most recent test, lint, or build summary, parsed from its output rather than from a process exit code — the check runs inside the terminal, so its real exit status is unobservable. Absence means no recognized summary was seen, which is not the same as no check running and not the same as passing. Check the run time for freshness before trusting it."
     ),
   recentOutput: z.string().nullable().optional(),
+  recentOutputTruncated: z
+    .boolean()
+    .optional()
+    .describe(
+      "Set when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept."
+    ),
   armed: z
     .boolean()
     .optional()

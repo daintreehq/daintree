@@ -18,6 +18,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 }));
 
 import type { TerminalStatusResult } from "@shared/types/terminalStatus";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
 
 /**
@@ -500,6 +501,60 @@ describe("terminal.getStatus", () => {
     expect(typeof out).toBe("string");
     expect((out as string).split("\n")).toHaveLength(50);
     expect((out as string).split("\n")[0]).toBe("line-150");
+  });
+
+  it("flags recentOutputTruncated only when older output was left out (#12450)", async () => {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2", "t3"],
+      panelsById: {
+        t1: { id: "t1", kind: "terminal", location: "grid", agentState: "idle" },
+        t2: { id: "t2", kind: "terminal", location: "grid", agentState: "idle" },
+        t3: { id: "t3", kind: "terminal", location: "grid", agentState: "idle" },
+      },
+    });
+    getSerializedStatesMock.mockResolvedValue(
+      snapshotMap({ t1: "one\ntwo\nthree", t2: "only", t3: null })
+    );
+
+    const { terminals } = await callGetStatus(setupActions(), {
+      includeOutput: { lines: 2 },
+    });
+
+    expect(terminals[0]).toMatchObject({ recentOutput: "two\nthree", recentOutputTruncated: true });
+    expect(terminals[1]?.recentOutput).toBe("only");
+    expect(terminals[1]).not.toHaveProperty("recentOutputTruncated");
+    expect(terminals[2]?.recentOutput).toBeNull();
+    expect(terminals[2]).not.toHaveProperty("recentOutputTruncated");
+  });
+
+  it("fits a busy fleet's tails under the response cap, newest lines kept (#12450)", async () => {
+    const ids = ["t1", "t2", "t3", "t4"];
+    const linesFor = (id: string) =>
+      Array.from({ length: 50 }, (_, i) => `${id} row ${i} `.padEnd(600, "│"));
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ids,
+      panelsById: Object.fromEntries(
+        ids.map((id) => [id, { id, kind: "terminal", location: "grid", agentState: "working" }])
+      ),
+    });
+    getSerializedStatesMock.mockResolvedValue(
+      snapshotMap(Object.fromEntries(ids.map((id) => [id, linesFor(id).join("\n")])))
+    );
+
+    const result = await callGetStatus(setupActions(), { includeOutput: { lines: 50 } });
+
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    expect(result.terminals.map((t) => t.terminalId)).toEqual(ids);
+    for (const entry of result.terminals) {
+      const lines = linesFor(entry.terminalId);
+      expect(entry.recentOutput).not.toBe("");
+      const kept = (entry.recentOutput ?? "").split("\n");
+      expect(kept).toEqual(lines.slice(-kept.length));
+      expect(entry.recentOutputTruncated).toBe(true);
+      expect(entry.agentState).toBe("working");
+    }
   });
 
   it("strips ANSI by default and preserves it when stripAnsi is false", async () => {

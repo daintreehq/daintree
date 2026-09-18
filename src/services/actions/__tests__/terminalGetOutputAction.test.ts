@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
+import { z } from "zod";
+import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
+
+/** Narrows a fitted read without asserting past the action's `any` result. */
+const FittedOutputSchema = z.object({
+  content: z.string(),
+  lineCount: z.number(),
+  truncated: z.boolean(),
+});
 
 /**
  * Snapshots cross IPC with the grid they were captured at (#11552); this action
@@ -252,6 +261,57 @@ describe("terminal.getOutput action", () => {
 
     // Should cap at 1000 lines
     expect(result.lineCount).toBe(1000);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("fits a wide tail under the response cap and keeps its newest lines (#12450)", async () => {
+    const lines = Array.from({ length: 1000 }, (_, i) => `row ${i} `.padEnd(240, "─"));
+    mockGetSerializedState.mockResolvedValue(snapshotOf(lines.join("\r\n")));
+
+    const actions = await createRegistry();
+    const action = actions.get("terminal.getOutput")!();
+    const output: unknown = await action.run({ terminalId: "test-terminal", maxLines: 1000 }, {});
+
+    expect(Buffer.byteLength(JSON.stringify(output), "utf8")).toBeLessThanOrEqual(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    const result = FittedOutputSchema.parse(output);
+    const kept = result.content.split("\n");
+    expect(kept.at(-1)).toBe(lines.at(-1));
+    expect(kept).toEqual(lines.slice(-kept.length));
+    expect(result.lineCount).toBe(kept.length);
+    expect(result.lineCount).toBeLessThan(1000);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("budgets preserved ANSI by its escaped size, not its raw size (#12450)", async () => {
+    const esc = String.fromCharCode(0x1b);
+    const segment = `${esc}[31mx${esc}[0m`;
+    const lines = Array.from({ length: 500 }, (_, i) => `${segment.repeat(6)} row ${i}`);
+    const raw = lines.join("\n");
+    // Fits raw, overruns once each ESC is written as a six-byte JSON escape.
+    expect(Buffer.byteLength(raw, "utf8")).toBeLessThan(MCP_RESPONSE_TEXT_MAX_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(raw), "utf8")).toBeGreaterThan(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    mockGetSerializedState.mockResolvedValue(snapshotOf(raw));
+
+    const actions = await createRegistry();
+    const action = actions.get("terminal.getOutput")!();
+    const output: unknown = await action.run(
+      { terminalId: "test-terminal", maxLines: 500, stripAnsi: false },
+      {}
+    );
+
+    expect(Buffer.byteLength(JSON.stringify(output), "utf8")).toBeLessThanOrEqual(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    const result = FittedOutputSchema.parse(output);
+    const kept = result.content.split("\n");
+    expect(kept).toEqual(lines.slice(-kept.length));
+    expect(result.content).toContain(esc);
+    expect(result.lineCount).toBe(kept.length);
+    expect(result.lineCount).toBeLessThan(500);
     expect(result.truncated).toBe(true);
   });
 

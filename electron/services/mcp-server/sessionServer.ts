@@ -42,6 +42,7 @@ import {
   serializeResourcePayload,
   unwrapDispatchResult,
   truncateText,
+  truncateTextTail,
   readStringField,
   RESOURCE_BACKING_ACTIONS,
   MCP_SERVER_INSTRUCTIONS,
@@ -106,6 +107,7 @@ import {
   ACTIONS_SEARCH_DEFAULT_LIMIT,
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
+import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
 import { extractOwnedResourcesFromDispatch, type OwnedResourceKind } from "./resourceOwnership.js";
@@ -2770,7 +2772,14 @@ async function readResourceContents(
       stripAnsi: true,
     });
     const value = unwrapDispatchResult(envelope);
-    const text = typeof value === "string" ? value : serializeResourcePayload(value);
+    if (typeof value === "string") {
+      return { uri, mimeType: "text/plain", text: truncateTextTail(value) };
+    }
+    // Compact, because `terminal.getOutput` fitted its tail to this same cap
+    // measured compact (#12450): indenting a full tail would push it back over
+    // and into the head-preserving cut, which leaves JSON that will not parse.
+    const text =
+      value === undefined || value === null ? "null" : safeSerializeToolResultCompact(value);
     return { uri, mimeType: "text/plain", text: truncateText(text) };
   }
   if (parsed.kind === "agentState") {
