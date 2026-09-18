@@ -62,12 +62,23 @@ class FakeDebugger extends EventEmitter {
 class FakeWebContents extends EventEmitter {
   readonly id = WEB_CONTENTS_ID;
   readonly debugger = new FakeDebugger();
+  /** What the guest currently shows; a test navigates by setting it before `did-navigate`. */
+  url = "http://localhost:5173/";
   isDestroyed(): boolean {
     return false;
   }
+  getURL(): string {
+    return this.url;
+  }
 }
 
-function makeHarness(overrides: { guestProject?: string | null; panelKind?: string } = {}) {
+function makeHarness(
+  overrides: {
+    guestProject?: string | null;
+    panelKind?: string;
+    adapterOrigins?: "local-preview" | "any";
+  } = {}
+) {
   const wc = new FakeWebContents();
   const pushed: SitePreviewPushPayload[] = [];
   let sessionCounter = 0;
@@ -95,7 +106,13 @@ function makeHarness(overrides: { guestProject?: string | null; panelKind?: stri
     newSessionId: () => `session-${++sessionCounter}`,
     newBindingName: () => "__binding",
     resolveGuestAdapter: (adapterId) =>
-      adapterBodies.has(adapterId) ? { id: adapterId, pluginId: PLUGIN_ID } : null,
+      adapterBodies.has(adapterId)
+        ? {
+            id: adapterId,
+            pluginId: PLUGIN_ID,
+            ...(overrides.adapterOrigins ? { origins: overrides.adapterOrigins } : {}),
+          }
+        : null,
     loadGuestAdapterSource: async (adapterId) => {
       adapterLoad.onEnter?.();
       if (adapterLoad.gate) await adapterLoad.gate;
@@ -455,6 +472,183 @@ describe("SitePreviewBridge", () => {
     );
     expect(installs.length).toBe(before + 1);
     expect(String(installs.at(-1)?.params?.source)).toContain("DOCUMENT_EPOCH = 1");
+  });
+
+  it("withholds the runtime from a page outside the adapter's origins, and keeps the binding", async () => {
+    harness.wc.url = "https://example.com/pricing";
+    const state = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    expect(state.suspended).toBe(true);
+    const methods = harness.wc.debugger.methods();
+    expect(methods).not.toContain("Page.addScriptToEvaluateOnNewDocument");
+    expect(methods).not.toContain("Runtime.evaluate");
+    expect(harness.pushed).toContainEqual({
+      kind: "origin-policy",
+      sessionId: "session-1",
+      projectId: PROJECT_ID,
+      documentEpoch: 0,
+      suspended: true,
+    });
+    expect(harness.pushed.some((p) => p.kind === "detached")).toBe(false);
+    expect(
+      harness.bridge.listCandidates(PROJECT_ID).find((c) => c.panelId === PANEL_ID)?.boundSessionId
+    ).toBe("session-1");
+  });
+
+  it("suspends when the preview leaves the local origin and resumes on the way back", async () => {
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    announceContexts(harness.wc);
+    const installsBefore = harness.wc.debugger.commands.filter(
+      (c) => c.method === "Page.addScriptToEvaluateOnNewDocument"
+    ).length;
+
+    harness.wc.url = "https://accounts.example.com/login";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(harness.pushed).toContainEqual({
+        kind: "origin-policy",
+        sessionId: "session-1",
+        projectId: PROJECT_ID,
+        documentEpoch: 1,
+        suspended: true,
+      });
+    });
+    // The previous document's script has already run in this one, so the
+    // removal is threefold: the script, the binding, and the runtime itself —
+    // disposed by the install id it was given, as on teardown.
+    const methods = harness.wc.debugger.methods();
+    expect(methods).toContain("Page.removeScriptToEvaluateOnNewDocument");
+    expect(methods).toContain("Runtime.removeBinding");
+    const disposals = harness.wc.debugger.commands.filter(
+      (c) =>
+        c.method === "Runtime.evaluate" &&
+        String(c.params?.expression).includes("api.installId !== ")
+    );
+    expect(disposals).toHaveLength(1);
+    expect(
+      harness.wc.debugger.commands.filter(
+        (c) => c.method === "Page.addScriptToEvaluateOnNewDocument"
+      ).length
+    ).toBe(installsBefore);
+    expect(harness.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(true);
+
+    // Traffic from the excluded document is ignored, not counted as abuse.
+    callBinding(harness.wc, envelope({ documentEpoch: 1, event: { type: "documentReady" } }));
+    expect(harness.pushed.some((p) => p.kind === "guest-event")).toBe(false);
+    expect(harness.bridge.getState(PROJECT_ID, "session-1")?.droppedMessages).toBe(0);
+
+    harness.wc.url = "http://127.0.0.1:5173/";
+    // The runtime reports `documentReady` from inside the install's evaluate,
+    // before that call returns. Held here so the readiness lands while the
+    // resumed install is still in flight: it must not be ignored as suspended
+    // traffic.
+    let releaseEvaluate: () => void = () => {};
+    harness.wc.debugger.gates.set(
+      "Runtime.evaluate",
+      new Promise<void>((resolve) => {
+        releaseEvaluate = resolve;
+      })
+    );
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(harness.pushed).toContainEqual({
+        kind: "origin-policy",
+        sessionId: "session-1",
+        projectId: PROJECT_ID,
+        documentEpoch: 2,
+        suspended: false,
+      });
+    });
+    await vi.waitFor(() => {
+      const installs = harness.wc.debugger.commands.filter(
+        (c) => c.method === "Page.addScriptToEvaluateOnNewDocument"
+      );
+      expect(installs.length).toBe(installsBefore + 1);
+      expect(String(installs.at(-1)?.params?.source)).toContain("DOCUMENT_EPOCH = 2");
+    });
+    callBinding(
+      harness.wc,
+      envelope({
+        documentEpoch: 2,
+        event: {
+          type: "documentReady",
+          routeId: "/",
+          url: "http://127.0.0.1:5173/",
+          viewport: { width: 800, height: 600, deviceScaleFactor: 1 },
+        },
+      })
+    );
+    releaseEvaluate();
+    harness.wc.debugger.gates.delete("Runtime.evaluate");
+    await vi.waitFor(() => {
+      expect(harness.bridge.getState(PROJECT_ID, "session-1")?.guestReady).toBe(true);
+    });
+    expect(harness.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(false);
+  });
+
+  it("withholds the runtime from a document that arrived while the install was in flight", async () => {
+    // The bind's install is past its policy check and waiting on CDP when the
+    // page leaves for a foreign origin. That install must not evaluate into the
+    // foreign document, and the reinstall the navigation queued must remove the
+    // script it registered.
+    let releaseAddBinding: () => void = () => {};
+    harness.wc.debugger.gates.set(
+      "Runtime.addBinding",
+      new Promise<void>((resolve) => {
+        releaseAddBinding = resolve;
+      })
+    );
+    const bound = harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    await vi.waitFor(() => {
+      expect(harness.wc.debugger.methods()).toContain("Runtime.addBinding");
+    });
+    harness.wc.url = "https://example.com/";
+    harness.wc.emit("did-navigate");
+    releaseAddBinding();
+    harness.wc.debugger.gates.delete("Runtime.addBinding");
+    await bound;
+    await vi.waitFor(() => {
+      expect(harness.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(true);
+    });
+    // The only evaluate allowed into that document is the disposal the
+    // suspension sends; the runtime itself never goes in.
+    const evaluated = harness.wc.debugger.commands
+      .filter((c) => c.method === "Runtime.evaluate")
+      .map((c) => String(c.params?.expression));
+    expect(evaluated.some((source) => source.includes("DOCUMENT_EPOCH"))).toBe(false);
+    const methods = harness.wc.debugger.methods();
+    expect(methods).toContain("Page.removeScriptToEvaluateOnNewDocument");
+    expect(harness.wc.debugger.commands.at(-1)?.method).not.toBe(
+      "Page.addScriptToEvaluateOnNewDocument"
+    );
+  });
+
+  it("installs anywhere for an adapter declared for any origin", async () => {
+    harness = makeHarness({ adapterOrigins: "any" });
+    harness.wc.url = "https://example.com/";
+    const state = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    expect(state.suspended).toBe(false);
+    expect(harness.wc.debugger.methods()).toContain("Page.addScriptToEvaluateOnNewDocument");
+    expect(harness.pushed.some((p) => p.kind === "origin-policy")).toBe(false);
   });
 
   it("refuses a panel embedded by another project's view", async () => {

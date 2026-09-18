@@ -58,6 +58,7 @@ import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { scopesFor, type CallSite } from "./agentTask.js";
 import {
   DETACH_COPY,
+  ORIGIN_SUSPENDED_COPY,
   UNTESTED_TOOLCHAIN_TITLE,
   relativeTo,
   untestedToolchainDetail,
@@ -312,6 +313,9 @@ function StripStatus({
     );
   }
   if (!bound) return <WaitingRow label="Connecting to the page" />;
+  if (binding.status === "bound" && binding.suspended) {
+    return <StripMessage icon={Unplug}>{ORIGIN_SUSPENDED_COPY}</StripMessage>;
+  }
 
   const selection = state.selection;
   if (selection.status === "ready") {

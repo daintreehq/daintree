@@ -122,6 +122,7 @@ export function createFakeHost() {
     mode,
     guestReady: false,
     droppedMessages: 0,
+    suspended: false,
   });
 
   const sitePreview = {

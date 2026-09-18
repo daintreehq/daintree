@@ -96,7 +96,18 @@ export interface InspectorContext {
 export type BindingState =
   | { status: "idle" }
   | { status: "binding"; panelId: string }
-  | { status: "bound"; sessionId: string; panelId: string; url: string | null }
+  | {
+      status: "bound";
+      sessionId: string;
+      panelId: string;
+      url: string | null;
+      /**
+       * The preview shows a document outside the adapter's origins, so the
+       * host withheld the runtime. Still bound: the next local document
+       * installs on its own.
+       */
+      suspended: boolean;
+    }
   | { status: "detached"; panelId: string; reason: SitePreviewDetachReason }
   /** `retrying`: an automatic attempt is scheduled; false once they have run out. */
   | { status: "failed"; message: string; retrying: boolean };
@@ -639,6 +650,7 @@ export class InspectorController implements DevPreviewToolSession {
         sessionId: state.sessionId,
         panelId: state.panelId,
         url: null,
+        suspended: state.suspended,
       },
       mode: state.mode,
       epoch: null,
@@ -797,6 +809,14 @@ export class InspectorController implements DevPreviewToolSession {
         return;
       case "epoch-advanced":
         this.noteEpoch(payload.documentEpoch);
+        return;
+      case "origin-policy":
+        // A suspension always follows a navigation, and that epoch advance is
+        // what retires the selection; nothing here is stale on its own.
+        this.noteEpoch(payload.documentEpoch);
+        if (binding.suspended !== payload.suspended) {
+          this.patchState({ binding: { ...binding, suspended: payload.suspended } });
+        }
         return;
       case "guest-event":
         this.handleGuestEvent(payload);

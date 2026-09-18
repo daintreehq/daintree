@@ -33,6 +33,16 @@ export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
   "host-shutdown": "Disconnected from the dev preview",
 };
 
+/**
+ * The strip while the preview shows a page outside the builder's origins — an
+ * external site the app linked to, an OAuth provider. Says what the host
+ * checked, the address, not who served it (a tunnel or a custom domain in
+ * front of the same dev server reads as foreign too). An observation with
+ * nothing to do: the binding is intact and the next local page picks up on
+ * its own, so no action and no warning tone.
+ */
+export const ORIGIN_SUSPENDED_COPY = "Paused — this page isn't at a local address";
+
 export function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
