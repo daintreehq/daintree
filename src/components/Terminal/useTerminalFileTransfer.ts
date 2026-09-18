@@ -4,7 +4,10 @@ import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { escapeShellArgOptional } from "@shared/utils/shellEscape.js";
-import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol.js";
+import {
+  formatWithBracketedPaste,
+  neutralizeControlCharacters,
+} from "@shared/utils/terminalInputProtocol.js";
 import {
   FILE_DRAG_MIME,
   decodeFileDragPaths,
@@ -44,19 +47,33 @@ function hasImageClipboardItem(event: ClipboardEvent): boolean {
   return false;
 }
 
-const ESC = String.fromCharCode(27);
-
 /**
  * Control characters that cannot be delivered safely as terminal input.
  *
  * CR and LF read as Enter to a program that is not in bracketed-paste mode,
  * which would submit rather than insert; ESC can open an escape sequence. All
- * three are legal in a POSIX filename, so a dropped path really can carry them.
- * Such a path is skipped exactly like one that failed to resolve — there is no
- * sanitized form that still points at the same file.
+ * of them are legal in a POSIX filename, so a dropped path really can carry
+ * one. Such a path is skipped exactly like one that failed to resolve — there
+ * is no sanitized form that still points at the same file.
+ *
+ * The test is the C0 block and DEL rather than those three, because
+ * `neutralizeControlCharacters` now rewrites the rest of them on the way out. A
+ * path that merely survived before would arrive spelled differently — naming a
+ * file that does not exist, or a different one that does — and `onInput` would
+ * record the original spelling beside it. Refusing is the honest answer, and it
+ * is the one this comment already promised.
+ *
+ * Tab is the exception, and stays deliverable: neutralisation preserves it, so
+ * a path carrying one still names the file it did before. Rejecting it would
+ * take away a drop that has always worked, to fix nothing.
  */
 function isDeliverablePath(filePath: string): boolean {
-  return !filePath.includes("\r") && !filePath.includes("\n") && !filePath.includes(ESC);
+  for (let index = 0; index < filePath.length; index++) {
+    const code = filePath.charCodeAt(index);
+    if (code === 0x09) continue;
+    if (code < 0x20 || code === 0x7f) return false;
+  }
+  return true;
 }
 
 interface UseTerminalFileTransferOptions extends TerminalFileTransferIdentity {
@@ -196,7 +213,14 @@ export function useTerminalFileTransfer(
     const writeToTerminal = (text: string, isAgent: boolean) => {
       const managed = terminalInstanceService.get(terminalId);
       const useBracketedPaste = managed ? managed.terminal.modes.bracketedPasteMode : isAgent;
-      const payload = useBracketedPaste ? formatWithBracketedPaste(text) : text;
+      // The unwrapped branch writes at the parser directly, so it needs the
+      // neutralisation the wrapper performs for the other one. Paths carrying
+      // controls never reach here (`isDeliverablePath` refuses them, because a
+      // rewritten path names a different file); this covers everything else
+      // that shares the batch, and costs nothing when there is nothing to do.
+      const payload = useBracketedPaste
+        ? formatWithBracketedPaste(text)
+        : neutralizeControlCharacters(text);
 
       terminalClient.write(terminalId, payload);
       terminalInstanceService.notifyUserInput(terminalId);

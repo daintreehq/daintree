@@ -5,6 +5,7 @@ import {
   PASTE_THRESHOLD_CHARS,
   containsFullBracketedPaste,
   formatWithBracketedPaste,
+  neutralizeControlCharacters,
   getSoftNewlineSequence,
   shouldUseBracketedPaste,
 } from "../terminalInputProtocol.js";
@@ -102,5 +103,56 @@ describe("terminalInputProtocol", () => {
     expect(formatWithBracketedPaste(plain)).toBe(
       `${BRACKETED_PASTE_START}${plain}${BRACKETED_PASTE_END}`
     );
+  });
+});
+
+describe("neutralizeControlCharacters", () => {
+  const ESC = String.fromCharCode(0x1b);
+  const ETX = String.fromCharCode(0x03);
+
+  it("turns every C0 action character into its picture", () => {
+    // The pair the audit reproduced reaching a pty intact: a cursor-movement
+    // sequence and an interrupt, both carried in a DOM-derived label.
+    const payload = `button#x${ESC}[D${ETX}`;
+    const safe = neutralizeControlCharacters(payload);
+
+    expect(safe).toBe("button#x\u241b[D\u2403");
+    expect(safe).not.toContain(ESC);
+    expect(safe).not.toContain(ETX);
+    // Still legible: the text around the controls is untouched.
+    expect(safe).toContain("button#x");
+  });
+
+  it("neutralizes DEL and the rest of the C0 block", () => {
+    for (let code = 0; code < 0x20; code++) {
+      if (code === 0x09 || code === 0x0a) continue;
+      const safe = neutralizeControlCharacters(String.fromCharCode(code));
+      expect(safe, `code ${code}`).toBe(String.fromCharCode(0x2400 + code));
+    }
+    expect(neutralizeControlCharacters(String.fromCharCode(0x7f))).toBe("\u2421");
+  });
+
+  it("keeps tabs and newlines, which are structure rather than action", () => {
+    expect(neutralizeControlCharacters("a\tb\nc")).toBe("a\tb\nc");
+  });
+
+  it("neutralizes a bare carriage return but keeps it inside a paste", () => {
+    // Bare, it submits the line. Between paste delimiters it is the line
+    // separator the program reads as data.
+    expect(neutralizeControlCharacters("a\rb")).toBe("a\u240db");
+    expect(neutralizeControlCharacters("a\rb", { insideBracketedPaste: true })).toBe("a\rb");
+  });
+
+  it("returns the same string when there is nothing to neutralize", () => {
+    const plain = "select the pricing card";
+    expect(neutralizeControlCharacters(plain)).toBe(plain);
+  });
+
+  it("carries multi-line paste bodies through the wrapper unbroken", () => {
+    // `performSubmit` converts newlines to `\r` before wrapping; neutralisation
+    // must not eat the separators that conversion exists to produce.
+    const wrapped = formatWithBracketedPaste("one\rtwo\rthree");
+    const body = wrapped.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+    expect(body).toBe("one\rtwo\rthree");
   });
 });

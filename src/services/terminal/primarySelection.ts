@@ -1,4 +1,7 @@
-import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import {
+  formatWithBracketedPaste,
+  neutralizeControlCharacters,
+} from "@shared/utils/terminalInputProtocol";
 
 export interface PrimarySelectionDeps {
   hostElement: HTMLElement;
@@ -54,9 +57,19 @@ export function installLinuxPrimarySelectionListeners(deps: PrimarySelectionDeps
       const { text } = await readSelection();
       if (!text) return;
       if (isDisposed() || isInputLocked()) return;
+      // A PRIMARY selection is whatever was on screen, escape sequences from a
+      // program's own output included, so neither branch may hand it to the
+      // parser as it stands. Each branch neutralises for itself, because `\r`
+      // means different things in the two: inside a bracketed paste it is the
+      // line separator and must survive, and the wrapper keeps it. Unwrapped it
+      // submits, which is what middle-click has always done — so every line
+      // ending, CRLF and bare CR and bare LF alike, is folded to `\n` first,
+      // neutralised, and only then turned back into the `\r` we mean. Folding
+      // only CRLF would leave a bare CR for the sanitiser to glyph, and a
+      // selection off a screen that uses them would paste as a single line.
       const payload = getBracketedPasteMode()
         ? formatWithBracketedPaste(text)
-        : text.replace(/\r?\n/g, "\r");
+        : neutralizeControlCharacters(text.replace(/\r\n|\r/g, "\n")).replace(/\n/g, "\r");
       writeToPty(terminalId, payload);
       notifyUserInput(terminalId);
     } catch {

@@ -148,6 +148,43 @@ describe("TerminalProcess.submit", () => {
     vi.useRealTimers();
   });
 
+  it("neutralizes page-derived controls on Gemini's soft-newline path", async () => {
+    // Gemini declares no bracketed paste, so its body used to reach the pty
+    // byte for byte. A DOM id the Site Builder quotes into a prompt can carry
+    // a cursor sequence and an interrupt; neither may be written as input.
+    vi.useFakeTimers();
+    const terminal = createTerminal({ kind: "terminal", launchAgentId: "gemini" });
+    (
+      terminal as unknown as { terminalInfo: { detectedAgentId: string } }
+    ).terminalInfo.detectedAgentId = "gemini";
+
+    terminal.submit("button#x\x1b[D\x03\nsecond line");
+
+    const written = ptyWriteMock.mock.calls[0]?.[0] ?? "";
+    // The soft newline Gemini needs is still generated, and it is the only
+    // ESC in the payload — the one that came from the page is a glyph.
+    expect(written).toBe("button#x\u241b[D\u2403\x1b\rsecond line");
+    expect(written.split("\x1b")).toHaveLength(2);
+    expect(written).not.toContain("\x03");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
+
+  it("neutralizes page-derived controls on the plain short-text path", async () => {
+    // Short single-line text takes neither the paste nor the soft-newline
+    // branch and is written straight through.
+    vi.useFakeTimers();
+    const terminal = createTerminal();
+
+    terminal.submit("about button#x\x1b[D\x03");
+
+    expect(ptyWriteMock.mock.calls[0]?.[0]).toBe("about button#x\u241b[D\u2403");
+    await vi.advanceTimersByTimeAsync(250);
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("\r");
+    vi.useRealTimers();
+  });
+
   it("routes focus-in (CSI I) to activityMonitor.notifyFocus instead of onInput (#8865)", () => {
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "claude" });
     const monitor = (
