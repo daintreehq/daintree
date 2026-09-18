@@ -12,6 +12,7 @@ import { getGitDir } from "./gitUtils.js";
 import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "./gitCheckIgnore.js";
 import { OPERATION_SENTINEL_NAMES } from "./gitRepoOperationState.js";
 import { resolveParcelWatcherExclusions, subscribeParcelWatcher } from "./parcelWatcherBackend.js";
+import { isRescanRequest } from "./parcelWatcherRescan.js";
 import { logWarn } from "./logger.js";
 import { affectedDirsForBurst } from "./worktreeAffectedDirs.js";
 
@@ -183,18 +184,6 @@ export interface GitFileWatcherOptions {
    *  the macOS FSEvents file descriptor ceiling (EMFILE). Fires in addition to
    *  `onWatcherFailed`. */
   onEmfileLimitReached?: () => void;
-}
-
-/**
- * Distinguish @parcel/watcher's non-fatal "you missed some events, re-scan"
- * signal from a genuine subscription failure. Only the macOS FSEvents backend
- * emits it (for `kFSEventStreamEventFlagMustScanSubDirs` and its kernel/client
- * drop variants), and only through the channel that leaves the subscription
- * alive. Windows fs.watch errors travel the ordinary fatal channel instead, so
- * they must NOT match here.
- */
-function isRescanRequest(message: string): boolean {
-  return /must be re-scanned/i.test(message);
 }
 
 export class GitFileWatcher {

@@ -7,6 +7,7 @@ import type { PluginDevWatcherState } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { createLogger } from "../../utils/logger.js";
 import { subscribeParcelWatcher } from "../../utils/parcelWatcherBackend.js";
+import { isRescanRequest } from "../../utils/parcelWatcherRescan.js";
 import { ABSENT_FINGERPRINT, fingerprintPluginDir } from "./pluginArtifactFingerprint.js";
 
 const logger = createLogger("main:PluginDevArtifactWatcher");
@@ -38,12 +39,20 @@ const STABILITY_MS = 120;
 const REARM_DELAY_MS = 1_000;
 const REARM_MAX_ATTEMPTS = 5;
 
+/**
+ * How long a re-armed subscription must stay up before it earns back the full
+ * re-arm budget. Resetting on the subscribe itself let a stream that dies
+ * seconds after every re-arm churn forever and never reach `degraded`.
+ */
+const REARM_HEALTHY_MS = 60_000;
+
 /** Overridable cadence, so tests do not have to spend real seconds on backoff. */
 export interface PluginDevArtifactWatcherTimings {
   settleDebounceMs: number;
   stabilityMs: number;
   rearmDelayMs: number;
   rearmMaxAttempts: number;
+  rearmHealthyMs: number;
 }
 
 const DEFAULT_TIMINGS: PluginDevArtifactWatcherTimings = {
@@ -51,6 +60,7 @@ const DEFAULT_TIMINGS: PluginDevArtifactWatcherTimings = {
   stabilityMs: STABILITY_MS,
   rearmDelayMs: REARM_DELAY_MS,
   rearmMaxAttempts: REARM_MAX_ATTEMPTS,
+  rearmHealthyMs: REARM_HEALTHY_MS,
 };
 
 export interface PluginDevArtifactWatcherDeps {
@@ -97,6 +107,8 @@ interface WatchState {
   sentinel: FSWatcher | null;
   sentinelPath: string | null;
   rearmAttempts: number;
+  /** `performance.now()` when the current subscription was adopted. */
+  armedAt: number | null;
   /**
    * Completed arms that actually resolved the directory. The FIRST one seeds
    * the fingerprint; later ones must not, or a rebuild that landed while the
@@ -192,6 +204,7 @@ export class PluginDevArtifactWatcher {
       sentinel: null,
       sentinelPath: null,
       rearmAttempts: 0,
+      armedAt: null,
       armCount: 0,
       arming: false,
       timer: null,
@@ -301,6 +314,16 @@ export class PluginDevArtifactWatcher {
         realDir,
         (err, events) => {
           if (this.isStale(state, generation)) return;
+          if (err && isRescanRequest(err.message)) {
+            // FSEvents dropped events but the stream is still running, so keep
+            // it and re-read the artifact — the same sweep a re-arm runs,
+            // without rebuilding a healthy client or spending the budget.
+            logger.debug("Plugin dev artifact watcher dropped events; rescanning", {
+              pluginId: state.pluginId,
+            });
+            this.schedule(state);
+            return;
+          }
           if (err) {
             logger.warn("Plugin dev artifact watcher error; re-arming", {
               pluginId: state.pluginId,
@@ -342,7 +365,9 @@ export class PluginDevArtifactWatcher {
       return;
     }
     state.subscription = subscription;
-    state.rearmAttempts = 0;
+    // Not a budget reset: that waits until this subscription has proven it
+    // stays up (see `rearmAfterError`).
+    state.armedAt = performance.now();
     this.disarmSentinel(state);
     this.setState(state, "watching", null);
     // Whatever changed while the watch was down produced no event this
@@ -391,10 +416,18 @@ export class PluginDevArtifactWatcher {
    * reporting an error is no longer reporting changes, so sitting on the handle
    * is indistinguishable from hot reload being switched off — which is the
    * failure this issue is about. Exhausting the budget reports `degraded`
-   * rather than continuing to look healthy.
+   * rather than continuing to look healthy. The budget is only restored by a
+   * subscription that stayed up for the healthy interval.
    */
   private rearmAfterError(state: WatchState, reason: string): void {
     if (this.disposed || state.stopped) return;
+    if (
+      state.armedAt !== null &&
+      performance.now() - state.armedAt >= this.timings.rearmHealthyMs
+    ) {
+      state.rearmAttempts = 0;
+    }
+    state.armedAt = null;
     const subscription = state.subscription;
     state.subscription = null;
     if (subscription) {
