@@ -39,7 +39,7 @@ export function coerceAgentState(value: unknown): AgentState | undefined {
 /**
  * Classification of why an agent is in the "waiting" state.
  *
- * - `"prompt"` — empty input prompt visible; safe to auto-drive.
+ * - `"prompt"` — usually an empty input prompt, but also the fallback when nothing more specific matched; confirm against output before driving it.
  * - `"question"` — agent asked a free-form question; verify before replying.
  * - `"approval"` — permission/approval selector visible (tool approval, y/n
  *   confirm, trust dialog); a specific choice is required, not free text.

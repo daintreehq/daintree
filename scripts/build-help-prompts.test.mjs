@@ -13,6 +13,14 @@ const AGENTS = readFileSync(path.join(root, "help/AGENTS.md"), "utf8");
 const SHARED = readFileSync(path.join(root, "scripts/help-src/SHARED.md"), "utf8");
 const AGENTS_HEAD = readFileSync(path.join(root, "scripts/help-src/AGENTS.head.md"), "utf8");
 
+/** The body of one `## ` section, so a rule is pinned where it belongs. */
+function section(body, heading) {
+  const start = body.indexOf(heading);
+  if (start === -1) return "";
+  const next = body.indexOf("\n## ", start + heading.length);
+  return body.slice(start, next === -1 ? undefined : next);
+}
+
 const ALL_GENERATED = [
   ["CLAUDE.md", CLAUDE],
   ["AGENTS.md", AGENTS],
@@ -57,6 +65,58 @@ describe("help prompt outputs", () => {
         expect(body).not.toMatch(/send the selection keys/i);
       }
     );
+
+    // A help session read a launched agent's output eight times inside 78
+    // seconds — while every agent sat idle at an empty prompt with its prompt
+    // already dropped — then told the user Daintree structurally cannot show
+    // it a Claude Code screen, and never checked again across 113 further
+    // steps. The scrollback was fine; the window was dead. These match the
+    // POLICY, not the sentence: reword freely, but losing the rule fails.
+    it.each(ALL_GENERATED)("%s keeps inferred limits inside their evidence", (_name, body) => {
+      const grounding = section(body, "## How to Answer");
+      expect(grounding).toMatch(/hypothesis|inferred/i);
+      expect(grounding).toMatch(/\bretest\b/i);
+      expect(grounding).toMatch(/untested limit/i);
+    });
+
+    // The same session answered a permission dialog with a guessed `1` while
+    // saying outright it could not see what the dialog asked. The rule against
+    // guessing a key was already there; the branch for "I can't read it at
+    // all" was not, so the assistant invented one.
+    it.each(ALL_GENERATED)("%s forbids answering a dialog it cannot read", (_name, body) => {
+      const launched = section(body, "## Agents You Launch");
+      expect(launched).toMatch(/don't send a selection at all/i);
+      expect(launched).toMatch(/fresh, larger read/i);
+      expect(launched).toMatch(/can't read isn't inside any authority/i);
+    });
+
+    // `worktree.delete` came back CONFIRMATION_TIMEOUT twice — the user never
+    // saw the dialog — and the same deletion then went through Bash with
+    // `git worktree remove --force`, past the submodule guard the action
+    // carries. The forge-write ban did not generalise; this does. The code has
+    // TWO sources for that error (nobody answered, and an approval that
+    // arrived past the deadline), so the rule must not claim either one.
+    it.each(ALL_GENERATED)("%s treats an unanswered confirmation as unanswered", (_name, body) => {
+      const gate = section(body, "## When an Action Needs the User");
+      expect(gate).toMatch(/CONFIRMATION_TIMEOUT/);
+      expect(gate).not.toMatch(/means nobody answered/i);
+      expect(gate).toMatch(/nor is a decline you can reason past/i);
+      expect(gate).toMatch(/bypass/i);
+      expect(gate).toMatch(/submodule/i);
+      // Must not read as a blanket ban on shell work.
+      expect(gate).toMatch(/carry on/i);
+    });
+
+    // "#70's approval was answered and it is armed now" — from a status
+    // carrying only `agentState: "working"` and `armed: true`. `armed` is
+    // fleet-broadcast selection, and activity is marked before the write goes
+    // out, so a send can manufacture the `working` it is then read as proof of.
+    it.each(ALL_GENERATED)("%s reads state fields for what they say", (_name, body) => {
+      const launched = section(body, "## Agents You Launch");
+      expect(launched).toMatch(/`armed`[^.]*fleet broadcast/i);
+      expect(launched).toMatch(/`working` is heuristic/i);
+      expect(launched).toMatch(/before the write goes out/i);
+    });
 
     it.each(ALL_GENERATED)("%s bounds waiting on a stuck agent and reports it", (_name, body) => {
       expect(body).toMatch(/After two waits with no change in its recent output, stop waiting/);

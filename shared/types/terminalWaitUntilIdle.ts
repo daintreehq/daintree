@@ -93,9 +93,11 @@ export type WaitUntilIdleResult = {
    */
   trackingState: WaitUntilIdleTrackingState;
   /**
-   * Only present when `idleReason === "waiting_for_user"`. Distinguishes a safe
-   * auto-drive moment (`"prompt"` — empty input prompt) from an agent actively
-   * asking the user a question (`"question"`).
+   * Only present when `idleReason === "waiting_for_user"`. Distinguishes an
+   * ordinary wait (`"prompt"` — usually an empty input prompt, but also the
+   * classifier's fallback when nothing more specific matched, so confirm it
+   * against output before driving) from an agent actively asking the user a
+   * question (`"question"`).
    */
   waitingReason?: WaitingReason;
   previousBusyState?: "working" | "idle";
@@ -162,7 +164,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       enum: ["prompt", "question", "approval", "error"],
       description:
-        "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt (safe to auto-drive); 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
+        "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt, or the fallback when nothing else matched — confirm before driving; 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
     },
     previousBusyState: { type: "string", enum: ["working", "idle"] },
     lastTransitionAt: { type: "number" },

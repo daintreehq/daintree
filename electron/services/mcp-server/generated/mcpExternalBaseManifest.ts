@@ -2191,7 +2191,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           enum: ["prompt", "question", "approval", "error"],
           description:
-            "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt (safe to auto-drive); 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
+            "Present only when idleReason is 'waiting_for_user'. 'prompt' = empty input prompt, or the fallback when nothing else matched — confirm before driving; 'question' = agent is asking the user a question; 'approval' = a permission/approval selector needs a specific choice; 'error' = agent stopped after a blocking error (auth/rate limit/network/failed command).",
         },
         previousBusyState: {
           type: "string",
