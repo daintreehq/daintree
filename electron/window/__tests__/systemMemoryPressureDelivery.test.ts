@@ -92,7 +92,7 @@ describe("systemMemoryPressureDelivery", () => {
     publishSystemMemoryPressure(DEGRADED, [win]);
     expect(view.send).not.toHaveBeenCalled();
 
-    view.setLoading(false);
+    // did-finish-load fires while Chromium still reports the view as loading.
     deliverOpenSystemMemoryPressure(win, view.wc);
     deliverOpenSystemMemoryPressure(win, view.wc);
     expect(view.send).toHaveBeenCalledTimes(1);

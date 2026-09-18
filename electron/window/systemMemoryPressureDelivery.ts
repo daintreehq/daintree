@@ -12,11 +12,13 @@ function envelope(payload: SystemMemoryPressurePayload) {
   return { name: "system:memory-pressure", payload };
 }
 
-function deliver(win: BrowserWindow, wc: WebContents): void {
+function deliver(win: BrowserWindow, wc: WebContents, viewReady: boolean): void {
   if (!openEpisode || win.isDestroyed() || notifiedWindowIds.has(win.id)) return;
-  // A view still loading drops the send before its preload is listening; it is
-  // delivered from its own did-finish-load instead.
-  if (wc.isDestroyed() || wc.isLoading()) return;
+  if (wc.isDestroyed()) return;
+  // A view still loading drops the send before its preload is listening, so it
+  // waits for its own did-finish-load. That event fires before Chromium clears
+  // the loading state, so the ready path must not consult isLoading() itself.
+  if (!viewReady && wc.isLoading()) return;
   try {
     wc.send(CHANNELS.EVENTS_PUSH, envelope(openEpisode));
     notifiedWindowIds.add(win.id);
@@ -44,13 +46,13 @@ export function publishSystemMemoryPressure(
   }
   openEpisode = payload;
   for (const win of windows) {
-    if (!win.isDestroyed()) deliver(win, getAppWebContents(win));
+    if (!win.isDestroyed()) deliver(win, getAppWebContents(win), false);
   }
 }
 
-/** Call when a window's visible view finishes loading. */
+/** Call from the did-finish-load of a window's visible view. */
 export function deliverOpenSystemMemoryPressure(win: BrowserWindow, wc: WebContents): void {
-  deliver(win, wc);
+  deliver(win, wc, true);
 }
 
 export function resetSystemMemoryPressureDeliveryForTesting(): void {
