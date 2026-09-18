@@ -626,6 +626,12 @@ describe("sessionServer prompt handler", () => {
     // point at reading the dialog and at the user's authority instead.
     expect(text).toMatch(/"approval"[^\n]*within authority the user already gave/);
     expect(text).not.toMatch(/send the selection keys|keys, not prose/);
+    // `prompt` is also the classifier's fallback when nothing more specific
+    // matched (WaitingReasonClassifier's default branch), so the recipe must
+    // not present it as a safe thing to drive unseen. Policy, not wording:
+    // the reassurance must be gone and some confirm-first instruction present.
+    expect(text).not.toMatch(/safe to auto-drive/);
+    expect(text).toMatch(/confirm against output/i);
   });
 
   it("does not dispatch worktree.getCurrent for triage_terminals (static prompt)", async () => {

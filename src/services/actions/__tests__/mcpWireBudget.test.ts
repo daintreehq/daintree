@@ -438,7 +438,16 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // round. The description stays on all three because the name alone reads as
   // raw output time, and spinner redraws are exactly what it leaves out. It was
   // trimmed from 152 B before raising.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_400;
+  //
+  // 56_400 → 56_450, measured at 56_449 B. The `waitingReason` enum's `"prompt"`
+  // arm used to read "empty input prompt (safe to auto-drive)". It is also the
+  // classifier's fallback when nothing more specific matched
+  // (`WaitingReasonClassifier`'s default branch), so a model that took the old
+  // wording at face value would drive a wait it had not identified. Same
+  // argument as the `pty_written` spend above: the length is the fix, because
+  // the short version is the one that reads as a reassurance. Trimmed from
+  // 144 B to 99 B before raising, for a net 49 B.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_450;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -532,7 +541,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   //
   // 214_300 → 214_900 for #12428, measured at 214_853 B: the same 567 B as the
   // external ceiling above, since all three tools are on both surfaces.
-  const MAX_COHORT_PAYLOAD_BYTES = 214_900;
+  //
+  // 214_900 → 214_950 for the `waitingReason` `"prompt"` rewording, measured at
+  // 214_902 B: the same 49 B as the external ceiling above, on one tool.
+  const MAX_COHORT_PAYLOAD_BYTES = 214_950;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
