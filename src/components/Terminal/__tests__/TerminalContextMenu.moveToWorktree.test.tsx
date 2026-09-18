@@ -535,6 +535,25 @@ describe("TerminalContextMenu — Move to worktree cap and picker handoff (#1244
     expect([moved.x, moved.y]).toEqual([260, 120]);
   });
 
+  // Radix opens on a touch or pen long-press straight from its own timer, with
+  // no contextmenu event behind it.
+  it("anchors on the press point when a long-press opened the menu", () => {
+    openMenu(manyWorktrees(12));
+    const pane = screen.getByText("Panel body");
+    vi.spyOn(pane, "getBoundingClientRect").mockReturnValue(
+      DOMRect.fromRect({ x: 100, y: 50, width: 400, height: 300 })
+    );
+
+    fireEvent.pointerDown(pane, { pointerType: "touch", clientX: 220, clientY: 140 });
+    fireEvent.click(screen.getByText(MORE));
+    closeMenu();
+
+    expect(screen.getByTestId("move-picker").getAttribute("data-panel-id")).toBe("panel-1");
+    expect(pickerProps.current?.returnFocusRef.current).toBe(pane);
+    const point = anchorRef.current!.current!.getBoundingClientRect();
+    expect([point.x, point.y]).toEqual([220, 140]);
+  });
+
   it("closes the picker when the menu starts speaking for another panel, and keeps it closed", () => {
     worktreesRef.current = manyWorktrees(12);
     panelsById.current = {

@@ -149,8 +149,9 @@ export function TerminalContextMenu({
   // the menu still holds the focus trap, and the menu's focus return would then
   // land after the picker had focused its search field.
   const pendingMovePickerRef = useRef<string | null>(null);
-  // Captured on every right-click. A context menu has no trigger to hang the
-  // picker off or hand a keyboard dismissal back to, so the pane stands in.
+  // Captured on every gesture that can open the menu. A context menu has no
+  // trigger to hang the picker off or hand a keyboard dismissal back to, so the
+  // pane stands in.
   const capturedMovePickerAnchorRef = useRef<MovePickerAnchor | null>(null);
   const movePickerReturnFocusRef = useRef<HTMLElement | null>(null);
 
@@ -199,6 +200,15 @@ export function TerminalContextMenu({
       },
     };
   }, []);
+
+  // Radix also opens the menu from a touch or pen long-press, which never
+  // raises the contextmenu event the capture above hangs off.
+  const captureMovePickerAnchorOnPress = useCallback(
+    (event: React.PointerEvent<HTMLElement>) => {
+      if (event.pointerType !== "mouse") captureMovePickerAnchor(event);
+    },
+    [captureMovePickerAnchor]
+  );
 
   const isWatched = usePanelStore((state) => state.watchedPanels.has(terminalId));
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(terminalId));
@@ -805,6 +815,7 @@ export function TerminalContextMenu({
             className="contents"
             data-context-trigger={terminalId}
             onContextMenu={captureMovePickerAnchor}
+            onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
           </div>
@@ -867,6 +878,7 @@ export function TerminalContextMenu({
             className="contents"
             data-context-trigger={terminalId}
             onContextMenu={captureMovePickerAnchor}
+            onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
           </div>
@@ -928,6 +940,7 @@ export function TerminalContextMenu({
             className="contents"
             data-context-trigger={terminalId}
             onContextMenu={captureMovePickerAnchor}
+            onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
           </div>
@@ -979,6 +992,7 @@ export function TerminalContextMenu({
             className="contents"
             data-context-trigger={terminalId}
             onContextMenu={captureMovePickerAnchor}
+            onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
           </div>
@@ -1024,6 +1038,7 @@ export function TerminalContextMenu({
             className="contents"
             data-context-trigger={terminalId}
             onContextMenu={handleContextMenu}
+            onPointerDown={captureMovePickerAnchorOnPress}
           >
             {children}
           </div>
