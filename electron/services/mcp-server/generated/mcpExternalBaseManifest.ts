@@ -1644,7 +1644,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   },
                   outputChangeAfterWriteAt: {
                     description:
-                      "For pty_written only: epoch ms of the latest screen change seen >200ms after the Enter. Ordering, not attribution; absent means no change was seen.",
+                      "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen.",
                     type: "number",
                   },
                 },

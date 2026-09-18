@@ -3,6 +3,7 @@ import type { IPty } from "node-pty";
 import { TerminalProcess } from "../TerminalProcess.js";
 import type { SpawnContext } from "../terminalSpawn.js";
 import type { TerminalInputController } from "../TerminalInputController.js";
+import { OUTPUT_PROGRESS_SAMPLE_MS } from "../OutputProgressTracker.js";
 
 /**
  * #12337 end to end through the pty-host side of the submit path: a caller's
@@ -253,19 +254,25 @@ describe("TerminalProcess submission output observation (#12478)", () => {
     terminal.dispose();
   });
 
-  it("does not count the composer echoing the body around the Enter", async () => {
+  it("does not count a composer echo that is sampled just after the Enter", async () => {
     const terminal = createTerminal({ launchAgentId: "claude" });
 
     terminal.submit("fix the bug", "tok-1");
-    // The composer echoes the body the moment it lands, before the Enter.
+    // The echo lands while the submit waits out its pre-Enter delay, so the
+    // sample that sees it fires after the Enter has already gone out.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(terminal.getSubmission("tok-1")?.phase).toBe("writing");
     ptyOnDataCallback!("> fix the bug");
     await vi.advanceTimersByTimeAsync(1_000);
 
-    expect(terminal.getSubmission("tok-1")?.phase).toBe("pty_written");
-    // The echo WAS observed as a change — it just cannot be ordered after the
-    // Enter, so it is not reported against the submission.
-    expect(terminal.getPublicState().lastOutputChangeAt).toBeDefined();
-    expect(terminal.getSubmission("tok-1")).not.toHaveProperty("outputChangeAfterWriteAt");
+    const record = terminal.getSubmission("tok-1");
+    const changedAt = terminal.getPublicState().lastOutputChangeAt;
+    expect(record?.phase).toBe("pty_written");
+    // Stamped after the Enter but inside the margin — the one case a bare
+    // after-the-write comparison would misreport as the agent responding.
+    expect(changedAt).toBeGreaterThan(record!.at!);
+    expect(changedAt).toBeLessThanOrEqual(record!.at! + OUTPUT_PROGRESS_SAMPLE_MS);
+    expect(record).not.toHaveProperty("outputChangeAfterWriteAt");
     terminal.dispose();
   });
 });

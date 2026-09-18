@@ -46,7 +46,9 @@ import type { SerializedTerminalSnapshot } from "../../../../shared/types/termin
 // agent-output content comparisons.
 const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
 // Trailing-edge throttle on the viewport digest pushed to the host (serves
-// IdentityWatcher's sync reads; its own poll cadence is 200ms).
+// IdentityWatcher's sync reads; its own poll cadence is 200ms). The digest is
+// also this path's output-progress sample, so it mirrors
+// OUTPUT_PROGRESS_SAMPLE_MS, which sizes a submission's post-Enter margin.
 const VIEWPORT_DIGEST_THROTTLE_MS = 200;
 // Flow-control ack batching: a `data-ack` is emitted once this much data-
 // message payload has parsed, or on a trailing timer so a quiet tail still

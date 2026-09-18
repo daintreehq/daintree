@@ -461,9 +461,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the short version is the one that reads as a reassurance. Trimmed from
   // 144 B to 99 B before raising, for a net 49 B.
   //
-  // 56_450 → 56_700 for #12478, measured at 56_609 B: 209 B for
+  // 56_450 → 56_700 for #12478, measured at 56_613 B: 213 B for
   // `submission.outputChangeAfterWriteAt` on `terminal.getStatus`, most of it the
-  // field's 147 B description. A submission can reach `pty_written` and be
+  // field's 151 B description. A submission can reach `pty_written` and be
   // dropped by an agent that has not finished starting, and a caller holding the
   // token had no way to see that the screen never moved after the Enter short of
   // pulling scrollback. The description has to say the value is an ordering and
@@ -568,7 +568,7 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 214_900 → 214_950 for the `waitingReason` `"prompt"` rewording, measured at
   // 214_902 B: the same 49 B as the external ceiling above, on one tool.
   //
-  // 214_950 → 215_100 for #12478, measured at 215_062 B: the same 209 B as the
+  // 214_950 → 215_100 for #12478, measured at 215_066 B: the same 213 B as the
   // external ceiling above, since `terminal.getStatus` is on both surfaces.
   const MAX_COHORT_PAYLOAD_BYTES = 215_100;
 

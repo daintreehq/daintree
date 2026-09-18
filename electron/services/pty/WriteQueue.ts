@@ -199,8 +199,10 @@ export class WriteQueue {
    * change inside that window cannot be placed on either side of the write, so
    * it is not reported.
    *
-   * An ordering, not attribution: a startup repaint or a later submission's
-   * output satisfies it just as well.
+   * The margin is the nominal sample delay, not a bound: a mirror or worker
+   * that has fallen behind can stamp that echo later still. What is ordered is
+   * the stamp, never the output, and a startup repaint or a later submission's
+   * output satisfies it just as well — an ordering, not attribution.
    */
   private outputChangeAfterWrite(record: TerminalSubmissionRecord): number | undefined {
     if (record.phase !== "pty_written" || record.at === undefined) return undefined;

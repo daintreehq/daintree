@@ -497,7 +497,7 @@ export const TerminalSubmissionRecordSchema = z.object({
     .number()
     .optional()
     .describe(
-      "For pty_written only: epoch ms of the latest screen change seen >200ms after the Enter. Ordering, not attribution; absent means no change was seen."
+      "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen."
     ),
 });
 

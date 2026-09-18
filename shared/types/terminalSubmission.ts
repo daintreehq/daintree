@@ -69,16 +69,18 @@ export interface TerminalSubmissionRecord {
   at?: number;
   /**
    * `pty_written` only: epoch milliseconds of the terminal's latest viewport
-   * change, when that change was observed more than one progress sample after
+   * change, when that change was stamped more than one progress sample after
    * the Enter was written (#12478). Derived when the record is read, not
    * stored.
    *
    * Absent means no qualifying change has been seen, which is what an agent
-   * silently discarding the prompt looks like — but not only that: a resize
-   * can absorb real output, and a long think leaves the screen just as still.
-   * Present is weak evidence: it orders a change after the write and does not
-   * attribute it, so a startup repaint or a later submission's output
-   * satisfies it too. Neither value makes re-sending safe on its own.
+   * silently discarding the prompt looks like — but not only that: a change
+   * stamped inside the margin is never counted, a resize can absorb real
+   * output, and a long think leaves the screen just as still. Present is weak
+   * evidence: it orders a change's stamp after the write and does not attribute
+   * it, so a startup repaint, a later submission's output, or an echo stamped
+   * late by a backlogged mirror satisfies it too. Neither value makes
+   * re-sending safe on its own.
    */
   outputChangeAfterWriteAt?: number;
 }

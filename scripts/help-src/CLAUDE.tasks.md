@@ -18,7 +18,7 @@ These cover ~90% of what the assistant is asked to do. They all live in the defa
 
 1. `terminal.list` (or remember the `terminalId` from a prior `agent.launch`).
 2. `terminal.sendCommand({ terminalId, command: <text> })` — sends the text and presses Enter. The terminal must be PTY-backed and not trashed.
-3. Pass the returned `submissionToken` to `terminal.getStatus` with `terminalIds` to confirm the agent picked it up before reporting back. A `pty_written` record with no `outputChangeAfterWriteAt` means the screen hasn't changed since the Enter, not that the prompt was lost: check the output with `includeOutput` before re-sending, since a retry can submit twice.
+3. Pass the returned `submissionToken` to `terminal.getStatus` with `terminalIds` and `includeOutput` before reporting back. `pty_written` means the text reached the terminal, not that the agent took it. With no `outputChangeAfterWriteAt`, no screen change has been seen since the Enter, which is not proof the prompt was lost: read the output before re-sending, since a retry can submit twice.
 
 ### Broadcast a command to multiple terminals
 
