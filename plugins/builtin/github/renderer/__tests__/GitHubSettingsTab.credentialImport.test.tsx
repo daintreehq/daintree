@@ -22,7 +22,9 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 // The dialog primitive has its own suite; a stub keeps this one about the
-// tab's import flow rather than overlay plumbing.
+// tab's import flow rather than overlay plumbing. It mirrors the primitive's
+// gates — both confirm gates disable the primary action, and a missing
+// `onClose` disables Cancel — so a wiring regression still shows here.
 vi.mock("@/components/ui/ConfirmDialog", () => ({
   ConfirmDialog: (props: {
     isOpen: boolean;
@@ -33,20 +35,23 @@ vi.mock("@/components/ui/ConfirmDialog", () => ({
     onConfirm: () => void;
     onClose?: () => void;
     isConfirmLoading?: boolean;
+    confirmDisabled?: boolean;
   }) =>
     props.isOpen ? (
       <div role="dialog">
         <h2>{props.title}</h2>
         <p>{props.description}</p>
         {props.children}
-        <button type="button" onClick={() => props.onConfirm()} disabled={props.isConfirmLoading}>
+        <button
+          type="button"
+          onClick={() => props.onConfirm()}
+          disabled={props.isConfirmLoading || props.confirmDisabled}
+        >
           {props.confirmLabel}
         </button>
-        {props.onClose && (
-          <button type="button" onClick={props.onClose}>
-            Cancel
-          </button>
-        )}
+        <button type="button" onClick={props.onClose} disabled={!props.onClose}>
+          Cancel
+        </button>
       </div>
     ) : null,
 }));
@@ -283,7 +288,10 @@ describe("GitHubSettingsTab — import from GitHub CLI", () => {
         (screen.getByRole("button", { name: "Import token" }) as HTMLButtonElement).disabled
       ).toBe(true)
     );
-    expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+    expect((screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement).disabled).toBe(
+      true
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Import token" }));
     expect(forgeMock.commitCredentialImport).toHaveBeenCalledTimes(1);
 
     await act(async () => finish({ unavailable: false, account: "octocat", scopes: [] }));

@@ -378,22 +378,26 @@ describe("registerForgeCredentialImportHandlers", () => {
 
     it("aborts the provider's signal once the import deadline passes", async () => {
       vi.useFakeTimers();
+      let seen: AbortSignal | undefined;
+      const onAbort = vi.fn();
       registryMock.getForgeProviderImpl.mockReturnValue(
         makeImpl({
-          preview: vi.fn(
-            (signal?: AbortSignal) =>
-              new Promise<CredentialImportUnavailable>((resolve) => {
-                signal?.addEventListener("abort", () =>
-                  resolve({ unavailable: true, reason: "cancelled" })
-                );
-              })
-          ),
+          preview: vi.fn((signal?: AbortSignal) => {
+            seen = signal;
+            signal?.addEventListener("abort", onAbort);
+            return new Promise<CredentialImportUnavailable>(() => {});
+          }),
         })
       );
 
       const pending = preview(PROVIDER_ID);
-      await vi.advanceTimersByTimeAsync(30_000);
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(seen?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
 
+      // The provider is told to stop, so it can kill its CLI process.
+      expect(onAbort).toHaveBeenCalledTimes(1);
+      expect(seen?.aborted).toBe(true);
       await expect(pending).resolves.toEqual({ unavailable: true, reason: "cancelled" });
     });
   });

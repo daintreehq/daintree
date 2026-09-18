@@ -328,7 +328,7 @@ export function GitHubSettingsTab() {
           {githubConfig?.hasToken && (
             <Button
               onClick={handleClearToken}
-              disabled={isImporting}
+              disabled={isValidating || isTesting || isImporting}
               loading={isClearing}
               variant="outline"
               size="sm"
