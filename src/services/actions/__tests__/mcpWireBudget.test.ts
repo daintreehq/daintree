@@ -470,8 +470,8 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // not attribution, or a startup repaint reads as the agent taking the turn.
   // The tool description, at 383 of its 400 B, is untouched; what a caller
   // should do with an absent value lives in the help partials instead.
-  // 56_700 → __EXT__ for #12479's `terminal.readLastMessageOwned`, measured at
-  // __EXTM__ B. Nearly all of it is the output schema, and that is the contract a
+  // 56_700 → 59_650 for #12479's `terminal.readLastMessageOwned`, measured at
+  // 59_609 B. Nearly all of it is the output schema, and that is the contract a
   // main-process tool has no other check on: nothing between the reader and the
   // client validates the result, so the client's AJV pass against these two
   // closed arms is what catches an `ok` missing its fields or an `unavailable`
@@ -480,7 +480,7 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the agent is waiting on it, and that `search-cap-reached` withholds an older
   // reply rather than passing it off as current. The reason and question-input
   // descriptions were trimmed before raising.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = __EXT__;
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 59_650;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -582,10 +582,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // external ceiling above, since `terminal.getStatus` is on both surfaces. Both
   // figures were re-measured on top of #12477's `waitingReason` rewording, which
   // landed on develop first and is included in them.
-  // 215_150 → __COH__ for #12479, measured at __COHM__ B: the same tool as the
+  // 215_150 → 218_100 for #12479, measured at 218_062 B: the same tool as the
   // external raise above, carried at the workbench floor for the subset
   // invariant — the external surface may not reach past the assistant's.
-  const MAX_COHORT_PAYLOAD_BYTES = __COH__;
+  const MAX_COHORT_PAYLOAD_BYTES = 218_100;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
