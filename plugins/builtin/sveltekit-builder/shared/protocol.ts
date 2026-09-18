@@ -376,7 +376,19 @@ export const SourceRevisionsResultSchema = z
   })
   .strict();
 
-export const DetectAppsArgsSchema = z.object({ worktreePath: z.string().min(1) }).strict();
+export const DetectAppsArgsSchema = z
+  .object({
+    /**
+     * The workspace discovery reads through. Naming it — rather than leaning on
+     * the plugin's ambient filesystem, which follows the focused window — is
+     * what lets a preview on a background worktree get a true answer.
+     */
+    projectId: z.string().min(1),
+    worktreeId: z.string().min(1),
+    /** Absolute worktree path; contained by the scope above, never authority itself. */
+    worktreePath: z.string().min(1),
+  })
+  .strict();
 export const DetectAppsResultSchema = z
   .object({ appCount: z.number().int().nonnegative() })
   .strict();

@@ -58,12 +58,13 @@ function workspaceClosed(): Error {
 }
 
 /**
- * Thrown when a view asks to open a workspace on a project other than its own.
- * The project and worktree arrive from the renderer, and they decide which
- * files the workspace may read, so the only trustworthy check is against the
- * project the host itself resolved for the sender. The worktree is not checked
- * the same way: the context reports the sender window's ACTIVE worktree, and a
- * builder on a background worktree legitimately names a different one.
+ * Thrown when a view names a project other than its own — opening a workspace,
+ * or scanning one for apps. The project and worktree arrive from the renderer,
+ * and they decide which files the read may reach, so the only trustworthy check
+ * is against the project the host itself resolved for the sender. The worktree
+ * is not checked the same way: the context reports the sender window's ACTIVE
+ * worktree, and a builder on a background worktree legitimately names a
+ * different one.
  */
 function workspaceForbidden(): Error {
   return new Error("WORKSPACE_FORBIDDEN: that project is not this view's project");
@@ -97,10 +98,6 @@ function projectReader(fs: PluginFsApi): ProjectFileReader {
 
 export async function activate(host: BuiltinPluginHostApi): Promise<() => void> {
   const registry = new WorkspaceRegistry();
-  // For the handlers that own no workspace (app discovery): ambient roots, the
-  // path the caller named. Everything a workspace does goes through the
-  // workspace's own scoped fs instead.
-  const reader = projectReader(host.fs);
 
   // Every push names the preview panel it is about: the workspace's owner
   // subscribes per panel, so a builder on another preview — or in another
@@ -213,9 +210,17 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
   await host.registerHandler(
     CHANNELS.detectApps,
     { args: DetectAppsArgsSchema, result: DetectAppsResultSchema, requires: ["fs:project-read"] },
-    async (_ctx, args) => {
+    async (ctx, args) => {
+      if (args.projectId !== ctx.projectId) throw workspaceForbidden();
       const { discoverSvelteKitApps } = await import("../shared/project/index.js");
-      const discovery = await discoverSvelteKitApps(reader, path.resolve(args.worktreePath));
+      // Scoped like a workspace even though discovery opens none: the answer
+      // decides whether the button appears, and the ambient handle would deny
+      // the read — reporting "no app" — for any worktree outside the focused
+      // window's roots.
+      const scopedReader = projectReader(
+        host.fsForWorkspace({ projectId: args.projectId, worktreeId: args.worktreeId })
+      );
+      const discovery = await discoverSvelteKitApps(scopedReader, path.resolve(args.worktreePath));
       return { appCount: discovery.apps.length };
     }
   );
