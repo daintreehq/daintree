@@ -630,34 +630,72 @@ describe("File menu layout (#12473)", () => {
     }
   );
 
-  it("gives plugin File items their own group ahead of the close group", () => {
-    vi.mocked(getPluginMenuItems).mockReturnValue([
-      {
-        pluginId: "acme",
-        item: { label: "Acme Export…", actionId: "app.settings", location: "file" },
-      },
-      {
-        pluginId: "acme",
-        item: { label: "Acme Panel", actionId: "app.settings", location: "view" },
-      },
-    ]);
+  const NON_MAC_WITH_PLUGIN = [
+    "Open Project…",
+    "Open Recent",
+    "Clone Repository…",
+    "---",
+    "New Worktree…",
+    "Project Settings…",
+    "---",
+    "New Window",
+    "---",
+    "Settings…",
+    "Plugin Manager…",
+    "---",
+    "Acme Export…",
+    "---",
+    "Close Project",
+    "Close Window",
+    "---",
+    "Exit",
+  ];
 
-    expect(layout(buildFileMenu("darwin")).slice(-6)).toEqual([
-      "New Window",
-      "---",
-      "Acme Export…",
-      "---",
-      "Close Project",
-      "Close Window",
-    ]);
-  });
+  it.each([
+    [
+      "darwin",
+      [
+        "Open Project…",
+        "Open Recent",
+        "Clone Repository…",
+        "---",
+        "New Worktree…",
+        "Project Settings…",
+        "---",
+        "New Window",
+        "---",
+        "Acme Export…",
+        "---",
+        "Close Project",
+        "Close Window",
+      ],
+    ],
+    ["win32", NON_MAC_WITH_PLUGIN],
+    ["linux", NON_MAC_WITH_PLUGIN],
+  ] as const)(
+    "on %s gives plugin File items their own group ahead of the close group",
+    (platform, expected) => {
+      vi.mocked(getPluginMenuItems).mockReturnValue([
+        {
+          pluginId: "acme",
+          item: { label: "Acme Export…", actionId: "app.settings", location: "file" },
+        },
+        {
+          pluginId: "acme",
+          item: { label: "Acme Panel", actionId: "app.settings", location: "view" },
+        },
+      ]);
 
-  it("keeps Cmd+O on Open Project… and opens the folder picker from it", () => {
+      expect(layout(buildFileMenu(platform))).toEqual(expected);
+    }
+  );
+
+  it("keeps Cmd+O on the item that opens the folder picker", async () => {
     vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: true, filePaths: [] });
-    const openProject = item(buildFileMenu("darwin"), "Open Project…");
-    expect(openProject.accelerator).toBe("CommandOrControl+O");
+    const cmdO = buildFileMenu("darwin").filter((i) => i.accelerator === "CommandOrControl+O");
+    expect(cmdO.map((i) => i.label)).toEqual(["Open Project…"]);
 
-    void openProject.click!({} as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
+    await cmdO[0].click!({} as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
 
     expect(dialog.showOpenDialog).toHaveBeenCalledWith(
       mockBrowserWindow,

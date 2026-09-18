@@ -20,7 +20,9 @@ export function hasOpenApplicationWindow(): boolean {
   // is a no-op, whereas a stuck-disabled Close Window is a real regression.
   if (!registry) return true;
   // The registry promotes a survivor whenever the primary closes, so no primary
-  // means no window at all.
+  // means no app window at all. Native panels (About) aren't registered, so one
+  // opened while windowless can't be closed from here — its own close button
+  // still works, and that rare case beats a dead item in every windowless menu.
   return Boolean(registry.getPrimary());
 }
 

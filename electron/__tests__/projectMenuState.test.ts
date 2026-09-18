@@ -238,6 +238,11 @@ describe("refreshProjectMenuState", () => {
     windowRefMock.getWindowRegistry.mockReturnValue(registryWith(undefined));
     refreshProjectMenuState();
     expect(menuItems.get(CLOSE_WINDOW_MENU_ITEM_ID)!.enabled).toBe(false);
+
+    // Reopening a window from the windowless state must bring it back.
+    windowRefMock.getWindowRegistry.mockReturnValue(registryWith(pvmWindow(null)));
+    refreshProjectMenuState();
+    expect(menuItems.get(CLOSE_WINDOW_MENU_ITEM_ID)!.enabled).toBe(true);
   });
 
   it("leaves Close Window enabled when there is no window layer to ask", () => {
