@@ -1,11 +1,7 @@
 import { useSyncExternalStore } from "react";
+import type { DeliveryState } from "@/services/agentRequests";
 import type { SiteSelection } from "../shared/model.js";
-import type {
-  ComponentDefinitions,
-  DeliveryState,
-  PickedComponent,
-  SourceRevisions,
-} from "./agentTask.js";
+import type { ComponentDefinitions, PickedComponent, SourceRevisions } from "./agentTask.js";
 
 export interface ComposerPin {
   selection: SiteSelection;

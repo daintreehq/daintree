@@ -343,6 +343,10 @@ export function AgentComposer({
       memoryKey,
       worktreeId,
       sentDraft: instruction,
+      // What the prompt is about, beside the words: the same sentence aimed at
+      // another element, another scope, or bytes that have since changed builds
+      // a different prompt, so it must not be folded into a run already going.
+      subjectKey: `${request.selection.selectionId}\n${subject.scope}\n${JSON.stringify(cited)}`,
       destination:
         destination.kind === "terminal"
           ? {
