@@ -12,10 +12,10 @@ import type { WorktreeViewStore, WorktreeViewStoreApi } from "@/store/createWork
  */
 
 /**
- * How soon a refused report is judged again when nothing in the store moves.
- * A load that settles without emitting anything — a folder with no repository,
- * or a host that finishes installing monitors this view already has — would
- * otherwise leave a refused view waiting out its whole deadline.
+ * How soon a refused or failed report is judged again when nothing in the
+ * store moves. A load that settles without emitting anything — a folder with
+ * no repository, or a host that finishes installing monitors this view already
+ * has — would otherwise leave a refused view waiting out its whole deadline.
  */
 const REFUSED_RETRY_MS = 500;
 
@@ -77,6 +77,7 @@ function watch(entry: ArmedSwitch): void {
     if (
       state.worktrees !== prev.worktrees ||
       state.isInitialized !== prev.isInitialized ||
+      state.isReconnecting !== prev.isReconnecting ||
       state.version !== prev.version
     ) {
       check(entry);
@@ -84,10 +85,13 @@ function watch(entry: ArmedSwitch): void {
   });
   // `onReady` also fires at once when the port is already up. That call is
   // skipped: a check that finishes the switch then would run before there is
-  // an unwatch to call, leaving both listeners behind.
+  // an unwatch to call, leaving both listeners behind. Later calls are
+  // deferred because the port client walks its live callback list, so
+  // unregistering from inside one would skip the provider's own ready
+  // handler — the one that starts hydration.
   let wired = false;
   const offReady = window.electron.worktreePort.onReady(() => {
-    if (wired) check(entry);
+    if (wired) queueMicrotask(() => check(entry));
   });
   entry.unwatch = () => {
     offStore();
@@ -135,7 +139,10 @@ function check(entry: ArmedSwitch): void {
   }
   if (!window.electron.worktreePort.isReady()) return;
   const state = store.getState();
-  if (!state.isInitialized) return;
+  // Reconnecting means the rows were last described by a host whose port has
+  // since closed; updates from its successor can land before the snapshot
+  // that replaces them, and a stale row still looks like it has a status.
+  if (!state.isInitialized || state.isReconnecting) return;
   const statusCount = countStatuses(state);
   if (statusCount !== state.worktrees.size) return;
 
@@ -157,26 +164,30 @@ function check(entry: ArmedSwitch): void {
       ({ accepted }) => {
         if (armed !== entry) return;
         entry.inFlight = false;
-        if (accepted) {
-          disarm();
-        } else if (entry.dirty) {
-          check(entry);
-        } else {
-          // Refused as not yet describing this host. The next store change
-          // re-judges it at once; the retry covers a host that settles
-          // without changing the store.
-          entry.retry = setTimeout(() => {
-            entry.retry = null;
-            check(entry);
-          }, REFUSED_RETRY_MS);
-        }
+        if (accepted) disarm();
+        else judgeAgain(entry);
       },
       () => {
         if (armed !== entry) return;
         entry.inFlight = false;
-        if (entry.dirty) check(entry);
+        judgeAgain(entry);
       }
     );
+}
+
+/**
+ * After a refused or failed report: at once if the store moved meanwhile,
+ * otherwise after a pause, since a host can settle without changing the store.
+ */
+function judgeAgain(entry: ArmedSwitch): void {
+  if (entry.dirty) {
+    check(entry);
+    return;
+  }
+  entry.retry = setTimeout(() => {
+    entry.retry = null;
+    check(entry);
+  }, REFUSED_RETRY_MS);
 }
 
 function expire(entry: ArmedSwitch): void {

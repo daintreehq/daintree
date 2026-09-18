@@ -1109,6 +1109,22 @@ describe("handleDirectoryOpen status timing (#12461)", () => {
     expect(statusTimingMock.fail).toHaveBeenCalledWith(switchId, "load-failed");
   });
 
+  it("finishes the timing when the swap fails and still reports the failure", async () => {
+    const { manager } = setup({ loadProject: async () => "cold" });
+    const swapError = new Error("view load timed out");
+    manager.switchTo.mockRejectedValueOnce(swapError);
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    const { switchId } = manager.switchTo.mock.calls[0]![2] as { switchId: string };
+    expect(statusTimingMock.fail).toHaveBeenCalledWith(switchId, "swap-failed");
+    expect(statusTimingMock.hostReady).not.toHaveBeenCalled();
+    expect(consoleError).toHaveBeenCalledWith("Failed to open project:", swapError);
+    expect(dialog.showMessageBox).toHaveBeenCalledTimes(1);
+    consoleError.mockRestore();
+  });
+
   it("does not time a switch with no worktree load to follow", async () => {
     const { send } = setup(null);
     await handleDirectoryOpen(PROJECT.path, targetWindow);

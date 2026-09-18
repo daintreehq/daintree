@@ -183,19 +183,22 @@ describe("WorkspaceService adversarial", () => {
         service["topologyWatcher"] as unknown as { startWatcher: () => Promise<void> },
         "startWatcher"
       ).mockResolvedValue(undefined);
-      const observed: Array<{ enumerated: boolean; settled: boolean }> = [];
-      vi.spyOn(service, "syncMonitors").mockImplementation(async () => {
-        observed.push({
-          enumerated: service.getStatusTimingMarks().enumeratedAt !== null,
-          settled: service.hasSettledLoad(),
-        });
-      });
+      let finishInstalling!: () => void;
+      const syncMonitors = vi
+        .spyOn(service, "syncMonitors")
+        .mockImplementation(() => new Promise<void>((resolve) => (finishInstalling = resolve)));
 
-      await service.loadProject("req-load", "/repo", "ws-test-project-id");
+      const load = service.loadProject("req-load", "/repo", "ws-test-project-id");
+      await vi.waitFor(() => expect(syncMonitors).toHaveBeenCalled());
 
       // Listed but still installing monitors: a view answered `[]` now must
       // not be able to report every (zero) worktree as having a status.
-      expect(observed).toEqual([{ enumerated: true, settled: false }]);
+      expect(service.getStatusTimingMarks().enumeratedAt).toEqual(expect.any(Number));
+      expect(service.hasSettledLoad()).toBe(false);
+      expect(sentEvents.some((e) => e.type === "load-project-result")).toBe(false);
+
+      finishInstalling();
+      await load;
       expect(service.hasSettledLoad()).toBe(true);
       expect(sentEvents).toContainEqual({
         type: "load-project-result",
@@ -235,27 +238,36 @@ describe("WorkspaceService adversarial", () => {
       expect(marks).toMatchObject({ firstStatusAt: [], monitorCount: 0 });
     });
 
-    it("stamps a monitor's first status from either emit path, once", () => {
+    it("stamps each monitor's first status from either emit path, once", () => {
       const withStatus = { worktreeChanges: { changedFileCount: 0 } };
-      const monitor = { getSnapshot: () => withStatus };
+      const viaCallback = { getSnapshot: () => withStatus };
+      const viaEmit = { getSnapshot: () => withStatus };
       const quiet = { getSnapshot: () => ({ worktreeChanges: null }) };
       const monitors = service["monitors"] as Map<string, unknown>;
-      monitors.set("wt-a", monitor);
-      monitors.set("wt-b", quiet);
+      monitors.set("wt-a", viaCallback);
+      monitors.set("wt-b", viaEmit);
+      monitors.set("wt-c", quiet);
+      const emitUpdate = (m: unknown) =>
+        (service as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](m);
+      const handleMonitorUpdate = (m: unknown, s: unknown) =>
+        (service as unknown as { handleMonitorUpdate: (m: unknown, s: unknown) => void })[
+          "handleMonitorUpdate"
+        ](m, s);
 
       const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-      (service as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](quiet);
-      (service as unknown as { handleMonitorUpdate: (m: unknown, s: unknown) => void })[
-        "handleMonitorUpdate"
-      ](monitor, withStatus);
+      handleMonitorUpdate(viaCallback, withStatus);
+      emitUpdate(quiet);
       nowSpy.mockReturnValue(2_000);
-      (service as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](monitor);
+      emitUpdate(viaEmit);
+      nowSpy.mockReturnValue(3_000);
+      handleMonitorUpdate(viaCallback, withStatus);
+      emitUpdate(viaEmit);
 
       expect(service.getStatusTimingMarks()).toMatchObject({
-        firstStatusAt: [1_000],
-        monitorCount: 2,
+        firstStatusAt: [1_000, 2_000],
+        monitorCount: 3,
       });
-      expect(sentEvents.filter((e) => e.type === "worktree-update")).toHaveLength(3);
+      expect(sentEvents.filter((e) => e.type === "worktree-update")).toHaveLength(5);
     });
   });
 

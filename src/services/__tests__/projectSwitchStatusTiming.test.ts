@@ -48,9 +48,11 @@ function makeStore(worktrees: WorktreeSnapshot[], epoch = "e1"): WorktreeViewSto
   return store;
 }
 
+// Walks the live list, as the preload's port client does, so a callback that
+// unregisters itself mid-walk skips the next one exactly as it would there.
 function makePortReady() {
   portReady = true;
-  for (const cb of [...readyCallbacks]) cb();
+  for (const cb of readyCallbacks) cb();
 }
 
 async function settle() {
@@ -82,7 +84,8 @@ describe("projectSwitchStatusTiming", () => {
             if (portReady) cb();
             readyCallbacks.push(cb);
             return () => {
-              readyCallbacks = readyCallbacks.filter((c) => c !== cb);
+              const index = readyCallbacks.indexOf(cb);
+              if (index >= 0) readyCallbacks.splice(index, 1);
             };
           },
           request,
@@ -155,14 +158,58 @@ describe("projectSwitchStatusTiming", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
-  it("waits for the worktree port before reporting", () => {
+  it("waits for the worktree port before reporting", async () => {
     portReady = false;
     attachSwitchStatusTimingStore(makeStore([worktree("a", true)]));
     armSwitchStatusTiming("s1", DEADLINE);
     expect(request).not.toHaveBeenCalled();
 
     makePortReady();
+    await settle();
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it("never starves a later ready handler when a late port finishes the switch", async () => {
+    portReady = false;
+    attachSwitchStatusTimingStore(makeStore([worktree("a", true)]));
+    armSwitchStatusTiming("s1", DEADLINE);
+    // Registered after the reporter's, as the provider's hydration handler is.
+    const startHydration = vi.fn();
+    window.electron.worktreePort.onReady(startHydration);
+
+    vi.setSystemTime(DEADLINE + 1);
+    makePortReady();
+    expect(startHydration).toHaveBeenCalledTimes(1);
+
+    await settle();
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]![1]).toMatchObject({ appliedAt: null });
+    expect(readyCallbacks).toEqual([startHydration]);
+  });
+
+  it("does not judge rows left by a host whose port closed until they are replaced", () => {
+    const store = makeStore([worktree("a", true)]);
+    store.getState().setReconnecting(true);
+    attachSwitchStatusTimingStore(store);
+    armSwitchStatusTiming("s1", DEADLINE);
+
+    update(store, worktree("a", true, 1), "e2");
+    expect(request).not.toHaveBeenCalled();
+
+    hydrate(store, [worktree("a", true)], "e2");
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(request.mock.calls[0]![1]).toMatchObject({ epoch: "e2" });
+  });
+
+  it("judges again after a pause when the report fails in transit", async () => {
+    request.mockRejectedValueOnce(new Error("Worktree port timed out"));
+    attachSwitchStatusTimingStore(makeStore([worktree("a", true)]));
+    armSwitchStatusTiming("s1", DEADLINE);
+    expect(request).toHaveBeenCalledTimes(1);
+
+    await settle();
+    vi.advanceTimersByTime(500);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it("reports again from the new host's state after a refusal", async () => {
