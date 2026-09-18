@@ -31,7 +31,7 @@ These cover most operational requests, and all of them sit in the default `actio
 
 ### Send a follow-up
 
-`terminal.sendCommand({ terminalId, command })` submits text as the agent's next prompt. It returns once the text is queued, not delivered: pass the returned `submissionToken` to `terminal.getStatus` with `terminalIds` to confirm. A `pty_written` record with no `outputChangeAfterWriteAt` means no screen change has been seen since the Enter, not that the prompt was lost: read the output before re-sending. A timestamp there only orders a change after the Enter; it does not show the agent took the prompt. After an ambiguous failure, check before re-sending, since a retry can submit twice. The same prompt to several agents is one call per terminal.
+`terminal.sendCommand({ terminalId, command })` submits text as the agent's next prompt. It returns once the text is queued, not delivered: pass the returned `submissionToken` to `terminal.getStatus` with `terminalIds` to confirm. A `pty_written` record with no `outputChangeAfterWriteAt` means no screen change has been seen more than 200ms after the Enter, not that the prompt was lost: read the output before re-sending. A timestamp there only shows a change was stamped after the Enter; it does not show the agent took the prompt. After an ambiguous failure, check before re-sending, since a retry can submit twice. The same prompt to several agents is one call per terminal.
 
 ### Wait for agents
 
