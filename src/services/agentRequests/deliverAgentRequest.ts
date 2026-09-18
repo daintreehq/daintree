@@ -1,4 +1,4 @@
-import type { TerminalStatusResult } from "@shared/types/terminalStatus";
+import type { TerminalStatusEntry, TerminalStatusResult } from "@shared/types/terminalStatus";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { actionService } from "@/services/ActionService";
 import { usePanelStore } from "@/store/panelStore";
@@ -137,6 +137,80 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
   const panel = usePanelStore.getState().panelsById[terminalId];
   if (!panel) return true;
   return panel.location !== "trash" && (panel.worktreeId ?? null) === worktreeId;
+}
+
+/**
+ * Which agent session a request was accepted for.
+ *
+ * A terminal id is a slot, not a session. The slot survives a restart, an agent
+ * exiting to leave a shell behind, and a different agent being launched into
+ * it — so readiness proved about the thing that was there says nothing about
+ * the thing that is there now, and the gap is real: the run awaits a source
+ * re-verification between proving readiness and submitting.
+ *
+ * `agentId` is the terminal's detected agent, falling back to what it was
+ * launched as, so a plain shell is `null` and refused. `spawnedAt` is the pty
+ * generation: a restart mints a new one. Together they are the strongest claim
+ * this surface can make. They are not a claim about the *process* inside the
+ * pty — an agent that exits leaving its shell keeps both — which is why the
+ * host still treats every submission as text typed at whatever is listening.
+ */
+interface DestinationIdentity {
+  agentId: string;
+  spawnedAt: number | undefined;
+}
+
+/** The identity an entry supports, or `null` when it supports none. */
+function identityOf(entry: TerminalStatusEntry | undefined): DestinationIdentity | null {
+  if (entry === undefined || entry.error !== undefined) return null;
+  // An exit code is the process being gone, not a slow prompt.
+  if (entry.exitCode !== undefined && entry.exitCode !== null) return null;
+  // `exited` is the agent leaving its own pty behind — the shell that was
+  // underneath it is now what reads stdin. The pty did not restart, so
+  // `spawnedAt` is unchanged, and `agentId` falls back to what the terminal was
+  // *launched* as, so both halves of the identity survive a demotion. This is
+  // the only field that notices, and it is checked here rather than with
+  // readiness because "send anyway" waives readiness and must not waive this.
+  if (entry.agentState === "exited") return null;
+  // Tested for a string rather than against `null`: a surface that could not
+  // observe the field leaves it out, and "unobserved" is not "an agent".
+  if (typeof entry.agentId !== "string" || entry.agentId === "") return null;
+  return { agentId: entry.agentId, spawnedAt: entry.spawnedAt };
+}
+
+function sameSession(bound: DestinationIdentity, now: DestinationIdentity): boolean {
+  return bound.agentId === now.agentId && bound.spawnedAt === now.spawnedAt;
+}
+
+/** One terminal's current status entry, or `undefined` when none is readable. */
+async function observe(terminalId: string): Promise<TerminalStatusEntry | undefined> {
+  const status = await actionService.dispatch<TerminalStatusResult>(
+    "terminal.getStatus",
+    { terminalIds: [terminalId] },
+    { source: "user" }
+  );
+  if (!status.ok) return undefined;
+  return status.result.terminals.find((terminal) => terminal.terminalId === terminalId);
+}
+
+/** Says which of the two ways the destination stopped being the one bound to. */
+function sessionChanged(title: string, now: DestinationIdentity | null): string {
+  return now === null
+    ? `${title} isn't an agent session any more — the request wasn't sent`
+    : `${title} restarted before the request went out — nothing was sent`;
+}
+
+/**
+ * Why a destination could not be bound. Kept apart from {@link sessionChanged}
+ * because this one is about never having had a session to bind to: a slot with
+ * no readable status, or one holding a plain shell. Reached when the user says
+ * "send anyway", which waives waiting, not proof of where the words go.
+ */
+function unbindable(title: string, entry: TerminalStatusEntry | undefined): string {
+  if (entry === undefined || entry.error !== undefined) {
+    return `${title} isn't reporting a status — the request wasn't sent`;
+  }
+  return `${title} isn't an agent session — the request wasn't sent`;
 }
 
 /**
@@ -281,19 +355,13 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
     const waitingSince = Date.now();
     let ready = false;
     let firstCheck = true;
+    let bound: DestinationIdentity | null = null;
     while (!ready && Date.now() < readyBy) {
       if (!firstCheck || destination.kind === "launch") await wait(LAUNCH_POLL_MS);
       firstCheck = false;
       if (!current()) return;
-      const status = await actionService.dispatch<TerminalStatusResult>(
-        "terminal.getStatus",
-        { terminalIds: [terminalId] },
-        { source: "user" }
-      );
+      const entry = await observe(terminalId);
       if (!current()) return;
-      const entry = status.ok
-        ? status.result.terminals.find((terminal) => terminal.terminalId === terminalId)
-        : undefined;
       if (entry?.error) {
         report({ status: "failed", message: `${title} isn't running any more` }, terminalId);
         return;
@@ -303,8 +371,16 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
       // the user may say "send anyway", because a detector can stay silent.
       const readiness =
         entry === undefined ? "not-yet" : launchReadiness(entry.agentState, entry.waitingReason);
-      if (readiness === "ready" || run.forced) ready = true;
-      else if (readiness === "needs-you") report({ status: "needs-you" }, terminalId);
+      if (readiness === "ready" || run.forced) {
+        // Bound from the same observation that proved readiness, so the two
+        // cannot disagree about which session they are about.
+        bound = identityOf(entry);
+        if (bound === null) {
+          report({ status: "failed", message: unbindable(title, entry) }, terminalId);
+          return;
+        }
+        ready = true;
+      } else if (readiness === "needs-you") report({ status: "needs-you" }, terminalId);
       else if (Date.now() - waitingSince > UNKNOWN_READINESS_MS) {
         report({ status: "unknown-readiness" }, terminalId);
       }
@@ -321,9 +397,39 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
       report({ status: "failed", message: problem }, terminalId);
       return;
     }
+    // `verify()` above is an await, and the readiness proved before it is now
+    // history. One last observation, read for both things it can tell us: that
+    // this is still the session the run bound to, and that it is still at a
+    // prompt. "Send anyway" reaches here too — it waives a readiness *signal*,
+    // which is not permission to write into a different process.
+    const settled = await observe(terminalId);
+    if (!current()) return;
+    const identity = identityOf(settled);
+    if (bound === null || identity === null || !sameSession(bound, identity)) {
+      report({ status: "failed", message: sessionChanged(title, identity) }, terminalId);
+      return;
+    }
+    // Checked here, under the last await rather than over it: a destination
+    // moved to another worktree while the observation was in flight keeps both
+    // its identity and its readiness, and `terminal.sendCommand` does not
+    // enforce the worktree the request was prepared for.
     if (!destinationStillEligible(terminalId, worktreeId)) {
       report(
         { status: "failed", message: `${title} left this worktree — the request wasn't sent` },
+        terminalId
+      );
+      return;
+    }
+    const settledReadiness = launchReadiness(settled?.agentState, settled?.waitingReason);
+    if (settledReadiness !== "ready" && !run.forced) {
+      report(
+        {
+          status: "failed",
+          message:
+            settledReadiness === "needs-you"
+              ? `${title} is asking you something — the request wasn't sent`
+              : `${title} left its prompt — the request wasn't sent`,
+        },
         terminalId
       );
       return;

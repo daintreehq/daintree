@@ -37,6 +37,10 @@ function terminal(agentState: string | null = null) {
           terminals: [
             {
               terminalId: "t1",
+              // As `terminal.getStatus` reports a live agent session: delivery
+              // binds to these and refuses a slot that stopped being this one.
+              agentId: "claude",
+              spawnedAt: 1_000,
               agentState: state,
               submission: args.submissionToken ? { phase: "pty_written" } : undefined,
             },
@@ -186,7 +190,11 @@ describe("deliverAgentRequest", () => {
       if (id === "terminal.getStatus") {
         return {
           ok: true,
-          result: { terminals: [{ terminalId: "t1", agentState: "waiting" }] },
+          result: {
+            terminals: [
+              { terminalId: "t1", agentId: "claude", spawnedAt: 1_000, agentState: "waiting" },
+            ],
+          },
         };
       }
       if (id === "terminal.sendCommand") {
