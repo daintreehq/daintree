@@ -8,7 +8,10 @@ import { checkIgnoredPaths, hasTrackedIgnoredPaths } from "../gitCheckIgnore.js"
 import { GitFileWatcher } from "../gitFileWatcher.js";
 import { settleParcelWatcherLifecycle } from "../parcelWatcherBackend.js";
 
-const { subscribeMock } = vi.hoisted(() => ({ subscribeMock: vi.fn() }));
+const { subscribeMock, exclusionsMock } = vi.hoisted(() => ({
+  subscribeMock: vi.fn(),
+  exclusionsMock: vi.fn(),
+}));
 
 /**
  * The slice of `@parcel/watcher`'s Event the watcher reads. `path` is optional
@@ -20,6 +23,7 @@ type WatcherEvent = { type: string; path?: string };
 
 vi.mock("../parcelWatcherBackend.js", () => ({
   subscribeParcelWatcher: subscribeMock,
+  resolveParcelWatcherExclusions: exclusionsMock,
   settleParcelWatcherLifecycle: () => Promise.resolve(),
 }));
 
@@ -63,17 +67,19 @@ function createMockSubscription(): { unsubscribe: () => Promise<void> } {
  */
 function setupSubscribeMock() {
   let capturedCallback: ((err: Error | null, events: Array<WatcherEvent>) => void) | undefined;
+  let capturedDir: string | undefined;
   let capturedOptions: Record<string, unknown> | undefined;
   let resolvePromise: ((sub: { unsubscribe: () => Promise<void> }) => void) | undefined;
   let rejectPromise: ((err: Error) => void) | undefined;
 
   subscribeMock.mockImplementation(
     (
-      _dir: string,
+      dir: string,
       cb: (err: Error | null, events: Array<WatcherEvent>) => void,
       opts?: Record<string, unknown>
     ) => {
       capturedCallback = cb;
+      capturedDir = dir;
       capturedOptions = opts;
       return new Promise<{ unsubscribe: () => Promise<void> }>((resolve, reject) => {
         resolvePromise = resolve;
@@ -84,6 +90,7 @@ function setupSubscribeMock() {
 
   return {
     getCallback: () => capturedCallback,
+    getDir: () => capturedDir,
     getOptions: () => capturedOptions,
     resolve: (sub?: { unsubscribe: () => Promise<void> }) => {
       if (resolvePromise) {
@@ -160,6 +167,8 @@ describe("GitFileWatcher", () => {
     vi.mocked(watch).mockImplementation(() => createMockWatcher());
     // Default subscribe: resolve immediately so non-worktree tests don't hang
     subscribeMock.mockResolvedValue(createMockSubscription());
+    // No hot directory exists by default, so the ignore list is the globs alone.
+    exclusionsMock.mockResolvedValue([]);
   });
 
   afterEach(() => {
@@ -1381,6 +1390,35 @@ describe("GitFileWatcher", () => {
       }
     });
 
+    it("treats a startup rejection that reads like a rescan as a failed watcher", async () => {
+      // A rescan request only means "the stream is alive but lost events" when
+      // it arrives through a live subscription. Rejecting the subscribe itself
+      // means no stream exists to keep.
+      const onChange = vi.fn();
+      const onWatcherFailed = vi.fn();
+      const mock = setupSubscribeMock();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        watchWorktree: true,
+        onWatcherFailed,
+      });
+
+      await gitWatcher.start();
+      mock.reject(new Error("Too many events. File system must be re-scanned."));
+      await Promise.resolve();
+      await flushParcelWatcherCallbacks();
+
+      expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+      expect(logWarn).toHaveBeenCalledWith("Worktree recursive watcher error (startup)", {
+        path: "/repo",
+        error: "Too many events. File system must be re-scanned.",
+      });
+      gitWatcher.dispose();
+    });
+
     it("startup EMFILE on macOS no longer returns false — callbacks fire async", async () => {
       const onChange = vi.fn();
       const onWatcherFailed = vi.fn();
@@ -1641,6 +1679,107 @@ describe("GitFileWatcher", () => {
       } finally {
         Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
       }
+    });
+
+    it("logs a run of dropped-event errors once per window with the count it swallowed", async () => {
+      const onChange = vi.fn();
+      const onWorktreeFilesChanged = vi.fn();
+      const mock = setupSubscribeMock();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange,
+        watchWorktree: true,
+        onWorktreeFilesChanged,
+      });
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+      const rescanWarnings = () =>
+        vi
+          .mocked(logWarn)
+          .mock.calls.filter(
+            ([message]) => message === "Worktree recursive watcher error (runtime)"
+          );
+      const dropped = new Error(
+        "Events were dropped by the FSEvents client. File system must be re-scanned."
+      );
+
+      fireError(cb, dropped);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(rescanWarnings()).toHaveLength(1);
+      expect(rescanWarnings()[0][1]).not.toHaveProperty("suppressed");
+      expect(onChange).toHaveBeenCalledTimes(1);
+
+      // Inside the window the warning goes quiet, but every overflow still
+      // lost events and still has to force its refresh.
+      fireError(cb, dropped);
+      await vi.advanceTimersByTimeAsync(5_000);
+      fireError(cb, dropped);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(rescanWarnings()).toHaveLength(1);
+      expect(onChange).toHaveBeenCalledTimes(3);
+      expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(3);
+      expect(onWorktreeFilesChanged).toHaveBeenLastCalledWith(null);
+
+      // One millisecond short of the window is still inside it.
+      await vi.advanceTimersByTimeAsync(14_999);
+      fireError(cb, dropped);
+      expect(rescanWarnings()).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
+      fireError(cb, dropped);
+      expect(rescanWarnings()).toHaveLength(2);
+      expect(rescanWarnings()[1][1]).toEqual({
+        path: "/repo",
+        error: dropped.message,
+        suppressed: 3,
+      });
+
+      // The count restarts once it has been reported.
+      await vi.advanceTimersByTimeAsync(30_000);
+      fireError(cb, dropped);
+      expect(rescanWarnings()).toHaveLength(3);
+      expect(rescanWarnings()[2][1]).not.toHaveProperty("suppressed");
+
+      gitWatcher.dispose();
+    });
+
+    it("keeps logging a fatal runtime error while rescan warnings are throttled", async () => {
+      const onWatcherFailed = vi.fn();
+      const mock = setupSubscribeMock();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange: vi.fn(),
+        watchWorktree: true,
+        onWatcherFailed,
+      });
+      await expect(gitWatcher.start()).resolves.toBe(true);
+      mock.resolve();
+      const cb = mock.getCallback();
+
+      fireError(
+        cb,
+        new Error("Events were dropped by the kernel. File system must be re-scanned.")
+      );
+      fireError(
+        cb,
+        new Error("Events were dropped by the kernel. File system must be re-scanned.")
+      );
+      vi.mocked(logWarn).mockClear();
+
+      fireError(cb, new Error("Error starting FSEvents stream"));
+
+      expect(logWarn).toHaveBeenCalledWith("Worktree recursive watcher error (runtime)", {
+        path: "/repo",
+        error: "Error starting FSEvents stream",
+      });
+      expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+
+      gitWatcher.dispose();
     });
 
     it("downgrades on a Windows buffer overflow despite it also losing events", async () => {
@@ -2382,6 +2521,158 @@ describe("GitFileWatcher", () => {
       await flushParcelWatcherCallbacks();
       gitWatcher.dispose();
       await flushParcelWatcherCallbacks();
+    });
+
+    it("passes the existing hot directories as literal ignores beside every glob", async () => {
+      exclusionsMock.mockResolvedValue(["node_modules", ".git", "dist"]);
+      const mock = setupSubscribeMock();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange: vi.fn(),
+        watchWorktree: true,
+      });
+
+      await gitWatcher.start();
+
+      const ignore = mock.getOptions()?.ignore as string[];
+      // Plain names are what Parcel forwards to FSEventStreamSetExclusionPaths;
+      // the globs still filter nested matches and anything past the cap.
+      expect(ignore.slice(-3)).toEqual(["node_modules", ".git", "dist"]);
+      expect(ignore).toContain("**/node_modules/**");
+      expect(ignore).toContain("**/.git/**");
+      expect(ignore.filter((entry) => entry.startsWith("**/"))).toHaveLength(19);
+      expect(ignore).toHaveLength(22);
+
+      mock.resolve();
+      await flushParcelWatcherCallbacks();
+      gitWatcher.dispose();
+      await flushParcelWatcherCallbacks();
+    });
+
+    it("only offers directories the globs already ignore, node_modules and .git first", async () => {
+      const mock = setupSubscribeMock();
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange: vi.fn(),
+        watchWorktree: true,
+      });
+
+      await gitWatcher.start();
+
+      const candidates = exclusionsMock.mock.calls[0][1] as string[];
+      expect(candidates.slice(0, 2)).toEqual(["node_modules", ".git"]);
+      const ignore = mock.getOptions()?.ignore as string[];
+      for (const name of candidates) {
+        // An exclusion must only ever drop churn the globs already discard,
+        // or a change the user cares about would go silent.
+        expect(ignore).toContain(`**/${name}/**`);
+      }
+
+      mock.resolve();
+      await flushParcelWatcherCallbacks();
+      gitWatcher.dispose();
+      await flushParcelWatcherCallbacks();
+    });
+
+    it("subscribes at the canonical root on macOS so FSEvents paths match it", async () => {
+      vi.mocked(realpath).mockImplementation(((p: string) =>
+        Promise.resolve(p === "/repo" ? "/private/repo" : p)) as never);
+      const mock = setupSubscribeMock();
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange: vi.fn(),
+          watchWorktree: true,
+        });
+        await gitWatcher.start();
+
+        expect(mock.getDir()).toBe("/private/repo");
+        expect(exclusionsMock.mock.calls[0][0]).toBe("/private/repo");
+
+        mock.resolve();
+        await flushParcelWatcherCallbacks();
+        gitWatcher.dispose();
+        await flushParcelWatcherCallbacks();
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
+    });
+
+    it("keeps the configured root off macOS", async () => {
+      vi.mocked(realpath).mockImplementation(((p: string) =>
+        Promise.resolve(p === "/repo" ? "/private/repo" : p)) as never);
+      const mock = setupSubscribeMock();
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange: vi.fn(),
+          watchWorktree: true,
+        });
+        await gitWatcher.start();
+
+        expect(mock.getDir()).toBe("/repo");
+        expect(exclusionsMock.mock.calls[0][0]).toBe("/repo");
+
+        mock.resolve();
+        await flushParcelWatcherCallbacks();
+        gitWatcher.dispose();
+        await flushParcelWatcherCallbacks();
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
+    });
+
+    it("does not subscribe when disposed while the exclusions are resolving", async () => {
+      let releaseExclusions: ((names: string[]) => void) | undefined;
+      exclusionsMock.mockImplementation(
+        () =>
+          new Promise<string[]>((resolve) => {
+            releaseExclusions = resolve;
+          })
+      );
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange: vi.fn(),
+        watchWorktree: true,
+      });
+
+      const started = gitWatcher.start();
+      await vi.waitFor(() => expect(releaseExclusions).toBeDefined());
+      gitWatcher.dispose();
+      releaseExclusions?.(["node_modules"]);
+
+      await expect(started).resolves.toBe(false);
+      expect(subscribeMock).not.toHaveBeenCalled();
+    });
+
+    it("does not look for exclusions when the worktree is not watched", async () => {
+      const gitWatcher = new GitFileWatcher({
+        worktreePath: "/repo",
+        branch: "main",
+        debounceMs: 300,
+        onChange: vi.fn(),
+      });
+
+      await expect(gitWatcher.start()).resolves.toBe(true);
+
+      expect(exclusionsMock).not.toHaveBeenCalled();
+      gitWatcher.dispose();
     });
 
     it("events from non-ignored paths still fire onChange", async () => {
