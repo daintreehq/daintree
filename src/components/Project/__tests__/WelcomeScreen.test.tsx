@@ -934,6 +934,76 @@ describe("WelcomeScreen", () => {
     expect(screen.getByText("Getting started")).toBeTruthy();
   });
 
+  // --- Container-scaled layout (#12438) ---
+
+  // jsdom evaluates no container queries, so these pin the invariants the
+  // queries depend on rather than the rendered sizes.
+  const MEASURE_SCALE = ["xl", "2xl", "3xl", "4xl", "5xl", "6xl", "7xl"];
+  // The widest default display on a current MacBook; laptop layouts stay put.
+  const WIDEST_LAPTOP_PX = 1728;
+  const welcomeTier = /^@min-\[(\d+)px\]\/welcome:(.+)$/;
+  const layoutCases: Array<[string, typeof mockProjects, boolean]> = [
+    ["returning users", mockProjects, true],
+    ["first-time users", [], true],
+    ["users yet to set up agents", [], false],
+  ];
+
+  it.each(layoutCases)(
+    "scales off an uncapped container wrapping the scroller for %s",
+    (_, projects, setupBannerDismissed) => {
+      storeState = { ...storeState, projects };
+      agentDiscoveryState.setupBannerDismissed = setupBannerDismissed;
+      const { container } = render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+      const roots = container.querySelectorAll<HTMLElement>('[class*="@container/welcome"]');
+      expect(roots).toHaveLength(1);
+      const root = roots[0]!;
+      expect(root).toBe(container.firstElementChild);
+
+      // As the scroller, the query would measure a width that changes as the
+      // scrollbar comes and goes, and a surface on a tier boundary could flip.
+      expect(root.classList.contains("overflow-y-auto")).toBe(false);
+      const scroller = root.firstElementChild;
+      expect(scroller?.classList.contains("overflow-y-auto")).toBe(true);
+
+      // A root capped at the column's width could never satisfy a wider query.
+      expect(Array.from(root.classList).some((token) => token.startsWith("max-w-"))).toBe(false);
+
+      const column = scroller!.firstElementChild!;
+      expect(column.contains(screen.getByTestId("quick-actions"))).toBe(true);
+
+      // Every wider tier must widen the column past the tier before it.
+      const tokens = Array.from(column.classList);
+      const baseMeasure = tokens.flatMap((token) => /^max-w-(\w+)$/.exec(token)?.[1] ?? []);
+      expect(baseMeasure).toHaveLength(1);
+      const steps = tokens
+        .flatMap((token) => {
+          const match = welcomeTier.exec(token);
+          const measure = match?.[2]?.match(/^max-w-(\w+)$/)?.[1];
+          return match && measure ? [{ px: Number(match[1]), measure }] : [];
+        })
+        .sort((a, b) => a.px - b.px);
+      expect(steps.length).toBeGreaterThan(0);
+      const ranks = [...baseMeasure, ...steps.map((step) => step.measure)].map((measure) =>
+        MEASURE_SCALE.indexOf(measure)
+      );
+      expect(ranks).not.toContain(-1);
+      for (let i = 1; i < ranks.length; i++) {
+        expect(ranks[i]).toBeGreaterThan(ranks[i - 1]!);
+      }
+
+      // No tier anywhere on the surface may engage at a laptop's width.
+      const thresholds = Array.from(root.querySelectorAll("*")).flatMap((element) =>
+        Array.from(element.classList).flatMap((token) => {
+          const px = welcomeTier.exec(token)?.[1];
+          return px ? [Number(px)] : [];
+        })
+      );
+      expect(thresholds.length).toBeGreaterThan(0);
+      expect(Math.min(...thresholds)).toBeGreaterThan(WIDEST_LAPTOP_PX);
+    }
+  );
+
   // --- Agent Welcome Card (#5111) ---
 
   describe("agent welcome card", () => {
