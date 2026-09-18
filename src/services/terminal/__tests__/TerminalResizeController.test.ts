@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 
-const { resizeMock, getEffectiveAgentConfigMock } = vi.hoisted(() => ({
+const { resizeMock, getEffectiveAgentConfigMock, logWarnMock } = vi.hoisted(() => ({
   resizeMock: vi.fn(),
   getEffectiveAgentConfigMock: vi.fn(),
+  logWarnMock: vi.fn(),
 }));
 
 vi.mock("@/clients", () => ({
@@ -11,6 +12,11 @@ vi.mock("@/clients", () => ({
     resize: resizeMock,
   },
 }));
+
+vi.mock("@/utils/logger", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/utils/logger")>();
+  return { ...actual, logWarn: logWarnMock };
+});
 
 vi.mock("@shared/config/agentRegistry", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@shared/config/agentRegistry")>();
@@ -2350,6 +2356,214 @@ describe("TerminalResizeController", () => {
       expect(managed.terminal.resize).not.toHaveBeenCalled();
       expect(resizeMock).not.toHaveBeenCalled();
       expect(geometryOf(managed)).toEqual(before);
+    });
+
+    // #12442: the column floor above admitted every grid from three columns up,
+    // and one row. The panes in that issue collapsed to exactly what it let
+    // through, so the floor is now the plausibility floor and covers both axes.
+    it.each([
+      {
+        axis: "columns",
+        cell: { width: 100, height: 20 },
+        expectGrid: { cols: 15, rows: 40 },
+      },
+      {
+        axis: "rows",
+        cell: { width: 10, height: 200 },
+        expectGrid: { cols: 158, rows: 4 },
+      },
+    ])("refuses a background grid too small on $axis to be a pane", ({ cell, expectGrid }) => {
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = false;
+      attachCellDims(managed, cell);
+      seedDetectable(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      // Witness the regime: a box this size is nowhere near the pixel floor, and
+      // the grid it derives clears FitAddon's old floor on both axes — so only
+      // the plausibility floor can be what rejects it.
+      expect(Math.floor((1600 - SCROLLBAR_PX) / cell.width)).toBe(expectGrid.cols);
+      expect(Math.floor(800 / cell.height)).toBe(expectGrid.rows);
+
+      expect(controller.resize("term-1", 1600, 800)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", 1600, 800)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("refuses a collapsed grid on the measured branch a visible pane takes", () => {
+      // The observer branch a cached view's stale `isVisible` routes down had a
+      // pixel floor and no grid floor at all, so a box that cleared the pixel
+      // floor and still divided to 2x1 went straight through to both grids
+      // (#12442). Caches must survive untouched: a poisoned `lastWidth` would
+      // make the dedup gate swallow the corrective resize that follows.
+      const managed = createManagedTerminal();
+      managed.isFocused = true;
+      managed.isVisible = true;
+      managed.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      attachCellDims(managed, { width: 800, height: 800 });
+      seedDetectable(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      // Witness the regime: the box is well past the pixel floor, and the cell
+      // is wide enough that only FitAddon's own floor can answer.
+      expect(Math.floor((1600 - SCROLLBAR_PX) / 800)).toBeLessThanOrEqual(2);
+
+      expect(controller.resize("term-1", 1600, 800)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("applies a genuinely small MEASURED grid instead of refusing it (#12442)", () => {
+      // The counterweight to every refusal above, and the reason the measured
+      // paths take the collapse floor rather than the strict one. A pane at the
+      // smallest supported size and the largest supported font really does
+      // measure about 23x4. That is a pane somebody is looking at: refusing it
+      // would leave xterm bigger than its container with the content clipped,
+      // and every later fit of that same container would refuse again — a
+      // permanent bug traded for this one.
+      const managed = createManagedTerminal();
+      managed.isFocused = true;
+      managed.isVisible = true;
+      managed.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      attachCellDims(managed, { width: 15, height: 32 });
+      const controller = makeController(managed);
+
+      const applied = controller.resize("term-1", 380, 142);
+
+      expect(applied).toEqual({ cols: 24, rows: 4 });
+      expect(managed.terminal.resize).toHaveBeenCalledWith(24, 4);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", 24, 4);
+    });
+
+    it("refuses a poisoned target cache on the paths that replay it", () => {
+      // `latestCols`/`latestRows` are a pending target, not a measurement —
+      // written ahead of every commit and by the PTY-only sizing panel spawn
+      // does. A pane that collapsed while hidden leaves the collapse sitting
+      // there, and these are the paths that re-assert it at wake and reveal
+      // (#12442).
+      const managed = createManagedTerminal();
+      managed.latestCols = 2;
+      managed.latestRows = 1;
+      const controller = makeController(managed);
+
+      controller.forceImmediateResize("term-1");
+      controller.applyDeferredResize("term-1");
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(managed.terminal.cols).toBe(80);
+    });
+
+    it("recovers on the next healthy resize at the same pixel box (#12442)", () => {
+      // The regression test for the failure mode this fix could have introduced.
+      // A refusal must not poison `lastWidth`/`lastHeight`: if it did, the pixel
+      // dedup would call the corrected resize redundant and the pane would stay
+      // wrong forever — trading a collapsed grid for a permanently stale one.
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = false;
+      attachCellDims(managed, { width: 100, height: 20 });
+      const controller = makeController(managed);
+
+      // Bad cell metrics derive 15 columns from this box and the grid is refused.
+      expect(controller.resize("term-1", 1600, 800)).toBeNull();
+      expect(resizeMock).not.toHaveBeenCalled();
+
+      // Metrics come good; the SAME box now derives a real grid and must apply.
+      attachCellDims(managed, { width: 10, height: 20 });
+      const applied = controller.resize("term-1", 1600, 800);
+
+      expect(applied).toEqual({ cols: colsFor(1600), rows: 40 });
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1600), 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+    });
+
+    it("keeps queued work when a refusal lands on top of it", () => {
+      // Ordering, not just outcome: the gate sits above `cancelPendingResize`,
+      // so a refused request must not drop a queued job that carries geometry
+      // something really measured. Weakening that ordering strands the pane at
+      // the grid the cancelled job was going to correct.
+      const managed = createManagedTerminal();
+      managed.isFocused = false;
+      managed.isVisible = true;
+      managed.terminal.buffer.active.length = 300;
+      attachCellDims(managed, CELL);
+      const controller = makeController(managed);
+
+      // A plausible box arms the debounce rather than committing immediately.
+      controller.resize("term-1", 1600, 800);
+      expect(controller.hasPendingResize("term-1")).toBe(true);
+
+      // A refused grid arrives before it fires.
+      controller.applyResize("term-1", 2, 1);
+      expect(controller.hasPendingResize("term-1")).toBe(true);
+
+      vi.advanceTimersByTime(200);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+    });
+
+    it("names the caller and the refused grid, once per episode (#12442)", () => {
+      // The issue's second ask: the collapse left a blank hour in the log, so a
+      // refusal has to say which path requested it. Asserted on fragments, not
+      // a whole sentence — the contract is that the id, the call site and the
+      // grid are all recoverable from the line, not its wording.
+      const managed = createManagedTerminal();
+      managed.latestCols = 2;
+      managed.latestRows = 1;
+      const controller = makeController(managed);
+      logWarnMock.mockClear();
+
+      controller.forceImmediateResize("term-1");
+
+      expect(logWarnMock).toHaveBeenCalledTimes(1);
+      const line = logWarnMock.mock.calls[0]![0] as string;
+      expect(line).toContain("term-1");
+      expect(line).toContain("force-immediate");
+      expect(line).toContain("2x1");
+
+      // A pane whose box keeps measuring zero is asked for the same impossible
+      // grid on every observer tick; the log must not become the flood it
+      // exists to explain.
+      controller.forceImmediateResize("term-1");
+      expect(logWarnMock).toHaveBeenCalledTimes(1);
+
+      // A different call site asking for the same grid is a different episode:
+      // naming only the first path would hide the one that matters.
+      controller.applyDeferredResize("term-1");
+      expect(logWarnMock).toHaveBeenCalledTimes(2);
+      expect(logWarnMock.mock.calls[1]![0] as string).toContain("deferred-resync");
+    });
+
+    it("refuses an implausible grid at the xterm choke point, restore included", () => {
+      // The last gate before xterm's own grid, and the one `collectTerminalSizes`
+      // reads back: a grid that lands here is persisted as the pane's real size
+      // and rebuilds the collapse on the next restore. The parked restore target
+      // is refused for the same reason — a replay normalizes to it when it
+      // closes (#12442).
+      const managed = createManagedTerminal();
+      const controller = makeController(managed);
+
+      controller.resizeTerminal(managed, 2, 1);
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+
+      managed.isSerializedRestoreInProgress = true;
+      controller.resizeTerminal(managed, 2, 1);
+      expect(managed.pendingRestoreGeometry).toBeUndefined();
+
+      // A plausible grid still lands, so the refusal is the floor and not the
+      // gate itself having been broken.
+      controller.resizeTerminal(managed, 120, 40);
+      expect(managed.pendingRestoreGeometry).toEqual({ cols: 120, rows: 40 });
     });
 
     it("refuses a sub-viable box on the measured branch a cached view's stale isVisible routes it down", () => {

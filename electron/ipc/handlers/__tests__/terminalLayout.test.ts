@@ -16,7 +16,11 @@ vi.mock("../../../services/pty/agentSessionCapturePersistence.js", () => ({
   noteRendererSessionIdentityEdits,
 }));
 
-import { terminalLayoutNamespace, sanitizeFieldEdits } from "../terminalLayout.js";
+import {
+  terminalLayoutNamespace,
+  sanitizeFieldEdits,
+  sanitizeTerminalSizes,
+} from "../terminalLayout.js";
 
 const setTerminals = terminalLayoutNamespace.ops.setTerminals.handler as (payload: {
   projectId: string;
@@ -622,5 +626,45 @@ describe("setDraftInputs merge (#11352)", () => {
       removedIds: [],
     });
     expect(saved()?.draftInputs).toEqual({ t1: "first draft" });
+  });
+});
+
+/**
+ * `terminalSizes` is the grid a restored pane is BORN on, so this sanitizer is
+ * the last thing between a collapsed measurement and a pane that rebuilds into
+ * the collapse on every eviction and restart (#12442).
+ */
+describe("sanitizeTerminalSizes", () => {
+  it("drops a collapsed entry and keeps every grid a pane could have measured", () => {
+    const sanitized = sanitizeTerminalSizes({
+      wide: { cols: 302, rows: 90 },
+      ordinary: { cols: 80, rows: 24 },
+      // A pane at the smallest supported size and the largest supported font.
+      // It has to survive: this map is a RECORD of what the pane measured, and
+      // Main MERGES rather than replaces, so dropping it would leave that pane
+      // restoring at whatever older, wronger entry is already on disk.
+      smallest: { cols: 23, rows: 4 },
+      collapsed: { cols: 2, rows: 1 },
+      "one-row": { cols: 80, rows: 1 },
+      "two-col": { cols: 2, rows: 90 },
+      zero: { cols: 0, rows: 51 },
+      fractional: { cols: 80.5, rows: 24 },
+      "not-finite": { cols: Number.NaN, rows: 24 },
+      infinite: { cols: Number.POSITIVE_INFINITY, rows: 24 },
+      oversized: { cols: 12000, rows: 24 },
+      "missing-rows": { cols: 80 },
+      "wrong-type": { cols: "80", rows: "24" },
+      "not-an-object": 80,
+      null: null,
+    } as Record<string, unknown>);
+
+    // Asserted as the whole map rather than per key: a sanitizer is only as good
+    // as what it leaves behind, and an equality catches an entry that survives
+    // for a reason nobody predicted.
+    expect(sanitized).toEqual({
+      wide: { cols: 302, rows: 90 },
+      ordinary: { cols: 80, rows: 24 },
+      smallest: { cols: 23, rows: 4 },
+    });
   });
 });

@@ -12,6 +12,7 @@ function makeCtx(stateRef: {
   const ptyManager = {
     setSabMode: vi.fn(),
     isSabMode: vi.fn(() => true),
+    resize: vi.fn(),
   } as unknown as HostContext["ptyManager"];
 
   return {
@@ -699,5 +700,65 @@ describe("worker-ingest dedicated ports (#10960)", () => {
       "term-9",
       "explicit-disconnect"
     );
+  });
+});
+
+describe("resize transport attribution (#12442)", () => {
+  function makeStateRef() {
+    return {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+  }
+
+  function makeNodePort() {
+    const listeners = new Map<string, Set<(arg?: unknown) => void>>();
+    return {
+      start() {},
+      close() {},
+      postMessage() {},
+      on(event: string, handler: (arg?: unknown) => void) {
+        let set = listeners.get(event);
+        if (!set) {
+          set = new Set();
+          listeners.set(event, set);
+        }
+        set.add(handler);
+      },
+      removeListener(event: string, handler: (arg?: unknown) => void) {
+        listeners.get(event)?.delete(handler);
+      },
+      emit(event: string, arg?: unknown) {
+        listeners.get(event)?.forEach((handler) => handler(arg));
+      },
+    };
+  }
+
+  it("names the MessagePort as the transport for a resize it delivers", () => {
+    // The renderer's MessagePort reaches this process without passing through
+    // Main, so when a collapsed grid is refused at the boundary the log has to
+    // say which of the two doors it arrived through — the issue asks for the
+    // caller to be named, and this is the half the host owns.
+    const ctx = makeCtx(makeStateRef());
+    vi.mocked(ctx.createPortQueueManager).mockReturnValue({
+      removeBytes: vi.fn(),
+      tryResume: vi.fn(),
+      isAtCapacity: vi.fn(() => false),
+      addBytes: vi.fn(),
+      applyBackpressure: vi.fn(),
+      getUtilization: vi.fn(() => 0),
+      getPausedTerminalIds: vi.fn(() => []),
+      resumeAll: vi.fn(),
+      dispose: vi.fn(),
+    } as unknown as ReturnType<HostContext["createPortQueueManager"]>);
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const handlers = createConnectionHandlers(ctx);
+    const port = makeNodePort();
+
+    handlers["connect-port"]({ windowId: 1 }, [port] as never);
+    port.emit("message", { data: { type: "resize", id: "term-1", cols: 100, rows: 30 } });
+
+    expect(ctx.ptyManager.resize).toHaveBeenCalledWith("term-1", 100, 30, "renderer-message-port");
   });
 });

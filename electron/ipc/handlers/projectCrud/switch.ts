@@ -517,7 +517,15 @@ async function persistOutgoingProjectState(
       validSizes === undefined
         ? undefined
         : (() => {
-            const merged = { ...(existing?.terminalSizes ?? {}), ...validSizes };
+            // Sanitize the EXISTING side too, not just the incoming one. The
+            // entries written before #12442 are already on disk — three of the
+            // reporter's panes persisted at `2x1` — and a merge that only
+            // filters what arrives preserves every one of them for the next
+            // restore to rebuild from.
+            const merged = {
+              ...sanitizeTerminalSizes((existing?.terminalSizes ?? {}) as Record<string, unknown>),
+              ...validSizes,
+            };
             if (mergedTerminals === undefined) return merged;
             const liveIds = new Set(mergedTerminals.map((t) => t.id));
             return Object.fromEntries(

@@ -23,7 +23,7 @@ export interface TerminalRevealControllerDeps {
   handlePostWake: (id: string) => void;
   deferGridChangeForStream: (managed: ManagedTerminal, gridWouldChange: boolean) => boolean;
   applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
-  applyDeferredResize: (id: string) => void;
+  applyDeferredResize: (id: string) => boolean;
   lockResize: (id: string, locked: boolean, customTtlMs?: number) => void;
   reconcileGeometryFresh: (id: string) => boolean;
   resumeFlush: (id: string) => void;
@@ -101,10 +101,15 @@ export class TerminalRevealController {
         // that if cellDims were unavailable during background and latestCols/
         // latestRows are stale, the rect-update doesn't dedup-poison the next
         // ResizeObserver tick.
-        this.deps.applyDeferredResize(id);
+        // A refused target leaves xterm where it was, so the rect below must
+        // NOT be stamped: the next ResizeObserver tick for that same box would
+        // dedup against it and the pane would never be corrected (#12442). The
+        // reveal sweep's `reconcileGeometryFresh` is dedup-exempt and measures
+        // it for real instead.
+        const deferredApplied = this.deps.applyDeferredResize(id);
 
         const rect = managed.hostElement.getBoundingClientRect();
-        if (rect.width > 0 && rect.height > 0) {
+        if (deferredApplied && rect.width > 0 && rect.height > 0) {
           const widthChanged = Math.abs(managed.lastWidth - rect.width) >= 1;
           const heightChanged = Math.abs(managed.lastHeight - rect.height) >= 1;
 

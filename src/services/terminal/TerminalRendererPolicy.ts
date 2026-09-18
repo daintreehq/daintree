@@ -8,7 +8,7 @@ export interface RendererPolicyDeps {
   onPostWake?: (id: string) => void;
   onResumeFlush?: (id: string) => void;
   onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
-  applyDeferredResize?: (id: string) => void;
+  applyDeferredResize?: (id: string) => boolean;
 }
 
 // Backend cadence hint sent to the PTY host alongside the binary

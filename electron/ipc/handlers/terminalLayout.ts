@@ -1,6 +1,6 @@
 import { projectStore } from "../../services/ProjectStore.js";
 import { noteRendererSessionIdentityEdits } from "../../services/pty/agentSessionCapturePersistence.js";
-import { isValidTerminalGeometry } from "../../../shared/types/terminal.js";
+import { isUsableTerminalGeometry } from "../../../shared/types/terminal.js";
 import {
   TerminalSnapshotSchema,
   filterValidTerminalEntries,
@@ -105,8 +105,17 @@ export function appliedSessionIdentityClaims(
 
 /**
  * Validate and sanitize terminal size records.
- * Entries whose geometry a terminal could not actually have been captured at
- * are dropped.
+ * Entries whose geometry no real pane could be showing are dropped.
+ *
+ * The floor catches a collapsed grid rather than only a structurally invalid
+ * one: this map is the grid a restored pane is BORN on, so a `2x1` entry — what
+ * a hidden pane's zero-size box divides to (#12442) — rebuilds that pane into
+ * the collapse on the next eviction or restart.
+ *
+ * It stops there deliberately. These entries are a RECORD of what a pane
+ * measured, so a stricter floor would drop the real grid of a genuinely small
+ * pane — and because the merge keeps whatever it already had, that pane would
+ * then restore at an older, wronger size rather than at no size at all.
  */
 export function sanitizeTerminalSizes(
   sizes: Record<string, unknown>
@@ -122,7 +131,7 @@ export function sanitizeTerminalSizes(
       typeof (size as { rows: unknown }).rows === "number"
     ) {
       const { cols, rows } = size as { cols: number; rows: number };
-      if (isValidTerminalGeometry({ cols, rows })) {
+      if (isUsableTerminalGeometry({ cols, rows })) {
         sanitized[terminalId] = { cols, rows };
       }
     }

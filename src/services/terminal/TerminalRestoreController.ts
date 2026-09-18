@@ -4,7 +4,7 @@ import { INCREMENTAL_RESTORE_CONFIG } from "./types";
 import { logWarn, logError } from "@/utils/logger";
 import type { TerminalScrollbackRestoreError } from "@shared/types/panel";
 import type { TerminalGeometry } from "@shared/types/terminal";
-import { isValidTerminalGeometry } from "@shared/types/terminal";
+import { isUsableTerminalGeometry } from "@shared/types/terminal";
 
 function classifyRestoreError(error: unknown): TerminalScrollbackRestoreError {
   const timestamp = Date.now();
@@ -102,9 +102,16 @@ export class TerminalRestoreController {
   private intendedGeometry(managed: ManagedTerminal): TerminalGeometry | undefined {
     if (!managed.isOpened) {
       const target = { cols: managed.targetCols, rows: managed.targetRows };
-      return isValidTerminalGeometry(target) ? target : undefined;
+      return isUsableTerminalGeometry(target) ? target : undefined;
     }
-    return { cols: managed.terminal.cols, rows: managed.terminal.rows };
+    // An opened pane's live grid is normally the best evidence there is — but not
+    // when it is collapsed. A pane already at 2x1 would otherwise seed the
+    // restore with that, let `alignToCaptureGeometry` widen it to a healthy
+    // capture grid, and then be resized straight back to 2x1 the moment the
+    // replay closed (#12442). Absent instead, so the pane keeps the capture grid
+    // and the next real fit measures it.
+    const live = { cols: managed.terminal.cols, rows: managed.terminal.rows };
+    return isUsableTerminalGeometry(live) ? live : undefined;
   }
 
   /**
@@ -113,16 +120,24 @@ export class TerminalRestoreController {
    *
    * A no-op — replay verbatim, exactly as before this fix — when the snapshot
    * carries no geometry (an older pty host across an upgrade, or a preserved
-   * snapshot captured pre-#11552), when the geometry is not a grid a terminal
-   * could plausibly have had, or when it already matches. Losing the session
-   * would be a worse compatibility policy than reproducing today's behaviour
-   * for payloads that predate the contract.
+   * snapshot captured pre-#11552), when the geometry is a grid no container
+   * produced, or when it already matches. That second case now covers the
+   * snapshots written during a collapse: parking xterm on a 2x1 capture grid is
+   * how the renderer adopted it, and `collectTerminalSizes` then persisted it as
+   * the pane's real size (#12442). Losing the session would be a worse
+   * compatibility policy than reproducing today's behaviour for payloads that
+   * predate the contract.
+   *
+   * The floor stops at the collapse, deliberately. A capture grid is not an
+   * estimate: it is the width the payload was ENCODED at, and the wrap markers
+   * only decode against it. Refusing a small but real capture would replay
+   * those bytes at the wrong width and bake the #11552 damage in.
    */
   private alignToCaptureGeometry(
     managed: ManagedTerminal,
     captureGeometry: TerminalGeometry | undefined
   ): void {
-    if (!isValidTerminalGeometry(captureGeometry)) return;
+    if (!isUsableTerminalGeometry(captureGeometry)) return;
     if (
       captureGeometry.cols === managed.terminal.cols &&
       captureGeometry.rows === managed.terminal.rows
@@ -165,6 +180,12 @@ export class TerminalRestoreController {
     managed.pendingRestoreGeometry = undefined;
     managed.isSerializedRestoreInProgress = false;
     if (!target) return;
+    // Below the bookkeeping above on purpose: the write gate and the restore
+    // flag must be released on every exit, so a refused grid can never leave
+    // the pane frozen mid-restore. `resizeTerminal` gates what it parks here,
+    // but this is a direct xterm resize and the seed reaches it without passing
+    // through that (#12442).
+    if (!isUsableTerminalGeometry(target)) return;
     if (target.cols === managed.terminal.cols && target.rows === managed.terminal.rows) {
       return;
     }

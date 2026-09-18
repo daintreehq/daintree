@@ -113,3 +113,76 @@ export function isValidTerminalGeometry(value: unknown): value is TerminalGeomet
     rows <= MAX_TERMINAL_GRID_DIMENSION
   );
 }
+
+/**
+ * The grid a container with no layout produces, which is the hole #12442 came
+ * through. A hidden pane measures 0x0; FitAddon's own floor — and the
+ * `colsForWidth`/`rowsForHeight` twins that reproduce it deliberately — answer
+ * exactly 2x1, `normalizeTerminalGridDimension` maps a non-finite measurement to
+ * 1, and `isValidTerminalGeometry` accepts both. Every layer downstream then
+ * recorded that as a real measurement: the PTY, the snapshot header, the
+ * persisted `terminalSizes` map. The CLI painted its frame into a 2-column PTY
+ * and the overflow was in scrollback for good.
+ *
+ * Kept this low on purpose. It is the floor no REAL pane can reach, which is
+ * what lets it be enforced unconditionally — including at the PTY boundary,
+ * where a request's provenance is unknowable. A pane at the smallest supported
+ * size (`MIN_TERMINAL_WIDTH_PX` x `MIN_TERMINAL_HEIGHT_PX`) and the largest
+ * supported font measures about 23x4, so a floor that excluded four rows would
+ * clip a pane somebody is looking at, permanently — trading this bug for a worse
+ * one. {@link isPlausibleTerminalGeometry} is the strict floor, and it applies
+ * only where nothing measured the grid at all.
+ */
+export const COLLAPSED_TERMINAL_COLS = 2;
+export const COLLAPSED_TERMINAL_ROWS = 1;
+
+/**
+ * True when `value` is a grid some container could actually have produced —
+ * structurally valid and past {@link COLLAPSED_TERMINAL_COLS} x
+ * {@link COLLAPSED_TERMINAL_ROWS}.
+ *
+ * The universal floor. Callers refuse `!isUsableTerminalGeometry(...)` rather
+ * than clamping up to it: inventing a grid nobody measured splits xterm from
+ * the PTY exactly as thoroughly as a tiny one does, so they hold the geometry
+ * they already have.
+ */
+export function isUsableTerminalGeometry(value: unknown): value is TerminalGeometry {
+  if (!isValidTerminalGeometry(value)) return false;
+  return value.cols > COLLAPSED_TERMINAL_COLS && value.rows > COLLAPSED_TERMINAL_ROWS;
+}
+
+/**
+ * Smallest grid a pane a user could actually work in describes.
+ *
+ * 20 columns is the floor `calculateTerminalDimensions` already refuses to
+ * estimate below, so it is the number this codebase has long treated as the
+ * narrowest pane worth booting. 5 rows is well under that estimator's 10-row
+ * floor and still excludes the collapse.
+ */
+export const MIN_PLAUSIBLE_TERMINAL_COLS = 20;
+export const MIN_PLAUSIBLE_TERMINAL_ROWS = 5;
+
+/**
+ * True when `value` is a grid a pane could plausibly have been MEASURED at.
+ *
+ * The strict floor, for the two paths that EXTRAPOLATE a grid instead of
+ * reading one: `resizeGridFromCachedCellMetrics`, which divides a box by a
+ * cached cell with no live layout to check against, and the background-window
+ * scaling that multiplies a session-anchored origin by forwarded window bounds.
+ * Neither looked at a container, so a grid below a workable pane is evidence
+ * there was no layout to read — and refusing costs only staleness, because both
+ * grids stay put and the reveal-time fresh measurement corrects them.
+ *
+ * It must NOT gate a measurement, nor a RECORD of one. A pane at the smallest
+ * supported size and the largest supported font genuinely measures under this
+ * floor, so refusing it leaves xterm bigger than its container with the content
+ * clipped — permanently, since every later fit of that container refuses too.
+ * The same goes for the values that carry a measurement forward: a snapshot's
+ * capture grid (the width its bytes were encoded at), a persisted
+ * `terminalSizes` entry, a surviving PTY's geometry, a parked attach target.
+ * All of those take {@link isUsableTerminalGeometry}.
+ */
+export function isPlausibleTerminalGeometry(value: unknown): value is TerminalGeometry {
+  if (!isValidTerminalGeometry(value)) return false;
+  return value.cols >= MIN_PLAUSIBLE_TERMINAL_COLS && value.rows >= MIN_PLAUSIBLE_TERMINAL_ROWS;
+}
