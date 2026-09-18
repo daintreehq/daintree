@@ -39,7 +39,10 @@ beforeAll(() => {
   body = buildGuestAsset();
 }, 60_000);
 
-function install(mode: "browse" | "select" = "select"): void {
+function install(
+  mode: "browse" | "select" = "select",
+  origins: "any" | "local-preview" = "any"
+): void {
   scope[BINDING] = (payload: string) => {
     raw.push(payload);
   };
@@ -50,6 +53,7 @@ function install(mode: "browse" | "select" = "select"): void {
     bindingName: BINDING,
     mode,
     runtimeSource: body,
+    origins,
   });
   // Evaluated as source text with no module scope, exactly as CDP delivers it.
   new Function(source)();
@@ -244,6 +248,7 @@ describe("host prelude + page runtime", () => {
         bindingName: BINDING,
         mode: "select",
         runtimeSource: body,
+        origins: "any",
       })
     );
     expect((scope[GUEST_RUNTIME_GLOBAL] as { installId: number }).installId).toBe(INSTALL + 1);
@@ -277,5 +282,44 @@ describe("host prelude + page runtime", () => {
     );
     const last = selections[selections.length - 1]?.event;
     expect(last).toMatchObject({ scope: "component", cause: "reselect" });
+  });
+});
+
+describe("origin policy in the injected script", () => {
+  it("installs nothing on a document outside the adapter's origins", () => {
+    // The audit's experiment: the compiled prelude and the real guest asset
+    // evaluated at https://example.com/oauth. It used to install and intercept
+    // a click. `Page.addScriptToEvaluateOnNewDocument` runs in the new document
+    // before main observes the navigation, so the host's own check cannot be
+    // what stops this — the script has to refuse itself.
+    const denied = buildGuestRuntimeSource({
+      sessionId: SESSION,
+      installId: INSTALL,
+      documentEpoch: EPOCH,
+      bindingName: BINDING,
+      mode: "select",
+      runtimeSource: body,
+      origins: "local-preview",
+    });
+    // jsdom serves this suite from localhost, so the denied document is faked
+    // the only way the guard can see it: through `location`.
+    const evaluateAt = (href: string, source: string): void => {
+      new Function("location", source)({ href });
+    };
+    evaluateAt("https://example.com/oauth", denied);
+
+    expect(scope[GUEST_RUNTIME_GLOBAL]).toBeUndefined();
+
+    const node = document.createElement("button");
+    document.body.appendChild(node);
+    const event = new MouseEvent("click", { bubbles: true, cancelable: true });
+    node.dispatchEvent(event);
+    // Nothing installed, so nothing intercepted and nothing was reported.
+    expect(event.defaultPrevented).toBe(false);
+    expect(raw).toEqual([]);
+
+    // The same script at a local address installs as usual.
+    evaluateAt("http://localhost:5173/", denied);
+    expect(scope[GUEST_RUNTIME_GLOBAL]).toBeDefined();
   });
 });

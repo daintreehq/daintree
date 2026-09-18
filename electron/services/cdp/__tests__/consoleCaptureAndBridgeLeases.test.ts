@@ -131,6 +131,7 @@ function getHandler(channel: string) {
 function makeBridge(pushed: SitePreviewPushPayload[]): SitePreviewBridge {
   return new SitePreviewBridge({
     push: (payload) => pushed.push(payload),
+    isPluginEnabled: async () => true,
     listGuests: () => [
       { webContentsId: WEB_CONTENTS_ID, panelId: PANEL_ID, projectId: PROJECT_ID, url: null },
     ],

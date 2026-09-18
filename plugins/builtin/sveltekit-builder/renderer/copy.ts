@@ -30,6 +30,7 @@ export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
   "install-failed": "Couldn't start the inspector inside the preview",
   "debugger-detached": "Disconnected — DevTools may have taken over the preview",
   "guest-flooding": "Disconnected — the page sent too many invalid messages",
+  "owner-disabled": "Disconnected — the Site Builder plugin was switched off",
   "host-shutdown": "Disconnected from the dev preview",
 };
 

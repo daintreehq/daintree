@@ -127,6 +127,16 @@ export interface SitePreviewBridgeDeps {
     adapterId: string
   ) => Pick<GuestAdapter, "id" | "pluginId" | "origins"> | null;
   loadGuestAdapterSource: (adapterId: string) => Promise<string>;
+  /**
+   * Whether the plugin that owns an adapter is loaded right now.
+   *
+   * Registration is a startup fact and says nothing about lifecycle: every
+   * shipped adapter is registered whether or not its plugin is enabled, so
+   * without this the host would load and evaluate a disabled plugin's guest
+   * body for any caller authorised to name the panel. The UI hiding the tool is
+   * a different guarantee, made in a different process.
+   */
+  isPluginEnabled: (pluginId: string) => Promise<boolean>;
 }
 
 interface Binding {
@@ -230,7 +240,9 @@ export class SitePreviewBridge {
   /** Set once the owning handler is disposing; no new work is accepted after. */
   private closed = false;
 
-  constructor(deps: Partial<SitePreviewBridgeDeps> & Pick<SitePreviewBridgeDeps, "push">) {
+  constructor(
+    deps: Partial<SitePreviewBridgeDeps> & Pick<SitePreviewBridgeDeps, "push" | "isPluginEnabled">
+  ) {
     this.deps = {
       listGuests: defaultListGuests,
       getWebContents: (id) => {
@@ -294,6 +306,9 @@ export class SitePreviewBridge {
     return this.withPanelLock(input.panelId, () => this.bindLocked(input));
   }
 
+  /** Per-plugin teardown counter; see {@link disposeForPlugin}. */
+  private readonly disposeGenerations = new Map<string, number>();
+
   private async bindLocked(input: {
     projectId: string;
     panelId: string;
@@ -353,9 +368,32 @@ export class SitePreviewBridge {
       });
     }
 
+    // Read before the first await that follows, so the comparison at the
+    // commit point below is against what was true when this bind was allowed.
+    const disposeGeneration = this.disposeGenerations.get(adapter.pluginId) ?? 0;
+
+    // Asked before the body is read, so a disabled plugin's code is never even
+    // loaded, let alone evaluated in the user's page.
+    if (!(await this.deps.isPluginEnabled(adapter.pluginId))) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "The plugin that owns that site preview runtime is not enabled",
+        context: { panelId, adapterId, pluginId: adapter.pluginId },
+      });
+    }
+
     // Loaded before anything is torn down: a failed read would otherwise leave
     // the panel with no binding at all.
     const runtimeSource = await this.deps.loadGuestAdapterSource(adapterId);
+    // Asked again: the read above is an await, and a disable that landed under
+    // it would otherwise be beaten by this bind.
+    if (!(await this.deps.isPluginEnabled(adapter.pluginId))) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "The plugin that owns that site preview runtime is not enabled",
+        context: { panelId, adapterId, pluginId: adapter.pluginId },
+      });
+    }
     // The read is the first await a bind performs, so a shutdown can complete
     // underneath it. `disposeAll` has already walked the bindings map by then
     // and would never see the one this call is about to add.
@@ -382,6 +420,18 @@ export class SitePreviewBridge {
         code: "CANCELLED",
         message: "The site preview bridge is shutting down",
         context: { panelId },
+      });
+    }
+
+    // The commit point: everything above was awaited and could be stale, and
+    // nothing below here awaits before the binding is in the map. A teardown
+    // for this plugin that started at any point since this bind was allowed
+    // means the bind was for a lifetime that has ended.
+    if ((this.disposeGenerations.get(adapter.pluginId) ?? 0) !== disposeGeneration) {
+      throw new AppError({
+        code: "UNSUPPORTED",
+        message: "The plugin that owns that site preview runtime is not enabled",
+        context: { panelId, adapterId, pluginId: adapter.pluginId },
       });
     }
 
@@ -518,6 +568,31 @@ export class SitePreviewBridge {
       expression: buildClearSelectionSource(),
       timeout: GUEST_EVALUATE_TIMEOUT_MS,
     });
+  }
+
+  /**
+   * Drop every binding a plugin's adapters back, because that plugin is no
+   * longer loaded.
+   *
+   * The install-time check keeps a disabled plugin's runtime out of a *new*
+   * document; this is what removes the one already in the page. Without it a
+   * binding made while the plugin was enabled would keep reading the site and
+   * pushing observations at a renderer whose plugin is gone, until the user
+   * happened to navigate.
+   */
+  async disposeForPlugin(pluginId: string): Promise<void> {
+    // Bumped synchronously, before the first await: `teardown` removes a
+    // binding from the map before it awaits its CDP cleanup, so a bind sitting
+    // on the predecessor's teardown would otherwise find an empty map here,
+    // pass its own (already-read, now stale) enabled check, and install a
+    // runtime that nothing is left to remove. A bind compares this counter
+    // synchronously at the instant it commits; re-reading the boolean cannot
+    // close the gap, because that read is itself an await.
+    this.disposeGenerations.set(pluginId, (this.disposeGenerations.get(pluginId) ?? 0) + 1);
+    for (const binding of [...this.bindings.values()]) {
+      if (binding.pluginId !== pluginId) continue;
+      await this.withPanelLock(binding.panelId, () => this.teardown(binding, "owner-disabled"));
+    }
   }
 
   async disposeAll(): Promise<void> {
@@ -814,6 +889,9 @@ export class SitePreviewBridge {
       bindingName: binding.bindingName,
       mode: installedMode,
       runtimeSource: binding.runtimeSource,
+      // Travels with the script, because the script outlives the host's chance
+      // to check: it runs in the next document before the navigation is seen.
+      origins: binding.origins,
     });
 
     const added = (await this.send(wc, "Page.addScriptToEvaluateOnNewDocument", { source })) as
@@ -1037,7 +1115,7 @@ function toState(binding: Binding): SitePreviewBindingState {
 let instance: SitePreviewBridge | null = null;
 
 export function getSitePreviewBridge(
-  deps?: Partial<SitePreviewBridgeDeps> & Pick<SitePreviewBridgeDeps, "push">
+  deps?: Partial<SitePreviewBridgeDeps> & Pick<SitePreviewBridgeDeps, "push" | "isPluginEnabled">
 ): SitePreviewBridge {
   if (!instance) {
     if (!deps) {
@@ -1048,6 +1126,15 @@ export function getSitePreviewBridge(
     }
     instance = new SitePreviewBridge(deps);
   }
+  return instance;
+}
+
+/**
+ * The bridge if one exists, without creating it. For callers on a lifecycle
+ * path — a plugin unloading — that must not bring the bridge into being just to
+ * ask it to let go of something it was never holding.
+ */
+export function peekSitePreviewBridge(): SitePreviewBridge | null {
   return instance;
 }
 

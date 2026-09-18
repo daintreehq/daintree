@@ -15,6 +15,7 @@
 
 import type { SitePreviewMode } from "../../../shared/types/ipc/sitePreview.js";
 import { GUEST_PROTOCOL_VERSION } from "./guestProtocol.js";
+import { buildOriginGuardSource, type GuestOriginPolicy } from "./originPolicy.js";
 
 export const GUEST_RUNTIME_GLOBAL = "__daintreeSitePreview";
 
@@ -31,6 +32,8 @@ export interface GuestRuntimeParams {
   mode: SitePreviewMode;
   /** The adapter body, already resolved host-side. */
   runtimeSource: string;
+  /** Where the adapter said it may run, checked by the script itself. */
+  origins: GuestOriginPolicy;
 }
 
 /**
@@ -58,8 +61,17 @@ export interface GuestRuntimeParams {
  * the validation that matters lives on the host side of the binding.
  */
 export function buildGuestRuntimeSource(params: GuestRuntimeParams): string {
-  const { sessionId, installId, documentEpoch, bindingName, mode, runtimeSource } = params;
+  const { sessionId, installId, documentEpoch, bindingName, mode, runtimeSource, origins } = params;
   return `(() => {
+  // First statement in the script, before the global, the listeners and the
+  // adapter body. The host checks the policy too, but it cannot check it in
+  // time: this script is registered with \`Page.addScriptToEvaluateOnNewDocument\`
+  // and has already run in the new document by the time main observes the
+  // navigation, so a redirect to an authentication page or an external link
+  // would have had the runtime in it for the moment before cleanup. The host's
+  // check is what removes the registration and disposes the runtime; this one
+  // is what keeps it from ever being there.
+  if (!${buildOriginGuardSource(origins)}) return;
   const VERSION = ${GUEST_PROTOCOL_VERSION};
   const SESSION_ID = ${JSON.stringify(sessionId)};
   const INSTALL_ID = ${installId};
