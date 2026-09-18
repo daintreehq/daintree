@@ -1,6 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach, beforeAll } from "vitest";
 import { stripAnsiCodes } from "@shared/utils/artifactParser";
+import { z } from "zod";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
+
+/** Narrows a fitted read without asserting past the action's `any` result. */
+const FittedOutputSchema = z.object({
+  content: z.string(),
+  lineCount: z.number(),
+  truncated: z.boolean(),
+});
 
 /**
  * Snapshots cross IPC with the grid they were captured at (#11552); this action
@@ -262,14 +270,12 @@ describe("terminal.getOutput action", () => {
 
     const actions = await createRegistry();
     const action = actions.get("terminal.getOutput")!();
-    const result = (await action.run(
-      { terminalId: "test-terminal", maxLines: 1000 },
-      {}
-    )) as TerminalOutputResult & { content: string };
+    const output: unknown = await action.run({ terminalId: "test-terminal", maxLines: 1000 }, {});
 
-    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
+    expect(Buffer.byteLength(JSON.stringify(output), "utf8")).toBeLessThanOrEqual(
       MCP_RESPONSE_TEXT_MAX_BYTES
     );
+    const result = FittedOutputSchema.parse(output);
     const kept = result.content.split("\n");
     expect(kept.at(-1)).toBe(lines.at(-1));
     expect(kept).toEqual(lines.slice(-kept.length));
@@ -292,14 +298,15 @@ describe("terminal.getOutput action", () => {
 
     const actions = await createRegistry();
     const action = actions.get("terminal.getOutput")!();
-    const result = (await action.run(
+    const output: unknown = await action.run(
       { terminalId: "test-terminal", maxLines: 500, stripAnsi: false },
       {}
-    )) as TerminalOutputResult & { content: string };
+    );
 
-    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
+    expect(Buffer.byteLength(JSON.stringify(output), "utf8")).toBeLessThanOrEqual(
       MCP_RESPONSE_TEXT_MAX_BYTES
     );
+    const result = FittedOutputSchema.parse(output);
     const kept = result.content.split("\n");
     expect(kept).toEqual(lines.slice(-kept.length));
     expect(result.content).toContain(esc);

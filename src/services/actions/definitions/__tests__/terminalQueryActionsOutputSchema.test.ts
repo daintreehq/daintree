@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { ActionId } from "@shared/types/actions";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
@@ -28,6 +29,7 @@ vi.mock("@shared/config/panelKindRegistry", () => ({
 
 import { ActionService } from "../../../ActionService";
 import { registerTerminalQueryActions } from "../terminalQueryActions";
+import { TerminalStatusResultSchema } from "../schemas";
 
 function registerDefinitions(): ActionRegistry {
   const registry: ActionRegistry = new Map();
@@ -113,18 +115,25 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
     expect(unavailable?.enum).toContain("hasPty");
   });
 
-  it("terminal.getStatus advertises recentOutputTruncated and keeps it through dispatch (#12450)", () => {
-    const service = registerAll();
-    const schema = outputSchema(service, "terminal.getStatus")!;
-    const items = (schema.properties as { terminals: { items?: Record<string, unknown> } })
-      .terminals.items;
-    const props = (items?.properties as Record<string, { type?: unknown }>) ?? {};
-    expect(props.recentOutputTruncated?.type).toBe("boolean");
-    expect((items?.required as string[] | undefined) ?? []).not.toContain("recentOutputTruncated");
+  it("terminal.getStatus advertises recentOutputTruncated and its result schema keeps it (#12450)", () => {
+    const EntrySchemaShape = z.object({
+      properties: z.object({
+        terminals: z.object({
+          items: z.object({
+            properties: z.record(z.string(), z.object({ type: z.unknown().optional() })),
+            required: z.array(z.string()).optional(),
+          }),
+        }),
+      }),
+    });
+    const { items } = EntrySchemaShape.parse(outputSchema(registerAll(), "terminal.getStatus"))
+      .properties.terminals;
+    expect(items.properties.recentOutputTruncated?.type).toBe("boolean");
+    expect(items.required ?? []).not.toContain("recentOutputTruncated");
 
-    // Dispatch strips undeclared keys, so an unlisted flag would never arrive.
-    const def = registerDefinitions().get("terminal.getStatus")!() as AnyActionDefinition;
-    const parsed = def.resultSchema!.parse({
+    // Dispatch parses results through this schema and strips undeclared keys,
+    // so an unlisted flag would never reach a caller.
+    const parsed = TerminalStatusResultSchema.parse({
       terminals: [
         {
           terminalId: "t1",
@@ -136,7 +145,7 @@ describe("terminal query actions emit a manifest outputSchema (#10676)", () => {
       ],
       source: "renderer",
       unavailableFields: ["hasPty"],
-    }) as { terminals: { recentOutputTruncated?: boolean }[] };
+    });
     expect(parsed.terminals[0]?.recentOutputTruncated).toBe(true);
   });
 

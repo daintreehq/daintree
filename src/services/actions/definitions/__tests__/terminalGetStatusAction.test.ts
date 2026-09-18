@@ -550,7 +550,7 @@ describe("terminal.getStatus", () => {
     for (const entry of result.terminals) {
       const lines = linesFor(entry.terminalId);
       expect(entry.recentOutput).not.toBe("");
-      const kept = (entry.recentOutput as string).split("\n");
+      const kept = (entry.recentOutput ?? "").split("\n");
       expect(kept).toEqual(lines.slice(-kept.length));
       expect(entry.recentOutputTruncated).toBe(true);
       expect(entry.agentState).toBe("working");
