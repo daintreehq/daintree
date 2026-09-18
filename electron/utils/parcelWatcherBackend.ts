@@ -245,6 +245,22 @@ export function subscribeParcelWatcher(
   });
 }
 
+/**
+ * Read-only snapshot for teardown diagnostics. `subscriptions` drops as soon as
+ * an unsubscribe is requested, before the native teardown finishes, so a zero
+ * there only means release was asked for; `lifecycleOps` is what is still
+ * running or queued behind the serialization lock.
+ */
+export function getParcelWatcherLifecycleStats(): {
+  subscriptions: number;
+  lifecycleOps: number;
+} {
+  return {
+    subscriptions: liveSubscriptions.size,
+    lifecycleOps: lifecycleQueue.length + (lifecycleBusy ? 1 : 0),
+  };
+}
+
 /** Wait until every lifecycle operation already queued by callers has settled. */
 export async function settleParcelWatcherLifecycle(): Promise<void> {
   for (;;) {

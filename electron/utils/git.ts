@@ -16,7 +16,10 @@ const GIT_WORKTREE_CHANGES_CACHE = new Cache<string, WorktreeChanges>({
   defaultTTL: 15000, // 15s to cover 10s background polling + margin
 });
 
-const inFlightWorktreeChanges = new Map<string, Promise<WorktreeChanges>>();
+const inFlightWorktreeChanges = new Map<
+  string,
+  { promise: Promise<WorktreeChanges>; signal: AbortSignal | undefined }
+>();
 
 export function invalidateWorktreeCache(cwd: string): void {
   GIT_WORKTREE_CHANGES_CACHE.invalidate(cwd);
@@ -538,6 +541,12 @@ export interface GetWorktreeChangesOptions {
    * UNC). Set only on Windows for worktrees the user has opted into.
    */
   wsl?: WslGitInvocation;
+  /**
+   * Kills the status git children when aborted. Polling callers pass their
+   * monitor's signal so stopping the monitor (and host teardown) stops the
+   * processes instead of abandoning them.
+   */
+  signal?: AbortSignal;
 }
 
 async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Promise<SimpleGit> {
@@ -545,13 +554,13 @@ async function gitForChanges(cwd: string, opts: GetWorktreeChangesOptions): Prom
     try {
       // `await` so a rejected factory promise lands in this catch and falls
       // back, matching the previous synchronous-throw behaviour.
-      return await createWslHardenedGit(opts.wsl);
+      return await createWslHardenedGit(opts.wsl, opts.signal);
     } catch {
       // Fall back to native git if the WSL invocation is rejected (e.g. wrong
       // platform, missing distro). Polling continues using the slower path.
     }
   }
-  return createHardenedGit(cwd);
+  return createHardenedGit(cwd, opts.signal);
 }
 
 export async function getWorktreeChangesWithStats(
@@ -577,9 +586,11 @@ export async function getWorktreeChangesWithStats(
       };
     }
 
+    // Shared only between callers with the same cancellation owner: a read
+    // joined across owners would hand one caller the other's abort.
     const inFlight = inFlightWorktreeChanges.get(cwd);
-    if (inFlight) {
-      return inFlight;
+    if (inFlight && inFlight.signal === options.signal) {
+      return inFlight.promise;
     }
   }
 
@@ -657,6 +668,9 @@ export async function getWorktreeChangesWithStats(
         cachedLog !== undefined
           ? cachedLog
           : await git.raw(["log", "-1", "--format=%ct%x09%an%x09%ae%x09%s"]).catch(() => "");
+      // The fallback above also swallows a cancellation; an empty log from a
+      // killed child must not sit in the cache as this commit's answer.
+      options.signal?.throwIfAborted();
       if (headOid && cachedLog === undefined) {
         LAST_COMMIT_LOG_CACHE.set(headOid, logOutput);
       }
@@ -772,6 +786,7 @@ export async function getWorktreeChangesWithStats(
           diffSucceeded = true;
         }
       } catch (error) {
+        if (options.signal?.aborted) throw error;
         logWarn("Failed to read numstat diff; continuing without line stats", {
           cwd,
           message: (error as Error).message,
@@ -977,10 +992,17 @@ export async function getWorktreeChangesWithStats(
         tracking,
       };
 
+      // Other enrichment steps degrade instead of throwing; a cancelled run
+      // must not publish what it half-read.
+      options.signal?.throwIfAborted();
       GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
       return result;
     } catch (error) {
       if (error instanceof WorktreeRemovedError) {
+        throw error;
+      }
+      // Cancelled by the caller: expected, not a git failure worth logging.
+      if (options.signal?.aborted) {
         throw error;
       }
 
@@ -1006,13 +1028,13 @@ export async function getWorktreeChangesWithStats(
   })();
 
   if (!forceRefresh) {
-    inFlightWorktreeChanges.set(cwd, fetchPromise);
+    inFlightWorktreeChanges.set(cwd, { promise: fetchPromise, signal: options.signal });
   }
 
   try {
     return await fetchPromise;
   } finally {
-    if (inFlightWorktreeChanges.get(cwd) === fetchPromise) {
+    if (inFlightWorktreeChanges.get(cwd)?.promise === fetchPromise) {
       inFlightWorktreeChanges.delete(cwd);
     }
   }

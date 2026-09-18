@@ -1006,6 +1006,107 @@ describe("RepoFetchCoordinator", () => {
     expect(onFetchSuccess).not.toHaveBeenCalled();
   });
 
+  // Stands in for simple-git's abort plugin: an aborted signal kills git and
+  // rejects the task, including one that was already aborted at spawn.
+  function abortableRaw(signal: AbortSignal): Promise<void> {
+    return new Promise<void>((_res, rej) => {
+      const fail = () => {
+        const err = new Error("the operation was aborted");
+        err.name = "GitError";
+        rej(err);
+      };
+      if (signal.aborted) fail();
+      else signal.addEventListener("abort", fail);
+    });
+  }
+
+  it("destroy() aborts the in-flight fetch's git signal and caches no failure (#12460)", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let fetchSignal: AbortSignal | undefined;
+    const raw = vi.fn(() => abortableRaw(fetchSignal!));
+    mockCreateBackgroundFetchGit.mockImplementation(
+      (_path: string, opts: { signal: AbortSignal }) => {
+        fetchSignal = opts.signal;
+        return { raw };
+      }
+    );
+
+    const onFetchSuccess = vi.fn();
+    const coord = new RepoFetchCoordinator({ onFetchSuccess });
+
+    const inFlight = coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    await vi.waitFor(() => expect(raw).toHaveBeenCalled());
+    expect(fetchSignal?.aborted).toBe(false);
+
+    coord.destroy();
+    expect(fetchSignal?.aborted).toBe(true);
+
+    const result = await inFlight;
+    expect(result.status).toBe("skipped");
+    expect(result.skipReason).toBe("stale-generation");
+    expect(onFetchSuccess).not.toHaveBeenCalled();
+    expect(coord.hasFailureFor("/repo/.git")).toBe(false);
+
+    // The coordinator stays usable after destroy (project switch reuses it).
+    mockCreateBackgroundFetchGit.mockReturnValue(makeMockGit(() => Promise.resolve()));
+    const next = await coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    expect(next.status).toBe("success");
+  });
+
+  it("destroy() while the fetch git is still being created cancels the fetch it would spawn", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let fetchSignal: AbortSignal | undefined;
+    let resolveFactory!: (git: MockGit) => void;
+    mockCreateBackgroundFetchGit.mockImplementation(
+      (_path: string, opts: { signal: AbortSignal }) => {
+        fetchSignal = opts.signal;
+        return new Promise<MockGit>((res) => (resolveFactory = res));
+      }
+    );
+
+    const coord = new RepoFetchCoordinator();
+    const inFlight = coord.fetchForWorktree({ worktreeId: "wt1", worktreePath: "/repo" });
+    await vi.waitFor(() => expect(mockCreateBackgroundFetchGit).toHaveBeenCalled());
+
+    coord.destroy();
+    expect(fetchSignal?.aborted).toBe(true);
+    const git = makeMockGit(() => abortableRaw(fetchSignal!));
+    resolveFactory(git);
+
+    const result = await inFlight;
+    expect(result.skipReason).toBe("stale-generation");
+    expect(coord.hasFailureFor("/repo/.git")).toBe(false);
+  });
+
+  it("destroy() mid-batch withholds the success notification an earlier remote earned", async () => {
+    mockGetGitCommonDir.mockReturnValue("/repo/.git");
+    let upstreamStarted = false;
+    mockCreateBackgroundFetchGit.mockImplementation(
+      (_path: string, opts: { signal: AbortSignal }) => ({
+        raw: vi.fn((args: string[]) => {
+          if (args[1] === "origin") return Promise.resolve();
+          upstreamStarted = true;
+          return abortableRaw(opts.signal);
+        }),
+      })
+    );
+
+    const onFetchSuccess = vi.fn();
+    const coord = new RepoFetchCoordinator({ onFetchSuccess });
+    const inFlight = coord.fetchForWorktree({
+      worktreeId: "wt1",
+      worktreePath: "/repo",
+      remotes: ["origin", "upstream"],
+      primaryRemote: "origin",
+    });
+    await vi.waitFor(() => expect(upstreamStarted).toBe(true));
+
+    coord.destroy();
+    await inFlight;
+
+    expect(onFetchSuccess).not.toHaveBeenCalled();
+  });
+
   it("destroy() during the async commondir resolution discards the fetch and creates no state", async () => {
     let resolveCommonDir: ((value: string | null) => void) | undefined;
     mockGetGitCommonDir.mockImplementation(

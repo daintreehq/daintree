@@ -10,6 +10,8 @@ import type {
   WorkspaceHostEvent,
   WorkspaceClientConfig,
   MonitorConfig,
+  WorkspaceHostDisposePending,
+  WorkspaceHostDisposePhase,
 } from "../../shared/types/workspace-host.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
@@ -28,6 +30,44 @@ const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// The host acks and exits ~500ms after `dispose` (its write-tail window) and
+// arms its own hard exit at 1s; the margin covers IPC delivery and a host
+// whose thread is briefly blocked in a native unsubscribe.
+const DISPOSE_KILL_TIMEOUT_MS = 1_500;
+// After `disposed` the host exits on its next turn, so the exit is expected
+// almost immediately — but an ack is a promise, not proof of death.
+const DISPOSE_EXIT_AFTER_ACK_GRACE_MS = 500;
+
+/** Why the pool (or anyone else) retired the host. Logged, never branched on. */
+export type WorkspaceHostDisposeReason =
+  | "idle-grace"
+  | "warm-cap"
+  | "evicted"
+  | "relocation"
+  | "ready-failed"
+  | "init-failed"
+  | "pool-dispose"
+  | "unspecified";
+
+type DisposeKillReason = "no-ack" | "no-exit-after-ack";
+
+interface DisposeTrace {
+  reason: WorkspaceHostDisposeReason;
+  startedAt: number;
+  lastProgress: {
+    phase: WorkspaceHostDisposePhase;
+    elapsedMs: number;
+    pending: WorkspaceHostDisposePending;
+  } | null;
+  ack: {
+    receivedAt: number;
+    elapsedMs: number;
+    settled: boolean;
+    pending: WorkspaceHostDisposePending;
+  } | null;
+  kill: { sentAt: number; reason: DisposeKillReason } | null;
+}
 
 const RESTART_FLOOR_MS = 100;
 const RESTART_CAP_BASE_MS = 1_000;
@@ -81,6 +121,13 @@ export class WorkspaceHostProcess extends EventEmitter {
   private healthCheckInterval: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
   private disposeTimer: NodeJS.Timeout | null = null;
+  /**
+   * What happened between sending `dispose` and the child's `exit`: the host's
+   * own reports and whether we had to signal it. The outcome is read from this
+   * state, never from the exit code, which does not reliably tell a SIGKILL
+   * from a clean exit across platforms.
+   */
+  private disposeTrace: DisposeTrace | null = null;
   /**
    * Sliding window of recent crash timestamps. Lazy-pruned to entries within
    * `CRASH_WINDOW_MS` on each crash — no proactive reset, no setTimeout.
@@ -450,7 +497,7 @@ export class WorkspaceHostProcess extends EventEmitter {
     return !this.isDisposed && this.child !== null && typeof this.child.pid === "number";
   }
 
-  dispose(): void {
+  dispose(reason: WorkspaceHostDisposeReason = "unspecified"): void {
     if (this.isDisposed) return;
     this.isDisposed = true;
 
@@ -491,41 +538,119 @@ export class WorkspaceHostProcess extends EventEmitter {
     );
 
     if (this.child) {
+      this.disposeTrace = {
+        reason,
+        startedAt: performance.now(),
+        lastProgress: null,
+        ack: null,
+        kill: null,
+      };
+      // Armed before the request goes out so any reply finds it in place.
+      this.armDisposeKill(DISPOSE_KILL_TIMEOUT_MS, "no-ack");
       this.send({ type: "dispose" });
-      // Unref'd so the pending backstop never holds the Electron event loop
-      // alive after app.quit when the host has already cooperated. Cleared by
-      // the `exit` handler, so a host that exits on the dispose message above
-      // never reaches the signal below.
-      this.disposeTimer = setTimeout(() => {
-        this.disposeTimer = null;
-        const pid = this.child?.pid;
-        if (!pid) return;
-        // Deliberately NOT `child.kill()` (#11069): Electron's
-        // `UtilityProcess.kill()` runs `Process::Terminate` +
-        // `base::EnsureProcessTerminated`, which on macOS blocks the calling
-        // thread — main — for up to 2s waiting for the child to die, freezing
-        // window input routing. A raw SIGKILL is non-blocking and cannot be
-        // trapped by the child. Matches the health watchdog's force-kill.
-        try {
-          process.kill(pid, "SIGKILL");
-        } catch (error) {
-          // ESRCH — the child exited between the pid read and the signal.
-          const code =
-            typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
-          if (code !== "ESRCH") {
-            console.warn(
-              `[WorkspaceHost:${this.serviceName}] Failed to kill host during dispose:`,
-              error
-            );
-          }
-        }
-        // `this.child` stays set — the `exit` event is the authority on process
-        // death and nulls it. Clearing it here would strand that handler.
-      }, 1000);
-      this.disposeTimer.unref?.();
     }
 
     this.removeAllListeners();
+  }
+
+  /**
+   * Force-kill backstop for a disposing host. Unref'd so it never holds the
+   * Electron event loop alive after app.quit; cleared by the `exit` handler,
+   * and replaced by a shorter one when the host acknowledges.
+   */
+  private armDisposeKill(delayMs: number, killReason: DisposeKillReason): void {
+    if (this.disposeTimer) clearTimeout(this.disposeTimer);
+    this.disposeTimer = setTimeout(() => {
+      this.disposeTimer = null;
+      const pid = this.child?.pid;
+      if (!pid) return;
+      // Deliberately NOT `child.kill()` (#11069): Electron's
+      // `UtilityProcess.kill()` runs `Process::Terminate` +
+      // `base::EnsureProcessTerminated`, which on macOS blocks the calling
+      // thread — main — for up to 2s waiting for the child to die, freezing
+      // window input routing. A raw SIGKILL is non-blocking and cannot be
+      // trapped by the child. Matches the health watchdog's force-kill.
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        // ESRCH — the child exited between the pid read and the signal.
+        const code =
+          typeof error === "object" && error !== null && "code" in error ? error.code : undefined;
+        if (code !== "ESRCH") {
+          console.warn(
+            `[WorkspaceHost:${this.serviceName}] Failed to kill host during dispose:`,
+            error
+          );
+        }
+        return;
+      }
+      const trace = this.disposeTrace;
+      if (trace) {
+        trace.kill = { sentAt: performance.now(), reason: killReason };
+        logWarn(
+          `[WorkspaceHost:${this.serviceName}] Host did not exit ${Math.round(trace.kill.sentAt - trace.startedAt)}ms after dispose (${killReason}); sent SIGKILL`,
+          this.describeDisposeTrace(trace)
+        );
+      }
+      // `this.child` stays set — the `exit` event is the authority on process
+      // death and nulls it. Clearing it here would strand that handler.
+    }, delayMs);
+    this.disposeTimer.unref?.();
+  }
+
+  private handleDisposeReport(
+    event: Extract<WorkspaceHostEvent, { type: "dispose-progress" | "disposed" }>
+  ): void {
+    const trace = this.disposeTrace;
+    // Only reports answering our `dispose` count, and nothing the host says
+    // after the kill may rewrite why it died.
+    if (!trace || trace.kill || trace.ack) return;
+    if (event.type === "dispose-progress") {
+      trace.lastProgress = {
+        phase: event.phase,
+        elapsedMs: event.elapsedMs,
+        pending: event.pending,
+      };
+      return;
+    }
+    trace.ack = {
+      receivedAt: performance.now(),
+      elapsedMs: event.elapsedMs,
+      settled: event.settled,
+      pending: event.pending,
+    };
+    this.armDisposeKill(DISPOSE_EXIT_AFTER_ACK_GRACE_MS, "no-exit-after-ack");
+  }
+
+  private describeDisposeTrace(trace: DisposeTrace): Record<string, unknown> {
+    const last = trace.ack ?? trace.lastProgress;
+    return {
+      reason: trace.reason,
+      lastPhase: trace.ack ? "disposed" : (trace.lastProgress?.phase ?? "no-report"),
+      ...(last ? { hostElapsedMs: last.elapsedMs, pending: last.pending } : {}),
+      ...(trace.ack
+        ? {
+            ackMs: Math.round(trace.ack.receivedAt - trace.startedAt),
+            settled: trace.ack.settled,
+          }
+        : {}),
+      ...(trace.kill ? { killReason: trace.kill.reason } : {}),
+    };
+  }
+
+  private logDisposeExit(code: number): void {
+    const trace = this.disposeTrace;
+    this.disposeTrace = null;
+    if (!trace) {
+      logInfo(`[WorkspaceHost:${this.serviceName}] Exited with code ${code} after dispose`);
+      return;
+    }
+    const outcome = trace.kill ? "kill" : trace.ack ? "ack" : "exit";
+    const durationMs = Math.round(performance.now() - trace.startedAt);
+    logInfo(
+      `[WorkspaceHost:${this.serviceName}] Exited with code ${code} after dispose (${outcome}, ${durationMs}ms)`,
+      { outcome, durationMs, exitCode: code, ...this.describeDisposeTrace(trace) }
+    );
   }
 
   private forwardHostOutput(kind: "stdout" | "stderr", chunk: Buffer): void {
@@ -703,7 +828,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       // A disposed host exiting is the cooperative path, not a crash — every
       // eviction ends here, so warning on it would read as a fault.
       if (this.isDisposed) {
-        logInfo(`[WorkspaceHost:${this.serviceName}] Exited with code ${code} after dispose`);
+        this.logDisposeExit(code);
       } else {
         logWarn(`[WorkspaceHost:${this.serviceName}] Exited with code ${code}`);
       }
@@ -716,8 +841,8 @@ export class WorkspaceHostProcess extends EventEmitter {
         clearTimeout(this.handshakeTimeout);
         this.handshakeTimeout = null;
       }
-      // The host cooperated with `dispose` — retire the force-kill backstop so
-      // it cannot signal a pid the OS may have already recycled.
+      // The process is gone — retire the force-kill backstop so it cannot
+      // signal a pid the OS may have already recycled.
       if (this.disposeTimer) {
         clearTimeout(this.disposeTimer);
         this.disposeTimer = null;
@@ -915,6 +1040,11 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   private processHostEvent(event: WorkspaceHostEvent): void {
+    // Teardown reports only exist after dispose, so they precede the guard.
+    if (event.type === "dispose-progress" || event.type === "disposed") {
+      this.handleDisposeReport(event);
+      return;
+    }
     if (this.isDisposed) return;
 
     switch (event.type) {

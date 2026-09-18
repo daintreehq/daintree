@@ -5521,6 +5521,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
   dispose(): void {
     this._shutdownController.abort();
+    // Cancel git before releasing any watcher: a native unsubscribe can block
+    // this thread, and fetches signalled before it are already stopping.
+    this.fetchCoordinator.destroy();
     // stop() clears the pending sets and their safety timers.
     this.topologyWatcher.stop();
     this.stopWslDistroPoller();
@@ -5533,7 +5536,6 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.monitors.clear();
     this.backgroundGitWatcherLru.clear();
     this.agentActiveWorktreeIds.clear();
-    this.fetchCoordinator.destroy();
     this.authFailureConfirmedNotified.clear();
     this.pollQueue.clear();
     this.stopForgeRemoteDetection();

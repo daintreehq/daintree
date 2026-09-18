@@ -19,7 +19,11 @@ const { forkMock, mockChildren, loggerCalls, appMock } = vi.hoisted(() => {
   const { EventEmitter } = require("events") as typeof import("events");
   const forkMock = vi.fn();
   const mockChildren: any[] = [];
-  const loggerCalls: { level: "info" | "warn"; message: string }[] = [];
+  const loggerCalls: {
+    level: "info" | "warn";
+    message: string;
+    context?: Record<string, unknown>;
+  }[] = [];
   const appEmitter = new EventEmitter();
   const appMock = Object.assign(appEmitter, {
     getPath: vi.fn(() => "/tmp/userData"),
@@ -61,8 +65,10 @@ vi.mock("../../utils/logger.js", () => ({
   createLogger: (name: string) => ({
     name,
     debug: vi.fn(),
-    info: (message: string) => loggerCalls.push({ level: "info", message }),
-    warn: (message: string) => loggerCalls.push({ level: "warn", message }),
+    info: (message: string, context?: Record<string, unknown>) =>
+      loggerCalls.push({ level: "info", message, context }),
+    warn: (message: string, context?: Record<string, unknown>) =>
+      loggerCalls.push({ level: "warn", message, context }),
     error: vi.fn(),
   }),
 }));
@@ -685,6 +691,174 @@ describe("WorkspaceHostProcess BrokerError contract", () => {
       vi.runOnlyPendingTimers();
 
       expect(forkMock).toHaveBeenCalledTimes(1);
+    });
+
+    // #12460 — half of all disposals ended in this SIGKILL, and nothing in the
+    // log said how long they took or what the host was doing when it died.
+    describe("dispose acknowledgement and outcome logging (#12460)", () => {
+      const settledAck = {
+        type: "disposed",
+        elapsedMs: 42,
+        settled: true,
+        pending: { parcelSubscriptions: 0, parcelLifecycleOps: 0 },
+      } as const;
+      let clock = 0;
+
+      beforeEach(() => {
+        clock = 0;
+        vi.spyOn(performance, "now").mockImplementation(() => clock);
+      });
+
+      function advance(ms: number): void {
+        clock += ms;
+        vi.advanceTimersByTime(ms);
+      }
+
+      const exitLog = () => loggerCalls.find((c) => c.message.includes("Exited with code"));
+
+      it("retires the backstop when the host acks, and logs the disposal as ack", async () => {
+        const { host, child, killSpy } = await disposeWedgedHost();
+
+        host.dispose("idle-grace");
+        advance(1_200);
+        child.emit("message", settledAck);
+        // Past the original 1.5s deadline: only a cleared backstop stays quiet.
+        advance(400);
+        expect(killSpy).not.toHaveBeenCalled();
+
+        child.emit("exit", 0);
+        vi.runOnlyPendingTimers();
+        expect(killSpy).not.toHaveBeenCalled();
+        expect((host as any).disposeTimer).toBeNull();
+        expect(exitLog()?.level).toBe("info");
+        expect(exitLog()?.context).toEqual({
+          outcome: "ack",
+          durationMs: 1_600,
+          ackMs: 1_200,
+          exitCode: 0,
+          reason: "idle-grace",
+          lastPhase: "disposed",
+          hostElapsedMs: 42,
+          settled: true,
+          pending: settledAck.pending,
+        });
+      });
+
+      it("still kills a silent host and logs what it last reported", async () => {
+        const { host, child, killSpy } = await disposeWedgedHost();
+
+        host.dispose("warm-cap");
+        child.emit("message", {
+          type: "dispose-progress",
+          phase: "settling",
+          elapsedMs: 12,
+          pending: { parcelSubscriptions: 3, parcelLifecycleOps: 2 },
+        });
+
+        advance(1_499);
+        expect(killSpy).not.toHaveBeenCalled();
+        advance(1);
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        expect(killSpy).toHaveBeenCalledWith(child.pid, "SIGKILL");
+        expect(child.kill).not.toHaveBeenCalled();
+
+        const killLog = loggerCalls.find((c) => c.message.includes("sent SIGKILL"));
+        expect(killLog?.level).toBe("warn");
+        expect(killLog?.context).toMatchObject({
+          reason: "warm-cap",
+          killReason: "no-ack",
+          lastPhase: "settling",
+          hostElapsedMs: 12,
+          pending: { parcelSubscriptions: 3, parcelLifecycleOps: 2 },
+        });
+
+        // A report racing the kill cannot rewrite why the host died.
+        child.emit("message", settledAck);
+        advance(50);
+        child.emit("exit", 0);
+        expect(exitLog()?.context).toMatchObject({
+          outcome: "kill",
+          killReason: "no-ack",
+          durationMs: 1_550,
+          lastPhase: "settling",
+        });
+      });
+
+      it("kills a host that acks but never exits, once the post-ack grace runs out", async () => {
+        const { host, child, killSpy } = await disposeWedgedHost();
+
+        host.dispose();
+        advance(1_200);
+        child.emit("message", { ...settledAck, settled: false });
+
+        // The original 1.5s mark passes quietly; the grace runs from the ack.
+        advance(499);
+        expect(killSpy).not.toHaveBeenCalled();
+        advance(1);
+        expect(killSpy).toHaveBeenCalledTimes(1);
+
+        child.emit("exit", 0);
+        expect(exitLog()?.context).toMatchObject({
+          outcome: "kill",
+          killReason: "no-exit-after-ack",
+          settled: false,
+        });
+      });
+
+      it("does not let a repeated ack stretch the post-ack grace", async () => {
+        const { host, child, killSpy } = await disposeWedgedHost();
+
+        host.dispose();
+        advance(100);
+        child.emit("message", settledAck);
+        advance(400);
+        child.emit("message", { ...settledAck, elapsedMs: 999 });
+        advance(100);
+
+        expect(killSpy).toHaveBeenCalledTimes(1);
+        child.emit("exit", 0);
+        expect(exitLog()?.context).toMatchObject({ ackMs: 100, hostElapsedMs: 42 });
+      });
+
+      it("logs an exit with no ack as exit, with the last phase the host reached", async () => {
+        const { host, child } = await disposeWedgedHost();
+
+        host.dispose();
+        child.emit("message", {
+          type: "dispose-progress",
+          phase: "disposing-services",
+          elapsedMs: 0,
+          pending: { parcelSubscriptions: 5, parcelLifecycleOps: 0 },
+        });
+        advance(300);
+        child.emit("exit", 0);
+
+        expect(exitLog()?.level).toBe("info");
+        expect(exitLog()?.context).toMatchObject({
+          outcome: "exit",
+          durationMs: 300,
+          reason: "unspecified",
+          lastPhase: "disposing-services",
+        });
+      });
+
+      it("ignores teardown reports from a host that was never asked to dispose", async () => {
+        const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+        const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+        const { host, child } = await disposeWedgedHost();
+
+        try {
+          child.emit("message", settledAck);
+          expect((host as any).disposeTrace).toBeNull();
+          expect((host as any).disposeTimer).toBeNull();
+          expect(warnSpy.mock.calls.some((c) => String(c[0]).includes("Unknown event"))).toBe(
+            false
+          );
+          expect(errorSpy).not.toHaveBeenCalled();
+        } finally {
+          host.dispose();
+        }
+      });
     });
 
     it("swallows the ESRCH race where the child exits between the pid read and the signal", async () => {

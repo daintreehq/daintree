@@ -1646,6 +1646,7 @@ export class WorktreeMonitor {
     return getWorktreeChangesWithStats(this.path, {
       forceRefresh: true,
       wsl: this.wslInvocation,
+      signal: this._pollAbortController.signal,
     });
   }
 
