@@ -1,6 +1,5 @@
 import type { ActionContext } from "@shared/types/actions";
 import { getActionContext } from "@/services/ActionService";
-import { getWorktreeIdentityById } from "@/store/storeAccessors";
 
 /**
  * Launch agents whose MCP session replays the context captured here (#12486).
@@ -23,6 +22,11 @@ const LAUNCH_CONTEXT_AGENT_IDS: ReadonlySet<string> = new Set(["claude"]);
  * terminal the agent has no relationship with. `isSettingsOpen` is dropped
  * because a snapshot of a dialog's visibility is wrong seconds later.
  *
+ * The worktree is pinned by id only. Its name, path, and branch are resolved
+ * per dispatch by `withReplayedWorktreeDetails`, because at launch they can be
+ * missing (a pane restored before its view's worktrees load) or later go stale
+ * (a branch switch), and either would otherwise hold for the pane's life.
+ *
  * Returns undefined for every other agent, so their spawn payload is unchanged.
  */
 export function buildAgentLaunchContext(input: {
@@ -34,21 +38,21 @@ export function buildAgentLaunchContext(input: {
   if (input.launchAgentId === undefined || !LAUNCH_CONTEXT_AGENT_IDS.has(input.launchAgentId)) {
     return undefined;
   }
-  const { isSettingsOpen: _isSettingsOpen, ...live } = getActionContext();
-  const context: ActionContext = {
+  const {
+    isSettingsOpen: _isSettingsOpen,
+    activeWorktreeName: _activeWorktreeName,
+    activeWorktreePath: _activeWorktreePath,
+    activeWorktreeBranch: _activeWorktreeBranch,
+    activeWorktreeIsMain: _activeWorktreeIsMain,
+    ...live
+  } = getActionContext();
+  return {
     ...live,
+    ...(input.worktreeId !== undefined
+      ? { activeWorktreeId: input.worktreeId, focusedWorktreeId: input.worktreeId }
+      : {}),
     focusedTerminalId: input.terminalId,
     focusedTerminalKind: "terminal",
     focusedTerminalTitle: input.title,
   };
-  if (input.worktreeId !== undefined) {
-    const worktree = getWorktreeIdentityById(input.worktreeId);
-    context.activeWorktreeId = input.worktreeId;
-    context.activeWorktreeName = worktree?.name;
-    context.activeWorktreePath = worktree?.path;
-    context.activeWorktreeBranch = worktree?.branch;
-    context.activeWorktreeIsMain = worktree?.isMainWorktree;
-    context.focusedWorktreeId = input.worktreeId;
-  }
-  return context;
 }

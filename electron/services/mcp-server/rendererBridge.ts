@@ -343,10 +343,19 @@ export function createRendererBridge(
    * Falls back to the active view when the workspace has no view anywhere: a
    * workspace nothing holds cannot be duplicated, and the switch cold-starts it
    * for whoever is asking.
+   *
+   * An agent pane's launch view is tried first when it is one of the holders
+   * (#12486): the pane's dispatches land there, so that is the view whose panel
+   * store holds the runs it created.
    */
-  function resolveRevealTarget(workspaceId: string | undefined): Electron.WebContents {
+  function resolveRevealTarget(
+    workspaceId: string | undefined,
+    preferredWebContentsId?: number
+  ): Electron.WebContents {
     if (workspaceId !== undefined) {
       const holders = getWebContentsForProject(workspaceId).filter((wc) => !wc.isDestroyed());
+      const preferred = holders.findIndex((wc) => wc.id === preferredWebContentsId);
+      if (preferred > 0) holders.unshift(...holders.splice(preferred, 1));
       for (const holder of holders) {
         const win = getWindowForWebContents(holder);
         if (!win || win.isDestroyed()) continue;
@@ -387,9 +396,10 @@ export function createRendererBridge(
     actionId: string,
     args: unknown,
     confirmed: boolean,
-    sessionOrigin: McpSessionOrigin
+    sessionOrigin: McpSessionOrigin,
+    preferredWebContentsId?: number
   ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> {
-    const target = resolveRevealTarget(workspaceId);
+    const target = resolveRevealTarget(workspaceId, preferredWebContentsId);
     // Routed as pinned, so the view holds an eviction lease and is thawed for
     // the duration. It is about to be swapped out by its own switch, and a
     // response that never comes back is indistinguishable to the caller from a

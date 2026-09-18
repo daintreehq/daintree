@@ -2076,6 +2076,40 @@ describe("rendererBridge — reveal routing and window raise (#12315)", () => {
     expect(active.send.mock.calls[0][1]).toMatchObject({ sessionOrigin: "assistant-pane" });
   });
 
+  it("reveals through an agent pane's launch view when its workspace is open in two windows (#12486)", async () => {
+    // The pane's runs live in the view it dispatches into — its launch view —
+    // so the reveal must switch that window, not the first holder's.
+    const firstHolder = makeWebContents(3101);
+    const launchView = makeWebContents(3102);
+    const firstWindow = makeWindow(1);
+    const launchWindow = makeWindow(2);
+    register(firstHolder, firstWindow);
+    register(launchView, launchWindow);
+    respondWith(launchView, { ok: true, result: "opened" });
+    mockProjectViews.set("ws-owned", [firstHolder, launchView]);
+    const entries = {
+      current: [
+        { window: firstWindow, activeWebContents: firstHolder },
+        { window: launchWindow, activeWebContents: launchView },
+      ],
+    };
+    const bridge = makeBridge(makeRegistry(entries));
+
+    const { raised } = await bridge.revealOwnedRun(
+      "ws-owned",
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external",
+      3102
+    );
+
+    expect(launchView.send).toHaveBeenCalledTimes(1);
+    expect(firstHolder.send).not.toHaveBeenCalled();
+    expect(raised).toBe(true);
+    expect(raiseLog).toEqual(["2:show", "2:focus"]);
+  });
+
   it.each([
     ["no workspace at all", undefined],
     ["a workspace no view holds", "ws-nowhere"],

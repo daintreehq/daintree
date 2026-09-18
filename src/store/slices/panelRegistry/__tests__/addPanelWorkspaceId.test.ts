@@ -192,6 +192,8 @@ describe("addPanel launch context (#12486)", () => {
     await usePanelStore.getState().addPanel({ requestedId: "term-5", bypassLimits: true });
     await drainMicrotasks();
 
-    expect(spawnMock.mock.calls[0]?.[0]?.actionContext).toBeUndefined();
+    // Premise first: a spawn that never happened would also carry no context.
+    expect(spawnMock).toHaveBeenCalledTimes(1);
+    expect(spawnMock.mock.calls[0]![0]!.actionContext).toBeUndefined();
   });
 });

@@ -2807,20 +2807,26 @@ describe("HttpLifecycle", () => {
         return sessionId!;
       }
 
-      function paneSessionDeps(
-        lc: HttpLifecycle,
-        sessionId: string,
-        paneBinding: import("../shared.js").PaneWorkspaceBinding
-      ) {
-        return (
+      /**
+       * The session deps the production handshake itself built, not a rebuilt
+       * copy: a handshake that stopped passing the pane binding through would
+       * leave a rebuilt copy routing correctly while the real session followed
+       * focus.
+       */
+      async function openSseWithDeps(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const build = vi.spyOn(
           lc as unknown as {
             buildSessionServerDeps: (
-              id: string,
-              b: { workspaceId: string },
-              p: import("../shared.js").PaneWorkspaceBinding
+              ...a: unknown[]
             ) => import("../sessionServer.js").SessionServerDeps;
-          }
-        ).buildSessionServerDeps(sessionId, { workspaceId: paneBinding.workspaceId }, paneBinding);
+          },
+          "buildSessionServerDeps"
+        );
+        const sessionId = await openSse(lc, deps, auth);
+        const sessionDeps = build.mock.results[0]!
+          .value as import("../sessionServer.js").SessionServerDeps;
+        build.mockRestore();
+        return { sessionId, sessionDeps };
       }
 
       it("binds a pane's /sse session to its launch workspace, as a non-renderer-owned origin", async () => {
@@ -2847,12 +2853,7 @@ describe("HttpLifecycle", () => {
           getCachedManifestForWorkspace: vi.fn(() => []),
         });
         const { lc } = paneLifecycle(deps);
-        const sessionId = await openSse(lc, deps, PANE_AUTH);
-        const sessionDeps = paneSessionDeps(lc, sessionId, {
-          workspaceId: WS_A,
-          launchWebContentsId: 42,
-          actionContext: LAUNCH_CONTEXT,
-        });
+        const { sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
 
         await sessionDeps.requestManifest();
         await sessionDeps.dispatchAction("worktree.getCurrent", {}, false);
@@ -2871,6 +2872,53 @@ describe("HttpLifecycle", () => {
         expect(deps.dispatchAction).not.toHaveBeenCalled();
         expect(deps.requestManifest).not.toHaveBeenCalled();
         expect(deps.getCachedManifest).not.toHaveBeenCalled();
+        // The binding the client can read back names the pane's workspace.
+        expect(sessionDeps.workspaceBinding?.workspaceId).toBe(WS_A);
+        expect(sessionDeps.preferredWebContentsId).toBe(42);
+      });
+
+      it("keeps the launch context on a call that outlives its session's teardown", async () => {
+        // A call awaiting its manifest can resume after the transport closed and
+        // `clearSessionBinding` ran. It must still act on the pane's worktree,
+        // not drop the context and act on the view's current selection.
+        const deps = bindingDeps({
+          dispatchActionForWorkspace: vi.fn().mockResolvedValue({ result: { ok: true } }),
+        });
+        const { lc } = paneLifecycle(deps);
+        const { sessionId, sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        deps.sessionStore.clearSessionBinding(sessionId);
+        await sessionDeps.dispatchAction("git.stageAll", {}, false);
+
+        expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
+          WS_A,
+          "git.stageAll",
+          {},
+          false,
+          "external",
+          { contextOverride: LAUNCH_CONTEXT, preferredWebContentsId: 42 }
+        );
+      });
+
+      it("passes the launch view to a reveal, so it switches the window the pane's runs are in", async () => {
+        const revealOwnedRun = vi.fn().mockResolvedValue({
+          envelope: { result: { ok: true, result: null } },
+          raised: true,
+        });
+        const deps = bindingDeps({ revealOwnedRun });
+        const { lc } = paneLifecycle(deps);
+        const { sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        await sessionDeps.revealOwnedRun!(WS_A, "pilot.openRun", { runId: "t1" }, false);
+
+        expect(revealOwnedRun).toHaveBeenCalledWith(
+          WS_A,
+          "pilot.openRun",
+          { runId: "t1" },
+          false,
+          "external",
+          42
+        );
       });
 
       it("binds identity-only when the launch workspace has no live view at handshake", async () => {

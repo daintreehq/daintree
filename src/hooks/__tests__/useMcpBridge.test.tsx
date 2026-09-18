@@ -267,6 +267,76 @@ describe("useMcpBridge", () => {
     );
   });
 
+  it("describes an agent pane's id-only worktree from this view's store before dispatch (#12486)", async () => {
+    // The pane's launch snapshot pins its worktree by id, because at launch the
+    // store may not have loaded it yet. By dispatch time it has.
+    mocks.get.mockReturnValue(safeManifestEntry());
+    mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+    mocks.worktrees.set("wt-pane", {
+      id: "wt-pane",
+      name: "pane",
+      path: "/repo/pane",
+      branch: "feature/pane",
+      isMainWorktree: false,
+    });
+
+    renderHook(() => useMcpBridge());
+
+    await dispatchHandler?.({
+      requestId: "req-pane",
+      actionId: "files.search",
+      args: { query: "x" },
+      context: { projectId: "p1", activeWorktreeId: "wt-pane", focusedTerminalId: "pane-1" },
+      sessionOrigin: "external",
+    });
+
+    expect(mocks.dispatch).toHaveBeenCalledWith(
+      "files.search",
+      { query: "x" },
+      {
+        source: "agent",
+        confirmed: undefined,
+        contextOverride: {
+          projectId: "p1",
+          activeWorktreeId: "wt-pane",
+          activeWorktreeName: "pane",
+          activeWorktreePath: "/repo/pane",
+          activeWorktreeBranch: "feature/pane",
+          activeWorktreeIsMain: false,
+          focusedTerminalId: "pane-1",
+        },
+      }
+    );
+  });
+
+  it.each(["help", "assistant-pane"] as const)(
+    "replays a %s snapshot exactly as captured, even one missing its worktree's path",
+    async (sessionOrigin) => {
+      // Describing the worktree is for agent panes, whose snapshot pins an id
+      // on purpose. An assistant's snapshot is replayed as the user left it.
+      mocks.get.mockReturnValue(safeManifestEntry());
+      mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });
+      mocks.worktrees.set("wt-pane", { id: "wt-pane", name: "pane", path: "/repo/pane" });
+
+      renderHook(() => useMcpBridge());
+
+      const snapshot = { projectId: "p1", activeWorktreeId: "wt-pane" };
+      await dispatchHandler?.({
+        requestId: `req-${sessionOrigin}`,
+        actionId: "files.search",
+        args: { query: "x" },
+        context: snapshot,
+        sessionOrigin,
+      });
+
+      expect(mocks.dispatch).toHaveBeenCalledWith(
+        "files.search",
+        { query: "x" },
+        { source: "agent", confirmed: undefined, contextOverride: snapshot }
+      );
+    }
+  );
+
   it("passes contextOverride: undefined for unpinned dispatch — live context preserved (#8317)", async () => {
     mocks.get.mockReturnValue(safeManifestEntry());
     mocks.dispatch.mockResolvedValue({ ok: true, result: { ok: true } });

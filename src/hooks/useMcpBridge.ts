@@ -62,6 +62,7 @@ import { TerminalKillBatchIdsSchema } from "@shared/types/terminalKillBatch";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { withReplayedWorktreeDetails } from "@/services/actions/replayedContextWorktree";
 
 const REJECTION_RESULT: ActionDispatchResult = {
   ok: false,
@@ -419,6 +420,18 @@ function readForgeIssueCommentContent(args: unknown): ForgeContentArg<ForgeIssue
   }
   if (typeof body !== "string" || body.length === 0) return { state: "invalid" };
   return { state: "supplied", value: { issueNumber, body } };
+}
+
+/**
+ * A worktree in this view's store, or undefined when there is none or no store
+ * is mounted — the same "nothing to describe" answer either way.
+ */
+function lookupViewWorktree(worktreeId: string) {
+  try {
+    return getCurrentViewStore().getState().worktrees.get(worktreeId);
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -1034,7 +1047,26 @@ export function useMcpBridge(): void {
     });
 
     const cleanupDispatch = window.electron.mcpBridge.onDispatchActionRequest(
-      async ({ requestId, actionId, args, confirmed, context, callerInfo, sessionOrigin }) => {
+      async ({
+        requestId,
+        actionId,
+        args,
+        confirmed,
+        context: replayedContext,
+        callerInfo,
+        sessionOrigin,
+      }) => {
+        // An agent pane's replayed snapshot names its worktree by id only, so
+        // describe it from this view's store once, up front (#12486): the
+        // confirm preview and the dispatch must read the same context, or the
+        // card could attest to a worktree the action then does not act on.
+        // Only an `external` session can be a pane replaying one — a bound
+        // api-key session sends no context at all — so a help or assistant
+        // snapshot replays exactly as it was captured (#8317).
+        const context =
+          replayedContext !== undefined && sessionOrigin === "external"
+            ? withReplayedWorktreeDetails(replayedContext, lookupViewWorktree)
+            : replayedContext;
         // Main started its 30s clock when it sent this; ours starts a beat
         // later, which is the safe direction to be wrong in only for reporting
         // — for the destructive re-check below we compare against it directly.
@@ -1289,8 +1321,8 @@ export function useMcpBridge(): void {
                 // context snapshot; replay it so the action targets the
                 // worktree/terminal focused at launch, not wherever focus
                 // drifted during the model's turn (#8317). Undefined for
-                // unpinned external dispatch — ActionService then falls
-                // back to live renderer context, unchanged behaviour.
+                // unpinned external dispatch — ActionService then falls back
+                // to live renderer context, unchanged behaviour.
                 contextOverride: context,
                 ...(hostApprovedTargets ? { hostApprovedTargets } : {}),
                 ...(approvedRecipeRun ? { hostApprovedRecipeRun: approvedRecipeRun } : {}),

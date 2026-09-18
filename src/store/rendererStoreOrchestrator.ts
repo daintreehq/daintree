@@ -27,7 +27,6 @@ import {
   setWorktreeSelectionAccessor,
   setWorktreeIdSetAccessor,
   setWorktreeGitDirAccessor,
-  setWorktreeIdentityAccessor,
   setWorktreePathIndexAccessor,
   setFleetArmingClearAccessor,
   setFleetArmedIdsAccessor,
@@ -91,16 +90,6 @@ export function initStoreOrchestrator(): () => void {
     const viewStore = getCurrentViewStoreOrNull();
     if (!viewStore) return undefined;
     return viewStore.getState().worktrees.get(worktreeId)?.gitDir || undefined;
-  });
-  setWorktreeIdentityAccessor((worktreeId) => {
-    const worktree = getCurrentViewStoreOrNull()?.getState().worktrees.get(worktreeId);
-    if (!worktree) return undefined;
-    return {
-      name: worktree.name,
-      path: worktree.path,
-      branch: worktree.branch,
-      isMainWorktree: worktree.isMainWorktree,
-    };
   });
   setWorktreePathIndexAccessor(() => {
     const viewStore = getCurrentViewStoreOrNull();

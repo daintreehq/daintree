@@ -13,14 +13,6 @@ export interface PanelStoreSnapshot {
   tabGroups: Map<string, TabGroup>;
 }
 
-/** The descriptive half of a worktree an `ActionContext` carries beside its id. */
-export interface WorktreeIdentitySnapshot {
-  name: string;
-  path: string;
-  branch?: string;
-  isMainWorktree?: boolean;
-}
-
 export interface WorktreeSelectionSnapshot {
   activeWorktreeId: string | null;
   /** Durable selection that should round-trip across project switches (#9512). */
@@ -41,8 +33,6 @@ let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;
 let _getWorktreeSelectionState: (() => WorktreeSelectionSnapshot) | null = null;
 let _getWorktreeIdSet: (() => Set<string> | null) | null = null;
 let _getWorktreeGitDirById: ((worktreeId: string) => string | undefined) | null = null;
-let _getWorktreeIdentityById:
-  ((worktreeId: string) => WorktreeIdentitySnapshot | undefined) | null = null;
 let _getWorktreePathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _getProjectPathIndex: (() => ReadonlyMap<string, string> | null) | null = null;
 let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) => boolean) | null =
@@ -111,22 +101,6 @@ export function setWorktreeGitDirAccessor(
  */
 export function getWorktreeGitDirById(worktreeId: string): string | undefined {
   return _getWorktreeGitDirById?.(worktreeId);
-}
-
-export function setWorktreeIdentityAccessor(
-  getter: (worktreeId: string) => WorktreeIdentitySnapshot | undefined
-): void {
-  _getWorktreeIdentityById = getter;
-}
-
-/**
- * Name, path, and branch of a worktree in the current view, or `undefined`
- * when unknown / no view store is mounted. Lets an agent launch describe the
- * worktree it spawns into rather than the one that happens to be selected
- * (#12486).
- */
-export function getWorktreeIdentityById(worktreeId: string): WorktreeIdentitySnapshot | undefined {
-  return _getWorktreeIdentityById?.(worktreeId);
 }
 
 export function setWorktreePathIndexAccessor(
@@ -226,7 +200,6 @@ export function resetStoreAccessorsForTesting(): void {
   _getWorktreeSelectionState = null;
   _getWorktreeIdSet = null;
   _getWorktreeGitDirById = null;
-  _getWorktreeIdentityById = null;
   _getWorktreePathIndex = null;
   _getProjectPathIndex = null;
   _setPanelExtensionState = null;

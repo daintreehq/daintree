@@ -2864,6 +2864,23 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     ]);
   });
 
+  it("takes the launch view from the sender's URL before its view has registered", async () => {
+    // The initial window loads before its view is registered, so the registry
+    // has no workspace for it yet; hydration reads the URL for the same reason.
+    await launchClaude({
+      sender: { id: 42, getURL: () => "app://daintree/index.html?projectId=p1" },
+    });
+    await launchClaude(
+      { sender: { id: 43, getURL: () => "app://daintree/index.html?projectId=p2" } },
+      { id: "claude-pane-2" }
+    );
+
+    expect(mockRegisterPaneWorkspaceBinding.mock.calls.map(([, binding]) => binding)).toEqual([
+      { workspaceId: "p1", launchWebContentsId: 42 },
+      { workspaceId: "p1" },
+    ]);
+  });
+
   it("drops a launch context that names another project", async () => {
     // Replayed against p1's view, a p2 snapshot would fail every dispatch as
     // BINDING_STALE — permanently. The live context is the better answer.

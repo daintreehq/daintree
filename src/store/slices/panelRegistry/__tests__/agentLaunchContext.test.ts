@@ -1,27 +1,16 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { ActionContext } from "@shared/types/actions";
 
-const { liveContext, worktrees } = vi.hoisted(() => ({
-  liveContext: { current: {} as ActionContext },
-  worktrees: new Map<
-    string,
-    { name: string; path: string; branch?: string; isMainWorktree?: boolean }
-  >(),
-}));
+const liveContext = vi.hoisted(() => ({ current: {} as ActionContext }));
 
 vi.mock("@/services/ActionService", () => ({
   getActionContext: () => ({ ...liveContext.current }),
-}));
-
-vi.mock("@/store/storeAccessors", () => ({
-  getWorktreeIdentityById: (id: string) => worktrees.get(id),
 }));
 
 const { buildAgentLaunchContext } = await import("../agentLaunchContext");
 
 describe("buildAgentLaunchContext (#12486)", () => {
   beforeEach(() => {
-    worktrees.clear();
     liveContext.current = {
       projectId: "p1",
       projectName: "Project",
@@ -37,15 +26,9 @@ describe("buildAgentLaunchContext (#12486)", () => {
       focusedTerminalTitle: "Docs",
       isSettingsOpen: true,
     };
-    worktrees.set("wt-pane", {
-      name: "pane",
-      path: "/repo/pane",
-      branch: "feature/pane",
-      isMainWorktree: false,
-    });
   });
 
-  it("describes the worktree the pane spawns into, not the one selected at launch", () => {
+  it("pins the worktree the pane spawns into, not the one selected at launch", () => {
     // A recipe or an MCP launch routinely targets a worktree the user is not
     // looking at; "current worktree" must mean the pane's own.
     const context = buildAgentLaunchContext({
@@ -60,12 +43,32 @@ describe("buildAgentLaunchContext (#12486)", () => {
       projectName: "Project",
       projectPath: "/repo",
       activeWorktreeId: "wt-pane",
-      activeWorktreeName: "pane",
-      activeWorktreePath: "/repo/pane",
-      activeWorktreeBranch: "feature/pane",
-      activeWorktreeIsMain: false,
       focusedWorktreeId: "wt-pane",
     });
+  });
+
+  it("carries no worktree description, which is resolved per dispatch instead", () => {
+    // Captured here it could be missing (a pane restored before its view's
+    // worktrees load) or go stale (a branch switch) for the pane's whole life —
+    // and a selected worktree's path beside the pane's id would be worse.
+    const context = buildAgentLaunchContext({
+      launchAgentId: "claude",
+      terminalId: "pane-1",
+      worktreeId: "wt-pane",
+    })!;
+
+    expect(context.activeWorktreeName).toBeUndefined();
+    expect(context.activeWorktreePath).toBeUndefined();
+    expect(context.activeWorktreeBranch).toBeUndefined();
+    expect(context.activeWorktreeIsMain).toBeUndefined();
+  });
+
+  it("keeps the live worktree's id when the spawn names none", () => {
+    const context = buildAgentLaunchContext({ launchAgentId: "claude", terminalId: "pane-1" })!;
+
+    expect(context.activeWorktreeId).toBe("wt-selected");
+    expect(context.focusedWorktreeId).toBe("wt-selected");
+    expect(context.activeWorktreePath).toBeUndefined();
   });
 
   it("makes the pane itself the focused terminal", () => {
@@ -87,29 +90,6 @@ describe("buildAgentLaunchContext (#12486)", () => {
 
     expect(context).toBeDefined();
     expect("isSettingsOpen" in context!).toBe(false);
-  });
-
-  it("keeps the live worktree when the spawn names none", () => {
-    const context = buildAgentLaunchContext({ launchAgentId: "claude", terminalId: "pane-1" });
-
-    expect(context).toMatchObject({
-      activeWorktreeId: "wt-selected",
-      activeWorktreePath: "/repo/selected",
-    });
-  });
-
-  it("names an unknown destination worktree without borrowing the selected one's details", () => {
-    // Borrowing the selected worktree's path would point "current worktree"
-    // somewhere the pane is not.
-    const context = buildAgentLaunchContext({
-      launchAgentId: "claude",
-      terminalId: "pane-1",
-      worktreeId: "wt-unknown",
-    });
-
-    expect(context!.activeWorktreeId).toBe("wt-unknown");
-    expect(context!.activeWorktreePath).toBeUndefined();
-    expect(context!.activeWorktreeName).toBeUndefined();
   });
 
   it.each([["codex"], ["daintree-assistant"], [undefined]])(

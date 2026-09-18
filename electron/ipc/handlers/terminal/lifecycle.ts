@@ -20,6 +20,7 @@ import {
   resolvePaneClaudeProjectsRoot,
 } from "../../../services/claude/ClaudeSessionStore.js";
 import type { HandlerDependencies, IpcContext } from "../../types.js";
+import { getProjectIdFromSenderUrl } from "../../senderIdentity.js";
 import {
   TerminalSpawnOptionsSchema,
   AgentSessionRetentionDaysSchema,
@@ -745,12 +746,16 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // The sender is the launch view only when it is a view of this pane's
       // workspace. `ctx.projectId` was resolved from the sender before any
       // await, off the cross-window registry, never the global current project.
+      // The initial window's view registers after its renderer has loaded, so a
+      // launch that early falls back to the workspace its URL was opened with,
+      // as project hydration does. Either way this only names a preference:
+      // routing still checks the view belongs to the workspace on every call.
+      const hasSender = Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0;
+      const senderWorkspaceId = hasSender
+        ? (ctx.projectId ?? getProjectIdFromSenderUrl(ctx.event.sender))
+        : null;
       const launchViewWebContentsId =
-        Number.isInteger(ctx.webContentsId) &&
-        ctx.webContentsId > 0 &&
-        ctx.projectId === resolvedProject.id
-          ? ctx.webContentsId
-          : null;
+        senderWorkspaceId === resolvedProject.id ? ctx.webContentsId : null;
       // A snapshot naming another project would make every dispatch fail
       // BINDING_STALE against the view it routes to, permanently; the pane is
       // better served by that view's live context.

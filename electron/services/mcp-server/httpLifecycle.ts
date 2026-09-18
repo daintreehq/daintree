@@ -141,7 +141,8 @@ export interface HttpLifecycleDeps {
     actionId: string,
     args: unknown,
     confirmed: boolean,
-    sessionOrigin: McpSessionOrigin
+    sessionOrigin: McpSessionOrigin,
+    preferredWebContentsId?: number
   ) => Promise<{ envelope: import("./shared.js").DispatchEnvelope; raised: boolean }>;
   /**
    * Validate a handshake workspace selector, or throw when it names no live
@@ -1723,7 +1724,16 @@ export class HttpLifecycle {
     const boundWorkspaceId = workspaceBinding?.workspaceId ?? null;
     // Only ever alongside a workspace binding: the handshake derives one from
     // the other. Undefined for an external bound session, whose route has no
-    // launch view to prefer and nothing extra to carry.
+    // launch view to prefer and nothing extra to carry. Captured with the
+    // workspace, for the workspace's reason: a session torn down while a call
+    // awaits its manifest must still dispatch against the pane's own worktree,
+    // not drop its context and act on whatever the view has selected.
+    const paneDispatchOptions: WorkspaceDispatchOptions | undefined = paneBinding
+      ? {
+          contextOverride: paneBinding.actionContext,
+          preferredWebContentsId: paneBinding.launchWebContentsId,
+        }
+      : undefined;
     const preferredWebContentsId = paneBinding?.launchWebContentsId;
     // Captured at build time (both handshakes populate the map before calling
     // this) so an in-flight dispatch settling after teardown deletes the map
@@ -1784,7 +1794,14 @@ export class HttpLifecycle {
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
         ? (workspaceId, actionId, args, confirmed) =>
-            bridgeReveal(workspaceId, actionId, args, confirmed ?? false, sessionOrigin)
+            bridgeReveal(
+              workspaceId,
+              actionId,
+              args,
+              confirmed ?? false,
+              sessionOrigin,
+              preferredWebContentsId
+            )
         : undefined;
 
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
@@ -1809,14 +1826,15 @@ export class HttpLifecycle {
         // bind — a selector from a pinned bearer is refused at handshake — so
         // the payload is built the same way on all three routes rather than one
         // of them relying on a default that a later binding rule could falsify.
-        const options: WorkspaceDispatchOptions | undefined = paneBinding
-          ? {
-              contextOverride: this.deps.sessionStore.sessionContextMap.get(sessionId),
-              preferredWebContentsId,
-            }
-          : undefined;
         return workspaceDispatch
-          ? workspaceDispatch(boundWorkspaceId, actionId, args, confirmed, sessionOrigin, options)
+          ? workspaceDispatch(
+              boundWorkspaceId,
+              actionId,
+              args,
+              confirmed,
+              sessionOrigin,
+              paneDispatchOptions
+            )
           : Promise.reject(missingWorkspaceRoute());
       }
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
