@@ -84,7 +84,7 @@ import {
   readVisibleActivityLines,
   ViewportSnapshotCache,
 } from "./analysis/headlessViewport.js";
-import { OutputProgressTracker } from "./OutputProgressTracker.js";
+import { OUTPUT_PROGRESS_SAMPLE_MS, OutputProgressTracker } from "./OutputProgressTracker.js";
 import type { AnalysisFinalCapture } from "./analysis/AnalysisBackend.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
@@ -111,11 +111,6 @@ import {
 // `agentOutputContentSnapshot` baseline makes the skipped chunks' delta
 // accumulate into it rather than being lost.
 const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
-
-// Trailing delay before the in-thread path samples the viewport for output
-// progress — the same cadence the worker's viewport digest runs at, so both
-// backends observe a burst at the same granularity.
-const OUTPUT_PROGRESS_SAMPLE_MS = 200;
 
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
@@ -495,6 +490,7 @@ export class TerminalProcess {
     this.writeQueue = new WriteQueue({
       isExited: () => !this.lifecycle.isAlive,
       lastOutputTime: () => this.terminalInfo.lastOutputTime,
+      lastOutputChangeAt: () => this.terminalInfo.lastOutputChangeAt,
       performSubmit: (text, ctx) => this.performSubmit(text, ctx),
       onWriteError: (error, context) => this.logWriteError(error, context),
       onSubmitStatus: (state) => this.callbacks.onSubmitStatus?.(this.id, state),

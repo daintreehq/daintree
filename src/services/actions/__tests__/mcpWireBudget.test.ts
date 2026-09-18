@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { findWireStrippedKeywords } from "@shared/utils/mcpWireSchema";
 import { measureWireSurface, type WireTool } from "./helpers/wireSurface";
+import { TerminalSubmissionRecordSchema } from "../definitions/schemas";
 
 /**
  * The context-condensation budgets — see `docs/architecture/mcp-context-condensation.md`.
@@ -228,6 +229,18 @@ describe("MCP wire budget — property descriptions (§4.3)", () => {
     const stale = Object.keys(OVERSIZED_PROPERTY_ALLOWLIST).filter((key) => !stillOver.has(key));
     expect(stale).toEqual([]);
   });
+
+  it("holds the submission record's output observation to the one-clause target", () => {
+    // The collector above walks input schemas only, so an output property
+    // escapes the target unless it is pinned by name. #12478 was allowed onto a
+    // tool at its description cap on the condition that it fit here.
+    const description = TerminalSubmissionRecordSchema.shape.outputChangeAfterWriteAt.description;
+
+    expect(description).toBeDefined();
+    expect(Buffer.byteLength(description ?? "", "utf8")).toBeLessThanOrEqual(
+      PROPERTY_DESCRIPTION_TARGET_BYTES
+    );
+  });
 });
 
 describe("MCP wire budget — atomicity (§4.4)", () => {
@@ -447,7 +460,17 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // argument as the `pty_written` spend above: the length is the fix, because
   // the short version is the one that reads as a reassurance. Trimmed from
   // 144 B to 99 B before raising, for a net 49 B.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_450;
+  //
+  // 56_450 → 56_700 for #12478, measured at 56_662 B: 213 B for
+  // `submission.outputChangeAfterWriteAt` on `terminal.getStatus`, most of it the
+  // field's 151 B description. A submission can reach `pty_written` and be
+  // dropped by an agent that has not finished starting, and a caller holding the
+  // token had no way to see that the screen never moved after the Enter short of
+  // pulling scrollback. The description has to say the value is an ordering and
+  // not attribution, or a startup repaint reads as the agent taking the turn.
+  // The tool description, at 383 of its 400 B, is untouched; what a caller
+  // should do with an absent value lives in the help partials instead.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_700;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -544,7 +567,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   //
   // 214_900 → 214_950 for the `waitingReason` `"prompt"` rewording, measured at
   // 214_902 B: the same 49 B as the external ceiling above, on one tool.
-  const MAX_COHORT_PAYLOAD_BYTES = 214_950;
+  //
+  // 214_950 → 215_150 for #12478, measured at 215_115 B: the same 213 B as the
+  // external ceiling above, since `terminal.getStatus` is on both surfaces. Both
+  // figures were re-measured on top of #12477's `waitingReason` rewording, which
+  // landed on develop first and is included in them.
+  const MAX_COHORT_PAYLOAD_BYTES = 215_150;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

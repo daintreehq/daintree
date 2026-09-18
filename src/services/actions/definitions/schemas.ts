@@ -490,6 +490,15 @@ export const TerminalSubmissionRecordSchema = z.object({
       "How far this submission got. `pty_written`: the text and its Enter reached the pty without error — it does NOT mean the agent read them or acted on them. `queued`/`writing`: still in progress. `failed`/`cancelled`: it did not go out whole, and part may sit in the composer, so neither makes re-sending safe. `unknown`: the terminal was read and holds no record, including tokens aged past the last 32."
     ),
   at: z.number().optional().describe("Epoch ms the phase was entered. Absent for `unknown`."),
+  // Kept inside the 160-byte property target: the tool description is at its
+  // cap, so what a caller should do with an absent value lives in the help
+  // partials instead (#12478).
+  outputChangeAfterWriteAt: z
+    .number()
+    .optional()
+    .describe(
+      "For pty_written only: epoch ms of the latest screen change stamped >200ms after the Enter. Ordering, not attribution; absent means no such change seen."
+    ),
 });
 
 export const TerminalStatusEntrySchema = z.object({

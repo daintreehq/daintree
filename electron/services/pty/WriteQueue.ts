@@ -4,6 +4,7 @@ import {
   type TerminalSubmissionPhase,
   type TerminalSubmissionRecord,
 } from "../../../shared/types/terminalSubmission.js";
+import { OUTPUT_PROGRESS_SAMPLE_MS } from "./OutputProgressTracker.js";
 
 /**
  * How long one submit may hold the composer before we say so. Reporting only —
@@ -48,6 +49,12 @@ export interface WriteQueueOptions {
   isExited: () => boolean;
   /** Current `lastOutputTime` accessor used by `waitForOutputSettle`. */
   lastOutputTime: () => number;
+  /**
+   * This terminal's latest viewport change (`lastOutputChangeAt`), read when a
+   * submission is looked up so retained records can report output that
+   * followed their Enter without carrying a closure each (#12478).
+   */
+  lastOutputChangeAt: () => number | undefined;
   /** Per-text submit handler — owns all shell-side-effect bookkeeping. */
   performSubmit: (text: string, ctx: SubmitExecutionContext) => Promise<void>;
   /** Optional sink for synchronous PTY write errors. */
@@ -174,7 +181,36 @@ export class WriteQueue {
     const pending = this.pendingSubmissions.get(token);
     if (pending !== undefined) return { ...pending };
     const finalized = this.finalizedSubmissions.find((record) => record.token === token);
-    return finalized === undefined ? undefined : { ...finalized };
+    if (finalized === undefined) return undefined;
+    const outputChangeAfterWriteAt = this.outputChangeAfterWrite(finalized);
+    return outputChangeAfterWriteAt === undefined
+      ? { ...finalized }
+      : { ...finalized, outputChangeAfterWriteAt };
+  }
+
+  /**
+   * The terminal's latest viewport change, if it was stamped after this
+   * record's Enter by more than one sampling interval (#12478).
+   *
+   * Only `pty_written` has an Enter to measure from; every other phase either
+   * has not written it yet or never will. The margin is there because a change
+   * is stamped when sampled, not when its output arrived, so the composer
+   * echoing the body just before the Enter can be stamped just after it. A
+   * change inside that window cannot be placed on either side of the write, so
+   * it is not reported.
+   *
+   * The margin is the nominal sample delay, not a bound: a mirror or worker
+   * that has fallen behind can stamp that echo later still. What is ordered is
+   * the stamp, never the output, and a startup repaint or a later submission's
+   * output satisfies it just as well — an ordering, not attribution.
+   */
+  private outputChangeAfterWrite(record: TerminalSubmissionRecord): number | undefined {
+    if (record.phase !== "pty_written" || record.at === undefined) return undefined;
+    const changedAt = this.options.lastOutputChangeAt();
+    if (changedAt === undefined || changedAt <= record.at + OUTPUT_PROGRESS_SAMPLE_MS) {
+      return undefined;
+    }
+    return changedAt;
   }
 
   /**

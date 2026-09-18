@@ -10,6 +10,7 @@ vi.mock("../../assistantTerminal.js", () => ({
 
 import { buildViewlessTerminalStatus, viewlessStatusArgsAreAnswerable } from "../terminalStatus.js";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../../shared/config/mcpLimits.js";
+import type { TerminalSubmissionRecord } from "../../../../shared/types/terminalSubmission.js";
 
 const WORKSPACE = "ws-1";
 
@@ -38,10 +39,7 @@ function deps(
     /** Main-side spawn ledger. Ids absent from it read as untracked (`null`). */
     owners?: Record<string, string>;
     /** Per-terminal submission ledger, keyed by terminal id then token. */
-    submissions?: Record<
-      string,
-      Record<string, { token: string; phase: string; at?: number } | undefined>
-    >;
+    submissions?: Record<string, Record<string, TerminalSubmissionRecord | undefined>>;
   } = {}
 ) {
   const byId = new Map(records.map((r) => [r["id"] as string, r]));
@@ -532,6 +530,34 @@ describe("buildViewlessTerminalStatus submission correlation (#12337)", () => {
       token: "tok-1",
       phase: "pty_written",
       at: 4242,
+    });
+  });
+
+  it("forwards the output observation the pty-host derived (#12478)", async () => {
+    const d = deps([record()], {
+      owners,
+      submissions: {
+        "t-1": {
+          "tok-1": {
+            token: "tok-1",
+            phase: "pty_written",
+            at: 4242,
+            outputChangeAfterWriteAt: 9000,
+          },
+        },
+      },
+    });
+
+    const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
+      terminalIds: ["t-1"],
+      submissionToken: "tok-1",
+    });
+
+    expect(result.terminals[0]?.submission).toEqual({
+      token: "tok-1",
+      phase: "pty_written",
+      at: 4242,
+      outputChangeAfterWriteAt: 9000,
     });
   });
 

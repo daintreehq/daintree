@@ -14,6 +14,19 @@ import { hashStrings } from "./SustainedChangeTracker.js";
  */
 export const OUTPUT_PROGRESS_RESIZE_QUIET_MS = 1000;
 
+/**
+ * Trailing delay before the in-thread path samples the viewport for output
+ * progress — the same cadence the worker's viewport digest runs at, so both
+ * backends observe a burst at the same granularity.
+ *
+ * It also sets how late a progress timestamp runs: a change is stamped when it
+ * is sampled, nominally within this interval of the output that caused it, and
+ * later still if the mirror or the worker is behind. That is why a submission's
+ * `outputChangeAfterWriteAt` ignores changes stamped within one interval of the
+ * Enter (#12478).
+ */
+export const OUTPUT_PROGRESS_SAMPLE_MS = 200;
+
 // Rows that exist only to animate while a turn runs. The primary working
 // patterns all require an interrupt hint ("esc to interrupt", "esc to cancel"),
 // which is what makes them safe to drop outright — the looser spinner-and-verb

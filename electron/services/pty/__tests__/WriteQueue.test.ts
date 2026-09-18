@@ -32,6 +32,7 @@ function makeOptions(): MutableOptions {
     options: {
       isExited: () => isExited.value,
       lastOutputTime: () => lastOutputTime.value,
+      lastOutputChangeAt: () => undefined,
       performSubmit: (text) => performSubmit(text),
       onWriteError: (e, ctx) => onWriteError(e, ctx),
       onSubmitStatus: (state) => statuses.push(state),
