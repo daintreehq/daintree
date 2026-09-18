@@ -308,7 +308,7 @@ test.describe.serial("Split-mode crash regression (issue #10438)", () => {
   });
 
   // The two-pane split layout container; present only while split mode is
-  // active (TwoPaneSplitLayout renders `data-split-mode="true"`).
+  // active (ContentGridDefault marks the grid `data-split-mode="true"`).
   const splitLayout = '[data-split-mode="true"]';
 
   test("split mode activates for two independent panels but duplicate-as-tab does not crash", async () => {

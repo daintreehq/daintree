@@ -36,7 +36,7 @@ The CSS, the edge geometry vars, and the dedicated `forced-colors` / `prefers-co
 - `PRIORITY_WEIGHTS` (`watch: 100, high: 10, low: 0`) are spaced so no type bonus (max 3) can lift a lower priority above a higher one.
 - A `lockedId` (the currently-visible notification) is held for `GRID_BAR_DWELL_FLOOR_MS` (5000ms, `src/store/notificationStore.ts`) so a higher-severity newcomer cannot preempt mid-read.
 
-`GridNotificationBar` owns the dwell timer, the entry/exit animation, and a VoiceOver live-region buffer flush on swap (clear → `LIVE_REGION_SWAP_DELAY` → repopulate, which is an AT concern and is _not_ gated on reduced-motion). It is rendered in all five content-grid layout variants — `ContentGridDefault`, `ContentGridTwoPaneSplit`, `ContentGridMaximizedGroup`, `ContentGridMaximizedSingle`, `ContentGridFleetScope` — **above** the component-owned `TerminalCountWarning`/`InlineStatusBanner` instances (e.g. `ContentGridDefault.tsx`). That stacking order is a convention; future producers must not invert it.
+`GridNotificationBar` owns the dwell timer, the entry/exit animation, and a VoiceOver live-region buffer flush on swap (clear → `LIVE_REGION_SWAP_DELAY` → repopulate, which is an AT concern and is _not_ gated on reduced-motion). It is rendered in all four content-grid layout variants — `ContentGridDefault` (which also lays out the two-pane split), `ContentGridMaximizedGroup`, `ContentGridMaximizedSingle`, `ContentGridFleetScope` — **above** the component-owned `TerminalCountWarning`/`InlineStatusBanner` instances (e.g. `ContentGridDefault.tsx`). That stacking order is a convention; future producers must not invert it.
 
 ### Component banner (`InlineStatusBanner`)
 
