@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   getSystemMemoryThresholds,
   readAvailableSystemMemoryMb,
+  readElectronSwapUsage,
   readSystemMemorySnapshot,
 } from "../systemMemory.js";
 
@@ -236,5 +237,53 @@ describe("readSystemMemorySnapshot", () => {
       total: 8 * 1024 * 1024,
     }));
     expect(readAvailableSystemMemoryMb()).toBeNull();
+  });
+});
+
+describe("readElectronSwapUsage", () => {
+  const original = (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo;
+
+  function stub(value: unknown) {
+    Object.defineProperty(process, "getSystemMemoryInfo", { configurable: true, value });
+  }
+
+  afterEach(() => {
+    Object.defineProperty(process, "getSystemMemoryInfo", {
+      configurable: true,
+      value: original,
+    });
+  });
+
+  it("converts Electron's KB swap figures to used and total MB", () => {
+    stub(() => ({ free: 1024, total: 8192, swapTotal: 4 * 1024 * 1024, swapFree: 1024 * 1024 }));
+    expect(readElectronSwapUsage()).toEqual({ usedMb: 3 * 1024, totalMb: 4 * 1024 });
+  });
+
+  it("reads a machine with no swap configured as zero of zero, not a failure", () => {
+    stub(() => ({ free: 1024, total: 8192, swapTotal: 0, swapFree: 0 }));
+    expect(readElectronSwapUsage()).toEqual({ usedMb: 0, totalMb: 0 });
+  });
+
+  it("returns null on Darwin, where Electron reports no swap fields", () => {
+    stub(() => ({ free: 1024, total: 8192, purgeable: 0, fileBacked: 0 }));
+    expect(readElectronSwapUsage()).toBeNull();
+  });
+
+  it("rejects malformed or inconsistent swap figures", () => {
+    stub(() => ({ free: 1024, total: 8192, swapTotal: Number.NaN, swapFree: 0 }));
+    expect(readElectronSwapUsage()).toBeNull();
+    stub(() => ({ free: 1024, total: 8192, swapTotal: 1024, swapFree: -1 }));
+    expect(readElectronSwapUsage()).toBeNull();
+    stub(() => ({ free: 1024, total: 8192, swapTotal: 1024, swapFree: 2048 }));
+    expect(readElectronSwapUsage()).toBeNull();
+  });
+
+  it("returns null when the API is missing or throws", () => {
+    stub(undefined);
+    expect(readElectronSwapUsage()).toBeNull();
+    stub(() => {
+      throw new Error("unavailable");
+    });
+    expect(readElectronSwapUsage()).toBeNull();
   });
 });

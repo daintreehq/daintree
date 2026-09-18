@@ -43,6 +43,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "window:sample-blink-memory": "external",
   "window:sample-renderer-elu": "external",
   "system:wake": "external",
+  "system:memory-pressure": "external",
   "app-agent:dispatch-action-request": "external",
   "app-agent:confirmation-request": "external",
   "plugin-mcp:consent-request": "external",

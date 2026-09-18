@@ -39,6 +39,11 @@ export interface SystemMemorySnapshot {
   availableMb: number;
 }
 
+export interface SwapUsage {
+  usedMb: number;
+  totalMb: number;
+}
+
 export interface SystemMemoryThresholds {
   criticalMb: number;
   warningMb: number;
@@ -161,4 +166,33 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
 
 export function readAvailableSystemMemoryMb(): number | null {
   return readSystemMemorySnapshot()?.availableMb ?? null;
+}
+
+function isNonNegativeFinite(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+/**
+ * Swap in use, from the same Electron call as {@link readSystemMemorySnapshot}.
+ * Chromium fills `swapTotal`/`swapFree` (KB) on Windows and Linux only — on
+ * Windows they are the commit limit and its headroom, not the page file alone —
+ * so Darwin returns null here and reads `sysctl vm.swapusage` instead. A
+ * machine with no swap configured reads as zero of zero, which is an
+ * observation, not a failure.
+ */
+export function readElectronSwapUsage(): SwapUsage | null {
+  try {
+    const getInfo = (
+      process as {
+        getSystemMemoryInfo?: () => { swapTotal?: number; swapFree?: number };
+      }
+    ).getSystemMemoryInfo;
+    if (typeof getInfo !== "function") return null;
+    const { swapTotal, swapFree } = getInfo.call(process);
+    if (!isNonNegativeFinite(swapTotal) || !isNonNegativeFinite(swapFree)) return null;
+    if (swapFree > swapTotal) return null;
+    return { usedMb: (swapTotal - swapFree) / 1024, totalMb: swapTotal / 1024 };
+  } catch {
+    return null;
+  }
 }

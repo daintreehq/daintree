@@ -337,6 +337,12 @@ export interface MemoryPressureActions {
    * `recordEluSample`. Failures are non-critical observability.
    */
   sampleRendererElu?: () => void;
+  /**
+   * Optional system-memory observer (#12462): swap and, on Darwin, the
+   * `fseventsd` footprint. Called every poll, warmup included; it gates its own
+   * cadence and runs its probes asynchronously, so it never delays this poll.
+   */
+  sampleSystemHealth?: () => void;
 }
 
 // workingSetSize is the only memory field Electron guarantees on all three
@@ -416,6 +422,11 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       }
       try {
         actions?.sampleRendererElu?.();
+      } catch {
+        /* non-critical */
+      }
+      try {
+        actions?.sampleSystemHealth?.();
       } catch {
         /* non-critical */
       }

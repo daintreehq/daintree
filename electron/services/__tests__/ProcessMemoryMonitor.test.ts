@@ -1536,6 +1536,44 @@ describe("ProcessMemoryMonitor", () => {
       expect(logDebug).toHaveBeenCalledWith("process-memory-sample", expect.any(Object));
     });
 
+    it("invokes actions.sampleSystemHealth on every poll, warmup included", () => {
+      const sampleSystemHealth = vi.fn();
+      const actions: MemoryPressureActions = {
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        sampleSystemHealth,
+      };
+
+      stop = startAppMetricsMonitor(actions);
+
+      // WARMUP_INTERVALS polls skip mitigation; the system observer still runs
+      // on each of them, since it gates its own cadence.
+      for (let i = 1; i <= WARMUP_INTERVALS + 1; i++) {
+        vi.advanceTimersByTime(30_000);
+        expect(sampleSystemHealth).toHaveBeenCalledTimes(i);
+      }
+    });
+
+    it("sampleSystemHealth throwing does not break the poll loop", () => {
+      const sampleSystemHealth = vi.fn().mockImplementation(() => {
+        throw new Error("probe wiring broke");
+      });
+      const actions: MemoryPressureActions = {
+        destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(undefined),
+        sampleSystemHealth,
+      };
+
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 200 * 1024, 100)]);
+      stop = startAppMetricsMonitor(actions);
+
+      vi.advanceTimersByTime(30_000);
+      vi.advanceTimersByTime(30_000);
+
+      expect(sampleSystemHealth).toHaveBeenCalledTimes(2);
+      expect(logDebug).toHaveBeenCalledWith("process-memory-sample", expect.any(Object));
+    });
+
     it("works without sampleBlinkMemory (optional field, backwards compat)", () => {
       const actions: MemoryPressureActions = {
         destroyHiddenWebviews: vi.fn().mockResolvedValue(0),
