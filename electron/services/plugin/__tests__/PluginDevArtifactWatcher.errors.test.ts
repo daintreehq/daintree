@@ -93,6 +93,9 @@ describe("PluginDevArtifactWatcher subscription errors", () => {
   beforeEach(async () => {
     subscriptions.length = 0;
     vi.clearAllMocks();
+    // Drops any one-shot rejection a failed test left queued, and restores the
+    // factory implementation.
+    vi.mocked(subscribeParcelWatcher).mockReset();
     now = 1_000;
     vi.spyOn(performance, "now").mockImplementation(() => now);
     // Realpath, because the watcher attributes events against the resolved root.
