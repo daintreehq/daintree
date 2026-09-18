@@ -141,6 +141,25 @@ export function scoreWorktree(worktree: Worktree | WorktreeState, query: string)
   );
 }
 
+/**
+ * The sidebar's text search as a predicate: a bare number (`123` or `#123`)
+ * matches only the issue or linked PR with that number, anything else has to
+ * score. Every surface that promises "finds what the sidebar's search box
+ * finds" reads this rather than restating it.
+ *
+ * An empty query matches everything. Whitespace is not trimmed here, because
+ * the sidebar never has: a query of spaces scores nothing and so hides every
+ * row. A caller that wants whitespace to read as empty trims first.
+ */
+export function matchesWorktreeQuery(worktree: Worktree | WorktreeState, query: string): boolean {
+  if (query.length === 0) return true;
+  const exactNum = parseExactNumber(query);
+  if (exactNum !== null) {
+    return worktree.issueNumber === exactNum || worktree.linked?.pr?.ref.number === exactNum;
+  }
+  return scoreWorktree(worktree, query) > 0;
+}
+
 export function computeStatus(
   worktree: Worktree | WorktreeState,
   isActive: boolean
@@ -179,19 +198,7 @@ export function matchesFilters(
   isActive: boolean,
   sessionsByWorktreeId?: Record<string, DevPreviewSessionState>
 ): boolean {
-  // Text search
-  if (filters.query.length > 0) {
-    const exactNum = parseExactNumber(filters.query);
-    if (exactNum !== null) {
-      if (worktree.issueNumber !== exactNum && worktree.linked?.pr?.ref.number !== exactNum) {
-        return false;
-      }
-    } else {
-      if (scoreWorktree(worktree, filters.query) === 0) {
-        return false;
-      }
-    }
-  }
+  if (!matchesWorktreeQuery(worktree, filters.query)) return false;
 
   // Status filters (OR within category)
   if (filters.statusFilters.size > 0) {

@@ -20,6 +20,8 @@ vi.mock("@/components/Terminal/TerminalContextMenu", () => ({
 vi.mock("@/hooks/useWorktreeStore", () => ({
   useWorktreeStore: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
     selector({ worktrees: new Map() }),
+  useWorktreeStoreOptional: (selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
+    selector({ worktrees: new Map() }),
 }));
 
 vi.mock("@/hooks/useWorktreeColorMap", () => ({

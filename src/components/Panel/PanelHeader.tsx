@@ -84,8 +84,12 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { PopoverAnchor } from "@/components/ui/popover";
+import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
+import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
 
 import {
   panelKindCanRestart,
@@ -275,6 +279,7 @@ function PanelHeaderComponent({
   const [armedRestartId, setArmedRestartId] = useState<string | null>(null);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [overflowTooltipOpen, setOverflowTooltipOpen] = useState(false);
+  const overflowButtonRef = useRef<HTMLButtonElement | null>(null);
   const armedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const ARMED_TIMEOUT_MS = 3000;
@@ -365,6 +370,71 @@ function PanelHeaderComponent({
   const showMoveToDock =
     !!onMinimize && !isMaximized && location !== "dock" && panelKindIsDockable(kind);
   const hasOverflowItems = true;
+
+  // The panel's own worktree, not the selected one: a panel can sit in a
+  // worktree other than the one the sidebar has active.
+  const currentWorktreeId = usePanelStore((state) => state.panelsById[id]?.worktreeId);
+  // A count, not the worktree list, so a poll that changes nothing but a
+  // worktree's status doesn't re-render every header. Counted against the live
+  // map rather than as `size > 1`: a panel whose worktree has already gone
+  // still has somewhere to move to when one other is left.
+  const otherWorktreeCount = useWorktreeStoreOptional(
+    (state) =>
+      state.worktrees.size -
+      (currentWorktreeId !== undefined && state.worktrees.has(currentWorktreeId) ? 1 : 0),
+    0
+  );
+  const canMoveToWorktree = otherWorktreeCount > 0;
+
+  // Which panel the picker was opened for, not a bare flag: a header can go
+  // on to speak for another panel while the picker is up (its tab closed out
+  // from under it, say), and the picker must not quietly retarget. Dropped
+  // during render, like the toolbar's identity editor, so it can't reopen if
+  // the header comes back to the original panel.
+  const [movePickerPanelId, setMovePickerPanelId] = useState<string | null>(null);
+  if (movePickerPanelId !== null && movePickerPanelId !== id) {
+    setMovePickerPanelId(null);
+  }
+  const isMovePickerOpen = movePickerPanelId !== null;
+  const handleMovePickerOpenChange = useCallback(
+    (open: boolean) => setMovePickerPanelId(open ? id : null),
+    [id]
+  );
+  // Mounted from the first opening on, not with the header: every pane has a
+  // header, and the content carries its own positioning observers. Kept after
+  // that so the picker still gets its exit animation.
+  const [hasOpenedMovePicker, setHasOpenedMovePicker] = useState(false);
+  // Selecting the menu item records the intent and the menu's close hook spends
+  // it. Opening straight from `onSelect` would raise the picker while the menu
+  // still holds the focus trap, and the menu's own focus return would then land
+  // on the button after the picker had focused its search field. Carries the
+  // panel it was chosen for: a tab switch inside the menu's exit animation
+  // changes which panel this header speaks for.
+  const pendingMovePickerRef = useRef<string | null>(null);
+  const handleMoveToWorktreeSelect = useCallback(() => {
+    pendingMovePickerRef.current = id;
+  }, [id]);
+  const handleOverflowMenuOpenChange = useCallback((open: boolean) => {
+    if (!open) return;
+    setOverflowTooltipOpen(false);
+    // A menu reopened inside its exit animation never unmounts, so the close
+    // hook below never runs for that close; drop the intent rather than let it
+    // open the picker on some later, unrelated close.
+    pendingMovePickerRef.current = null;
+  }, []);
+  const handleOverflowMenuCloseAutoFocus = useCallback(
+    (event: Event) => {
+      const pendingPanelId = pendingMovePickerRef.current;
+      pendingMovePickerRef.current = null;
+      if (pendingPanelId === null || pendingPanelId !== id) return;
+      // The picker takes focus into its search field; returning it to the
+      // button first would only flash a ring on the way.
+      event.preventDefault();
+      setHasOpenedMovePicker(true);
+      setMovePickerPanelId(id);
+    },
+    [id]
+  );
 
   // Restart handler for Radix DropdownMenu onSelect
   const handleRestartSelect = useCallback(
@@ -748,7 +818,7 @@ function PanelHeaderComponent({
           }
         : { surface: "surface-panel", extension: "panel-header-bg" };
 
-  return (
+  const header = (
     // Compact density supplies the shared frame (h-8, px-3, border-b
     // border-divider, flex alignment, shrink-0); everything panel-only —
     // drag surface, state backgrounds, follower stripe, tab strip, badges,
@@ -1187,27 +1257,32 @@ function PanelHeaderComponent({
       >
         {/* Overflow menu — panel management actions */}
         {hasOverflowItems && (
-          <DropdownMenu
-            onOpenChange={(open) => {
-              if (open) setOverflowTooltipOpen(false);
-            }}
-          >
+          <DropdownMenu onOpenChange={handleOverflowMenuOpenChange}>
             <Tooltip open={overflowTooltipOpen} onOpenChange={setOverflowTooltipOpen}>
               <TooltipTrigger asChild>
                 <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon-xs"
-                    onPointerDown={(e) => e.stopPropagation()}
-                    aria-label="More panel actions"
-                  >
-                    <Ellipsis aria-hidden="true" />
-                  </Button>
+                  {/* Also the anchor for the Move to worktree picker, which opens
+                      from a menu item rather than from a press on the button. */}
+                  <PopoverAnchor asChild>
+                    <Button
+                      ref={overflowButtonRef}
+                      variant="ghost"
+                      size="icon-xs"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      aria-label="More panel actions"
+                    >
+                      <Ellipsis aria-hidden="true" />
+                    </Button>
+                  </PopoverAnchor>
                 </DropdownMenuTrigger>
               </TooltipTrigger>
               <TooltipContent side="bottom">More panel actions</TooltipContent>
             </Tooltip>
-            <DropdownMenuContent align="end" className="min-w-[160px]">
+            <DropdownMenuContent
+              align="end"
+              className="min-w-[160px]"
+              onCloseAutoFocus={handleOverflowMenuCloseAutoFocus}
+            >
               {/* Session group */}
               {hasPty && (
                 <DropdownMenuItem
@@ -1246,6 +1321,13 @@ function PanelHeaderComponent({
                 </DropdownMenuItem>
               )}
 
+              {canMoveToWorktree && (
+                <DropdownMenuItem onSelect={handleMoveToWorktreeSelect}>
+                  <FolderGit2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                  Move to worktree…
+                </DropdownMenuItem>
+              )}
+
               {agentId && (
                 <DropdownMenuItem
                   onSelect={() =>
@@ -1262,7 +1344,9 @@ function PanelHeaderComponent({
               )}
 
               {/* Management group */}
-              {((canRestart && onRestart) || hasPty || agentId) && <DropdownMenuSeparator />}
+              {((canRestart && onRestart) || hasPty || canMoveToWorktree || agentId) && (
+                <DropdownMenuSeparator />
+              )}
               {location === "dock" && onRestore && (
                 <DropdownMenuItem onSelect={() => onRestore()}>
                   <PanelTopClose className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
@@ -1513,6 +1597,32 @@ function PanelHeaderComponent({
         />
       ) : null}
     </SurfaceHeader>
+  );
+
+  return (
+    // The picker's root wraps the whole header so its content can sit beside
+    // the title bar rather than inside it. Portalled content still bubbles
+    // React events up its component tree, and inside the bar that would reach
+    // the drag listeners, the double-click-to-maximize and the controls'
+    // roving keys. The root itself renders no DOM.
+    <AppPalettePopover
+      isOpen={isMovePickerOpen}
+      onOpenChange={handleMovePickerOpenChange}
+      // Modal like the launcher it is modelled on: Tab cycles inside, and the
+      // outside press that dismisses it doesn't also land on what it hit.
+      modal={true}
+    >
+      {header}
+      {hasOpenedMovePicker && (
+        <MoveToWorktreePicker
+          panelId={id}
+          currentWorktreeId={currentWorktreeId}
+          isOpen={isMovePickerOpen}
+          onOpenChange={handleMovePickerOpenChange}
+          returnFocusRef={overflowButtonRef}
+        />
+      )}
+    </AppPalettePopover>
   );
 }
 

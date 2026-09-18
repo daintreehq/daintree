@@ -5,6 +5,7 @@ import { PALETTE_SURFACE_WIDTHS, type PaletteSurfaceTier } from "@/components/ui
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
 import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
+import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 /**
  * The anchored half of the palette shell.
@@ -186,6 +187,16 @@ export interface AppPalettePopoverContentProps extends Omit<
    * keeps ownership of the Radix event itself.
    */
   onCloseAutoFocus?: () => void;
+  /**
+   * Where focus goes back to, for a palette hung off a `PopoverAnchor` instead
+   * of a `Trigger`. Radix only ever returns focus to a trigger, so without this
+   * an anchor-only palette drops a keyboard dismissal on `document.body`.
+   *
+   * Only claims the closes the shell would otherwise hand to Radix: an
+   * activation that asked for suppression and a pointer dismissal (unless
+   * `restoreFocusOnPointerDismiss`) still restore nothing.
+   */
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
 }
 
 function AppPalettePopoverContent({
@@ -196,6 +207,7 @@ function AppPalettePopoverContent({
   restoreFocusOnPointerDismiss = false,
   consumeCloseAutoFocusSuppression,
   onCloseAutoFocus,
+  returnFocusRef,
   onEscapeKeyDown,
   onInteractOutside,
   onFocus,
@@ -272,6 +284,16 @@ function AppPalettePopoverContent({
       onCloseAutoFocus?.();
       if (suppressRequested || (!restoreFocusOnPointerDismiss && wasPointerCloseRef.current)) {
         event.preventDefault();
+      } else {
+        const target = returnFocusRef?.current;
+        if (target?.isConnected) {
+          event.preventDefault();
+          // Armed here rather than left to the popover's own close handler,
+          // which runs after this one — by then the focus below has already
+          // landed and dragged the anchor's tooltip open.
+          armTooltipFocusSuppression();
+          target.focus({ preventScroll: true });
+        }
       }
       // The shell owns this palette's restoration outright — the rules above
       // are per-palette policy, not the popover primitive's default — so the
@@ -285,7 +307,13 @@ function AppPalettePopoverContent({
       // pointer dismissal and taint the next keyboard close.
       wasPointerCloseRef.current = false;
     },
-    [consumeCloseAutoFocusSuppression, focusRestore, onCloseAutoFocus, restoreFocusOnPointerDismiss]
+    [
+      consumeCloseAutoFocusSuppression,
+      focusRestore,
+      onCloseAutoFocus,
+      restoreFocusOnPointerDismiss,
+      returnFocusRef,
+    ]
   );
 
   const handleEscapeKeyDown = useCallback(
