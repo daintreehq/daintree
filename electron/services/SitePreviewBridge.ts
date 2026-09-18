@@ -39,7 +39,11 @@ import { acquireCdpLease, type CdpLease } from "./cdp/WebContentsCdpService.js";
 import { AppError } from "../utils/errorTypes.js";
 import { getWebviewDialogService } from "./WebviewDialogService.js";
 import { getProjectForWebContents } from "../window/webContentsRegistry.js";
-import { validateGuestEnvelope, type GuestEnvelopeRejection } from "./sitePreview/guestProtocol.js";
+import {
+  DOCUMENT_READY,
+  validateGuestEnvelope,
+  type GuestEnvelopeRejection,
+} from "./sitePreview/guestProtocol.js";
 import {
   buildDisposeSource,
   buildGuestRuntimeSource,
@@ -592,7 +596,9 @@ export class SitePreviewBridge {
     }
 
     binding.lastSequence = verdict.envelope.sequence;
-    if (verdict.envelope.event.type === "documentReady") binding.guestReady = true;
+    // The one payload fact the host acts on. Everything else in the event is
+    // the adapter's to validate, and is forwarded uninterpreted.
+    if (verdict.envelope.event.type === DOCUMENT_READY) binding.guestReady = true;
 
     this.deps.push({
       kind: "guest-event",

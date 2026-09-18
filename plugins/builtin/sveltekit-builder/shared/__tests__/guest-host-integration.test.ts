@@ -8,8 +8,11 @@ import {
   buildModeUpdateSource,
   buildReselectSource,
 } from "../../../../../electron/services/sitePreview/guestRuntime.js";
-import { validateGuestEnvelope } from "../../../../../electron/services/sitePreview/guestProtocol.js";
-import type { GuestEnvelope } from "../protocol.js";
+import {
+  GuestEventSchema as HostGuestEventSchema,
+  validateGuestEnvelope,
+} from "../../../../../electron/services/sitePreview/guestProtocol.js";
+import { GuestEventSchema, type GuestEnvelope } from "../protocol.js";
 
 /**
  * The two halves of the guest boundary were built in parallel: the host's
@@ -56,7 +59,11 @@ function evaluate(source: string): void {
   new Function(source)();
 }
 
-/** Runs every captured payload through the host validator, in order. */
+/**
+ * Runs every captured payload through both halves of the boundary, in order:
+ * the host validates the envelope and the adapter's own schema validates the
+ * payload. A message either half would drop is a failure here.
+ */
 function acceptedEnvelopes(): GuestEnvelope[] {
   let lastSequence = -1;
   return raw.map((payload) => {
@@ -67,7 +74,13 @@ function acceptedEnvelopes(): GuestEnvelope[] {
     });
     if (!verdict.ok) throw new Error(`host rejected a guest message: ${verdict.reason}`);
     lastSequence = verdict.envelope.sequence;
-    return verdict.envelope;
+    const event = GuestEventSchema.safeParse(verdict.envelope.event);
+    if (!event.success) {
+      throw new Error(
+        `the adapter schema rejected a "${String(verdict.envelope.event.type)}" event`
+      );
+    }
+    return { ...verdict.envelope, event: event.data };
   });
 }
 
@@ -100,6 +113,34 @@ afterEach(() => {
   delete scope["__daintreeSiteBuilderGuest.state"];
   raw = [];
   document.body.innerHTML = "";
+});
+
+describe("the lifecycle event both halves validate", () => {
+  // `documentReady` is the one payload the host and the adapter both declare —
+  // the host marks a binding ready on its verdict, the adapter draws the page
+  // on its own. A body only one of them accepts is a binding the user is told
+  // is ready with nothing in it, so they have to accept the same language, not
+  // merely name the same fields.
+  const viewport = { width: 800, height: 600, deviceScaleFactor: 1 };
+
+  it.each([
+    { case: "the shape both declare", body: { routeId: null, url: "http://site/", viewport } },
+    { case: "a named route", body: { routeId: "/pricing", url: "http://site/pricing", viewport } },
+    { case: "nothing but the discriminant", body: {} },
+    { case: "a retyped field", body: { routeId: 3, url: "http://site/", viewport } },
+    {
+      case: "an extra field",
+      body: { routeId: null, url: "http://site/", viewport, extra: true },
+    },
+    {
+      case: "an impossible viewport",
+      body: { routeId: null, url: "http://site/", viewport: { ...viewport, width: 0 } },
+    },
+  ])("agrees on $case", ({ body }) => {
+    const event = { type: "documentReady", ...body };
+    const adapter = GuestEventSchema.safeParse(event).success;
+    expect(HostGuestEventSchema.safeParse(event).success).toBe(adapter);
+  });
 });
 
 describe("host prelude + page runtime", () => {

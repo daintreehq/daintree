@@ -179,6 +179,28 @@ describe("Site Builder end to end: view controller → plugin main → disk", ()
     );
   });
 
+  it("drops a guest event whose payload does not match the adapter schema", async () => {
+    // The host validates the envelope and that the event has a `type`; the
+    // payload is the adapter's to prove. A page that forged one gets nothing
+    // through, and says so once rather than once per event.
+    const env = await setUp();
+    const { selectionId } = await selectInPage(env, "src/lib/native.svelte", "<section");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      env.guest({ type: "selectionChanged", nodes: [{ runtimeOccurrenceId: "forged" }] });
+      env.guest({ type: "selectionChanged", nodes: "not-an-array" });
+      await vi.waitFor(() => {
+        expect(warn).toHaveBeenCalledTimes(1);
+      });
+
+      // The selection the page had legitimately reported is untouched.
+      const selection = env.controller.getSnapshot().selection;
+      expect(selection.status === "ready" && selection.selection.selectionId).toBe(selectionId);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("reopens its workspace after main closed it, and resolves again", async () => {
     const env = await setUp();
     await selectInPage(env, "src/lib/native.svelte", "<section");
