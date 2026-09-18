@@ -277,10 +277,10 @@ describe("SidebarContent zero-worktrees empty state — issue #6752 (supersedes 
     expect(branch).not.toMatch(/<ol[^>]*>/);
   });
 
-  it("keeps the File → Open Directory menu-path pill as the single wayfinding cue", () => {
+  it("keeps the File → Open Project menu-path pill as the single wayfinding cue", () => {
     // The menu-path pill stays as a raw <kbd> with the existing styling — it
     // names the one action a zero-worktrees user can take next.
-    expect(source).toMatch(/<kbd[^>]*>\s*File → Open Directory\s*<\/kbd>/);
+    expect(source).toMatch(/<kbd[^>]*>\s*File → Open Project\s*<\/kbd>/);
   });
 
   it("mounts NewWorktreeDialog from the zero-worktrees branch so populated-sidebar shortcuts still work", () => {
@@ -350,7 +350,7 @@ describe("SidebarContent zero-worktrees taxonomy alignment — issue #6934", () 
 
   it("does not render a button in the zero-worktrees branch", () => {
     // The zero-worktrees state's only action is in the application menu,
-    // communicated via the <kbd>File → Open Directory</kbd> hint — there is
+    // communicated via the <kbd>File → Open Project</kbd> hint — there is
     // no inline button. Guards against a future regression that adds a
     // create-worktree CTA back into this branch.
     const branchStart = source.indexOf("if (worktrees.length === 0) {");

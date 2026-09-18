@@ -1673,7 +1673,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 <span className="text-xs text-text-secondary">
                   Use{" "}
                   <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
-                    File → Open Directory
+                    File → Open Project
                   </kbd>
                 </span>
               }

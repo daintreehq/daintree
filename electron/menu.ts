@@ -25,7 +25,12 @@ import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
-import { PROJECT_MENU_ITEM_IDS, resolveProjectIdForApplicationMenu } from "./projectMenuState.js";
+import {
+  CLOSE_WINDOW_MENU_ITEM_ID,
+  PROJECT_MENU_ITEM_IDS,
+  hasOpenApplicationWindow,
+  resolveProjectIdForApplicationMenu,
+} from "./projectMenuState.js";
 import { PRODUCT_NAME, PRODUCT_WEBSITE, PRODUCT_COPYRIGHT_ORG } from "./utils/productBranding.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { getUserMessage, isAppError } from "./utils/errorTypes.js";
@@ -223,9 +228,12 @@ export function createApplicationMenu(
   const template: Electron.MenuItemConstructorOptions[] = [
     {
       label: "File",
+      // Grouped by what each item acts on: getting a project open, the open
+      // project, the window, then closing — Open Recent stays directly under the
+      // open command it belongs with.
       submenu: [
         {
-          label: "Open Directory…",
+          label: "Open Project…",
           accelerator: "CommandOrControl+O",
           click: async (_item, browserWindow) => {
             const win = getTargetBrowserWindow(browserWindow);
@@ -234,16 +242,15 @@ export function createApplicationMenu(
           },
         },
         {
+          label: "Open Recent",
+          submenu: recentProjectsMenu,
+        },
+        {
           label: "Clone Repository…",
           click: (_item, browserWindow) =>
             sendAction("project.cloneRepo", getTargetBrowserWindow(browserWindow)),
         },
-        {
-          label: "New Window",
-          accelerator: rendererMenuAccelerator("app.newWindow"),
-          click: (_item, browserWindow) =>
-            sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
-        },
+        { type: "separator" },
         {
           // No native accelerator: the default binding is the chord
           // Cmd+K Cmd+N, which Electron accelerators can't express. The old
@@ -256,12 +263,22 @@ export function createApplicationMenu(
             sendAction("worktree.createDialog.open", getTargetBrowserWindow(browserWindow)),
         },
         {
-          label: "Open Recent",
-          submenu: recentProjectsMenu,
+          id: PROJECT_MENU_ITEM_IDS[0],
+          label: "Project Settings…",
+          enabled: projectMenuEnabled,
+          click: (_item, browserWindow) =>
+            sendAction("project.settings.open", getTargetBrowserWindow(browserWindow)),
         },
         { type: "separator" },
+        {
+          label: "New Window",
+          accelerator: rendererMenuAccelerator("app.newWindow"),
+          click: (_item, browserWindow) =>
+            sendAction("app.newWindow", getTargetBrowserWindow(browserWindow)),
+        },
         ...(process.platform !== "darwin"
           ? [
+              { type: "separator" as const },
               {
                 label: "Settings…",
                 accelerator: rendererMenuAccelerator("app.settings"),
@@ -275,13 +292,6 @@ export function createApplicationMenu(
               },
             ]
           : []),
-        {
-          id: PROJECT_MENU_ITEM_IDS[0],
-          label: "Project Settings…",
-          enabled: projectMenuEnabled,
-          click: (_item, browserWindow) =>
-            sendAction("project.settings.open", getTargetBrowserWindow(browserWindow)),
-        },
         ...(filePluginItems.length > 0 ? [{ type: "separator" as const }, ...filePluginItems] : []),
         { type: "separator" },
         {
@@ -292,9 +302,22 @@ export function createApplicationMenu(
             sendAction("project.closeActive", getTargetBrowserWindow(browserWindow)),
         },
         {
+          id: CLOSE_WINDOW_MENU_ITEM_ID,
           label: "Close Window",
-          role: "close",
-          registerAccelerator: false,
+          enabled: hasOpenApplicationWindow(),
+          ...(process.platform === "darwin"
+            ? {
+                // Not role "close": macOS 26 attaches its ✕ symbol to any item
+                // whose action is performClose:, and that one icon indents the
+                // whole section so Close Project reads as hanging off the group
+                // above. Sending the same selector to the first responder keeps
+                // the role's targeting (sheets, detached DevTools) without it.
+                // Cmd+W still reaches the renderer first — app views ignore menu
+                // shortcuts for it (see ProjectViewHandlers.ts).
+                accelerator: "Command+W",
+                click: () => Menu.sendActionToFirstResponder("performClose:"),
+              }
+            : { role: "close" as const, registerAccelerator: false }),
         },
         ...(process.platform !== "darwin"
           ? [{ type: "separator" as const }, { label: "Exit", role: "quit" as const }]
@@ -781,7 +804,7 @@ function buildRecentProjectsMenu(
 
 /**
  * Show the folder picker and open whatever the user chooses. Shared by the File
- * menu's Open Directory… item and the "Choose another folder" recovery on a
+ * menu's Open Project… item and the "Choose another folder" recovery on a
  * failed open (#11409), so both configure the dialog identically.
  */
 async function promptForDirectoryOpen(

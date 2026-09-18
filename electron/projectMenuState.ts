@@ -8,6 +8,22 @@ import { getWindowRegistry } from "./window/windowRef.js";
 // macOS/Windows and briefly re-registers accelerators.
 export const PROJECT_MENU_ITEM_IDS = ["file-project-settings", "file-close-project"] as const;
 
+// File → Close Window is gated on "is a window open" instead. On macOS it is a
+// plain item rather than role "close" (see menu.ts), so AppKit no longer
+// validates it against the key window and it would otherwise stay clickable
+// while the app sits windowless with just its menu bar.
+export const CLOSE_WINDOW_MENU_ITEM_ID = "file-close-window";
+
+export function hasOpenApplicationWindow(): boolean {
+  const registry = getWindowRegistry();
+  // No window layer to ask: leave it enabled — performClose: with no key window
+  // is a no-op, whereas a stuck-disabled Close Window is a real regression.
+  if (!registry) return true;
+  // The registry promotes a survivor whenever the primary closes, so no primary
+  // means no window at all.
+  return Boolean(registry.getPrimary());
+}
+
 /**
  * Which project the process-global application menu should reflect.
  *
@@ -81,6 +97,11 @@ export function refreshProjectMenuState(): void {
       if (!item) continue;
       item.enabled = enabled;
     }
+
+    // Rides the same triggers: focus, a window closing, and window-all-closed are
+    // exactly when "is a window open" can change.
+    const closeWindowItem = menu.getMenuItemById(CLOSE_WINDOW_MENU_ITEM_ID);
+    if (closeWindowItem) closeWindowItem.enabled = hasOpenApplicationWindow();
   } catch (err) {
     console.error("[MAIN] Failed to refresh the File-menu project gates:", err);
   }
