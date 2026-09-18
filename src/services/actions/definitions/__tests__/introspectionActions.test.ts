@@ -4,6 +4,7 @@ import type { z } from "zod";
 import { BUILT_IN_ACTION_IDS } from "@shared/config/actionIds";
 import type { ActionDefinition, ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { actionService } from "@/services/ActionService";
+import type { AnyActionDefinition } from "../../actionTypes";
 
 // Node 25 exposes a broken native `localStorage` stub on `globalThis` (no
 // `clear`/`getItem`/etc) that shadows JSDOM's Storage and leaks the warning
@@ -877,7 +878,7 @@ describe("actions.search", () => {
   // Typed wide enough to take the query and hand back the raw result, so these
   // ranking specs neither cast their args nor their results.
   function search(query: string): Promise<unknown> {
-    const def: ActionDefinition<z.ZodTypeAny> = registry.get("actions.search")!();
+    const def: AnyActionDefinition = registry.get("actions.search")!();
     return def.run({ query }, stubCtx);
   }
 
