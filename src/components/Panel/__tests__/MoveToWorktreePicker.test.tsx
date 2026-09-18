@@ -163,9 +163,15 @@ interface HarnessProps {
   currentWorktreeId?: string;
   onOpenChange?: (open: boolean) => void;
   onPanelKeyDown?: (event: React.KeyboardEvent) => void;
+  onPanelClick?: (event: React.MouseEvent) => void;
 }
 
-function Harness({ currentWorktreeId = "w-current", onOpenChange, onPanelKeyDown }: HarnessProps) {
+function Harness({
+  currentWorktreeId = "w-current",
+  onOpenChange,
+  onPanelKeyDown,
+  onPanelClick,
+}: HarnessProps) {
   const [open, setOpen] = useState(true);
   const anchorRef = useRef<HTMLButtonElement>(null);
   const handleOpenChange = (next: boolean) => {
@@ -174,7 +180,7 @@ function Harness({ currentWorktreeId = "w-current", onOpenChange, onPanelKeyDown
   };
   return (
     // Stands in for the panel the picker is a React child of.
-    <div onKeyDown={onPanelKeyDown}>
+    <div onKeyDown={onPanelKeyDown} onClick={onPanelClick}>
       <AppPalettePopover isOpen={open} onOpenChange={handleOpenChange} modal={true}>
         <button ref={anchorRef} type="button">
           More panel actions
@@ -544,6 +550,19 @@ describe("MoveToWorktreePicker", () => {
         { terminalId: "panel-1", worktreeId: "w-restore" },
         { source: "menu" }
       );
+    });
+
+    it("keeps the activating click from reaching the panel behind it", () => {
+      // Panes focus themselves on any click that reaches them, prevented or
+      // not, and focusing the pane that just moved switches the view to its
+      // new worktree.
+      const onPanelClick = vi.fn();
+      render(<Harness onPanelClick={onPanelClick} />);
+
+      fireEvent.click(option("fix/restore-recovery-cwd"));
+
+      expect(dispatchMock).toHaveBeenCalledTimes(1);
+      expect(onPanelClick).not.toHaveBeenCalled();
     });
 
     it("ignores the current worktree's row", () => {

@@ -411,9 +411,11 @@ function MoveToWorktreeRow({
         isCurrent
           ? undefined
           : (event) => {
-              // Handled here: the panel under the picker would otherwise take
-              // the click as a request to focus the pane that is leaving.
-              event.preventDefault();
+              // Stopped here, not merely prevented: the pane under the picker
+              // focuses itself on any click it sees, whatever the default
+              // state, and focusing the pane that just left would pull the
+              // view over to the worktree it moved to.
+              event.stopPropagation();
               onMove(worktree.id);
             }
       }

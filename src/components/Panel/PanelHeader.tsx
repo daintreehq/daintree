@@ -386,7 +386,20 @@ function PanelHeaderComponent({
   );
   const canMoveToWorktree = otherWorktreeCount > 0;
 
-  const [isMovePickerOpen, setIsMovePickerOpen] = useState(false);
+  // Which panel the picker was opened for, not a bare flag: a header can go
+  // on to speak for another panel while the picker is up (its tab closed out
+  // from under it, say), and the picker must not quietly retarget. Dropped
+  // during render, like the toolbar's identity editor, so it can't reopen if
+  // the header comes back to the original panel.
+  const [movePickerPanelId, setMovePickerPanelId] = useState<string | null>(null);
+  if (movePickerPanelId !== null && movePickerPanelId !== id) {
+    setMovePickerPanelId(null);
+  }
+  const isMovePickerOpen = movePickerPanelId !== null;
+  const handleMovePickerOpenChange = useCallback(
+    (open: boolean) => setMovePickerPanelId(open ? id : null),
+    [id]
+  );
   // Mounted from the first opening on, not with the header: every pane has a
   // header, and the content carries its own positioning observers. Kept after
   // that so the picker still gets its exit animation.
@@ -418,7 +431,7 @@ function PanelHeaderComponent({
       // button first would only flash a ring on the way.
       event.preventDefault();
       setHasOpenedMovePicker(true);
-      setIsMovePickerOpen(true);
+      setMovePickerPanelId(id);
     },
     [id]
   );
@@ -1594,7 +1607,7 @@ function PanelHeaderComponent({
     // roving keys. The root itself renders no DOM.
     <AppPalettePopover
       isOpen={isMovePickerOpen}
-      onOpenChange={setIsMovePickerOpen}
+      onOpenChange={handleMovePickerOpenChange}
       // Modal like the launcher it is modelled on: Tab cycles inside, and the
       // outside press that dismisses it doesn't also land on what it hit.
       modal={true}
@@ -1605,7 +1618,7 @@ function PanelHeaderComponent({
           panelId={id}
           currentWorktreeId={currentWorktreeId}
           isOpen={isMovePickerOpen}
-          onOpenChange={setIsMovePickerOpen}
+          onOpenChange={handleMovePickerOpenChange}
           returnFocusRef={overflowButtonRef}
         />
       )}

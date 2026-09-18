@@ -727,6 +727,7 @@ describe("PanelHeader", () => {
         screen.getByTestId("overflow-menu").querySelectorAll("button, hr")
       ).map((node) => (node.tagName === "HR" ? "---" : node.textContent?.trim()));
       const index = labels.indexOf("Move to worktree…");
+      expect(index).toBeGreaterThanOrEqual(0);
       expect(labels[index + 1]).toBe("Move to new worktree…");
     });
 
@@ -775,6 +776,23 @@ describe("PanelHeader", () => {
       act(() => mockMenuOpenChange?.(true));
 
       expect(finishMenuClose()).toBe(false);
+      expect(picker()).toBeNull();
+    });
+
+    it("closes an open picker when the header goes on to another panel", () => {
+      // A picker opened for one panel must never move another.
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a", "w-b"];
+      const { rerender } = render(<PanelHeader {...makeProps()} />);
+      fireEvent.click(findMenuButton("Move to worktree…")!);
+      finishMenuClose();
+      expect(picker()).not.toBeNull();
+
+      rerender(<PanelHeader {...makeProps({ id: "other-panel" })} />);
+      expect(picker()).toBeNull();
+
+      // And stays closed if the header comes back to the first panel.
+      rerender(<PanelHeader {...makeProps()} />);
       expect(picker()).toBeNull();
     });
 
