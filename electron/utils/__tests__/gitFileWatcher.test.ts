@@ -1699,7 +1699,9 @@ describe("GitFileWatcher", () => {
       const rescanWarnings = () =>
         vi
           .mocked(logWarn)
-          .mock.calls.filter(([message]) => message === "Worktree recursive watcher error (runtime)");
+          .mock.calls.filter(
+            ([message]) => message === "Worktree recursive watcher error (runtime)"
+          );
       const dropped = new Error(
         "Events were dropped by the FSEvents client. File system must be re-scanned."
       );
@@ -1759,8 +1761,14 @@ describe("GitFileWatcher", () => {
       mock.resolve();
       const cb = mock.getCallback();
 
-      fireError(cb, new Error("Events were dropped by the kernel. File system must be re-scanned."));
-      fireError(cb, new Error("Events were dropped by the kernel. File system must be re-scanned."));
+      fireError(
+        cb,
+        new Error("Events were dropped by the kernel. File system must be re-scanned.")
+      );
+      fireError(
+        cb,
+        new Error("Events were dropped by the kernel. File system must be re-scanned.")
+      );
       vi.mocked(logWarn).mockClear();
 
       fireError(cb, new Error("Error starting FSEvents stream"));
