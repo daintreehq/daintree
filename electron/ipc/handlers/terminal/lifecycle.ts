@@ -141,21 +141,23 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   return cachedMcpServerService;
 }
 
-// One-time wiring of the assistant-pane pinning resolvers (#10647). Help-session
-// resolvers are wired in globalServicesInit / HelpSessionService; the assistant
-// pane path has no such owner, so we lazily wire it on first assistant spawn —
-// before `registerAssistantPaneBearer` and the CLI's first `/mcp` handshake.
-// Idempotent re-set is harmless, but the guard avoids re-binding on every spawn.
-let assistantPaneResolversWired = false;
-function wireAssistantPaneResolvers(mcpServerService: McpServerSingleton): void {
-  if (assistantPaneResolversWired) return;
+// Wiring of the pane-token routing resolvers: the assistant pane's WebContents
+// pin (#10647) and an agent pane's launch-workspace binding (#12486).
+// Help-session resolvers are wired in globalServicesInit / HelpSessionService;
+// pane tokens have no such owner, so every spawn that registers one wires them
+// first — before the CLI's first handshake. Re-setting is three reference
+// writes, and doing it per registration keeps the wiring ahead of each one
+// rather than dependent on which kind of pane happened to launch first.
+function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
   mcpServerService.setAssistantPaneWebContentsResolver((token) =>
     mcpPaneConfigService.getWebContentsIdForToken(token)
   );
   mcpServerService.setAssistantPaneActionContextResolver((token) =>
     mcpPaneConfigService.getActionContextForToken(token)
   );
-  assistantPaneResolversWired = true;
+  mcpServerService.setPaneWorkspaceBindingResolver((token) =>
+    mcpPaneConfigService.getPaneWorkspaceBindingForToken(token)
+  );
 }
 
 // Same lazy-import discipline as the MCP service above: PluginService pulls in
@@ -740,6 +742,24 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
       // PluginService load, server readiness — happens before
       // `preparePaneConfig` mints anything, per the binding rule above.
       let preparedForThisLaunch = false;
+      // The sender is the launch view only when it is a view of this pane's
+      // workspace. `ctx.projectId` was resolved from the sender before any
+      // await, off the cross-window registry, never the global current project.
+      const launchViewWebContentsId =
+        Number.isInteger(ctx.webContentsId) &&
+        ctx.webContentsId > 0 &&
+        ctx.projectId === resolvedProject.id
+          ? ctx.webContentsId
+          : null;
+      // A snapshot naming another project would make every dispatch fail
+      // BINDING_STALE against the view it routes to, permanently; the pane is
+      // better served by that view's live context.
+      const launchActionContext =
+        validatedOptions.actionContext !== undefined &&
+        (validatedOptions.actionContext.projectId === undefined ||
+          validatedOptions.actionContext.projectId === resolvedProject.id)
+          ? validatedOptions.actionContext
+          : undefined;
       try {
         const projSettings = await projectStore.getProjectSettings(resolvedProject.id);
         const tier = resolveDaintreeMcpTier(projSettings);
@@ -773,6 +793,22 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
               preparedForThisLaunch = true;
               safeCommand = `${safeCommand} --mcp-config ${quoteCommandArg(prepared.configPath, quotingShell)}`;
               if (prepared.token !== null) {
+                // Bind the bearer to the workspace this pane was launched in, so
+                // its MCP session acts there for its whole life instead of on
+                // whichever window has focus when a call lands (#12486). Same
+                // timing rule as the assistant's pin below: registered before
+                // this IPC resolves, because the CLI's first handshake can race
+                // ahead of anything later. Revoked with the token on PTY exit.
+                wirePaneTokenResolvers(mcpServerService);
+                mcpPaneConfigService.registerPaneWorkspaceBinding(prepared.token, {
+                  workspaceId: resolvedProject.id,
+                  ...(launchViewWebContentsId !== null
+                    ? { launchWebContentsId: launchViewWebContentsId }
+                    : {}),
+                  ...(launchActionContext !== undefined
+                    ? { actionContext: launchActionContext }
+                    : {}),
+                });
                 spawnEnv = { ...(spawnEnv ?? {}), DAINTREE_MCP_TOKEN: prepared.token };
               }
             }
@@ -845,7 +881,7 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             // primitive, which is exactly the structured tool error we want —
             // revoking the token here would degrade that into a 401 instead.
             if (Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0) {
-              wireAssistantPaneResolvers(mcpServerService);
+              wirePaneTokenResolvers(mcpServerService);
               mcpPaneConfigService.registerAssistantPaneBearer(
                 token,
                 ctx.webContentsId,

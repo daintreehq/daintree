@@ -340,6 +340,126 @@ describe("McpPaneConfigService", () => {
     });
   });
 
+  describe("agent-pane workspace binding (#12486)", () => {
+    it("binds the token to its launch workspace, launch view, and context", async () => {
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-agent",
+        port: 45454,
+        tier: "action",
+      });
+      const ctx = { projectId: "p1", activeWorktreeId: "wt-3" };
+
+      service.registerPaneWorkspaceBinding(token, {
+        workspaceId: "p1",
+        launchWebContentsId: 42,
+        actionContext: ctx,
+      });
+
+      expect(service.getPaneWorkspaceBindingForToken(token)).toEqual({
+        workspaceId: "p1",
+        launchWebContentsId: 42,
+        actionContext: ctx,
+      });
+      // The tier the pane was minted at is untouched by where it routes.
+      expect(service.getTierForToken(token)).toBe("action");
+    });
+
+    it("never surfaces through the assistant resolvers, which confer a renderer-owned origin", async () => {
+      // The handshake stamps `assistant-pane` on anything those resolvers
+      // match, and that origin unlocks surfaces an agent pane must never reach
+      // (#12407). Routing it to a view must not make it the assistant.
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-agent-origin",
+        port: 45454,
+        tier: "system",
+      });
+
+      service.registerPaneWorkspaceBinding(token, {
+        workspaceId: "p1",
+        launchWebContentsId: 42,
+        actionContext: { projectId: "p1" },
+      });
+
+      expect(service.getWebContentsIdForToken(token)).toBeNull();
+      expect(service.getActionContextForToken(token)).toBeNull();
+    });
+
+    it("keeps an assistant bearer out of the pane binding resolver", async () => {
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-assistant-only",
+        port: 45454,
+        tier: "action",
+      });
+
+      service.registerAssistantPaneBearer(token, 42, { projectId: "p1" });
+
+      expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
+    });
+
+    it("stores only the fields it was given", async () => {
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-agent-bare",
+        port: 45454,
+        tier: "workbench",
+      });
+
+      service.registerPaneWorkspaceBinding(token, { workspaceId: "p1" });
+
+      expect(service.getPaneWorkspaceBindingForToken(token)).toEqual({ workspaceId: "p1" });
+    });
+
+    it("no-ops for an unknown or revoked token", async () => {
+      expect(() =>
+        service.registerPaneWorkspaceBinding("ghost-token", { workspaceId: "p1" })
+      ).not.toThrow();
+      expect(service.getPaneWorkspaceBindingForToken("ghost-token")).toBeNull();
+      expect(service.getPaneWorkspaceBindingForToken("")).toBeNull();
+
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-agent-race",
+        port: 45454,
+        tier: "action",
+      });
+      await service.revokePaneConfig("pane-agent-race");
+      service.registerPaneWorkspaceBinding(token, { workspaceId: "p1" });
+
+      expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
+    });
+
+    it("revokePaneConfig tears the binding down with the token", async () => {
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-agent-revoke",
+        port: 45454,
+        tier: "action",
+      });
+      service.registerPaneWorkspaceBinding(token, { workspaceId: "p1", launchWebContentsId: 42 });
+
+      await service.revokePaneConfig("pane-agent-revoke");
+
+      expect(service.getPaneWorkspaceBindingForToken(token)).toBeNull();
+    });
+
+    it("drops the previous launch's binding when the pane is prepared again", async () => {
+      // A restart re-prepares the same pane id and mints a new bearer; the old
+      // one must not keep routing anywhere.
+      const first = await service.preparePaneConfig({
+        paneId: "pane-agent-restart",
+        port: 45454,
+        tier: "action",
+      });
+      service.registerPaneWorkspaceBinding(first.token, { workspaceId: "p1" });
+
+      const second = await service.preparePaneConfig({
+        paneId: "pane-agent-restart",
+        port: 45454,
+        tier: "action",
+      });
+
+      expect(service.getPaneWorkspaceBindingForToken(first.token)).toBeNull();
+      expect(service.getPaneWorkspaceBindingForToken(second.token)).toBeNull();
+    });
+  });
+
   it("revokeAll clears all tokens and files", async () => {
     const a = await service.preparePaneConfig({
       paneId: "pane-a",

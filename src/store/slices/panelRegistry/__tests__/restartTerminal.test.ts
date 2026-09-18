@@ -213,6 +213,36 @@ describe("restartTerminal agent-exited demotion (#5764)", () => {
     expect(payload.agentLaunchFlags).toEqual(["--persisted-flag"]);
   });
 
+  it("carries a launch context into a Claude restart, since the fresh bearer binds to it (#12486)", async () => {
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    usePanelStore.setState({
+      panelsById: { [active.id]: active },
+      panelIds: [active.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    const payload = mockSpawn.mock.calls[0]![0];
+    expect(payload.actionContext).toMatchObject({
+      activeWorktreeId: "wt-1",
+      focusedWorktreeId: "wt-1",
+      focusedTerminalId: "test-1",
+      focusedTerminalKind: "terminal",
+    });
+  });
+
+  it("sends no launch context when the restart demotes to a plain shell", async () => {
+    const demoted = { ...agentPanelBase, agentState: "exited" as const, exitCode: 0 };
+    usePanelStore.setState({
+      panelsById: { [demoted.id]: demoted },
+      panelIds: [demoted.id],
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].actionContext).toBeUndefined();
+  });
+
   it("restarts as agent terminal when a failed-to-start spawn is retried (#10816)", async () => {
     // A failed-to-start agent spawn carries agentState "exited" (so MCP read
     // paths report the crash) but no exitCode — it never ran. Retrying it must

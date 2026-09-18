@@ -51,6 +51,7 @@ import {
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { buildAgentLaunchContext } from "./agentLaunchContext";
 import { countPanelsTowardLimit } from "./panelCount";
 import { isUsableTerminalGeometry } from "@shared/types/terminal";
 
@@ -1222,10 +1223,18 @@ export const createAddPanelActions = (
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
             handbackCode: options.handbackCode,
-            // Launch-time context for the daintree-assistant pinned session
-            // (#10647). Threaded straight through; the main-process handler only
-            // consumes it for that agent and ignores it otherwise.
-            actionContext: options.actionContext,
+            // Launch-time context the pane's MCP session replays: the
+            // assistant's is supplied by its caller (#10647), a Claude pane's
+            // is captured here for its own worktree (#12486). Main ignores it
+            // for every other agent.
+            actionContext:
+              options.actionContext ??
+              buildAgentLaunchContext({
+                launchAgentId,
+                terminalId: id,
+                title: _p1.title,
+                worktreeId: spawnWorktreeId,
+              }),
           });
 
           markRendererPerformance("agentlaunch.spawn-ipc-resolved", { id });

@@ -38,6 +38,7 @@ import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { extractSystemPromptArgs } from "@shared/utils/agentSystemPrompt";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { saveNormalized } from "./persistence";
+import { buildAgentLaunchContext } from "./agentLaunchContext";
 import { optimizeForDock } from "./layout";
 import {
   deriveRuntimeStatus,
@@ -845,6 +846,7 @@ export const createRestartActions = (
         initialRows: spawnRows,
       });
 
+      const restartTitle = titleAtSpawn(get, id, currentTerminal);
       await terminalClient.spawn({
         id,
         projectId: capturedWorkspaceId,
@@ -857,7 +859,7 @@ export const createRestartActions = (
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
         // Keep the ownership rung across restart so the backend's own
         // default-title rewrites stay gated for pinned/user titles.
-        ...titleAtSpawn(get, id, currentTerminal),
+        ...restartTitle,
         command: isAgent ? spawnCommand : undefined,
         restore: false,
         env: restartEnv,
@@ -874,6 +876,14 @@ export const createRestartActions = (
         agentPresetId: nextAgentPresetId,
         agentPresetColor: nextAgentPresetColor,
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
+        // A restart mints the pane a fresh MCP bearer, so it needs its launch
+        // context again or its session falls back to live selection (#12486).
+        actionContext: buildAgentLaunchContext({
+          launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
+          terminalId: id,
+          title: restartTitle.title,
+          worktreeId: spawnWorktreeId,
+        }),
       });
 
       // Main awaits admission, settings and filesystem work before it reaches
@@ -1433,6 +1443,7 @@ export const createRestartActions = (
         initialRows: spawnRows,
       });
 
+      const fallbackTitle = titleAtSpawn(get, id, terminal);
       await terminalClient.spawn({
         id,
         projectId: capturedWorkspaceId,
@@ -1444,7 +1455,7 @@ export const createRestartActions = (
         // Carried with the title, never without it: a title that arrives
         // unaccompanied re-stamps as "default" and the next detection sweep
         // overwrites the user's rename (#10794).
-        ...titleAtSpawn(get, id, terminal),
+        ...fallbackTitle,
         command: commandToRun,
         restore: false,
         env: restartEnv,
@@ -1457,6 +1468,12 @@ export const createRestartActions = (
         agentPresetId: nextPreset.id,
         agentPresetColor: nextPreset.color,
         originalAgentPresetId: originalPresetId,
+        actionContext: buildAgentLaunchContext({
+          launchAgentId: terminal.launchAgentId,
+          terminalId: id,
+          title: fallbackTitle.title,
+          worktreeId: fallbackWorktreeId,
+        }),
       });
 
       reconcileWorktreeAfterSpawn(id, fallbackWorktreeId, get().panelsById[id]);
