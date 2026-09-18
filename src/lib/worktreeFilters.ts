@@ -95,7 +95,10 @@ export function getWorktreeType(worktree: Worktree | WorktreeState): WorktreeTyp
   const prefix = branch.split(/[/-]/)[0];
   if (!prefix) return "other";
 
-  const branchType = BRANCH_PREFIX_MAP[prefix];
+  // Own keys only: a branch like `constructor-injection` would otherwise read an
+  // inherited member off the plain-object table, and its missing `id` becomes a
+  // group no section renders — dropping the worktree from grouped orderings.
+  const branchType = Object.hasOwn(BRANCH_PREFIX_MAP, prefix) ? BRANCH_PREFIX_MAP[prefix] : null;
   if (branchType) {
     return branchType.id as WorktreeTypeId;
   }
