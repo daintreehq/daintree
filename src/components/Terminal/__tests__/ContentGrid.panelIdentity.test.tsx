@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, cleanup } from "@testing-library/react";
+import { render, cleanup, fireEvent } from "@testing-library/react";
 import { DndContext } from "@dnd-kit/core";
 import type { PanelInstance, TabGroup } from "@shared/types/panel";
 import type { ContentGridContext } from "../useContentGridContext";
 import { ContentGrid } from "../ContentGrid";
+import { DIVIDER_WIDTH_PX } from "../TwoPaneSplitDivider";
 
 // #12476: closing one grid panel must leave every other panel mounted — a
 // remount restarts media playback and drops scroll and viewer state that
@@ -15,11 +16,21 @@ const lifecycle = vi.hoisted(() => ({
   nextInstance: 0,
 }));
 
-const grid = vi.hoisted(() => ({
-  ctx: {} as Partial<ContentGridContext>,
-  // What the stubbed split controller publishes; deliberately asymmetric so a
-  // grid that ignored it and fell back to equal halves would show.
-  splitTemplate: "minmax(0, 0.7fr) 6px minmax(0, 0.3fr)",
+const grid = vi.hoisted(() => ({ ctx: {} as Partial<ContentGridContext> }));
+
+// The real split controller runs; only its store and terminal services are
+// stubbed. The default ratio is asymmetric so a grid that ignored the
+// controller's template and fell back to equal halves would show.
+const split = vi.hoisted(() => ({
+  commitRatioIfChanged:
+    vi.fn<(worktreeId: string, ratio: number, panels: [string, string]) => void>(),
+}));
+const splitState = vi.hoisted(() => ({
+  ratioByWorktreeId: {},
+  config: { enabled: true, defaultRatio: 0.7, preferPreview: false },
+  commitRatioIfChanged: split.commitRatioIfChanged,
+  resetWorktreeRatio: () => {},
+  setWorktreeRatio: () => {},
 }));
 
 vi.mock("../useContentGridContext", () => ({
@@ -63,21 +74,22 @@ vi.mock("../GridTabGroup", async () => {
   };
 });
 
-vi.mock("../TwoPaneSplitLayout", async () => {
-  const { useLayoutEffect } = await import("react");
-  function TwoPaneSplitLayout({
-    onGridTemplateChange,
-  }: {
-    onGridTemplateChange: (template: string | null) => void;
-  }) {
-    useLayoutEffect(() => {
-      onGridTemplateChange(grid.splitTemplate);
-      return () => onGridTemplateChange(null);
-    }, [onGridTemplateChange]);
-    return <div data-testid="split-divider" />;
-  }
-  return { TwoPaneSplitLayout };
-});
+vi.mock("@/store", () => ({
+  useTwoPaneSplitStore: <T,>(selector: (state: typeof splitState) => T) => selector(splitState),
+}));
+vi.mock("@/store/twoPaneSplitStore", () => ({ resolveEffectiveRatio: () => undefined }));
+vi.mock("@/services/TerminalInstanceService", () => ({
+  terminalInstanceService: {
+    lockResize: () => {},
+    runResizePass: () => {},
+    scheduleBatchResize: () => {},
+  },
+}));
+vi.mock("@/lib/layoutTransitionLock", () => ({
+  isSidebarMeasurementLocked: () => true,
+  subscribeSidebarLayoutTransitionUnlock: () => () => {},
+  subscribeSidebarHydrationUnlock: () => () => {},
+}));
 
 vi.mock("@/components/DragDrop", async () => {
   const { SortableTerminal } = await vi.importActual<
@@ -135,6 +147,7 @@ interface GridFixture {
   split?: boolean;
   placeholderIndex?: number;
   layoutAnimationEnabled?: boolean;
+  worktreeId?: string;
 }
 
 // Mirrors the shape useContentGridContext hands the layouts.
@@ -143,6 +156,7 @@ function setGrid({
   split = false,
   placeholderIndex,
   layoutAnimationEnabled = true,
+  worktreeId = "wt1",
 }: GridFixture) {
   const tabGroups: TabGroup[] = cells.map((cell) => {
     const members = typeof cell === "string" ? [cell] : cell;
@@ -182,7 +196,7 @@ function setGrid({
     placeholderInGrid: showPlaceholder,
     placeholderIndex: placeholderIndex ?? -1,
     focusedId: null,
-    activeWorktreeId: "wt1",
+    activeWorktreeId: worktreeId,
     isInTrash: () => false,
     layoutTransition: { duration: 0 },
     layoutAnimationEnabled,
@@ -232,12 +246,26 @@ function gridNode(container: HTMLElement): HTMLElement {
   return node;
 }
 
-// Direct grid items in DOM order: a panel cell by its id, anything else by
-// its test id.
+// Direct grid items in DOM order: a panel cell by its id, the split divider as
+// "divider", anything else by its test id.
 function gridOrder(container: HTMLElement): string[] {
-  return Array.from(gridNode(container).children).map(
-    (child) => child.getAttribute("data-terminal-id") ?? child.getAttribute("data-testid") ?? "?"
+  return Array.from(gridNode(container).children).map((child) =>
+    child.getAttribute("role") === "separator"
+      ? "divider"
+      : (child.getAttribute("data-terminal-id") ?? child.getAttribute("data-testid") ?? "?")
   );
+}
+
+// "minmax(0, 0.7fr) 6px minmax(0, 0.3fr)" -> ["minmax(0, 0.7fr)", "6px", ...]
+function gridTracks(container: HTMLElement): string[] {
+  return (
+    gridNode(container).style.gridTemplateColumns.match(/minmax\([^)]*\)|repeat\(.*\)|\S+/g) ?? []
+  );
+}
+
+function fractionOf(track: string | undefined): number {
+  const match = /^minmax\(0, ([\d.]+)fr\)$/.exec(track ?? "");
+  return match ? Number(match[1]) : Number.NaN;
 }
 
 function isSplitGrid(container: HTMLElement): boolean {
@@ -247,10 +275,19 @@ function isSplitGrid(container: HTMLElement): boolean {
 describe("ContentGrid panel identity across layout changes (#12476)", () => {
   beforeEach(() => {
     lifecycle.unmounts.length = 0;
+    split.commitRatioIfChanged.mockClear();
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      }
+    );
   });
 
   afterEach(() => {
     cleanup();
+    vi.unstubAllGlobals();
   });
 
   it("keeps later panels mounted when an earlier grid panel closes", () => {
@@ -309,7 +346,7 @@ describe("ContentGrid panel identity across layout changes (#12476)", () => {
     setGrid({ cells: rest, split: true });
     rerender(view());
 
-    expect(gridOrder(container)).toEqual([rest[0], "split-divider", rest[1]]);
+    expect(gridOrder(container)).toEqual([rest[0], "divider", rest[1]]);
     expectSurvivors(container, before, rest);
     expect(lifecycle.unmounts).toHaveLength(1);
   });
@@ -318,14 +355,47 @@ describe("ContentGrid panel identity across layout changes (#12476)", () => {
     setGrid({ cells: ["a", "b"], split: true });
     const { container, rerender } = render(view());
 
-    expect(gridNode(container).style.gridTemplateColumns).toBe(grid.splitTemplate);
+    const [left, divider, right] = gridTracks(container);
+    expect(fractionOf(left)).toBeCloseTo(splitState.config.defaultRatio);
+    expect(divider).toBe(`${DIVIDER_WIDTH_PX}px`);
+    expect(fractionOf(right)).toBeCloseTo(1 - splitState.config.defaultRatio);
 
     setGrid({ cells: ["a", "b", "c"] });
     rerender(view());
 
     expect(isSplitGrid(container)).toBe(false);
-    expect(gridNode(container).style.gridTemplateColumns).not.toBe(grid.splitTemplate);
-    expect(container.querySelector('[data-testid="split-divider"]')).toBeNull();
+    expect(gridTracks(container)).not.toContain(`${DIVIDER_WIDTH_PX}px`);
+    expect(container.querySelector('[role="separator"]')).toBeNull();
+  });
+
+  it("flushes a pending divider ratio to its own split when another split replaces it", () => {
+    setGrid({ cells: ["a", "b"], split: true });
+    const { container, getByRole, rerender } = render(view());
+
+    fireEvent.keyDown(getByRole("separator"), { key: "ArrowRight" });
+    const pending = fractionOf(gridTracks(container)[0]);
+    expect(pending).toBeGreaterThan(splitState.config.defaultRatio);
+    expect(split.commitRatioIfChanged).not.toHaveBeenCalled();
+
+    setGrid({ cells: ["c", "d"], split: true, worktreeId: "wt2" });
+    rerender(view());
+
+    expect(split.commitRatioIfChanged).toHaveBeenCalledTimes(1);
+    expect(split.commitRatioIfChanged).toHaveBeenCalledWith("wt1", pending, ["a", "b"]);
+    expect(fractionOf(gridTracks(container)[0])).toBeCloseTo(splitState.config.defaultRatio);
+  });
+
+  it("keeps the split controller when the same pair re-renders", () => {
+    setGrid({ cells: ["a", "b"], split: true });
+    const { getByRole, rerender } = render(view());
+    const divider = getByRole("separator");
+    fireEvent.keyDown(divider, { key: "ArrowRight" });
+
+    setGrid({ cells: ["a", "b"], split: true });
+    rerender(view());
+
+    expect(getByRole("separator")).toBe(divider);
+    expect(split.commitRatioIfChanged).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -370,7 +440,7 @@ describe("ContentGrid panel identity across layout changes (#12476)", () => {
     setGrid({ cells: ["b", "a"], split: true });
     rerender(view());
 
-    expect(gridOrder(container)).toEqual(["b", "split-divider", "a"]);
+    expect(gridOrder(container)).toEqual(["b", "divider", "a"]);
     expectSurvivors(container, before, ["a", "b"]);
     expect(panelNode(container, "a").getAttribute("data-initial-id")).toBe("a");
     expect(panelNode(container, "b").getAttribute("data-initial-id")).toBe("b");
