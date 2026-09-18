@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { PanelHeader } from "../PanelHeader";
 import type { PanelHeaderProps } from "../PanelHeader";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
@@ -125,26 +125,40 @@ vi.mock("@/components/ui/tooltip", () => ({
   ),
 }));
 
+// The menu's own lifecycle hooks, captured so a test can play the close that
+// Radix would run once the menu has actually gone.
+let mockMenuOpenChange: ((open: boolean) => void) | undefined;
+let mockMenuCloseAutoFocus: ((event: Event) => void) | undefined;
+
 vi.mock("@/components/ui/dropdown-menu", () => ({
   DropdownMenu: ({
     children,
+    onOpenChange,
   }: {
     children: React.ReactNode;
     onOpenChange?: (open: boolean) => void;
-  }) => <div>{children}</div>,
+  }) => {
+    mockMenuOpenChange = onOpenChange;
+    return <div>{children}</div>;
+  },
   DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   DropdownMenuContent: ({
     children,
     className,
+    onCloseAutoFocus,
   }: {
     children: React.ReactNode;
     className?: string;
     align?: string;
-  }) => (
-    <div data-testid="overflow-menu" className={className}>
-      {children}
-    </div>
-  ),
+    onCloseAutoFocus?: (event: Event) => void;
+  }) => {
+    mockMenuCloseAutoFocus = onCloseAutoFocus;
+    return (
+      <div data-testid="overflow-menu" className={className}>
+        {children}
+      </div>
+    );
+  },
   DropdownMenuItem: ({
     children,
     onSelect,
@@ -165,6 +179,42 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+}));
+
+// `null` stands for "no project view store mounted", which is where the
+// optional hook hands back its fallback.
+let mockWorktreeIds: string[] | null = null;
+
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStoreOptional: <T,>(
+    selector: (state: { worktrees: Map<string, unknown> }) => T,
+    fallback: T
+  ) =>
+    mockWorktreeIds === null
+      ? fallback
+      : selector({ worktrees: new Map(mockWorktreeIds.map((id) => [id, { id }])) }),
+}));
+
+// The picker has its own suite; here it only has to say when it is open and
+// what it was pointed at.
+vi.mock("../MoveToWorktreePicker", () => ({
+  MoveToWorktreePicker: ({
+    isOpen,
+    panelId,
+    currentWorktreeId,
+  }: {
+    isOpen: boolean;
+    panelId: string;
+    currentWorktreeId: string | undefined;
+  }) =>
+    isOpen ? (
+      <div
+        role="dialog"
+        aria-label="Move to worktree"
+        data-panel-id={panelId}
+        data-current-worktree-id={currentWorktreeId}
+      />
+    ) : null,
 }));
 
 function makeProps(overrides: Partial<PanelHeaderProps> = {}): PanelHeaderProps {
@@ -208,6 +258,9 @@ describe("PanelHeader", () => {
       panelsById: {},
       panelIds: [],
     };
+    mockWorktreeIds = null;
+    mockMenuOpenChange = undefined;
+    mockMenuCloseAutoFocus = undefined;
   });
 
   describe("overflow menu tooltip", () => {
@@ -608,6 +661,133 @@ describe("PanelHeader", () => {
       );
       const menu = screen.getByTestId("overflow-menu");
       expect(menu.querySelector("[data-testid='custom-action']")).toBeDefined();
+    });
+  });
+
+  describe("Move to worktree", () => {
+    const findMenuButton = (label: string) =>
+      Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button")).find(
+        (btn) => btn.textContent?.trim() === label
+      );
+
+    function placePanelIn(worktreeId: string) {
+      mockStoreState = {
+        ...mockStoreState,
+        panelsById: { "test-panel": { id: "test-panel", worktreeId } },
+        panelIds: ["test-panel"],
+      };
+    }
+
+    /** The close Radix runs once the menu is gone; returns whether it was claimed. */
+    function finishMenuClose(): boolean {
+      const event = new Event("closeAutoFocus", { cancelable: true });
+      act(() => mockMenuCloseAutoFocus?.(event));
+      return event.defaultPrevented;
+    }
+
+    const picker = () => document.querySelector('[role="dialog"][aria-label="Move to worktree"]');
+
+    it("is offered when the project has another worktree", () => {
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a", "w-b"];
+      render(<PanelHeader {...makeProps()} />);
+
+      expect(findMenuButton("Move to worktree…")).toBeDefined();
+    });
+
+    it("is not offered when the panel's worktree is the only one", () => {
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a"];
+      render(<PanelHeader {...makeProps()} />);
+
+      expect(findMenuButton("Move to worktree…")).toBeUndefined();
+    });
+
+    it("is offered to a panel whose worktree has gone when one other remains", () => {
+      placePanelIn("w-gone");
+      mockWorktreeIds = ["w-b"];
+      render(<PanelHeader {...makeProps()} />);
+
+      expect(findMenuButton("Move to worktree…")).toBeDefined();
+    });
+
+    it("is not offered outside a project view", () => {
+      placePanelIn("w-a");
+      render(<PanelHeader {...makeProps()} />);
+
+      expect(findMenuButton("Move to worktree…")).toBeUndefined();
+    });
+
+    it("sits directly above Move to new worktree", () => {
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a", "w-b"];
+      render(<PanelHeader {...makeProps({ agentId: "claude" })} />);
+
+      const labels = Array.from(
+        screen.getByTestId("overflow-menu").querySelectorAll("button, hr")
+      ).map((node) => (node.tagName === "HR" ? "---" : node.textContent?.trim()));
+      const index = labels.indexOf("Move to worktree…");
+      expect(labels[index + 1]).toBe("Move to new worktree…");
+    });
+
+    it("is offered to any panel kind, and closes its group with a separator", () => {
+      // No PTY, no agent, no restart: the move is the whole session group.
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a", "w-b"];
+      render(<PanelHeader {...makeProps({ kind: "browser" })} />);
+
+      const nodes = Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button, hr"));
+      expect(nodes[0]?.textContent?.trim()).toBe("Move to worktree…");
+      expect(nodes[1]?.tagName).toBe("HR");
+      expect(findMenuButton("Move to new worktree…")).toBeUndefined();
+    });
+
+    it("opens the picker once the menu has closed, without moving anything", () => {
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a", "w-b"];
+      render(<PanelHeader {...makeProps()} />);
+
+      fireEvent.click(findMenuButton("Move to worktree…")!);
+      // Still inside the menu's teardown: opening now would race its focus return.
+      expect(picker()).toBeNull();
+
+      expect(finishMenuClose()).toBe(true);
+      expect(picker()?.getAttribute("data-panel-id")).toBe("test-panel");
+      expect(picker()?.getAttribute("data-current-worktree-id")).toBe("w-a");
+      expect(mockDispatch).not.toHaveBeenCalled();
+    });
+
+    it("leaves an ordinary menu close alone", () => {
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a", "w-b"];
+      render(<PanelHeader {...makeProps()} />);
+
+      expect(finishMenuClose()).toBe(false);
+      expect(picker()).toBeNull();
+    });
+
+    it("drops the request when the menu reopens before it has closed", () => {
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a", "w-b"];
+      render(<PanelHeader {...makeProps()} />);
+
+      fireEvent.click(findMenuButton("Move to worktree…")!);
+      act(() => mockMenuOpenChange?.(true));
+
+      expect(finishMenuClose()).toBe(false);
+      expect(picker()).toBeNull();
+    });
+
+    it("drops the request when the header switched to another panel meanwhile", () => {
+      placePanelIn("w-a");
+      mockWorktreeIds = ["w-a", "w-b"];
+      const { rerender } = render(<PanelHeader {...makeProps()} />);
+
+      fireEvent.click(findMenuButton("Move to worktree…")!);
+      rerender(<PanelHeader {...makeProps({ id: "other-panel" })} />);
+
+      expect(finishMenuClose()).toBe(false);
+      expect(picker()).toBeNull();
     });
   });
 

@@ -6,6 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppPalettePopover } from "../AppPalettePopover";
 import { AppPaletteDialog, type PaletteSurfaceTier } from "../AppPaletteDialog";
 import { useUIStore } from "@/store/uiStore";
+import {
+  _resetTooltipFocusSuppressionForTests,
+  isTooltipSuppressedForElement,
+} from "@/lib/tooltipFocusSuppression";
 
 /**
  * Radix is stubbed so the shell's own policy is what's under test: which
@@ -81,6 +85,7 @@ interface HarnessProps {
   dismissOnForeignOverlay?: boolean;
   restoreFocusOnPointerDismiss?: boolean;
   consumeCloseAutoFocusSuppression?: () => boolean;
+  returnFocusRef?: React.RefObject<HTMLElement | null>;
   initialOpen?: boolean;
   /** Drives the open state from the test, overriding the harness's own. */
   open?: boolean;
@@ -214,6 +219,7 @@ beforeEach(() => {
   rootOpenChange = null;
   contentProps = {};
   useUIStore.setState({ overlayStack: [] });
+  _resetTooltipFocusSuppressionForTests();
 });
 
 describe("AppPalettePopover surface tier", () => {
@@ -679,6 +685,62 @@ describe("AppPalettePopover", () => {
 
       expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
       expect(calls).toEqual(["consume", "notify"]);
+    });
+
+    describe("anchor return target", () => {
+      function mountAnchor() {
+        const anchor = document.createElement("button");
+        document.body.appendChild(anchor);
+        return { anchor, ref: { current: anchor } };
+      }
+
+      it("takes a keyboard dismissal back to the anchor it was given", () => {
+        const { anchor, ref } = mountAnchor();
+        render(<Harness returnFocusRef={ref} />);
+
+        // Radix only returns focus to a Trigger, so without the claim an
+        // anchor-only palette drops the keyboard on the document body.
+        expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+        expect(document.activeElement).toBe(anchor);
+        anchor.remove();
+      });
+
+      it("keeps the anchor's tooltip shut on the way back", () => {
+        const { anchor, ref } = mountAnchor();
+        render(<Harness returnFocusRef={ref} />);
+
+        fireCloseAutoFocus();
+
+        expect(isTooltipSuppressedForElement(anchor)).toBe(true);
+        anchor.remove();
+      });
+
+      it("leaves a pointer dismissal restoring nothing", () => {
+        const { anchor, ref } = mountAnchor();
+        render(<Harness returnFocusRef={ref} />);
+        act(() => contentProps.onPointerDownOutside?.());
+
+        expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+        expect(document.activeElement).not.toBe(anchor);
+        anchor.remove();
+      });
+
+      it("restores nothing when the consumer claims the close", () => {
+        const { anchor, ref } = mountAnchor();
+        render(<Harness returnFocusRef={ref} consumeCloseAutoFocusSuppression={() => true} />);
+
+        expect(fireCloseAutoFocus().preventDefault).toHaveBeenCalledTimes(1);
+        expect(document.activeElement).not.toBe(anchor);
+        anchor.remove();
+      });
+
+      it("hands the close to Radix when the anchor has left the document", () => {
+        const anchor = document.createElement("button");
+        render(<Harness returnFocusRef={{ current: anchor }} />);
+
+        expect(fireCloseAutoFocus().preventDefault).not.toHaveBeenCalled();
+        expect(document.activeElement).not.toBe(anchor);
+      });
     });
   });
 
