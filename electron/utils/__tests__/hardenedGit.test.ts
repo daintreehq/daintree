@@ -40,6 +40,7 @@ import {
   getHardenedGitConfig,
   selectUserDataDir,
   toGitConfigPath,
+  GIT_BLOCK_TIMEOUT_MS,
 } from "../hardenedGit.js";
 import { simpleGit } from "simple-git";
 
@@ -60,19 +61,31 @@ function soleHooksPath(config: readonly string[]): string {
   return values[0];
 }
 
+/** Values of every `-o Key=value` pair for `key`, in argv order. */
+function sshOptionValues(argv: readonly string[], key: string): string[] {
+  return argv.flatMap((arg, i) =>
+    argv[i - 1] === "-o" && arg.startsWith(`${key}=`) ? [arg.slice(key.length + 1)] : []
+  );
+}
+
 /**
  * What an ssh invocation handed to headless git must guarantee: it names ssh
  * itself, and it can never stop on a prompt. A blank value fails the first
  * (issue #12475) and a bare `ssh` fails the second — its host-key prompt hangs
  * a process with no terminal, which `GIT_TERMINAL_PROMPT=0` does not cover.
+ * The connect timeout has to land inside simple-git's block timeout, or a
+ * silent unreachable host is killed as a stall instead of reported as one.
  */
 function expectNonInteractiveSsh(command: unknown): void {
   expect(typeof command).toBe("string");
   const argv = String(command).split(/\s+/);
   expect(argv[0]).toBe("ssh");
-  expect(argv).toEqual(
-    expect.arrayContaining(["BatchMode=yes", "StrictHostKeyChecking=accept-new"])
-  );
+  expect(sshOptionValues(argv, "BatchMode")).toEqual(["yes"]);
+  expect(sshOptionValues(argv, "StrictHostKeyChecking")).toEqual(["accept-new"]);
+  const timeouts = sshOptionValues(argv, "ConnectTimeout").map(Number);
+  expect(timeouts).toHaveLength(1);
+  expect(timeouts[0]).toBeGreaterThan(0);
+  expect(timeouts[0] * 1000).toBeLessThan(GIT_BLOCK_TIMEOUT_MS);
 }
 
 function sshCommandValues(config: readonly string[]): string[] {

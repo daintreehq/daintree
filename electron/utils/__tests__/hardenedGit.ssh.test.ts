@@ -16,17 +16,12 @@ import path from "node:path";
  * after authentication. It never evaluates the command git asks it to run.
  */
 
-const TEST_USER_DATA = fs.mkdtempSync(path.join(os.tmpdir(), "daintree-ssh-userdata-"));
-const PRIOR_USER_DATA = process.env.DAINTREE_USER_DATA;
-process.env.DAINTREE_USER_DATA = TEST_USER_DATA;
-
-// Registered outside the suite below: a skipped suite never runs its hooks, so
-// cleanup declared inside it would leak the temp root on Windows.
-afterAll(() => {
-  fs.rmSync(TEST_USER_DATA, { recursive: true, force: true });
-  if (PRIOR_USER_DATA === undefined) delete process.env.DAINTREE_USER_DATA;
-  else process.env.DAINTREE_USER_DATA = PRIOR_USER_DATA;
-});
+/**
+ * Deadline for each hardened git call, inside vitest's 15s test timeout: a
+ * stalled transport then aborts and kills its child before the fixture is
+ * removed, rather than outliving a timed-out test.
+ */
+const GIT_CALL_DEADLINE_MS = 10_000;
 
 /**
  * Process env the hardened factory snapshots at creation. HOME and the
@@ -75,6 +70,11 @@ function writeScript(file: string, body: string): void {
 
 function sshArgv(): string[] {
   return fs.existsSync(sshLog) ? fs.readFileSync(sshLog, "utf8").split("\n") : [];
+}
+
+/** Every `-o <option>` git passed to ssh — a bare option word would not count. */
+function sshOptions(argv: readonly string[]): string[] {
+  return argv.filter((_, i) => argv[i - 1] === "-o");
 }
 
 // The fake transport is a shell script found through PATH, which Git for
@@ -143,7 +143,7 @@ describePosix("hardened git ssh transport (real git)", () => {
   it("populates an ssh-URL submodule in a new worktree", async () => {
     const { createHardenedGit } = await import("../hardenedGit.js");
 
-    const client = await createHardenedGit(worktreeDir);
+    const client = await createHardenedGit(worktreeDir, AbortSignal.timeout(GIT_CALL_DEADLINE_MS));
     await client.raw([
       "submodule",
       "update",
@@ -161,7 +161,7 @@ describePosix("hardened git ssh transport (real git)", () => {
     // key blocks on a prompt no one can answer.
     const argv = sshArgv();
     expect(argv).toContain("git@example.invalid");
-    expect(argv).toEqual(
+    expect(sshOptions(argv)).toEqual(
       expect.arrayContaining(["BatchMode=yes", "StrictHostKeyChecking=accept-new"])
     );
   });
@@ -184,7 +184,10 @@ describePosix("hardened git ssh transport (real git)", () => {
 
     process.env.GIT_SSH_COMMAND = envSsh;
     process.env.GIT_SSH = envSsh;
-    const client = await createHardenedGit(probeDir).finally(() => {
+    const client = await createHardenedGit(
+      probeDir,
+      AbortSignal.timeout(GIT_CALL_DEADLINE_MS)
+    ).finally(() => {
       delete process.env.GIT_SSH_COMMAND;
       delete process.env.GIT_SSH;
     });

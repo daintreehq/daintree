@@ -38,9 +38,10 @@ const SAFE_GIT_CONFIG_BASE = [
 ] as const;
 
 /**
- * The only ssh invocation Daintree hands git. `BatchMode=yes` is what keeps a
- * headless process from hanging: `GIT_TERMINAL_PROMPT=0` silences git's own
- * credential prompt but not ssh's host-key or passphrase prompts.
+ * The only ssh invocation Daintree hands git. `BatchMode=yes` stops ssh from
+ * prompting for a password, passphrase or host key, none of which a process
+ * without a terminal can answer — `GIT_TERMINAL_PROMPT=0` only covers git's own
+ * terminal prompt, never ssh's.
  */
 const NON_INTERACTIVE_SSH_COMMAND =
   "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15";
@@ -54,8 +55,9 @@ const NON_INTERACTIVE_SSH_COMMAND =
  * `core.sshCommand` is pinned rather than blanked. Git does not read an empty
  * value as unset: it forks the empty string as the transport program, so every
  * ssh URL died with `cannot run :` — which left the SSH submodules of a new
- * worktree empty (issue #12475). A `-c` value outranks repo config either way,
- * so pinning blocks a repo-supplied transport exactly as blanking did.
+ * worktree empty (issue #12475). A `-c core.sshCommand` outranks the one in repo
+ * config either way, so pinning blocks a repo-supplied transport exactly as
+ * blanking did.
  * `core.askpass=` and `credential.helper=` are safe blank: git skips an empty
  * askpass and treats an empty helper as a list reset.
  */
