@@ -341,6 +341,7 @@ export type FetchResult = WorkspaceFetchResult;
     opts: FetchOptions
   ): Promise<Map<string, FetchResult>> {
     const results = new Map<string, FetchResult>();
+    const baseGenerationAtStart = this.baseGeneration;
     let anyFetched = false;
     for (const remote of remotes) {
       const generationAtStart = generations.get(remote) ?? this.baseGeneration;
@@ -355,8 +356,9 @@ export type FetchResult = WorkspaceFetchResult;
     // One notification per batch, not per remote: the observer refreshes the
     // worktree's status, and doing that N times for one scheduled poll is
     // wasted work. Fired outside runFetch so a throwing observer can't poison
-    // any remote's failure cache.
-    if (anyFetched) {
+    // any remote's failure cache. A destroy() mid-batch (which now aborts the
+    // remaining remotes promptly) retires the earlier remotes' success too.
+    if (anyFetched && this.baseGeneration === baseGenerationAtStart) {
       try {
         this.callbacks.onFetchSuccess?.(opts.worktreeId);
       } catch {

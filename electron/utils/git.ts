@@ -586,10 +586,10 @@ export async function getWorktreeChangesWithStats(
       };
     }
 
-    // An aborted run is on its way to rejecting with its owner's cancellation;
-    // a caller that was not cancelled must not inherit that.
+    // Shared only between callers with the same cancellation owner: a read
+    // joined across owners would hand one caller the other's abort.
     const inFlight = inFlightWorktreeChanges.get(cwd);
-    if (inFlight && !inFlight.signal?.aborted) {
+    if (inFlight && inFlight.signal === options.signal) {
       return inFlight.promise;
     }
   }
@@ -668,6 +668,9 @@ export async function getWorktreeChangesWithStats(
         cachedLog !== undefined
           ? cachedLog
           : await git.raw(["log", "-1", "--format=%ct%x09%an%x09%ae%x09%s"]).catch(() => "");
+      // The fallback above also swallows a cancellation; an empty log from a
+      // killed child must not sit in the cache as this commit's answer.
+      options.signal?.throwIfAborted();
       if (headOid && cachedLog === undefined) {
         LAST_COMMIT_LOG_CACHE.set(headOid, logOutput);
       }
@@ -783,6 +786,7 @@ export async function getWorktreeChangesWithStats(
           diffSucceeded = true;
         }
       } catch (error) {
+        if (options.signal?.aborted) throw error;
         logWarn("Failed to read numstat diff; continuing without line stats", {
           cwd,
           message: (error as Error).message,
@@ -988,6 +992,9 @@ export async function getWorktreeChangesWithStats(
         tracking,
       };
 
+      // Other enrichment steps degrade instead of throwing; a cancelled run
+      // must not publish what it half-read.
+      options.signal?.throwIfAborted();
       GIT_WORKTREE_CHANGES_CACHE.set(cwd, result, cacheTTL);
       return result;
     } catch (error) {

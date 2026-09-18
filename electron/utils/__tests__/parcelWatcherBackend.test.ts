@@ -84,24 +84,39 @@ describe("subscribeParcelWatcher", () => {
     expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 0, lifecycleOps: 0 });
 
     const stop = deferred<void>();
-    subscribeMock.mockResolvedValueOnce({ unsubscribe: vi.fn(() => stop.promise) });
-    const subscription = await subscribeParcelWatcher("/repo", vi.fn());
-    expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 1, lifecycleOps: 0 });
+    const armed = deferred<{ unsubscribe: () => Promise<void> }>();
+    subscribeMock
+      .mockResolvedValueOnce({ unsubscribe: vi.fn(() => stop.promise) })
+      .mockReturnValueOnce(armed.promise);
+    try {
+      const subscription = await subscribeParcelWatcher("/repo", vi.fn());
+      expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 1, lifecycleOps: 0 });
 
-    const stopping = subscription.unsubscribe();
-    expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 0, lifecycleOps: 1 });
+      const stopping = subscription.unsubscribe();
+      // Queued behind the teardown by the serialization lock.
+      const queued = subscribeParcelWatcher("/other", vi.fn());
+      expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 0, lifecycleOps: 2 });
 
-    let drained = false;
-    const draining = closeAllParcelWatcherSubscriptions().then(() => {
-      drained = true;
-    });
-    await Promise.resolve();
-    expect(drained).toBe(false);
+      let drained = false;
+      const draining = closeAllParcelWatcherSubscriptions().then(() => {
+        drained = true;
+      });
+      await new Promise((done) => setImmediate(done));
+      expect(drained).toBe(false);
 
-    stop.resolve();
-    await stopping;
-    await draining;
-    expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 0, lifecycleOps: 0 });
+      stop.resolve();
+      await stopping;
+      armed.resolve({ unsubscribe: vi.fn().mockResolvedValue(undefined) });
+      await queued;
+      await draining;
+      expect(getParcelWatcherLifecycleStats()).toEqual({ subscriptions: 0, lifecycleOps: 0 });
+    } finally {
+      // A failed assertion above must not leave the process-global queue
+      // blocked for the tests after this one.
+      stop.resolve();
+      armed.resolve({ unsubscribe: vi.fn().mockResolvedValue(undefined) });
+      await closeAllParcelWatcherSubscriptions();
+    }
   });
 
   it("coalesces repeated unsubscribe calls onto one native teardown", async () => {

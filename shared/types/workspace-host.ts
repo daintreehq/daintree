@@ -713,7 +713,7 @@ export interface WorkspaceHostDisposePending {
   parcelLifecycleOps: number;
 }
 
-export type WorkspaceHostDisposePhase = "disposing-services" | "settling";
+export type WorkspaceHostDisposePhase = "disposing-services" | "settling" | "write-tail";
 
 export type WorkspaceHostEvent =
   // Lifecycle events

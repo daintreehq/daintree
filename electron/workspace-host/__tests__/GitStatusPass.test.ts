@@ -480,19 +480,27 @@ describe("GitStatusPass", () => {
   });
 
   it("passes the monitor's signal to status git and reads a cancelled pass as no result (#12460)", async () => {
-    const controller = new AbortController();
-    mockGetWorktreeChangesWithStats.mockImplementation(async () => {
-      controller.abort();
-      throw new Error("the operation was aborted");
-    });
-    const { pass, host } = makePass({ abortSignal: controller.signal });
+    const first = new AbortController();
+    let rejectStatus!: (error: unknown) => void;
+    mockGetWorktreeChangesWithStats.mockReturnValue(
+      new Promise((_res, rej) => (rejectStatus = rej))
+    );
+    const { pass, host } = makePass({ abortSignal: first.signal });
 
-    await expect(pass.run(true)).resolves.toBeUndefined();
-
+    const running = pass.run(true);
+    await vi.waitFor(() => expect(mockGetWorktreeChangesWithStats).toHaveBeenCalled());
     expect(mockGetWorktreeChangesWithStats).toHaveBeenCalledWith(
       "/test/worktree",
-      expect.objectContaining({ signal: controller.signal })
+      expect.objectContaining({ signal: first.signal })
     );
+
+    // stop() aborts, then start() mints a fresh controller before the killed
+    // git rejects: the pass must judge the signal it started with.
+    first.abort();
+    (host as { abortSignal: AbortSignal }).abortSignal = new AbortController().signal;
+    rejectStatus(new Error("the operation was aborted"));
+
+    await expect(running).resolves.toBeUndefined();
     expect(host.mood).toBe("stable");
     expect(host.emitUpdate).not.toHaveBeenCalled();
     expect(host.isUpdating).toBe(false);

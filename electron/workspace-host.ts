@@ -428,10 +428,11 @@ const forgeBridge = initForgeBridge(sendEvent);
  * terminate-on-SIGTERM. A host that outlives `dispose` defeats the point of
  * "free memory" and strands the parent's backstop on a live child.
  *
- * Disposal aborts in-flight git (monitor and fetch controllers), then waits a
+ * Disposal aborts in-flight git (monitor and fetch controllers), waits a
  * bounded time for the parcel lifecycle queue to drain so native unsubscribes
  * are not abandoned mid-flight, then acknowledges and exits. The parent
- * force-kills only if neither the ack nor the exit arrives.
+ * force-kills only if neither the ack nor the exit arrives. Budgets live in
+ * `hostShutdown.ts`.
  */
 const shutdown = createHostShutdown({
   disposers: [() => workspaceService.dispose(), () => forgeBridge.dispose()],

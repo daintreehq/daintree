@@ -31,9 +31,9 @@ const logWarn = (msg: string, ctx?: Record<string, unknown>) =>
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// The host arms a 500ms self-exit on `dispose` and spends up to 300ms of it
-// waiting for watcher release; the margin covers IPC delivery and a host whose
-// thread is briefly blocked in a native unsubscribe.
+// The host acks and exits ~500ms after `dispose` (its write-tail window) and
+// arms its own hard exit at 1s; the margin covers IPC delivery and a host
+// whose thread is briefly blocked in a native unsubscribe.
 const DISPOSE_KILL_TIMEOUT_MS = 1_500;
 // After `disposed` the host exits on its next turn, so the exit is expected
 // almost immediately — but an ack is a promise, not proof of death.
