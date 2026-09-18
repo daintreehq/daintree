@@ -71,6 +71,8 @@ export interface WorkerAnalysisDelegate {
   getAgentContext(): { agentLive: boolean; agentState?: AgentState };
   /** The grid the worker's mirror reported for this terminal (#11719). */
   onMirrorGeometry(cols: number, rows: number, replayInFlight: boolean): void;
+  /** The mirror's non-empty viewport lines, from each throttled digest (#12428). */
+  onViewport(lines: string[]): void;
 }
 
 export interface WorkerBackendSpec {
@@ -490,6 +492,7 @@ export class WorkerAnalysisBackend implements AnalysisBackend {
       case "viewport":
         this.viewportLines = msg.lines;
         this.cursorLine = msg.cursorLine;
+        this.delegate.onViewport(msg.lines);
         return;
       default:
         return;

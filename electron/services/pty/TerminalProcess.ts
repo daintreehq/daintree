@@ -80,9 +80,11 @@ import type { AnalysisWorkerPool } from "./analysis/AnalysisWorkerPool.js";
 import {
   readCursorLine,
   readLastNLines,
+  readViewportNonEmptyLines,
   readVisibleActivityLines,
   ViewportSnapshotCache,
 } from "./analysis/headlessViewport.js";
+import { OutputProgressTracker } from "./OutputProgressTracker.js";
 import type { AnalysisFinalCapture } from "./analysis/AnalysisBackend.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import { TerminalExitObservers, type TerminalExitArgs } from "./TerminalExitObservers.js";
@@ -109,6 +111,11 @@ import {
 // `agentOutputContentSnapshot` baseline makes the skipped chunks' delta
 // accumulate into it rather than being lost.
 const AGENT_OUTPUT_NOTE_MIN_INTERVAL_MS = 50;
+
+// Trailing delay before the in-thread path samples the viewport for output
+// progress — the same cadence the worker's viewport digest runs at, so both
+// backends observe a burst at the same granularity.
+const OUTPUT_PROGRESS_SAMPLE_MS = 200;
 
 export interface TerminalProcessCallbacks {
   emitData: (id: string, data: string | Uint8Array) => void;
@@ -230,6 +237,8 @@ export class TerminalProcess {
   // the clock starts (fake test clocks sit at 0).
   private lastAgentOutputNoteAt = Number.NEGATIVE_INFINITY;
   private agentOutputNoteTimer: NodeJS.Timeout | null = null;
+  private readonly outputProgress = new OutputProgressTracker();
+  private outputProgressTimer: NodeJS.Timeout | null = null;
 
   private agentOutputForwarder!: AgentOutputForwarder;
 
@@ -801,6 +810,7 @@ export class TerminalProcess {
       }),
       onMirrorGeometry: (cols, rows, replayInFlight) =>
         this.checkMirrorGeometry(cols, rows, replayInFlight),
+      onViewport: (lines) => this.noteOutputProgress(lines),
     };
   }
 
@@ -1000,6 +1010,10 @@ export class TerminalProcess {
   }
 
   private disposeHeadless(): void {
+    if (this.outputProgressTimer) {
+      clearTimeout(this.outputProgressTimer);
+      this.outputProgressTimer = null;
+    }
     this.analysis.release();
   }
 
@@ -1176,6 +1190,7 @@ export class TerminalProcess {
       agentState: t.agentState,
       waitingReason: t.waitingReason,
       lastStateChange: t.lastStateChange,
+      lastOutputChangeAt: t.lastOutputChangeAt,
       traceId: t.traceId,
       analysisEnabled: t.analysisEnabled,
       lastInputTime: t.lastInputTime,
@@ -1355,6 +1370,7 @@ export class TerminalProcess {
     const terminal = this.terminalInfo;
     if (terminal.isExited) {
       try {
+        this.outputProgress.noteResize(Date.now());
         this.analysis.resize(cols, rows);
         if (this.analysis.kind === "worker") {
           // Reflow rewraps the buffer — invalidate any wake no-change skip.
@@ -1429,6 +1445,7 @@ export class TerminalProcess {
     const confirmed = appliedCols === cols && appliedRows === rows;
 
     try {
+      this.outputProgress.noteResize(Date.now());
       this.analysis.resize(cols, rows);
       if (this.analysis.kind === "worker") {
         terminal.contentEpoch++;
@@ -1992,12 +2009,34 @@ export class TerminalProcess {
     this.semanticBufferManager.onData(prelude);
   }
 
+  private noteOutputProgress(lines: readonly string[]): void {
+    const now = Date.now();
+    if (this.outputProgress.observe(lines, now)) {
+      this.terminalInfo.lastOutputChangeAt = now;
+    }
+  }
+
+  // In-thread counterpart of the worker's viewport digest: one trailing read
+  // per burst, so the last frame before the output stops is always observed.
+  private scheduleOutputProgressSample(): void {
+    if (this.outputProgressTimer) return;
+    this.outputProgressTimer = setTimeout(() => {
+      this.outputProgressTimer = null;
+      const mirror = this.terminalInfo.headlessTerminal;
+      // No mirror is no reading, not an empty screen.
+      if (!mirror) return;
+      this.noteOutputProgress(readViewportNonEmptyLines(mirror));
+    }, OUTPUT_PROGRESS_SAMPLE_MS);
+    this.outputProgressTimer.unref?.();
+  }
+
   private feedPreludeInThread(prelude: string): void {
     const terminal = this.terminalInfo;
     if (terminal.headlessTerminal) {
       terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 0) + 1;
       headlessMirrorScheduler.enqueue(this.id, terminal.headlessTerminal, prelude, () => {
         terminal.pendingHeadlessWrites = (terminal.pendingHeadlessWrites ?? 1) - 1;
+        this.scheduleOutputProgressSample();
       });
     }
   }
@@ -2043,6 +2082,7 @@ export class TerminalProcess {
         // subscribes to, and a stale hit here would diff a pre-parse snapshot.
         this.viewportSnapshotCache.invalidate();
         this.noteAgentOutputActivity();
+        this.scheduleOutputProgressSample();
       });
     } else {
       this.noteAgentOutputActivity();

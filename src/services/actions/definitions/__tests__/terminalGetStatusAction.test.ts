@@ -73,12 +73,13 @@ beforeEach(() => {
 });
 
 describe("terminal.getStatus", () => {
-  it("names its source and declares only hasPty unobservable (#12316, #12336)", async () => {
+  it("names its source and declares only the pty-host fields unobservable (#12316, #12336, #12428)", async () => {
     // The same envelope the main-process fallback answers in. A live view saw
     // the panel-shaped fields, so their absence is evidence — a missing `armed`
-    // here means "not armed", not "unknown". `hasPty` is the exception: the
-    // pty-host computes it and the renderer's panel copy is never written, so
-    // this surface says it could not look rather than reporting silence.
+    // here means "not armed", not "unknown". `hasPty` and `lastOutputChangeAt`
+    // are the exceptions: the pty-host computes them and the panel store holds
+    // no live copy, so this surface says it could not look rather than
+    // reporting silence.
     panelStoreMock.getState.mockReturnValue({
       panelIds: ["t1"],
       panelsById: {
@@ -89,7 +90,7 @@ describe("terminal.getStatus", () => {
     const result = await callGetStatus(setupActions());
 
     expect(result.source).toBe("renderer");
-    expect(result.unavailableFields).toEqual(["hasPty"]);
+    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
     expect(result.terminals[0]?.armed).toBe(false);
   });
 
@@ -130,7 +131,33 @@ describe("terminal.getStatus", () => {
     for (const entry of result.terminals) expect(entry.error).toBeUndefined();
     // The non-PTY panel resolves with null agent identity rather than erroring.
     expect(result.terminals[2]).toMatchObject({ agentId: null, agentState: null });
-    expect(result.unavailableFields).toEqual(["hasPty"]);
+    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
+  });
+
+  it("emits no lastOutputChangeAt, even from a panel that carries one (#12428)", async () => {
+    // The timestamp is tracked on the pty-host's viewport, and the panel store
+    // holds no copy. A stray property on a panel is not an observation.
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          agentState: "working",
+          lastOutputChangeAt: 1234,
+        },
+      },
+    });
+
+    const result = await callGetStatus(setupActions());
+
+    expect(result.terminals[0]?.terminalId).toBe("t1");
+    expect(result.terminals[0]?.error).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(result.terminals[0]))).not.toHaveProperty(
+      "lastOutputChangeAt"
+    );
+    expect(result.unavailableFields).toContain("lastOutputChangeAt");
   });
 
   it("returns a `terminals` object wrapper, never a raw array", async () => {

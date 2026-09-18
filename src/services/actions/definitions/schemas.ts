@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
+import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "@shared/types/terminalStatus";
 import {
   GLOBAL_SETTINGS_TAB_IDS,
   PROJECT_SETTINGS_TAB_IDS,
@@ -497,6 +498,7 @@ export const TerminalStatusEntrySchema = z.object({
   agentState: z.string().nullable(),
   waitingReason: z.string().optional(),
   lastTransitionAt: z.number().optional(),
+  lastOutputChangeAt: z.number().optional().describe(LAST_OUTPUT_CHANGE_AT_DESCRIPTION),
   exitCode: z
     .number()
     .int()
@@ -579,7 +581,7 @@ export const TerminalStatusResultSchema = z.object({
       "Which surface answered. `pty` is the reduced reading given when this session's workspace has no open window."
     ),
   unavailableFields: z
-    .array(z.enum(["armed", "lastCheckResult", "exitCode", "hasPty"]))
+    .array(z.enum(["armed", "lastCheckResult", "exitCode", "hasPty", "lastOutputChangeAt"]))
     .describe(
       "Fields the answering surface could not observe at all. Absent from every entry, and unknown rather than false."
     ),

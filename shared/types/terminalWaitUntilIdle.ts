@@ -1,4 +1,5 @@
 import type { WaitingReason } from "./agent.js";
+import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "./terminalStatus.js";
 
 /**
  * Default wait is a bounded long-poll, not an open-ended block. A tool call
@@ -100,6 +101,13 @@ export type WaitUntilIdleResult = {
   previousBusyState?: "working" | "idle";
   lastTransitionAt?: number;
   /**
+   * When the terminal's visible content last changed, ignoring recognised
+   * spinner and timer redraws (#12428). Read from the pty-host once the wait
+   * has resolved, for tracked terminals only; absent when that read found
+   * nothing or did not answer in time.
+   */
+  lastOutputChangeAt?: number;
+  /**
    * Numeric process exit code, present only when `idleReason` is `"completed"`
    * or `"exited"`. `null` when the process was terminated by a signal without a
    * numeric code. Lets a conductor verify a real success before gating an
@@ -158,6 +166,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
     },
     previousBusyState: { type: "string", enum: ["working", "idle"] },
     lastTransitionAt: { type: "number" },
+    lastOutputChangeAt: { type: "number", description: LAST_OUTPUT_CHANGE_AT_DESCRIPTION },
     exitCode: {
       type: ["number", "null"],
       description:
@@ -209,6 +218,8 @@ export type WaitUntilIdleBatchEntry = {
   waitingReason?: WaitingReason;
   previousBusyState?: "working" | "idle";
   lastTransitionAt?: number;
+  /** See {@link WaitUntilIdleResult.lastOutputChangeAt}. */
+  lastOutputChangeAt?: number;
   exitCode?: number | null;
   exitSignal?: number;
   /**
@@ -257,6 +268,7 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
           waitingReason: { type: "string", enum: ["prompt", "question", "approval", "error"] },
           previousBusyState: { type: "string", enum: ["working", "idle"] },
           lastTransitionAt: { type: "number" },
+          lastOutputChangeAt: { type: "number", description: LAST_OUTPUT_CHANGE_AT_DESCRIPTION },
           exitCode: { type: ["number", "null"] },
           exitSignal: { type: "number" },
           settled: {

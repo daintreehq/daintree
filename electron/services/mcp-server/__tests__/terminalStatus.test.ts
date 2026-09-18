@@ -320,6 +320,25 @@ describe("buildViewlessTerminalStatus results", () => {
     for (const entry of result.terminals) expect(entry.error).toBeUndefined();
   });
 
+  it("reports each terminal's own output-progress time, even for one agent type (#12428)", async () => {
+    // Two terminals running the same agent must not share a reading — the
+    // point is to single out the one whose screen stopped moving.
+    const result = await buildViewlessTerminalStatus(
+      deps([
+        record({ id: "moving", lastOutputChangeAt: 9000 }),
+        record({ id: "still", lastOutputChangeAt: 3000 }),
+        record({ id: "never" }),
+      ]),
+      WORKSPACE,
+      { terminalIds: ["moving", "still", "never"] }
+    );
+
+    expect(result.terminals.map((t) => t.lastOutputChangeAt)).toEqual([9000, 3000, undefined]);
+    // Unobserved is absent, not a time — and not a field this surface lacks.
+    expect(result.terminals[2]).not.toHaveProperty("lastOutputChangeAt");
+    expect(result.unavailableFields).not.toContain("lastOutputChangeAt");
+  });
+
   it("keeps hasPty through the output attachment, in both polarities", async () => {
     // `recentOutput` is assigned onto the entry after `buildEntry` returns, so
     // the two must not clobber each other.

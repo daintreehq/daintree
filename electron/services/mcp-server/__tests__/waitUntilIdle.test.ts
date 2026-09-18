@@ -1,7 +1,13 @@
-import { describe, it, expect } from "vitest";
-import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "../waitUntilIdle.js";
+import { describe, it, expect, afterEach, vi } from "vitest";
+import {
+  handleWaitUntilIdle,
+  handleWaitUntilIdleBatch,
+  OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS,
+} from "../waitUntilIdle.js";
 import { events } from "../../events.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
+import { setPtyClientRef } from "../../../window/serviceRefs.js";
+import type { PtyClient } from "../../PtyClient.js";
 import type { WaitUntilIdleResult } from "../../../../shared/types/terminalWaitUntilIdle.js";
 
 const emitIdle = (
@@ -687,5 +693,131 @@ describe("a kill landing mid-wait (#12339)", () => {
     expect(result.timedOut).toBe(false);
     expect(result.busyState).toBe("idle");
     expect(result.trackingState).toBe("closed");
+  });
+});
+
+describe("lastOutputChangeAt on wait results (#12428)", () => {
+  afterEach(() => {
+    setPtyClientRef(null);
+  });
+
+  // Only `getTerminalAsync` is read; the cast keeps the fake to that surface.
+  const installPtyClient = (
+    getTerminalAsync: (id: string) => Promise<{ lastOutputChangeAt?: number } | null>
+  ) => {
+    const fake = { getTerminalAsync: vi.fn(getTerminalAsync) };
+    setPtyClientRef(fake as unknown as PtyClient);
+    return fake;
+  };
+
+  it("reports each terminal's own reading on a batch, settled rows and working ones alike", async () => {
+    const moving = nextIds();
+    const still = nextIds();
+    seedWorkingAgent(moving.terminalId, moving.agentId);
+    seedWorkingAgent(still.terminalId, still.agentId);
+    const readings: Record<string, number> = {
+      [moving.terminalId]: 9_000,
+      [still.terminalId]: 3_000,
+    };
+    const fake = installPtyClient(async (id) => ({ lastOutputChangeAt: readings[id] }));
+
+    const pending = handleWaitUntilIdleBatch(
+      { terminalIds: [moving.terminalId, still.terminalId], mode: "first", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(moving.terminalId, moving.agentId);
+    const res = await pending;
+
+    const byId = new Map(res.results.map((entry) => [entry.terminalId, entry]));
+    expect(byId.get(moving.terminalId)).toMatchObject({ settled: true, lastOutputChangeAt: 9_000 });
+    // The row still `working` is the one a caller needs this for most.
+    expect(byId.get(still.terminalId)).toMatchObject({
+      settled: false,
+      busyState: "working",
+      lastOutputChangeAt: 3_000,
+    });
+    // Read once the wait resolved, not per state event.
+    expect(fake.getTerminalAsync).toHaveBeenCalledTimes(2);
+  });
+
+  it("never reads the pty-host for a terminal the store does not track", async () => {
+    const fake = installPtyClient(async () => ({ lastOutputChangeAt: 1 }));
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: ["progress-untracked"], mode: "first" },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+
+    expect(res.results[0]!.trackingState).toBe("unknown");
+    expect(res.results[0]).not.toHaveProperty("lastOutputChangeAt");
+    expect(fake.getTerminalAsync).not.toHaveBeenCalled();
+  });
+
+  it("attaches the reading to a single wait that timed out still working", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    installPtyClient(async () => ({ lastOutputChangeAt: 4_242 }));
+
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 20,
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result.busyState).toBe("working");
+    expect(result.lastOutputChangeAt).toBe(4_242);
+  });
+
+  it("leaves the field absent when no change was observed or the record is gone", async () => {
+    const unobserved = nextIds();
+    const missing = nextIds();
+    seedWorkingAgent(unobserved.terminalId, unobserved.agentId);
+    seedWorkingAgent(missing.terminalId, missing.agentId);
+    installPtyClient(async (id) => (id === missing.terminalId ? null : {}));
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [unobserved.terminalId, missing.terminalId], mode: "first", timeoutMs: 20 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+
+    expect(res.timedOut).toBe(true);
+    for (const entry of res.results) expect(entry).not.toHaveProperty("lastOutputChangeAt");
+  });
+
+  it("returns the wait's answer without the field when the pty-host read stalls", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    installPtyClient(() => new Promise(() => {}));
+
+    const started = Date.now();
+    const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 20,
+    });
+
+    expect(result.timedOut).toBe(true);
+    expect(result).not.toHaveProperty("lastOutputChangeAt");
+    // Bounded by the lookup ceiling, not by the host.
+    expect(Date.now() - started).toBeLessThan(OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS + 2_000);
+  });
+
+  it("keeps the wait's answer when the pty-host read fails", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    installPtyClient(async () => {
+      throw new Error("host gone");
+    });
+
+    const pending = handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 5_000,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    emitIdle(terminalId, agentId);
+    const result = await pending;
+
+    expect(result).toMatchObject({ busyState: "idle", idleReason: "completed", timedOut: false });
+    expect(result).not.toHaveProperty("lastOutputChangeAt");
   });
 });

@@ -24,11 +24,20 @@ export type TerminalStatusSource = "renderer" | "pty";
  * observed-and-absent. Without this a `pty` answer's missing `armed` reads as
  * "not armed", which is an interpretation main has no evidence for.
  *
- * It cuts both ways. `hasPty` is the one field the reduced `pty` answer reports
- * and the richer `renderer` answer cannot, so a surface listing nothing is not
- * the same as a surface that saw everything.
+ * It cuts both ways. `hasPty` and `lastOutputChangeAt` are read in the
+ * pty-host, so the reduced `pty` answer reports them and the richer `renderer`
+ * answer cannot — a surface listing nothing is not the same as a surface that
+ * saw everything.
  */
-export type TerminalStatusUnavailableField = "armed" | "lastCheckResult" | "exitCode" | "hasPty";
+export type TerminalStatusUnavailableField =
+  "armed" | "lastCheckResult" | "exitCode" | "hasPty" | "lastOutputChangeAt";
+
+/**
+ * Model-facing description of `lastOutputChangeAt`, shared by the status and
+ * wait output schemas so the three copies cannot drift apart.
+ */
+export const LAST_OUTPUT_CHANGE_AT_DESCRIPTION =
+  "Epoch ms the visible screen last changed, ignoring recognized spinner/timer redraws. Absent if unobserved. Not a hang verdict.";
 
 /** One terminal's status, in the shape `TerminalStatusEntrySchema` publishes. */
 export interface TerminalStatusEntry {
@@ -37,6 +46,13 @@ export interface TerminalStatusEntry {
   agentState: AgentState | null;
   waitingReason?: WaitingReason;
   lastTransitionAt?: number;
+  /**
+   * When the terminal's visible content last changed, ignoring recognised
+   * spinner and timer redraws (#12428). An observation for the caller to act
+   * on, never a hang verdict: long reasoning leaves the screen just as still.
+   * Read in the pty-host, so only the `pty` answer reports it.
+   */
+  lastOutputChangeAt?: number;
   exitCode?: number | null;
   spawnedAt?: number;
   lastCheckResult?: TerminalCheckResult;

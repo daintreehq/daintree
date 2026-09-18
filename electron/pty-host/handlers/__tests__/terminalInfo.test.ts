@@ -185,6 +185,14 @@ describe("mapTerminalInfo", () => {
     expect(result.worktreeId).toBeUndefined();
   });
 
+  it("forwards the output-progress timestamp, and leaves an unobserved one absent (#12428)", () => {
+    const ctx = createCtx();
+    expect(
+      mapTerminalInfo(makeTerminal({ lastOutputChangeAt: 4242 }), ctx).lastOutputChangeAt
+    ).toBe(4242);
+    expect(mapTerminalInfo(makeTerminal(), ctx).lastOutputChangeAt).toBeUndefined();
+  });
+
   it("emits exactly the field set the host response type declares", () => {
     // Compile-time only. Nearly every field on PtyHostTerminalInfo is optional,
     // so dropping one from the mapper still type-checks at all four call sites

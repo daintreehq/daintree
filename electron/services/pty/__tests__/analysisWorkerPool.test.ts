@@ -77,6 +77,7 @@ function makeDelegate(): WorkerAnalysisDelegate {
     getProcessState: () => null,
     getAgentContext: () => ({ agentLive: false, agentState: undefined }),
     onMirrorGeometry: vi.fn(),
+    onViewport: vi.fn(),
   };
 }
 

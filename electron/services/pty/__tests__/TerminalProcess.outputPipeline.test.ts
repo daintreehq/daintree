@@ -198,3 +198,78 @@ describe("TerminalProcess output pipeline ordering and throttling", () => {
     expect(snapshotSpy.mock.calls.length).toBe(afterDispose);
   });
 });
+
+describe("TerminalProcess output progress, in-thread (#12428)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    ptyOnDataCallback = null;
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllTimers();
+  });
+
+  const spinnerFrame = (glyph: string, seconds: number) =>
+    `\r\x1b[2K${glyph} Thinking… (${seconds}s · esc to interrupt)`;
+
+  it("stamps a content change once the burst settles, and not a spinner redraw", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+    const writtenAt = Date.now();
+
+    ptyOnDataCallback!("● The fix is in src/app.ts.\r\n");
+    await vi.advanceTimersByTimeAsync(250);
+    const stamped = terminal.getPublicState().lastOutputChangeAt;
+    // Sampled on the trailing timer, so after the write and before now.
+    expect(stamped).toBeGreaterThan(writtenAt);
+    expect(stamped).toBeLessThanOrEqual(Date.now());
+
+    // A frozen turn: only the working footer moves, for well past the sample
+    // cadence.
+    for (let i = 0; i < 10; i++) {
+      ptyOnDataCallback!(spinnerFrame(i % 2 === 0 ? "✻" : "✽", 12 + i));
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(stamped);
+
+    // New output lands beside the still-animating footer.
+    ptyOnDataCallback!(`\r\x1b[2KRunning the tests now.\r\n${spinnerFrame("✶", 23)}`);
+    await vi.advanceTimersByTimeAsync(250);
+    expect(terminal.getPublicState().lastOutputChangeAt).toBeGreaterThan(stamped!);
+
+    terminal.dispose();
+  });
+
+  it("does not report a resize's reflow as output", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!(`${"wrapped ".repeat(8)}\r\n`);
+    await vi.advanceTimersByTimeAsync(250);
+    const stamped = terminal.getPublicState().lastOutputChangeAt;
+    expect(stamped).toBeDefined();
+
+    // The 64-column line rewraps at 40. The footer redraw is what makes the
+    // in-thread path sample the reflowed screen.
+    terminal.resize(40, 24);
+    ptyOnDataCallback!(spinnerFrame("✻", 1));
+    await vi.advanceTimersByTimeAsync(250);
+    ptyOnDataCallback!(spinnerFrame("✽", 2));
+    await vi.advanceTimersByTimeAsync(2_000);
+    ptyOnDataCallback!(spinnerFrame("✶", 3));
+    await vi.advanceTimersByTimeAsync(250);
+
+    expect(terminal.getPublicState().lastOutputChangeAt).toBe(stamped);
+    terminal.dispose();
+  });
+
+  it("drops a pending sample when the terminal is disposed", async () => {
+    const terminal = createTerminal({ launchAgentId: "claude" });
+
+    ptyOnDataCallback!("output that never gets sampled\r\n");
+    await vi.advanceTimersByTimeAsync(1);
+    terminal.dispose();
+    await vi.advanceTimersByTimeAsync(500);
+
+    expect(terminal.getPublicState().lastOutputChangeAt).toBeUndefined();
+  });
+});

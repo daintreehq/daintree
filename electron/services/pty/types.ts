@@ -57,6 +57,11 @@ export interface TerminalPublicState {
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /**
+   * When the visible content last changed, ignoring recognised spinner and
+   * timer redraws (#12428). Absent until a change has been observed.
+   */
+  lastOutputChangeAt?: number;
   traceId?: string;
   analysisEnabled: boolean;
   lastInputTime: number;

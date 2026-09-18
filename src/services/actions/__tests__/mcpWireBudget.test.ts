@@ -428,7 +428,17 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // on develop under this branch. This PR's own spend is unchanged at 1_811 B
   // over whatever develop measures; the step from 54_100 is that constant plus
   // #12346's inherited baseline, not a wider spend here.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 55_900;
+  //
+  // 55_900 → 56_400 for #12428, measured at 56_400 B. `lastOutputChangeAt` lands
+  // on `terminal.getStatus` and both wait tools: 567 B, three copies of one
+  // 126 B description plus the `unavailableFields` enum member. The field is the
+  // whole fix. A spinner redraws for as long as a frozen turn sits there, so
+  // `agentState` and `lastTransitionAt` never change, and without this a caller
+  // can only tell a stalled agent from a busy one by pulling scrollback every
+  // round. The description stays on all three because the name alone reads as
+  // raw output time, and spinner redraws are exactly what it leaves out. It was
+  // trimmed from 152 B before raising.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 56_400;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -519,7 +529,10 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // Without that a short answer reads as a quiet terminal, which is the
   // misreading the issue was filed over. Both tools are on the external tier,
   // which absorbed the same spend inside its existing headroom.
-  const MAX_COHORT_PAYLOAD_BYTES = 214_300;
+  //
+  // 214_300 → 214_900 for #12428, measured at 214_853 B: the same 567 B as the
+  // external ceiling above, since all three tools are on both surfaces.
+  const MAX_COHORT_PAYLOAD_BYTES = 214_900;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

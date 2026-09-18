@@ -14,6 +14,51 @@ import {
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import { mapAgentStateToBusyState, mapAgentStateToIdleReason } from "./shared.js";
 import type { AgentAvailabilityStore } from "../AgentAvailabilityStore.js";
+import { getPtyClient } from "../../window/serviceRefs.js";
+
+/**
+ * Ceiling on the pty-host read that fills `lastOutputChangeAt` once a wait has
+ * resolved. The wait's own answer is already decided by then, so a stalled
+ * host costs the caller this much and the field, never the result.
+ */
+export const OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS = 500;
+
+/**
+ * Read when each terminal's visible content last changed (#12428), keyed by
+ * terminal id rather than agent id — several terminals share an agent type.
+ * A terminal whose record is missing, lacks the field, or does not answer
+ * before the shared deadline is simply left out.
+ */
+async function readOutputProgress(terminalIds: readonly string[]): Promise<Map<string, number>> {
+  const progress = new Map<string, number>();
+  const ptyClient = getPtyClient();
+  if (!ptyClient || terminalIds.length === 0) return progress;
+
+  let deadlineHandle: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<undefined>((resolve) => {
+    deadlineHandle = setTimeout(() => resolve(undefined), OUTPUT_PROGRESS_LOOKUP_TIMEOUT_MS);
+  });
+  try {
+    const readings = await Promise.all(
+      terminalIds.map((id) =>
+        Promise.race([
+          ptyClient.getTerminalAsync(id).then(
+            (record) => record?.lastOutputChangeAt,
+            () => undefined
+          ),
+          deadline,
+        ])
+      )
+    );
+    terminalIds.forEach((id, index) => {
+      const at = readings[index];
+      if (at !== undefined) progress.set(id, at);
+    });
+  } finally {
+    clearTimeout(deadlineHandle);
+  }
+  return progress;
+}
 
 /**
  * Classify a terminal we hold no agent mapping for. The store drops the mapping
@@ -37,7 +82,26 @@ export interface WaitUntilIdleOptions {
   maxTimeoutMs?: number;
 }
 
+/**
+ * Wait for one terminal to leave `working`, then attach its output progress.
+ *
+ * The progress read runs only after the wait has settled and released its
+ * subscriptions, so nothing arriving during it can change the answer. Only
+ * tracked terminals are read: an untracked id is one the store never mapped to
+ * an agent, and a closed one has no live screen left to report on.
+ */
 export async function handleWaitUntilIdle(
+  rawArgs: unknown,
+  signal: AbortSignal,
+  options?: WaitUntilIdleOptions
+): Promise<WaitUntilIdleResult> {
+  const result = await waitForTerminalIdle(rawArgs, signal, options);
+  if (result.trackingState !== "tracked") return result;
+  const lastOutputChangeAt = (await readOutputProgress([result.terminalId])).get(result.terminalId);
+  return lastOutputChangeAt === undefined ? result : { ...result, lastOutputChangeAt };
+}
+
+async function waitForTerminalIdle(
   rawArgs: unknown,
   signal: AbortSignal,
   options?: WaitUntilIdleOptions
@@ -384,6 +448,28 @@ function buildBatchResult(
  * may block for hours), same tier-clamped ceiling via `options.maxTimeoutMs`.
  */
 export async function handleWaitUntilIdleBatch(
+  rawArgs: unknown,
+  signal: AbortSignal,
+  options?: WaitUntilIdleOptions
+): Promise<WaitUntilIdleBatchResult> {
+  const result = await waitForBatchIdle(rawArgs, signal, options);
+  // Every row, settled or not: a row still `working` is the one whose output
+  // progress a caller most needs (#12428).
+  const trackedIds = result.results
+    .filter((entry) => entry.trackingState === "tracked")
+    .map((entry) => entry.terminalId);
+  const progress = await readOutputProgress(trackedIds);
+  if (progress.size === 0) return result;
+  return {
+    ...result,
+    results: result.results.map((entry) => {
+      const lastOutputChangeAt = progress.get(entry.terminalId);
+      return lastOutputChangeAt === undefined ? entry : { ...entry, lastOutputChangeAt };
+    }),
+  };
+}
+
+async function waitForBatchIdle(
   rawArgs: unknown,
   signal: AbortSignal,
   options?: WaitUntilIdleOptions
