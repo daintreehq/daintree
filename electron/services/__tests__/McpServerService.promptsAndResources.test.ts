@@ -1247,7 +1247,7 @@ describe("McpServerService", () => {
     it("serves a fitted scrollback read as parseable JSON rather than cutting it", async () => {
       // `terminal.getOutput` fits its compact JSON to the cap; indenting it for
       // the resource used to push it back over and into the head-first cut.
-      const base = { terminalId: "t-1", content: "", lineCount: 200, truncated: true };
+      const base = { terminalId: "t-1", content: "", lineCount: 1, truncated: true };
       const filler = "y".repeat(RESOURCE_TEXT_MAX_BYTES - JSON.stringify(base).length);
       const output = { ...base, content: filler };
       const dispatchMock = vi.fn((payload: DispatchRequest): ActionDispatchResult => {
@@ -1264,6 +1264,7 @@ describe("McpServerService", () => {
 
       const result = await client.readResource({ uri: "daintree://terminal/t-1/scrollback" });
       const content = result.contents[0] as { uri: string; mimeType: string; text: string };
+      expect(Buffer.byteLength(content.text, "utf8")).toBeLessThanOrEqual(RESOURCE_TEXT_MAX_BYTES);
       expect(JSON.parse(content.text)).toEqual(output);
     });
 

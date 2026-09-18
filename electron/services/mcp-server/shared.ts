@@ -1155,7 +1155,11 @@ const TAIL_TRUNCATION_MARKER = "[truncated]\n\n";
 export function truncateTextTail(text: string, maxBytes: number = RESOURCE_TEXT_MAX_BYTES): string {
   const buffer = Buffer.from(text, "utf8");
   if (buffer.length <= maxBytes) return text;
-  const budget = Math.max(0, maxBytes - Buffer.byteLength(TAIL_TRUNCATION_MARKER, "utf8"));
+  // The marker is ASCII, so a character slice is a byte slice.
+  if (maxBytes <= TAIL_TRUNCATION_MARKER.length) {
+    return TAIL_TRUNCATION_MARKER.slice(0, Math.max(0, maxBytes));
+  }
+  const budget = maxBytes - TAIL_TRUNCATION_MARKER.length;
   let start = buffer.length - budget;
   if (buffer[start - 1] !== 0x0a) {
     const newline = buffer.indexOf(0x0a, start);

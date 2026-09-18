@@ -521,14 +521,16 @@ describe("terminal.getStatus", () => {
     });
 
     expect(terminals[0]).toMatchObject({ recentOutput: "two\nthree", recentOutputTruncated: true });
-    expect(terminals[1]).toMatchObject({ recentOutput: "only", recentOutputTruncated: false });
+    expect(terminals[1]?.recentOutput).toBe("only");
+    expect(terminals[1]).not.toHaveProperty("recentOutputTruncated");
     expect(terminals[2]?.recentOutput).toBeNull();
     expect(terminals[2]).not.toHaveProperty("recentOutputTruncated");
   });
 
   it("fits a busy fleet's tails under the response cap, newest lines kept (#12450)", async () => {
-    const lines = Array.from({ length: 50 }, (_, i) => `row ${i} `.padEnd(600, "│"));
     const ids = ["t1", "t2", "t3", "t4"];
+    const linesFor = (id: string) =>
+      Array.from({ length: 50 }, (_, i) => `${id} row ${i} `.padEnd(600, "│"));
     panelStoreMock.getState.mockReturnValue({
       panelIds: ids,
       panelsById: Object.fromEntries(
@@ -536,7 +538,7 @@ describe("terminal.getStatus", () => {
       ),
     });
     getSerializedStatesMock.mockResolvedValue(
-      snapshotMap(Object.fromEntries(ids.map((id) => [id, lines.join("\n")])))
+      snapshotMap(Object.fromEntries(ids.map((id) => [id, linesFor(id).join("\n")])))
     );
 
     const result = await callGetStatus(setupActions(), { includeOutput: { lines: 50 } });
@@ -544,10 +546,11 @@ describe("terminal.getStatus", () => {
     expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
       MCP_RESPONSE_TEXT_MAX_BYTES
     );
-    expect(result.terminals).toHaveLength(4);
+    expect(result.terminals.map((t) => t.terminalId)).toEqual(ids);
     for (const entry of result.terminals) {
+      const lines = linesFor(entry.terminalId);
+      expect(entry.recentOutput).not.toBe("");
       const kept = (entry.recentOutput as string).split("\n");
-      expect(kept.length).toBeGreaterThan(0);
       expect(kept).toEqual(lines.slice(-kept.length));
       expect(entry.recentOutputTruncated).toBe(true);
       expect(entry.agentState).toBe("working");

@@ -278,6 +278,36 @@ describe("terminal.getOutput action", () => {
     expect(result.truncated).toBe(true);
   });
 
+  it("budgets preserved ANSI by its escaped size, not its raw size (#12450)", async () => {
+    const esc = String.fromCharCode(0x1b);
+    const segment = `${esc}[31mx${esc}[0m`;
+    const lines = Array.from({ length: 500 }, (_, i) => `${segment.repeat(6)} row ${i}`);
+    const raw = lines.join("\n");
+    // Fits raw, overruns once each ESC is written as a six-byte JSON escape.
+    expect(Buffer.byteLength(raw, "utf8")).toBeLessThan(MCP_RESPONSE_TEXT_MAX_BYTES);
+    expect(Buffer.byteLength(JSON.stringify(raw), "utf8")).toBeGreaterThan(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    mockGetSerializedState.mockResolvedValue(snapshotOf(raw));
+
+    const actions = await createRegistry();
+    const action = actions.get("terminal.getOutput")!();
+    const result = (await action.run(
+      { terminalId: "test-terminal", maxLines: 500, stripAnsi: false },
+      {}
+    )) as TerminalOutputResult & { content: string };
+
+    expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
+      MCP_RESPONSE_TEXT_MAX_BYTES
+    );
+    const kept = result.content.split("\n");
+    expect(kept).toEqual(lines.slice(-kept.length));
+    expect(result.content).toContain(esc);
+    expect(result.lineCount).toBe(kept.length);
+    expect(result.lineCount).toBeLessThan(500);
+    expect(result.truncated).toBe(true);
+  });
+
   it("enforces maxLines lower bound of 1", async () => {
     const mockBuffer = "line1\nline2\nline3";
     mockGetSerializedState.mockResolvedValue(snapshotOf(mockBuffer));

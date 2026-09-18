@@ -1605,7 +1605,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               recentOutputTruncated: {
                 description:
-                  "True when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept.",
+                  "Set when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept.",
                 type: "boolean",
               },
               armed: {

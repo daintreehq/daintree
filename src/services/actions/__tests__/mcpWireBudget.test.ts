@@ -511,7 +511,7 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // check delivery at all. The external ceiling above does not move — there the
   // owned pair replaced the unscoped one.
   //
-  // 214_000 → 214_300 for #12450, measured at 214_287 B. Terminal tails are now
+  // 214_000 → 214_300 for #12450, measured at 214_286 B. Terminal tails are now
   // fitted under the 50 KiB response budget instead of being cut into unparseable
   // JSON, so fewer lines can come back than were asked for, and the only way a
   // caller can tell is the output schema: `terminal.getStatus` gains

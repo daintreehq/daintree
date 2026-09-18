@@ -361,7 +361,7 @@ export async function buildViewlessTerminalStatus(
     if (includeOutput) {
       const tail = outputs.get(id) ?? null;
       entry.recentOutput = tail?.content ?? null;
-      if (tail) entry.recentOutputTruncated = tail.truncated;
+      if (tail?.truncated) entry.recentOutputTruncated = true;
     }
     return entry;
   });

@@ -528,7 +528,7 @@ export const TerminalStatusEntrySchema = z.object({
     .boolean()
     .optional()
     .describe(
-      "True when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept."
+      "Set when older output was left out, by `lines` or the 50 KiB response budget the terminals share; the newest lines are kept."
     ),
   armed: z
     .boolean()

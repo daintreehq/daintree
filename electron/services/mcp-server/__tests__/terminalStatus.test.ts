@@ -409,25 +409,35 @@ describe("buildViewlessTerminalStatus results", () => {
   });
 
   it("fits busy tails under the response cap, keeping each one's newest lines (#12450)", async () => {
-    const lines = Array.from({ length: 50 }, (_, i) => `row ${i} `.padEnd(600, "│"));
     const ids = ["t-1", "t-2", "t-3"];
+    const linesFor = (id: string) =>
+      Array.from({ length: 50 }, (_, i) => `${id} row ${i} `.padEnd(600, "│"));
     const d = deps(
       ids.map((id) => record({ id })),
-      { serialized: Object.fromEntries(ids.map((id) => [id, { data: lines.join("\n") }])) }
+      { serialized: Object.fromEntries(ids.map((id) => [id, { data: linesFor(id).join("\n") }])) }
     );
+    // A repeated id is its own row and spends its own share; an unknown one is
+    // an error-only row that must not grow output fields.
+    const requested = ["t-1", "t-2", "t-1", "missing", "t-3"];
 
     const result = await buildViewlessTerminalStatus(d, WORKSPACE, {
-      terminalIds: ids,
+      terminalIds: requested,
       includeOutput: { lines: 50 },
     });
 
     expect(Buffer.byteLength(JSON.stringify(result), "utf8")).toBeLessThanOrEqual(
       MCP_RESPONSE_TEXT_MAX_BYTES
     );
-    expect(result.terminals.map((t) => t.terminalId)).toEqual(ids);
-    for (const entry of result.terminals) {
+    expect(result.terminals.map((t) => t.terminalId)).toEqual(requested);
+    expect(d.ptyClient.getSerializedStateAsync).toHaveBeenCalledTimes(3);
+    const missing = result.terminals[3]!;
+    expect(missing.error).toBeDefined();
+    expect(missing).not.toHaveProperty("recentOutput");
+    expect(missing).not.toHaveProperty("recentOutputTruncated");
+    for (const entry of result.terminals.filter((t) => t.terminalId !== "missing")) {
+      const lines = linesFor(entry.terminalId);
+      expect(entry.recentOutput).not.toBe("");
       const kept = (entry.recentOutput as string).split("\n");
-      expect(kept.length).toBeGreaterThan(0);
       expect(kept).toEqual(lines.slice(-kept.length));
       expect(entry.recentOutputTruncated).toBe(true);
     }

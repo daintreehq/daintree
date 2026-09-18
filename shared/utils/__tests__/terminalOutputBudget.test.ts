@@ -169,8 +169,7 @@ describe("fitTerminalOutputResult", () => {
 function entry(id: string, recentOutput?: string | null, extra: Partial<TerminalStatusEntry> = {}) {
   const base: TerminalStatusEntry = { terminalId: id, agentId: null, agentState: null, ...extra };
   if (recentOutput === undefined) return base;
-  if (recentOutput === null) return { ...base, recentOutput };
-  return { ...base, recentOutput, recentOutputTruncated: false };
+  return { ...base, recentOutput };
 }
 
 function statusOf(terminals: TerminalStatusEntry[]): TerminalStatusResult {
@@ -205,8 +204,8 @@ describe("boundTerminalStatusOutput", () => {
       [a, busyA],
       [b, busyB],
     ] as const) {
+      expect(fitted!.recentOutput).not.toBe("");
       const kept = fitted!.recentOutput!.split("\n");
-      expect(kept.length).toBeGreaterThan(0);
       expect(kept).toEqual(lines.slice(-kept.length));
       expect(fitted!.recentOutputTruncated).toBe(true);
     }
@@ -229,6 +228,74 @@ describe("boundTerminalStatusOutput", () => {
     // terminals' unused share gives it nearly the whole budget.
     expect(fitted.length).toBeGreaterThan(40 * 1024);
     expect(bounded.terminals.slice(0, 20)).toEqual(quietTails);
+    for (const quiet of bounded.terminals.slice(0, 20)) {
+      expect(quiet).not.toHaveProperty("recentOutputTruncated");
+    }
+  });
+
+  it("charges flag bytes only for the tails it cuts, spending the rest", () => {
+    // Enough rows that reserving a flag on every one would cost ~5.8 KB.
+    const quiet = Array.from({ length: 200 }, (_, i) =>
+      entry(`quiet-${i}`.padEnd(40, "-"), `ok ${i}`, {
+        agentId: "claude",
+        agentState: "idle",
+        lastTransitionAt: 1_700_000_000_000 + i,
+        spawnedAt: 1_700_000_000_000,
+        exitCode: null,
+        armed: false,
+      })
+    );
+    const busy = numberedLines(400, 100);
+    const status = statusOf([...quiet, entry("busy", busy.join("\n"))]);
+    expect(bytesOf(status)).toBeGreaterThan(CAP);
+
+    const bounded = boundTerminalStatusOutput(status, CAP);
+
+    const bytes = bytesOf(bounded);
+    expect(bytes).toBeLessThanOrEqual(CAP);
+    // Unspent budget stays under one busy line plus the allocator's rounding.
+    expect(CAP - bytes).toBeLessThan(102 + 201);
+    expect(bounded.terminals.slice(0, 200)).toEqual(quiet);
+    expect(bounded.terminals.at(-1)!.recentOutputTruncated).toBe(true);
+  });
+
+  it("holds the cap, the newest-suffix rule, and honest flags across varied fleets", () => {
+    let seed = 12450;
+    const next = (bound: number) => {
+      seed = (seed * 48_271) % 2_147_483_647;
+      return seed % bound;
+    };
+    for (let round = 0; round < 60; round += 1) {
+      const terminals = Array.from({ length: 1 + next(40) }, (_, i) => {
+        const shape = next(4);
+        if (shape === 0) return entry(`t${i}`);
+        if (shape === 1) return entry(`t${i}`, null, { error: "e".repeat(next(200)) });
+        const lines = Array.from(
+          { length: 1 + next(50) },
+          (_, j) => `${ESC}[3${j % 8}m${i}:${j} ${"🌳é界".repeat(next(30))}${ESC}[0m`
+        );
+        return entry(`t${i}`, lines.join("\n"), { agentState: "working" });
+      });
+      const status = statusOf(terminals);
+
+      const bounded = boundTerminalStatusOutput(status, CAP);
+
+      expect(bytesOf(bounded)).toBeLessThanOrEqual(CAP);
+      bounded.terminals.forEach((fitted, i) => {
+        const original = status.terminals[i]!;
+        if (fitted === original) {
+          expect(fitted).not.toHaveProperty("recentOutputTruncated");
+          return;
+        }
+        expect(fitted.recentOutputTruncated).toBe(true);
+        expect(original.recentOutput!.endsWith(fitted.recentOutput!)).toBe(true);
+        expect(hasOrphanSurrogate(fitted.recentOutput!)).toBe(false);
+        expect({ ...fitted, recentOutput: undefined, recentOutputTruncated: undefined }).toEqual({
+          ...original,
+          recentOutput: undefined,
+        });
+      });
+    }
   });
 
   it("empties and flags every tail when the status fields alone overrun the cap", () => {
@@ -246,7 +313,7 @@ describe("boundTerminalStatusOutput", () => {
     expect(bounded.terminals[0]!.error).toBe(status.terminals[0]!.error);
   });
 
-  it("stays within the cap when an entry carries no truncation flag yet", () => {
+  it("flags a cut tail that carried no flag yet and stays within the cap", () => {
     const lines = numberedLines(100, 1000);
     const bare: TerminalStatusEntry = {
       terminalId: "t",

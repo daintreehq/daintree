@@ -515,7 +515,7 @@ export function registerTerminalQueryActions(
               // last-N window and recentOutput reads as empty even when idle.
               const tail = tailCapturedOutput(serialized.data, effectiveLines, stripAnsi);
               entry.recentOutput = tail.content;
-              entry.recentOutputTruncated = tail.truncated;
+              if (tail.truncated) entry.recentOutputTruncated = true;
             }
           }
         }

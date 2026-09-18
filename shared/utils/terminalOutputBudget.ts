@@ -129,6 +129,9 @@ function allocateFairly(costs: readonly number[], total: number): number[] {
   return allowances;
 }
 
+/** What setting the flag adds to an entry that lacks the key. */
+const TRUNCATED_FLAG_BYTES = utf8ByteLength(',"recentOutputTruncated":true');
+
 /**
  * Fit every entry's `recentOutput` so a status snapshot's compact JSON stays
  * within `maxBytes`.
@@ -136,8 +139,16 @@ function allocateFairly(costs: readonly number[], total: number): number[] {
  * Terminals share one response, so the bytes left after every other field are
  * split fairly between their tails and each keeps its own newest lines. Lines
  * are never ranked across terminals — nothing orders one pane's output against
- * another's. When the status fields alone overrun the cap every tail comes back
- * empty and flagged, and the transport cap handles the rest as before.
+ * another's.
+ *
+ * `recentOutputTruncated` is only ever set to `true`, and only on the tails that
+ * are cut, so a whole tail pays nothing for it — at fleet scale a flag on every
+ * row is what would tip a snapshot over. The flags a cut adds come out of the
+ * same budget, which can cut more tails; that repeats until the cut set stops
+ * growing, which it must within one round per terminal. When the status fields
+ * alone overrun the cap every tail comes back empty and flagged, and the
+ * transport cap handles the rest as before; that needs a narrower query, which
+ * no tail budget can stand in for.
  */
 export function boundTerminalStatusOutput<T extends { terminals: TerminalStatusEntry[] }>(
   result: T,
@@ -148,34 +159,45 @@ export function boundTerminalStatusOutput<T extends { terminals: TerminalStatusE
   const tails = result.terminals.map((entry) =>
     typeof entry.recentOutput === "string" ? entry.recentOutput : null
   );
-  // Measured with `false`, the longer spelling, so a flag that flips to `true`
-  // when its tail is cut can only shrink the total.
+  const costs = tails.map((tail) => (tail === null ? 0 : jsonStringBytes(tail)));
   const skeleton = {
     ...result,
     terminals: result.terminals.map((entry, index) =>
-      tails[index] === null
-        ? entry
-        : {
-            ...entry,
-            recentOutput: "",
-            recentOutputTruncated: entry.recentOutputTruncated ?? false,
-          }
+      tails[index] === null ? entry : { ...entry, recentOutput: "" }
     ),
   };
-  const available = maxBytes - utf8ByteLength(JSON.stringify(skeleton));
-  const costs = tails.map((tail) => (tail === null ? 0 : jsonStringBytes(tail)));
-  const allowances = allocateFairly(costs, available);
+  const skeletonBytes = utf8ByteLength(JSON.stringify(skeleton));
+  const needsFlagBytes = result.terminals.map((entry) => entry.recentOutputTruncated === undefined);
+
+  const cut = costs.map(() => false);
+  const flagBytes = () =>
+    cut.reduce(
+      (sum, isCut, index) => sum + (isCut && needsFlagBytes[index] ? TRUNCATED_FLAG_BYTES : 0),
+      0
+    );
+  let allowances = allocateFairly(costs, maxBytes - skeletonBytes);
+  for (;;) {
+    let grew = false;
+    for (let index = 0; index < costs.length; index += 1) {
+      if (!cut[index] && costs[index]! > allowances[index]!) {
+        cut[index] = true;
+        grew = true;
+      }
+    }
+    if (!grew) break;
+    allowances = allocateFairly(costs, maxBytes - skeletonBytes - flagBytes());
+  }
 
   return {
     ...result,
     terminals: result.terminals.map((entry, index) => {
       const tail = tails[index];
-      if (tail === null || costs[index]! <= allowances[index]!) return entry;
+      if (typeof tail !== "string" || costs[index]! <= allowances[index]!) return entry;
       const fitted = fitTailToJsonBytes(
-        { content: tail, lineCount: 0, truncated: entry.recentOutputTruncated ?? false },
+        { content: tail, lineCount: 0, truncated: true },
         allowances[index]!
       );
-      return { ...entry, recentOutput: fitted.content, recentOutputTruncated: fitted.truncated };
+      return { ...entry, recentOutput: fitted.content, recentOutputTruncated: true };
     }),
   };
 }

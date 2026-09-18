@@ -310,9 +310,11 @@ describe("SDK conformance", () => {
 });
 
 describe("terminal tails fitted before the cap (#12450)", () => {
-  const lines = Array.from({ length: 1000 }, (_, i) => `row ${i} `.padEnd(160, "│"));
+  const linesFor = (id: string) =>
+    Array.from({ length: 1000 }, (_, i) => `${id} row ${i} `.padEnd(160, "│"));
 
   it("ships an oversized getOutput tail whole: parseable, structured, not an error", () => {
+    const lines = linesFor("t-1");
     const fitted = fitTerminalOutputResult(
       { terminalId: "t-1", content: lines.join("\n"), lineCount: 1000, truncated: false },
       TOOL_RESULT_TEXT_MAX_BYTES
@@ -320,20 +322,23 @@ describe("terminal tails fitted before the cap (#12450)", () => {
     const result = buildToolCallResult(fitted, { structuredContent: fitted });
 
     expect(result.isError).toBeUndefined();
-    expect(result.structuredContent).toEqual(fitted);
+    expect(byteLength(result)).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
     const parsed = JSON.parse(textOf(result)) as typeof fitted;
-    expect(parsed.content.split("\n").at(-1)).toBe(lines.at(-1));
+    expect(parsed).toEqual(result.structuredContent);
+    const kept = parsed.content.split("\n");
+    expect(kept).toEqual(lines.slice(-kept.length));
+    expect(parsed.lineCount).toBe(kept.length);
     expect(parsed.truncated).toBe(true);
   });
 
-  it("ships an oversized status snapshot whole with every tail's newest line", () => {
+  it("ships an oversized status snapshot whole with every tail's own newest line", () => {
+    const ids = ["a", "b", "c"];
     const status: TerminalStatusResult = {
-      terminals: ["a", "b", "c"].map((id) => ({
+      terminals: ids.map((id) => ({
         terminalId: id,
         agentId: "claude",
         agentState: "working",
-        recentOutput: lines.slice(-50).join("\n"),
-        recentOutputTruncated: true,
+        recentOutput: linesFor(id).slice(-50).join("\n"),
       })),
       source: "pty",
       unavailableFields: ["armed", "lastCheckResult"],
@@ -344,9 +349,16 @@ describe("terminal tails fitted before the cap (#12450)", () => {
     });
 
     expect(result.isError).toBeUndefined();
-    expect(result.structuredContent).toEqual(bounded);
-    for (const entry of bounded.terminals) {
-      expect(entry.recentOutput?.split("\n").at(-1)).toBe(lines.at(-1));
+    expect(byteLength(result)).toBeLessThanOrEqual(TOOL_RESULT_TEXT_MAX_BYTES);
+    const parsed = JSON.parse(textOf(result)) as TerminalStatusResult;
+    expect(parsed).toEqual(result.structuredContent);
+    expect(parsed.terminals.map((t) => t.terminalId)).toEqual(ids);
+    for (const entry of parsed.terminals) {
+      const lines = linesFor(entry.terminalId);
+      const kept = (entry.recentOutput as string).split("\n");
+      expect(entry.recentOutput).not.toBe("");
+      expect(kept).toEqual(lines.slice(-kept.length));
+      expect(entry.recentOutputTruncated).toBe(true);
     }
   });
 });
