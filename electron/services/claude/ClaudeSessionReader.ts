@@ -19,7 +19,7 @@
  */
 
 import { constants as fsConstants, type Stats } from "fs";
-import { lstat, open, readdir, realpath, type FileHandle } from "fs/promises";
+import { lstat, open, readdir, realpath, stat, type FileHandle } from "fs/promises";
 import path from "path";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "../../../shared/config/mcpLimits.js";
 import {
@@ -49,6 +49,19 @@ const CHUNK_BYTES = 256 * 1024;
 const MAX_SCAN_BYTES = 8 * 1024 * 1024;
 /** Cap on any id, name or stop reason lifted out of a record. */
 const FIELD_MAX_CHARS = 256;
+/**
+ * Nesting a returned question input may have. The transport drops a whole
+ * structured result past 100 levels, and the envelope spends a few of them
+ * before the input starts, so an input past this is omitted rather than
+ * allowed to cost the caller everything else.
+ */
+const TOOL_INPUT_MAX_DEPTH = 32;
+/**
+ * How Claude Code records a local slash command it ran itself — `/exit`,
+ * `/model` — as user records that are not marked meta. They are bookkeeping,
+ * not something said to the agent.
+ */
+const LOCAL_COMMAND_PREFIXES = ["<command-name>", "<command-message>", "<local-command-"];
 
 /** Injection seams for tests: the step and the ceiling, nothing else. */
 export interface ClaudeSessionReaderOptions {
@@ -93,7 +106,7 @@ async function lstatOrNull(target: string) {
 async function findTranscript(
   location: ClaudeSessionLocation,
   signal: AbortSignal | undefined
-): Promise<string | null> {
+): Promise<{ file: string; rootReal: string } | null> {
   const { projectsRoot, cwd, sessionId } = location;
   let rootReal: string;
   try {
@@ -109,7 +122,7 @@ async function findTranscript(
     (await lstatOrNull(path.join(direct, name))) &&
     (await isContainedDirectory(direct, rootReal))
   ) {
-    return path.join(direct, name);
+    return { file: path.join(direct, name), rootReal };
   }
 
   let entries: string[];
@@ -132,29 +145,48 @@ async function findTranscript(
       failure ??= error;
       continue;
     }
-    if (await isContainedDirectory(dir, rootReal)) return path.join(dir, name);
+    if (await isContainedDirectory(dir, rootReal)) return { file: path.join(dir, name), rootReal };
   }
   if (failure !== undefined) throw failure;
   return null;
 }
 
+function isWithin(rootReal: string, target: string): boolean {
+  const relative = path.relative(rootReal, target);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+function sameFile(a: Stats, b: Stats): boolean {
+  return a.ino === b.ino && a.dev === b.dev;
+}
+
 /**
  * Open the transcript through one verified descriptor, or return null when it
- * is not a regular file.
+ * is not a file this reader will trust.
  *
  * `lstat` refuses a symlink planted where the transcript should be, which
- * `stat` would follow to some other session's file. The descriptor is then
- * checked against what was `lstat`ed, so a swap between the check and the open
- * reads nothing, and every byte after that comes from this handle.
+ * `stat` would follow to some other session's file, and the descriptor is then
+ * checked against what was `lstat`ed, so a leaf swapped between the two reads
+ * nothing. `O_NOFOLLOW` covers the last path component only, though: a project
+ * directory swapped for a symlink after the containment check would carry the
+ * open outside the store. So once the file is open, its real path must still
+ * lie inside the store and still name the file the descriptor holds. Every
+ * byte after that comes from this handle.
  */
-async function openVerified(file: string): Promise<{ handle: FileHandle; stats: Stats } | null> {
+async function openVerified(
+  file: string,
+  rootReal: string
+): Promise<{ handle: FileHandle; stats: Stats } | null> {
   const checked = await lstat(file);
   if (!checked.isFile()) return null;
   const handle = await open(file, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
   try {
     const stats = await handle.stat();
-    if (stats.isFile() && stats.ino === checked.ino && stats.dev === checked.dev) {
-      return { handle, stats };
+    if (stats.isFile() && sameFile(stats, checked)) {
+      const real = await realpath(file);
+      if (isWithin(rootReal, real) && sameFile(await stat(real), stats)) {
+        return { handle, stats };
+      }
     }
   } catch (error) {
     await handle.close();
@@ -251,8 +283,13 @@ interface SessionRecord {
   type: string | null;
   subtype: string | null;
   isSidechain: boolean;
-  /** Harness-injected, compaction summaries included — nothing anyone said. */
+  /**
+   * Bookkeeping rather than conversation: meta records, compaction summaries
+   * and the echo of a local slash command. Nothing said to the agent or by it.
+   */
   isMeta: boolean;
+  /** Something said to the agent — text or any other non-result block — whatever else the record carries. */
+  isPrompt: boolean;
   timestamp: number | null;
   message: { content?: unknown } | null;
   messageId: string | null;
@@ -265,12 +302,19 @@ function boundedString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value.slice(0, FIELD_MAX_CHARS) : null;
 }
 
+function isLocalCommandEcho(content: unknown): boolean {
+  const first = Array.isArray(content) ? (content[0] as { text?: unknown } | undefined)?.text : content;
+  if (typeof first !== "string") return false;
+  const text = first.trimStart();
+  return LOCAL_COMMAND_PREFIXES.some((prefix) => text.startsWith(prefix));
+}
+
 /**
  * The subagent parser drops everything this one needs — the message id, the
  * sidechain and meta flags, and both halves of every tool call — so it is a
  * parser of its own rather than a widened copy of that one.
  */
-export function parseSessionRecord(line: string): SessionRecord | null {
+function parseSessionRecord(line: string): SessionRecord | null {
   const trimmed = line.trim();
   if (!trimmed) return null;
   let parsed: unknown;
@@ -291,10 +335,16 @@ export function parseSessionRecord(line: string): SessionRecord | null {
   const toolUses: ToolUse[] = [];
   const toolResultIds: string[] = [];
   const content = message?.content;
+  // A record can carry a tool result and something the user typed together;
+  // the result answers a call, and the rest is still a prompt.
+  let isPrompt = typeof content === "string" && content.trim().length > 0;
   if (Array.isArray(content)) {
     for (const block of content) {
       if (!block || typeof block !== "object") continue;
       const entry = block as Record<string, unknown>;
+      if (entry.type !== "tool_result" && entry.type !== "tool_use") {
+        isPrompt ||= entry.type !== "text" || (typeof entry.text === "string" && entry.text.trim().length > 0);
+      }
       if (entry.type === "tool_use") {
         const id = typeof entry.id === "string" ? entry.id : "";
         const name = boundedString(entry.name);
@@ -314,7 +364,9 @@ export function parseSessionRecord(line: string): SessionRecord | null {
     type: typeof record.type === "string" ? record.type : null,
     subtype: typeof record.subtype === "string" ? record.subtype : null,
     isSidechain: record.isSidechain === true,
-    isMeta: record.isMeta === true || record.isCompactSummary === true,
+    isMeta:
+      record.isMeta === true || record.isCompactSummary === true || isLocalCommandEcho(content),
+    isPrompt,
     timestamp: Number.isFinite(timestamp) ? timestamp : null,
     message: message ? { content } : null,
     messageId:
@@ -418,6 +470,19 @@ export function fitWithinResponseCap(
  * before it can answer. One that is too large is omitted whole rather than
  * cut: a question with half its options is worse than a name and an id.
  */
+function nestingExceeds(value: unknown, maxDepth: number): boolean {
+  const pending: { node: unknown; depth: number }[] = [{ node: value, depth: 1 }];
+  while (pending.length > 0) {
+    const { node, depth } = pending.pop()!;
+    if (node === null || typeof node !== "object") continue;
+    if (depth > maxDepth) return true;
+    for (const child of Array.isArray(node) ? node : Object.values(node)) {
+      pending.push({ node: child, depth: depth + 1 });
+    }
+  }
+  return false;
+}
+
 function projectToolUses(newestFirst: ToolUse[]): AgentUnansweredToolUse[] {
   let inputBytes = 0;
   const kept = newestFirst.slice(0, LAST_MESSAGE_TOOL_USE_LIMIT).map((use) => {
@@ -434,7 +499,8 @@ function projectToolUses(newestFirst: ToolUse[]): AgentUnansweredToolUse[] {
     const bytes = wireBytes(input);
     if (
       bytes > LAST_MESSAGE_TOOL_INPUT_MAX_BYTES ||
-      inputBytes + bytes > LAST_MESSAGE_TOOL_INPUTS_TOTAL_MAX_BYTES
+      inputBytes + bytes > LAST_MESSAGE_TOOL_INPUTS_TOTAL_MAX_BYTES ||
+      nestingExceeds(input, TOOL_INPUT_MAX_DEPTH)
     ) {
       return projected;
     }
@@ -479,11 +545,11 @@ export async function readClaudeLastMessage(
   let handle: FileHandle | null = null;
   try {
     signal?.throwIfAborted();
-    const file = await findTranscript(location, signal);
+    const transcript = await findTranscript(location, signal);
     // Claude Code writes the file with the first message, so a session nobody
     // has typed into has nothing on record yet.
-    if (!file) return unavailable("no-message");
-    const opened = await openVerified(file);
+    if (!transcript) return unavailable("no-message");
+    const opened = await openVerified(transcript.file, transcript.rootReal);
     if (!opened) return unavailable("store-unreadable");
     handle = opened.handle;
     const { stats } = opened;
@@ -493,11 +559,11 @@ export async function readClaudeLastMessage(
     const seenToolUses = new Set<string>();
     const unanswered: ToolUse[] = [];
     let found: FoundMessage | null = null;
-    // What was read before the reply was found, and so is newer than it. The
-    // assistant ids are kept rather than counted because the reply's own later
-    // blocks — a question after its prose — are read first and are not newer
-    // than the message they belong to.
-    let promptFollows = false;
+    // What was read before the reply was found, and so is newer than it: a
+    // prompt or a tool result sets the first; the assistant ids are kept rather
+    // than counted because the reply's own later blocks — a question after its
+    // prose — are read first and are not newer than the message they belong to.
+    let userFollows = false;
     const laterAssistantIds: (string | null)[] = [];
 
     const collectToolUses = (record: SessionRecord): void => {
@@ -518,13 +584,19 @@ export async function readClaudeLastMessage(
 
       if (record.type === "user") {
         for (const id of record.toolResultIds) answered.add(id);
-        if (record.isMeta || record.toolResultIds.length > 0) continue;
-        // A prompt older than the reply is where the reply began.
-        if (found) {
-          found.complete = true;
-          break;
+        if (record.isMeta) continue;
+        if (record.isPrompt) {
+          // A prompt older than the reply is where the reply began.
+          if (found) {
+            found.complete = true;
+            break;
+          }
+          userFollows = true;
+          continue;
         }
-        promptFollows = true;
+        // A bare result read before the reply is activity after its text; one
+        // read after it sits between the reply's own records and is older.
+        if (!found && record.toolResultIds.length > 0) userFollows = true;
         continue;
       }
 
@@ -588,7 +660,7 @@ export async function readClaudeLastMessage(
       unansweredToolUses: projectToolUses(unanswered),
       newerRecordsFollow:
         state.partialTail ||
-        promptFollows ||
+        userFollows ||
         laterAssistantIds.some((id) => id === null || id !== found?.id),
       fileUpdatedAt: Math.round(stats.mtimeMs),
     });

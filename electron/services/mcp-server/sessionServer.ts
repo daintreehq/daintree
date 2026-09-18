@@ -1770,6 +1770,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           try {
             const result = await deps[ownedResource.handler](ownedResourceId, extra.signal);
             outcome = { kind: "result", value: { ok: true, result } };
+            // The same success bookkeeping the delegated owned tools get on
+            // the renderer path: a grant that admitted the call slides its
+            // window, and the session's idle timer restarts.
+            if (grantIssuedAt !== undefined || nativeGrantId !== undefined) {
+              if (grantIssuedAt !== undefined) {
+                sessionStore.grantCache.refresh(sessionId, actionId, grantIssuedAt);
+              }
+              if (nativeGrantId !== undefined) {
+                sessionStore.grantCache.refreshNativeGrant(nativeGrantId);
+              }
+              if (sessionStore.sessions.has(sessionId)) {
+                sessionStore.resetIdleTimer(sessionId);
+              } else if (sessionStore.httpSessions.has(sessionId)) {
+                sessionStore.resetHttpIdleTimer(sessionId);
+              }
+            }
             return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
             });

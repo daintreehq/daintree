@@ -68,9 +68,15 @@ export interface AgentLastMessageOk {
   provider: SubagentProvider;
   /** Null when no reply with text was on record but an unanswered tool use was. */
   message: AgentLastMessage | null;
-  /** Oldest first. */
+  /**
+   * Calls made in or after `message` — or anywhere, when there is none — with
+   * no result later in the file. Oldest first.
+   */
   unansweredToolUses: AgentUnansweredToolUse[];
-  /** Conversation records newer than `message` exist, or the last line was still being written. */
+  /**
+   * A prompt, a tool result or another message follows the text of `message`,
+   * or the last line was still being written.
+   */
   newerRecordsFollow: boolean;
   fileUpdatedAt: number;
 }

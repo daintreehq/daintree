@@ -24,6 +24,7 @@ import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
 import { ResourceOwnershipLedger } from "../resourceOwnership.js";
+import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
 import {
   buildToolError,
   buildMcpErrorPayload,
@@ -7234,7 +7235,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     });
   });
   describe("terminal.readLastMessageOwned (#12479)", () => {
-    const READ_RESULT = {
+    const READ_RESULT: AgentLastMessageResult = {
       status: "ok",
       provider: "claude",
       message: {
@@ -7251,7 +7252,8 @@ describe("session-scoped resource ownership (#11909)", () => {
 
     function readHarness(
       sessionId: string,
-      read: () => Promise<unknown> = () => Promise.resolve(READ_RESULT)
+      read: SessionServerDeps["handleTerminalReadLastMessageOwned"] = () =>
+        Promise.resolve(READ_RESULT)
     ) {
       const handleTerminalReadLastMessageOwned = vi.fn(read);
       const h = harness(sessionId, {}, { handleTerminalReadLastMessageOwned });
@@ -7341,7 +7343,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     // An unavailable answer is still an answer — the caller asked and was told
     // why not — so it is a structured success, not a tool error.
     it("returns an unavailable answer as a structured result", async () => {
-      const unavailable = { status: "unavailable", reason: "store-unknown" };
+      const unavailable: AgentLastMessageResult = { status: "unavailable", reason: "store-unknown" };
       const { server } = readHarness("s-read-unavailable", () => Promise.resolve(unavailable));
 
       const result = await callTool(server, {
@@ -7368,6 +7370,47 @@ describe("session-scoped resource ownership (#11909)", () => {
           outcome: { kind: "result", value: { ok: true, result: READ_RESULT } },
         })
       );
+    });
+
+    // Ownership records carry the workspace the panel was created in, and a
+    // session rebound elsewhere is refused before anything is read.
+    it("refuses a panel recorded under another workspace, without reading", async () => {
+      const { store, server, handleTerminalReadLastMessageOwned } = readHarness("s-read-rebound");
+      store.resourceOwnership.record(
+        "s-read-rebound",
+        [{ kind: "terminal", id: "terminal-a" }],
+        "ws-a"
+      );
+      store.sessionWorkspaceMap.set("s-read-rebound", "ws-b");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-a" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+    });
+
+    it("slides a native grant that covered the read, as the delegated owned tools do", async () => {
+      const { store, server } = readHarness("s-read-grant");
+      const grant = store.grantCache.issueNativeGrant({
+        sessionId: "s-read-grant",
+        actorId: "help-1",
+        actorType: "help-session",
+        allowedTools: ["terminal.readLastMessageOwned"],
+        maxUses: 3,
+      });
+      const refresh = vi.spyOn(store.grantCache, "refreshNativeGrant");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(refresh).toHaveBeenCalledWith(grant.id);
     });
 
     it("reports a failed read as an execution error, audited as a throw", async () => {

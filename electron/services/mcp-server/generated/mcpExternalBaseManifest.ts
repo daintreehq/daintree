@@ -2088,11 +2088,12 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 additionalProperties: false,
               },
               description:
-                "Tool calls with no result later in the file, oldest first, at most 8. Not proof the agent is waiting on one now.",
+                "Calls made in or after the message with no result later in the file, oldest first, at most 8. Not proof the agent is waiting on one now.",
             },
             newerRecordsFollow: {
               type: "boolean",
-              description: "More conversation, or a line still being written, follows the message.",
+              description:
+                "A prompt, tool result or later message follows the text, or a line is still being written.",
             },
             fileUpdatedAt: {
               type: "number",
