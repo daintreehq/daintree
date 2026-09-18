@@ -1022,4 +1022,428 @@ describe("WorktreeMonitor", () => {
       monitor.stop();
     });
   });
+
+  describe("backgrounded project (#12459)", () => {
+    const WATCH_CONFIG: WorktreeMonitorConfig = {
+      ...TEST_CONFIG,
+      gitWatchEnabled: true,
+    };
+    const ACTIVE_WORKTREE: Worktree = { ...TEST_WORKTREE, isCurrent: true };
+
+    beforeEach(() => {
+      mockWatcherStartResult = true;
+      mockGetWorktreeChangesWithStats.mockResolvedValue({
+        worktreeId: "/test/worktree",
+        rootPath: "/test",
+        changes: [],
+        changedFileCount: 0,
+        lastUpdated: Date.now(),
+      });
+    });
+
+    function statusCalls(): number {
+      return mockGetWorktreeChangesWithStats.mock.calls.length;
+    }
+
+    function fireGitChange(): void {
+      const onChange = capturedWatcherOptions?.onChange as (() => void) | undefined;
+      expect(onChange).toBeDefined();
+      onChange?.();
+    }
+
+    it("pause tears down the focused worktree's recursive watcher and a straggling event runs no status", async () => {
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.hasWatcher).toBe(true);
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: true });
+
+      monitor.pausePolling();
+      expect(monitor.hasWatcher).toBe(false);
+      // Poll timer cancelled too, not merely a timer that declines when it fires.
+      expect(vi.getTimerCount()).toBe(0);
+
+      // Clear the self-trigger cooldown so the event would otherwise force a
+      // refresh straight away, then deliver it through the retired watcher.
+      await vi.advanceTimersByTimeAsync(2_000);
+      const before = statusCalls();
+      fireGitChange();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(statusCalls()).toBe(before);
+      monitor.stop();
+    });
+
+    it("resume re-arms the watcher and runs exactly one forced catch-up pass", async () => {
+      const callbacks = makeCallbacks();
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, callbacks, "main");
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.pausePolling();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      const before = statusCalls();
+      const armsBefore = capturedWatcherOptionsHistory.length;
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(monitor.hasWatcher).toBe(true);
+      expect(capturedWatcherOptionsHistory.length).toBe(armsBefore + 1);
+      expect(capturedWatcherOptionsHistory.at(-1)).toMatchObject({ watchWorktree: true });
+      expect(statusCalls()).toBe(before + 1);
+      // Recursive coverage was down for the whole pause, so the stat pre-check
+      // can't be trusted — the catch-up must be forced.
+      expect(mockGetWorktreeChangesWithStats.mock.calls.at(-1)?.[1]).toMatchObject({
+        forceRefresh: true,
+      });
+      // The file browser is told its listings may have missed writes.
+      expect(
+        vi.mocked(callbacks.onUpdate).mock.calls.at(-1)?.[0]?.workingTreeChangedAt
+      ).toBeGreaterThan(0);
+
+      // Then back to the normal recursive heartbeat: nothing early, one pass at 5 min.
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(statusCalls()).toBe(before + 1);
+      await vi.advanceTimersByTimeAsync(241_000);
+      expect(statusCalls()).toBe(before + 2);
+      monitor.stop();
+    });
+
+    it("a monitor paused before start never arms a watcher or a poll loop", async () => {
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      monitor.pausePolling();
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(watcherStartCallCount).toBe(0);
+      expect(monitor.hasWatcher).toBe(false);
+      // The one-shot initial status still lands so the card has data.
+      expect(statusCalls()).toBe(1);
+
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(statusCalls()).toBe(1);
+      monitor.stop();
+    });
+
+    it("pause leaves an agent-active worktree's watcher and status work alone", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      monitor.agentActive = true;
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const armsBefore = capturedWatcherOptionsHistory.length;
+
+      monitor.pausePolling();
+
+      expect(monitor.hasWatcher).toBe(true);
+      expect(capturedWatcherOptionsHistory.length).toBe(armsBefore);
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: true });
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      const before = statusCalls();
+      fireGitChange();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statusCalls()).toBe(before + 1);
+
+      // Its heartbeat keeps running without any watcher event.
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(statusCalls()).toBe(before + 2);
+      monitor.stop();
+    });
+
+    it("an agent past the recursive cap keeps git-only plus the 60s elevated poll through a pause", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      monitor.agentActive = true;
+      monitor.setRecursiveWatchBudgetAllowed(false);
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: false });
+
+      monitor.pausePolling();
+      expect(monitor.hasWatcher).toBe(true);
+      const before = statusCalls();
+      await vi.advanceTimersByTimeAsync(61_000);
+
+      expect(statusCalls()).toBe(before + 1);
+      // No recursive coverage, so the elevated poll forces a real status.
+      expect(mockGetWorktreeChangesWithStats.mock.calls.at(-1)?.[1]).toMatchObject({
+        forceRefresh: true,
+      });
+      monitor.stop();
+    });
+
+    it("an agent that finishes while paused lets go of its watcher; resume brings it back with one pass", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      monitor.agentActive = true;
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.pausePolling();
+
+      const before = statusCalls();
+      monitor.agentActive = false;
+
+      // Released at once — no 3s downgrade settle, and no "final" refresh on a
+      // project nobody is looking at.
+      expect(monitor.hasWatcher).toBe(false);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(statusCalls()).toBe(before);
+
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.hasWatcher).toBe(true);
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: false });
+      expect(statusCalls()).toBe(before + 1);
+      monitor.stop();
+    });
+
+    it("an agent that starts while paused gets its recursive watcher and poll loop back", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await flushInitialStatus();
+      monitor.pausePolling();
+      expect(monitor.hasWatcher).toBe(false);
+
+      const before = statusCalls();
+      monitor.agentActive = true;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(monitor.hasWatcher).toBe(true);
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: true });
+      expect(statusCalls()).toBe(before + 1);
+
+      // The poll loop is back too: the recursive heartbeat fires at 5 min.
+      await vi.advanceTimersByTimeAsync(301_000);
+      expect(statusCalls()).toBe(before + 2);
+      monitor.stop();
+    });
+
+    it("a status pass in flight at resume keeps the catch-up instead of dropping it", async () => {
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.pausePolling();
+
+      // An explicit refresh while paused is still running when the project comes back.
+      let release!: () => void;
+      mockGetWorktreeChangesWithStats.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({
+                worktreeId: "/test/worktree",
+                rootPath: "/test",
+                changes: [],
+                changedFileCount: 0,
+                lastUpdated: Date.now(),
+              });
+          })
+      );
+      const refresh = monitor.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+      const before = statusCalls();
+
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statusCalls()).toBe(before);
+
+      release();
+      await refresh;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statusCalls()).toBe(before + 1);
+      monitor.stop();
+    });
+
+    it("a deferred catch-up that fails does not escape as an unhandled rejection", async () => {
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.pausePolling();
+
+      let release!: () => void;
+      mockGetWorktreeChangesWithStats
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              release = () =>
+                resolve({
+                  worktreeId: "/test/worktree",
+                  rootPath: "/test",
+                  changes: [],
+                  changedFileCount: 0,
+                  lastUpdated: Date.now(),
+                });
+            })
+        )
+        .mockRejectedValueOnce(new Error("git status failed"));
+      const refresh = monitor.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+      const before = statusCalls();
+
+      // Parked behind the in-flight pass, then drained into a pass that fails.
+      monitor.resumePolling();
+      release();
+      await refresh;
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(statusCalls()).toBe(before + 1);
+      expect(monitor.getSnapshot().mood).toBe("error");
+      monitor.stop();
+    });
+
+    it("rapid background/foreground flips while the poll queue is busy run one catch-up", async () => {
+      const { default: PQueue } = await import("p-queue");
+      const queue = new PQueue({ concurrency: 1 });
+      const monitor = new WorktreeMonitor(
+        ACTIVE_WORKTREE,
+        WATCH_CONFIG,
+        makeCallbacks(),
+        "main",
+        queue
+      );
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      let unblock!: () => void;
+      void queue.add(
+        () =>
+          new Promise<void>((resolve) => {
+            unblock = resolve;
+          })
+      );
+      const before = statusCalls();
+
+      monitor.pausePolling();
+      monitor.resumePolling();
+      monitor.pausePolling();
+      monitor.resumePolling();
+      unblock();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(statusCalls()).toBe(before + 1);
+      monitor.stop();
+    });
+
+    it("a catch-up still queued when the project is backgrounded again does not run", async () => {
+      const { default: PQueue } = await import("p-queue");
+      const queue = new PQueue({ concurrency: 1 });
+      const monitor = new WorktreeMonitor(
+        ACTIVE_WORKTREE,
+        WATCH_CONFIG,
+        makeCallbacks(),
+        "main",
+        queue
+      );
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      let unblock!: () => void;
+      void queue.add(
+        () =>
+          new Promise<void>((resolve) => {
+            unblock = resolve;
+          })
+      );
+      const before = statusCalls();
+
+      monitor.pausePolling();
+      monitor.resumePolling();
+      monitor.pausePolling();
+      unblock();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+      expect(statusCalls()).toBe(before);
+      monitor.stop();
+    });
+
+    it("earning a recursive slot reconciles status for edits git-only coverage missed", async () => {
+      const monitor = new WorktreeMonitor(TEST_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      monitor.agentActive = true;
+      monitor.setRecursiveWatchBudgetAllowed(false);
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: false });
+      const before = statusCalls();
+
+      monitor.setRecursiveWatchBudgetAllowed(true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(capturedWatcherOptions).toMatchObject({ watchWorktree: true });
+      expect(statusCalls()).toBe(before + 1);
+      // Forced: the stat pre-check would trust the new recursive watcher.
+      expect(mockGetWorktreeChangesWithStats.mock.calls.at(-1)?.[1]).toMatchObject({
+        forceRefresh: true,
+      });
+      monitor.stop();
+    });
+
+    it("a resume that overlaps a running catch-up still gets its own pass", async () => {
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.pausePolling();
+
+      let release!: () => void;
+      mockGetWorktreeChangesWithStats.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = () =>
+              resolve({
+                worktreeId: "/test/worktree",
+                rootPath: "/test",
+                changes: [],
+                changedFileCount: 0,
+                lastUpdated: Date.now(),
+              });
+          })
+      );
+      const before = statusCalls();
+      monitor.resumePolling();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(statusCalls()).toBe(before + 1);
+
+      // Backgrounded and foregrounded again while that pass is still reading:
+      // edits in between are newer than what it will publish.
+      monitor.pausePolling();
+      monitor.resumePolling();
+      release();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(statusCalls()).toBe(before + 2);
+      monitor.stop();
+    });
+
+    it("a worktree that loses focus before its queued catch-up runs still gets a forced pass", async () => {
+      const { default: PQueue } = await import("p-queue");
+      const queue = new PQueue({ concurrency: 1 });
+      const monitor = new WorktreeMonitor(
+        ACTIVE_WORKTREE,
+        WATCH_CONFIG,
+        makeCallbacks(),
+        "main",
+        queue
+      );
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      monitor.pausePolling();
+
+      let unblock!: () => void;
+      void queue.add(
+        () =>
+          new Promise<void>((resolve) => {
+            unblock = resolve;
+          })
+      );
+      const before = statusCalls();
+      monitor.resumePolling();
+      monitor.isCurrent = false;
+      unblock();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(statusCalls()).toBe(before + 1);
+      // Its recursive watcher was down for the whole pause.
+      expect(mockGetWorktreeChangesWithStats.mock.calls.at(-1)?.[1]).toMatchObject({
+        forceRefresh: true,
+      });
+      monitor.stop();
+    });
+  });
 });

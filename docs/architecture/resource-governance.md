@@ -102,6 +102,7 @@ Every host-independent per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`sh
 | --- | --- | --- | --- | --- |
 | `pollIntervalActive` / `pollIntervalBackground` (ms) | 1500 / 5000 | 2000 / 10000 | 4000 / 20000 | WorkspaceClient → workspace-host |
 | `backgroundGitWatcherCap` | 20 | 12 | 6 | WorkspaceService LRU watcher budget |
+| `agentRecursiveWatcherCap` | 48 | 32 | 16 | WorkspaceService agent recursive-watcher budget |
 | `processTreePollInterval` (ms) | 2000 | 2500 | 5000 | ProcessTreeCache |
 | `projectStatsPollInterval` (ms) | 5000 | 5000 | 25000 | ProjectStatsService |
 | `agentScrollbackMaxLines` | 10000 | 10000 | 4000 | Renderer agent scrollback policy (`scrollbackConfig.ts`) |
@@ -122,7 +123,9 @@ Two entries also pin values that live in a second place and must move together: 
 
 ### WorkspaceClient → workspace-host
 
-`updateMonitorConfig(...)` ships the poll/fetch intervals and `backgroundGitWatcherCap` to the workspace host. The watcher cap is an **LRU budget** (`WorkspaceService.applyWatcherBudget`): the focused worktree always keeps its recursive watcher (excluded from the cap); the `cap` most-recently-focused background worktrees keep `git-only` watchers; the rest fall back to adaptive polling. Revocations run before grants so freed inotify/FSEvents handles are released before any new watcher arms — the live handle count stays bounded by the cap even mid-reconcile. This is the mechanism that bounds O(N) fd growth in long sessions with many worktrees.
+`updateMonitorConfig(...)` ships the poll/fetch intervals, `backgroundGitWatcherCap` and `agentRecursiveWatcherCap` to the workspace host. The watcher cap is an **LRU budget** (`WorkspaceService.applyWatcherBudget`): the focused worktree always keeps its recursive watcher (excluded from the cap); the `cap` most-recently-focused background worktrees keep `git-only` watchers; the rest fall back to adaptive polling. Worktrees with a working agent sit outside that pool and always keep a watcher, but only the first `agentRecursiveWatcherCap` of them in activation order hold a recursive one — a newcomer never evicts an established stream, and agents past the cap watch `.git/` only, with the 60 s elevated poll as their fallback. Revocations run before grants so freed inotify/FSEvents handles are released before any new watcher arms — the live handle count stays bounded by the cap even mid-reconcile. This is the mechanism that bounds O(N) fd growth in long sessions with many worktrees.
+
+A **backgrounded project** (its host paused via `WorkspaceService.pause()`) runs no fetch or resource-status polling at all. Its worktrees without a working agent — the focused one included — also stop their status poll and drop their watcher entirely, so the host holds no FSEvents/inotify streams for them. Agent-active worktrees keep their watcher and status poll through the pause, because their freshness is the product's core loop; an agent that finishes while paused is released at once, and one that starts gets its watcher back. On resume, each released worktree re-arms and runs one catch-up status pass through the poll queue — forced where recursive coverage returns, since nothing was watching in between.
 
 ### HibernationService
 

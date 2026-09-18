@@ -32,6 +32,12 @@ function widenPrune(a: boolean | undefined, b: boolean | undefined): boolean {
 
 export interface FetchSchedulerHost {
   readonly isRunning: boolean;
+  /**
+   * False while the project is backgrounded. A paused host keeps running, so
+   * `isRunning` alone can't stop the cadence: nothing scheduled may arm or
+   * re-arm until this flips back. Explicit forced requests still run.
+   */
+  readonly pollingEnabled: boolean;
   readonly isCurrent: boolean;
   readonly hasInitialStatus: boolean;
   readonly hasFetchCallback: boolean;
@@ -114,7 +120,7 @@ export class FetchScheduler {
    */
   schedule(initial: boolean = false): void {
     if (this.disposed) return;
-    if (!this.host.isRunning) return;
+    if (!this.host.isRunning || !this.host.pollingEnabled) return;
     if (!this.host.hasFetchCallback) return;
     if (this.fetchTimer) return;
 
@@ -124,7 +130,7 @@ export class FetchScheduler {
 
     this.fetchTimer = setTimeout(() => {
       this.fetchTimer = null;
-      if (this.disposed || !this.host.isRunning) return;
+      if (this.disposed || !this.host.isRunning || !this.host.pollingEnabled) return;
       void this.run(false);
     }, delay);
   }
@@ -161,6 +167,7 @@ export class FetchScheduler {
 
   private async run(force: boolean, prune?: boolean): Promise<WorkspaceFetchResult | void> {
     if (this.disposed || !this.host.isRunning) return;
+    if (!force && !this.host.pollingEnabled) return;
     if (!this.host.hasFetchCallback) return;
     if (this._pendingFetchPromise) {
       // A fetch is already in-flight. Drop non-force duplicates, but defer a
@@ -195,7 +202,10 @@ export class FetchScheduler {
           // stopped, or its caller waits forever. `run` returns undefined on a
           // stopped scheduler, which is exactly the "declined" signal.
           void this.run(true, queued.prune).then(queued.resolve, () => queued.resolve());
-        } else if (!this.disposed && this.host.isRunning) {
+        } else {
+          // schedule() declines on a paused host, so a fetch that was already
+          // in flight when the project was backgrounded can't restart the
+          // cadence — resume re-arms it.
           this.schedule(false);
         }
       });

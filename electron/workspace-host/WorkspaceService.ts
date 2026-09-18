@@ -198,6 +198,9 @@ const DEFAULT_BACKGROUND_WORKTREE_INTERVAL_MS = 10000;
 // in `shared/types/resourceProfile.ts` — that profile must mirror the
 // hardcoded defaults. Overridden per-profile via `updateMonitorConfig`.
 const DEFAULT_BACKGROUND_GIT_WATCHER_CAP = 12;
+// Default cap on concurrent recursive watchers held by agent-active worktrees.
+// Matches the `balanced` profile's `agentRecursiveWatcherCap`.
+const DEFAULT_AGENT_RECURSIVE_WATCHER_CAP = 32;
 const WORKTREE_REMOVE_LOCK_RETRY_DELAYS_MS = [250, 500, 1000, 2000, 3000, 5000, 8000];
 
 function sleep(ms: number): Promise<void> {
@@ -453,11 +456,18 @@ export class WorkspaceService {
   // Worktree IDs the renderer reports as having an actively working agent
   // (via the `set-agent-activity` port action). Agent-active monitors are
   // elevated to the recursive watcher tier and exempted from the background
-  // watcher budget, exactly like the focused worktree — the ENOSPC/EMFILE
-  // degradation path bounds the worst case on constrained kernels. Kept as a
-  // set (not per-monitor only) so worktrees discovered *after* the broadcast
-  // (e.g. an agent's own `git worktree add`) inherit the flag on creation.
+  // watcher budget, exactly like the focused worktree. Kept as a set (not
+  // per-monitor only) so worktrees discovered *after* the broadcast (e.g. an
+  // agent's own `git worktree add`) inherit the flag on creation. Iteration
+  // order is activation order — `setAgentActivity` keeps survivors in place —
+  // which is what `applyWatcherBudget` ranks the recursive cap by.
   private agentActiveWorktreeIds = new Set<string>();
+  // Separate, generous ceiling on how many agent-active worktrees may hold a
+  // recursive watcher at once. With a fleet of agents most worktrees are
+  // agent-active, so the exemption above would otherwise leave the recursive
+  // stream count unbounded. Agents past it keep a `git-only` watcher plus the
+  // 60 s elevated poll.
+  private agentRecursiveWatcherCap: number = DEFAULT_AGENT_RECURSIVE_WATCHER_CAP;
   // Provider hostname-matcher table relayed from main's forge registry.
   // Empty until the first relay lands (after plugin load), so monitors start
   // unmatched and re-resolve when the table arrives or changes.
@@ -1110,7 +1120,14 @@ export class WorkspaceService {
     }
     if (monitorConfig?.backgroundGitWatcherCap !== undefined) {
       this.backgroundGitWatcherCap = this.normalizeWatcherCap(
-        monitorConfig.backgroundGitWatcherCap
+        monitorConfig.backgroundGitWatcherCap,
+        this.backgroundGitWatcherCap
+      );
+    }
+    if (monitorConfig?.agentRecursiveWatcherCap !== undefined) {
+      this.agentRecursiveWatcherCap = this.normalizeWatcherCap(
+        monitorConfig.agentRecursiveWatcherCap,
+        this.agentRecursiveWatcherCap
       );
     }
 
@@ -1474,8 +1491,8 @@ export class WorkspaceService {
   // --- Background git-watcher budget (LRU) ---
 
   /** Clamp a requested cap to a non-negative integer, ignoring junk values. */
-  private normalizeWatcherCap(value: number): number {
-    if (!Number.isFinite(value)) return this.backgroundGitWatcherCap;
+  private normalizeWatcherCap(value: number, fallback: number): number {
+    if (!Number.isFinite(value)) return fallback;
     return Math.max(0, Math.floor(value));
   }
 
@@ -1495,7 +1512,9 @@ export class WorkspaceService {
    * worktree always keeps its watcher (excluded from the cap). Background
    * monitors are granted a watcher for the `cap` most-recently-focused entries
    * (LRU tail) and evicted otherwise — evicted monitors stop their watcher and
-   * fall back to adaptive polling.
+   * fall back to adaptive polling. Agent-active worktrees sit outside that
+   * pool and always keep a watcher, with recursive coverage bounded separately
+   * by `agentRecursiveWatcherCap` (see `agentRecursiveGrants`).
    *
    * Revocations run before grants so freed inotify/fd handles are released
    * before any new watcher arms, keeping the live handle count bounded by the
@@ -1537,20 +1556,49 @@ export class WorkspaceService {
     for (let i = 0; i < cutoff; i++) {
       this.monitors.get(ids[i])?.setGitWatchBudgetAllowed(false);
     }
+    const agentRecursive = this.agentRecursiveGrants();
+    for (const [id, monitor] of this.monitors) {
+      if (id !== this.activeWorktreeId && !agentRecursive.has(id)) {
+        monitor.setRecursiveWatchBudgetAllowed(false);
+      }
+    }
     // The focused worktree always keeps its watcher.
     if (this.activeWorktreeId) {
-      this.monitors.get(this.activeWorktreeId)?.setGitWatchBudgetAllowed(true);
+      const active = this.monitors.get(this.activeWorktreeId);
+      active?.setRecursiveWatchBudgetAllowed(true);
+      active?.setGitWatchBudgetAllowed(true);
     }
     // Worktrees with an actively working agent always keep theirs too —
-    // streaming those changes is the product's core loop; the watcher-failure
-    // degradation path (ENOSPC/EMFILE → git-only) bounds the worst case.
+    // streaming those changes is the product's core loop. The recursive cap
+    // bounds how many stream the whole tree; the rest watch `.git/` only.
     for (const id of this.agentActiveWorktreeIds) {
-      this.monitors.get(id)?.setGitWatchBudgetAllowed(true);
+      const monitor = this.monitors.get(id);
+      if (!monitor) continue;
+      if (agentRecursive.has(id)) monitor.setRecursiveWatchBudgetAllowed(true);
+      monitor.setGitWatchBudgetAllowed(true);
     }
     // Grant the surviving MRU tail.
     for (let i = cutoff; i < ids.length; i++) {
       this.monitors.get(ids[i])?.setGitWatchBudgetAllowed(true);
     }
+  }
+
+  /**
+   * Agent-active worktrees always keep a watcher, but only the first
+   * `agentRecursiveWatcherCap` installed ones, in activation order (so a
+   * newcomer never evicts an established stream), may hold a recursive one;
+   * the rest drop to git-only. The focused worktree is outside this cap — it
+   * has its own recursive entitlement whether or not an agent works there.
+   */
+  private agentRecursiveGrants(): Set<string> {
+    const grants = new Set<string>();
+    for (const id of this.agentActiveWorktreeIds) {
+      if (grants.size >= this.agentRecursiveWatcherCap) break;
+      if (id !== this.activeWorktreeId && this.monitors.has(id)) {
+        grants.add(id);
+      }
+    }
+    return grants;
   }
 
   /**
@@ -1566,9 +1614,29 @@ export class WorkspaceService {
     // Port payloads are typed but not runtime-validated; a malformed request
     // must not silently clear every elevation (`new Set(undefined)` is empty).
     if (!Array.isArray(worktreeIds)) return;
-    const next = new Set(worktreeIds.filter((id): id is string => typeof id === "string"));
+    const incoming = new Set(worktreeIds.filter((id): id is string => typeof id === "string"));
     const previous = this.agentActiveWorktreeIds;
+    // Survivors keep their place and newcomers join the end, so a broadcast
+    // that merely reorders the same agents can't reshuffle who holds a
+    // recursive watcher under the cap.
+    const next = new Set<string>();
+    for (const id of previous) {
+      if (incoming.has(id)) next.add(id);
+    }
+    for (const id of incoming) next.add(id);
     this.agentActiveWorktreeIds = next;
+
+    // Settle newcomers' recursive grants before they're elevated, so an agent
+    // over the cap arms git-only straight away instead of arming recursive and
+    // rotating down a moment later. Side-effect free: the flag only drives a
+    // rotation once the monitor is agent-active.
+    const grants = this.agentRecursiveGrants();
+    for (const id of next) {
+      const monitor = this.monitors.get(id);
+      if (monitor && !monitor.agentActive) {
+        monitor.setRecursiveWatchBudgetAllowed(grants.has(id));
+      }
+    }
 
     let membershipChanged = false;
     for (const [id, monitor] of this.monitors) {
@@ -1710,6 +1778,12 @@ export class WorkspaceService {
     if (this.agentActiveWorktreeIds.has(wt.id)) {
       monitor.agentActive = true;
       monitor.setGitWatchBudgetAllowed(true);
+      // Recursive coverage waits for applyWatcherBudget() to rank it against
+      // the agent cap. Batched installs (syncMonitors) defer that pass until
+      // every monitor has started, so a default grant would let each newcomer
+      // arm recursive first and overshoot the cap; this one starts git-only
+      // and is promoted if it earns a slot.
+      monitor.setRecursiveWatchBudgetAllowed(false);
     }
 
     this.monitors.set(wt.id, monitor);
@@ -1723,6 +1797,13 @@ export class WorkspaceService {
     // (deferWatcherBudget) to avoid O(N²) reconciliation across a cold start.
     if (!deferWatcherBudget) {
       this.applyWatcherBudget();
+    }
+
+    // A worktree that appears while the project is backgrounded (an agent's
+    // own `git worktree add`, an MCP create) joins paused, so start() never
+    // arms the watcher or poll loop the rest of the host has let go of.
+    if (!this.pollingEnabled) {
+      monitor.pausePolling();
     }
 
     if (skipInitialGitStatus) {
@@ -5068,9 +5149,22 @@ ${lines.map((l) => "+" + l).join("\n")}`;
 
     let watcherCapChanged = false;
     if (config.backgroundGitWatcherCap !== undefined) {
-      const normalized = this.normalizeWatcherCap(config.backgroundGitWatcherCap);
+      const normalized = this.normalizeWatcherCap(
+        config.backgroundGitWatcherCap,
+        this.backgroundGitWatcherCap
+      );
       if (normalized !== this.backgroundGitWatcherCap) {
         this.backgroundGitWatcherCap = normalized;
+        watcherCapChanged = true;
+      }
+    }
+    if (config.agentRecursiveWatcherCap !== undefined) {
+      const normalized = this.normalizeWatcherCap(
+        config.agentRecursiveWatcherCap,
+        this.agentRecursiveWatcherCap
+      );
+      if (normalized !== this.agentRecursiveWatcherCap) {
+        this.agentRecursiveWatcherCap = normalized;
         watcherCapChanged = true;
       }
     }

@@ -405,6 +405,7 @@ describe("ResourceProfileService", () => {
       fetchIntervalActiveMs: RESOURCE_PROFILE_CONFIGS.efficiency.fetchIntervalActiveMs,
       fetchIntervalBackgroundMs: RESOURCE_PROFILE_CONFIGS.efficiency.fetchIntervalBackgroundMs,
       backgroundGitWatcherCap: RESOURCE_PROFILE_CONFIGS.efficiency.backgroundGitWatcherCap,
+      agentRecursiveWatcherCap: RESOURCE_PROFILE_CONFIGS.efficiency.agentRecursiveWatcherCap,
     });
     expect(hib.setMemoryPressureThresholdMs).toHaveBeenCalledWith(
       RESOURCE_PROFILE_CONFIGS.efficiency.memoryPressureInactiveMs

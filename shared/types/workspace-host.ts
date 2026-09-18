@@ -351,6 +351,12 @@ export interface MonitorConfig {
    * fall back to the adaptive poll path. See `ResourceProfileConfig`.
    */
   backgroundGitWatcherCap?: number;
+  /**
+   * Profile-aware cap on the number of agent-active worktrees allowed to hold
+   * a recursive watcher concurrently (per workspace-host). Agents past it fall
+   * back to `git-only`. See `ResourceProfileConfig`.
+   */
+  agentRecursiveWatcherCap?: number;
 }
 
 /**
