@@ -92,6 +92,9 @@ describe("buildAgentTaskPrompt", () => {
 
     expect(prompt).toContain("- App: apps/site (SvelteKit 2.15.0, Svelte 5.2.0, no Tailwind)");
     expect(prompt).toContain("- Page: /pricing (route /pricing)");
+    // A toolchain the bundled compiler was tested against is unremarkable, so
+    // the prompt spends no line on it.
+    expect(prompt).not.toContain("Toolchain note:");
     const files = prompt.slice(prompt.indexOf("- Route files, outermost layout first:"));
     expect(files.split("\n").slice(1, 6)).toEqual([
       "  - layout: apps/site/src/routes/+layout.svelte",
@@ -100,6 +103,26 @@ describe("buildAgentTaskPrompt", () => {
       "  - data: apps/site/src/routes/pricing/+page.ts",
       `  - page: apps/site/${FILE}`,
     ]);
+  });
+
+  it("warns about a toolchain the traced locations were not proven against", () => {
+    const prompt = buildAgentTaskPrompt({
+      instruction: "Tighten the header",
+      selection: makeSelection(),
+      file: FILE,
+      worktreePath: "/repo",
+      place: {
+        appPath: "",
+        versions: { svelte: "4.2.1", kit: "2.15.0", tailwind: null },
+        route: null,
+      },
+    });
+
+    // The agent is told what to distrust and what to do about it — check the
+    // file — not that the builder has withheld anything.
+    expect(prompt).toContain("- Toolchain note: Svelte 4.2.1 (tested against Svelte 5)");
+    expect(prompt).toContain("verify the source before relying on them");
+    expect(prompt).not.toMatch(/preview[- ]only/i);
   });
 
   it("keeps generated frames out of the component chain", () => {

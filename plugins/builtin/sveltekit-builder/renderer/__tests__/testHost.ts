@@ -172,7 +172,7 @@ export function createFakeHost() {
     status: "ready",
     workspaceSessionId: "ws-1",
     appRoot: WORKTREE,
-    support: { level: "full" },
+    support: { level: "tested" },
   }));
   handlers.set(CHANNELS.selectionResolve, (args) => ({
     status: "ok",

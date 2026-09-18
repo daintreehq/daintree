@@ -41,8 +41,9 @@ export interface InstalledVersionReport {
  *
  * Not from the ranges in the app's manifest, which are a statement of intent
  * and routinely wrong: `"svelte": "^4.0.0"` in a tree where the lockfile
- * resolved 5.x, or `"^5"` in a tree nobody has installed. A visual editor that
- * writes Svelte 5 syntax on the strength of a caret range corrupts the project.
+ * resolved 5.x, or `"^5"` in a tree nobody has installed. Parsing source with
+ * the compiler a caret range implied, rather than the one the app installed,
+ * misreads the file it is tracing.
  *
  * The lookup climbs from the app root to the worktree root because a workspace
  * install hoists: `apps/site` usually has no `node_modules/svelte` of its own,
@@ -96,7 +97,8 @@ export async function readInstalledVersions(
  * `pnp` matters because it is the one case where "no `node_modules/svelte`"
  * does not mean "not installed": Yarn Plug'n'Play resolves out of a zip cache
  * and there is nothing for us to read. Telling that user to run install would
- * be wrong advice, and calling their project unsupported would be a lie.
+ * be wrong advice: the verdict says instead that the versions the app actually
+ * resolves could not be established, which is what we know.
  */
 export type InstallStyle = "node-modules" | "pnp";
 
@@ -120,8 +122,8 @@ export async function detectInstallStyle(
  * — `workspace:*`, a git URL, a `file:` link, `5.garbage`.
  *
  * The whole string is validated, not just its prefix. A prefix match would read
- * `5.garbage` as Svelte 5 and hand the project full editing support on the
- * strength of a typo. Prereleases count as their own major, so `5.0.0-next.42`
+ * `5.garbage` as Svelte 5 and call the toolchain tested on the strength of a
+ * typo. Prereleases count as their own major, so `5.0.0-next.42`
  * is Svelte 5 — the baseline is about the API generation, not about stability.
  */
 const SEMVER = /^v?(\d+)(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
@@ -135,16 +137,19 @@ export function majorVersion(version: string | null): number | null {
 }
 
 /**
- * The packages whose major decides the support verdict. A range, not a floor:
- * source is parsed with the bundled Svelte compiler and located through the
- * dev runtime's `__svelte_meta`, so a newer major inherits nothing it was not
- * tested against. Tailwind is not here — the builder reads its version for the
+ * The packages whose major the support verdict reports on. A range, not a
+ * floor: source is parsed with the bundled Svelte compiler and located through
+ * the dev runtime's `__svelte_meta`, so a newer major inherits nothing it was
+ * not tested against. Tailwind is not here — the builder reads its version for the
  * agent's context and nothing else.
  */
-const GATED: ReadonlyArray<{ key: TrackedPackageKey; major: number }> = [
-  { key: "svelte", major: SUPPORTED_BASELINE.svelteMajor },
-  { key: "kit", major: SUPPORTED_BASELINE.kitMajor },
+const TESTED_AGAINST: ReadonlyArray<{ key: TestedPackageKey; label: string; major: number }> = [
+  { key: "svelte", label: "Svelte", major: SUPPORTED_BASELINE.svelteMajor },
+  { key: "kit", label: "SvelteKit", major: SUPPORTED_BASELINE.kitMajor },
 ];
+
+/** The subset of {@link TrackedPackageKey} the verdict speaks about. */
+export type TestedPackageKey = "svelte" | "kit";
 
 export interface SupportAssessment {
   verdict: SupportVerdict;
@@ -152,21 +157,23 @@ export interface SupportAssessment {
   /**
    * Declared in `package.json` but absent from every `node_modules` we looked
    * in. Structurally distinct from "too old" because the remedy is different
-   * and the UI must say so: this is "run install", not "unsupported project".
+   * and the UI must say so: this is "run install", not "a version we never
+   * tested against".
    * A caller that offers a recovery action keys off this, not off the prose.
    */
   missingInstall: TrackedPackageKey[];
 }
 
 /**
- * The gate. `full` needs Svelte and Kit installed at the supported major;
- * anything else is `preview-only` with a reason per failing
- * package that names the package and the version actually found.
+ * A diagnostic, not a gate. `tested` means Svelte and Kit are installed at the
+ * majors the bundled compiler was proven against; anything else is `untested`,
+ * with a reason per package naming it and the version actually found.
  *
- * Vite is read and reported but never gates: the baseline pins no Vite major,
- * and refusing to open a site because its bundler is a version we did not
- * anticipate would be a guess dressed as a policy. No verdict here implies
- * migration — nothing in this module writes.
+ * Nothing keys off the verdict to withhold a capability: an untested toolchain
+ * is still traced, and its selection still goes to an agent. Vite is reported
+ * but absent here — the baseline pins no Vite major, and naming a bundler
+ * version we did not anticipate would be a guess dressed as a finding. No
+ * verdict here implies migration — nothing in this module writes.
  */
 export interface AssessSupportOptions {
   installStyle?: InstallStyle;
@@ -183,7 +190,7 @@ export function assessSupport(
   const reasons: string[] = [];
   const missingInstall: TrackedPackageKey[] = [];
 
-  for (const { key, major: supported } of GATED) {
+  for (const { key, major: tested } of TESTED_AGAINST) {
     const pkg = TRACKED_PACKAGES[key];
     const installed = versions[key];
     const isDeclared = typeof declared[pkg] === "string";
@@ -191,7 +198,7 @@ export function assessSupport(
     // Under Plug'n'Play nothing on the filesystem is authoritative: the loader
     // resolves from a zip cache, so a stale `node_modules` left over from a
     // previous linker would answer for a package the app never loads. We do not
-    // execute `.pnp.cjs` to find out, so the honest verdict is preview-only.
+    // execute `.pnp.cjs` to find out, so the honest verdict is untested.
     if (installStyle === "pnp") {
       reasons.push(
         installed === null
@@ -223,20 +230,45 @@ export function assessSupport(
       reasons.push(`${pkg} resolved to "${installed}", which has no readable major version`);
       continue;
     }
-    if (major < supported) {
+    if (major < tested) {
       reasons.push(
-        `${pkg} ${installed} is installed; this builder is tested against ${pkg} ${supported}`
+        `${pkg} ${installed} is installed; this builder is tested against ${pkg} ${tested}`
       );
-    } else if (major > supported) {
+    } else if (major > tested) {
       reasons.push(
-        `${pkg} ${installed} is newer than this builder was tested against (${pkg} ${supported}); tracing an element and asking an agent still work`
+        `${pkg} ${installed} is newer than this builder was tested against (${pkg} ${tested})`
       );
     }
   }
 
   return {
-    verdict: reasons.length === 0 ? { level: "full" } : { level: "preview-only", reasons },
+    verdict: reasons.length === 0 ? { level: "tested" } : { level: "untested", reasons },
     versions,
     missingInstall,
   };
+}
+
+/**
+ * The same observation as the verdict's reasons, from installed versions alone:
+ * "Svelte 4.2.1 (tested against Svelte 5)".
+ *
+ * A caller that holds only the versions — the agent prompt, which lists them
+ * already — can say what the verdict says without carrying the verdict's
+ * install-style evidence. It claims no more than the versions it was handed do:
+ * these are what was read from disk, which under Plug'n'Play is not necessarily
+ * what the app resolves, so the note names a version rather than a resolution.
+ * Versions with no readable major say nothing at all — absent and unreadable
+ * are the assessment's business, not a note about skew.
+ */
+export function untestedVersionNotes(
+  versions: Readonly<Pick<InstalledVersions, TestedPackageKey>>
+): string[] {
+  const notes: string[] = [];
+  for (const { key, label, major: tested } of TESTED_AGAINST) {
+    const installed = versions[key];
+    const major = majorVersion(installed);
+    if (installed === null || major === null || major === tested) continue;
+    notes.push(`${label} ${installed} (tested against ${label} ${tested})`);
+  }
+  return notes;
 }

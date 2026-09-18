@@ -116,3 +116,28 @@ export function mismatchMessage(mismatch: SelectionMismatch): string {
     "open this page from a link inside the preview, then select the element again."
   );
 }
+
+/**
+ * What the support verdict is allowed to say, in one voice for the two places
+ * that say it: the drawer and the agent prompt.
+ *
+ * It is an observation about our bundled compiler, never a limitation of the
+ * user's app — tracing an element and handing it to an agent work the same
+ * either way — so it stays at the lowest signal tier: neutral, no accent, no
+ * action, and nothing about what the builder won't do.
+ */
+export const UNTESTED_TOOLCHAIN_TITLE = "Toolchain not verified";
+
+/** The drawer's body: the verdict's own reasons, which already name the package and version. */
+export function untestedToolchainDetail(reasons: readonly string[]): string {
+  return reasons.join(". ");
+}
+
+/**
+ * The prompt's line. The agent has the versions listed above it already, so
+ * this says the one thing they don't carry: which of them the source it is
+ * about was parsed by a compiler that never saw.
+ */
+export function untestedToolchainPromptLine(notes: readonly string[]): string {
+  return `- Toolchain note: ${notes.join("; ")} — the locations above come from a compiler that never saw this version, so verify the source before relying on them`;
+}

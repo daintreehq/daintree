@@ -1,6 +1,8 @@
 import type { AgentState } from "@shared/types/agent";
 import type { SiteSelection } from "../shared/model.js";
 import type { RouteNode } from "../shared/protocol.js";
+import { untestedVersionNotes } from "../shared/project/versions.js";
+import { untestedToolchainPromptLine } from "./copy.js";
 
 /**
  * The context an agent task carries. Everything here is observed or resolved
@@ -244,6 +246,11 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
     lines.push(
       `- App: ${place.appPath === "" ? "the worktree root" : place.appPath} (${stack.join(", ")})`
     );
+    // Version skew is the agent's problem, not ours to hide: the locations
+    // below were resolved by a compiler that never saw this Svelte, so the
+    // agent is told to check the file rather than trust the line number.
+    const untested = untestedVersionNotes(place.versions);
+    if (untested.length > 0) lines.push(untestedToolchainPromptLine(untested));
   }
   const route = place?.route ?? null;
   lines.push(

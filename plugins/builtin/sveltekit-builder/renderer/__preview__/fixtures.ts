@@ -242,7 +242,7 @@ export const FIXTURES = {
               status: "ready",
               workspaceSessionId: "ws-1",
               appRoot: args.appRoot,
-              support: { level: "full" },
+              support: { level: "tested" },
             }
           : { status: "ambiguous", appRoots: roots }
       );
