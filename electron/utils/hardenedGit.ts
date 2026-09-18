@@ -38,16 +38,32 @@ const SAFE_GIT_CONFIG_BASE = [
 ] as const;
 
 /**
+ * The only ssh invocation Daintree hands git. `BatchMode=yes` is what keeps a
+ * headless process from hanging: `GIT_TERMINAL_PROMPT=0` silences git's own
+ * credential prompt but not ssh's host-key or passphrase prompts.
+ */
+const NON_INTERACTIVE_SSH_COMMAND =
+  "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15";
+
+/**
  * Path-independent half of the hardened profile. `core.hooksPath` is appended
  * per call by `getHardenedGitConfig()` — it resolves an app-owned absolute
  * directory that cannot be captured at module evaluation (see
  * `resolveUserDataDir`).
+ *
+ * `core.sshCommand` is pinned rather than blanked. Git does not read an empty
+ * value as unset: it forks the empty string as the transport program, so every
+ * ssh URL died with `cannot run :` — which left the SSH submodules of a new
+ * worktree empty (issue #12475). A `-c` value outranks repo config either way,
+ * so pinning blocks a repo-supplied transport exactly as blanking did.
+ * `core.askpass=` and `credential.helper=` are safe blank: git skips an empty
+ * askpass and treats an empty helper as a list reset.
  */
 const HARDENED_GIT_CONFIG_BASE = [
   ...SAFE_GIT_CONFIG_BASE,
   "core.askpass=",
   "credential.helper=",
-  "core.sshCommand=",
+  `core.sshCommand=${NON_INTERACTIVE_SSH_COMMAND}`,
 ] as const;
 
 const AUTHENTICATED_GIT_CONFIG_BASE = [...SAFE_GIT_CONFIG_BASE] as const;
@@ -579,8 +595,7 @@ export async function createAuthenticatedGit(
     LC_MESSAGES: "C",
     LANGUAGE: "",
     GIT_TERMINAL_PROMPT: "0",
-    GIT_SSH_COMMAND:
-      "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15",
+    GIT_SSH_COMMAND: NON_INTERACTIVE_SSH_COMMAND,
     // Same lock-suppression and Windows-GCM hardening as createHardenedGit.
     // GIT_ASKPASS is intentionally NOT set here — credentialed commands
     // (clone/push) need legitimate ASKPASS resolution.
@@ -651,8 +666,7 @@ export async function createBackgroundFetchGit(
       LC_MESSAGES: "C",
       LANGUAGE: "",
       GIT_TERMINAL_PROMPT: "0",
-      GIT_SSH_COMMAND:
-        "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=15",
+      GIT_SSH_COMMAND: NON_INTERACTIVE_SSH_COMMAND,
       GIT_ASKPASS: "true",
       // simple-git's .env() replaces the env wholesale, so the hardening
       // flags from createAuthenticatedGit's first .env() call must be
