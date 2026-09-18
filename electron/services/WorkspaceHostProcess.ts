@@ -1221,6 +1221,7 @@ export class WorkspaceHostProcess extends EventEmitter {
       case "forge-rate-limit-changed":
       case "forge-token-health-changed":
       case "forge-remote-changed":
+      case "switch-status-timing":
         this.emit("host-event", event);
         break;
 

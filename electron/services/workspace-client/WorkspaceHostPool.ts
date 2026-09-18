@@ -12,6 +12,7 @@ import type { WorkspaceClientConfig } from "../../../shared/types/workspace-host
 import type { ForgeProviderMatcher } from "../../../shared/utils/forgeHostnames.js";
 import { projectStore } from "../ProjectStore.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
+import type { HostLoadKind } from "../ProjectSwitchStatusTiming.js";
 
 const CLEANUP_GRACE_MS = 180_000;
 
@@ -225,7 +226,8 @@ export class WorkspaceHostPool {
     })();
   }
 
-  async loadProject(rootPath: string, windowId: number): Promise<void> {
+  /** Resolves with whether an existing host was reused ("warm") or one was spawned ("cold"). */
+  async loadProject(rootPath: string, windowId: number): Promise<HostLoadKind> {
     const normalizedPath = this.normalizeProjectPath(rootPath);
     const seq = (this.windowLoadSeq.get(windowId) ?? 0) + 1;
     this.windowLoadSeq.set(windowId, seq);
@@ -243,7 +245,7 @@ export class WorkspaceHostPool {
       // Superseded while waiting on the entry's readiness — the newer request
       // owns the mapping and all attachment bookkeeping (including disposing a
       // ready-failed entry, which it detects itself on the same code path).
-      if (isStale()) return;
+      if (isStale()) return "warm";
       if (isReadyFailed) {
         existingEntry.host.dispose("ready-failed");
         this.entries.delete(normalizedPath);
@@ -272,7 +274,7 @@ export class WorkspaceHostPool {
           this.onProjectSwitch?.(windowId);
           this.releaseOldProject(windowId, oldProjectPath);
         }
-        return;
+        return "warm";
       }
     }
 
@@ -333,7 +335,7 @@ export class WorkspaceHostPool {
           this.scheduleDormantCleanup(normalizedPath, newEntry);
         }
       }
-      return;
+      return "cold";
     }
 
     this.windowToProject.set(windowId, normalizedPath);
@@ -342,6 +344,7 @@ export class WorkspaceHostPool {
       this.onProjectSwitch?.(windowId);
       this.releaseOldProject(windowId, oldProjectPath);
     }
+    return "cold";
   }
 
   prewarmProject(rootPath: string): void {

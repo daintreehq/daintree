@@ -30,6 +30,7 @@ import type { CopyTreeProgress } from "../shared/types/ipc.js";
 import type { WorkspaceHostRequest, WorkspaceHostEvent } from "../shared/types/workspace-host.js";
 import type { WorktreePortRequest } from "../shared/types/worktree-port.js";
 import { WorkspaceService } from "./workspace-host/WorkspaceService.js";
+import { isStatusReportCurrent } from "./workspace-host/StatusTimingRecorder.js";
 import { ensureSerializable } from "../shared/utils/serialization.js";
 import { formatErrorMessage } from "../shared/utils/errorMessage.js";
 import { initForgeBridge } from "./workspace-host/forgeBridge.js";
@@ -273,6 +274,27 @@ async function handleWorktreePortRequest(
       case "get-submodule-delete-risk": {
         const risk = await workspaceService.getSubmoduleDeleteRisk(msg.payload.worktreeId);
         result = { risk };
+        break;
+      }
+
+      case "report-switch-status-timing": {
+        const { payload } = msg;
+        const host = workspaceService.getStatusTimingMarks();
+        const accepted = isStatusReportCurrent(payload, {
+          epoch: workspaceService.getVersion().epoch,
+          monitorCount: host.monitorCount,
+          enumerating: workspaceService.isLoadEnumerating(),
+        });
+        if (accepted) {
+          sendEvent({
+            type: "switch-status-timing",
+            switchId: payload.switchId,
+            rendererAppliedAt: payload.appliedAt,
+            rendererStatusCount: payload.statusCount,
+            host,
+          });
+        }
+        result = { accepted };
         break;
       }
 

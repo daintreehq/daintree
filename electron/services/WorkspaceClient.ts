@@ -40,6 +40,7 @@ import type {
 } from "../../shared/types/ipc.js";
 import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
 import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
+import type { HostLoadKind } from "./ProjectSwitchStatusTiming.js";
 
 const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
 
@@ -189,7 +190,7 @@ export class WorkspaceClient extends EventEmitter {
 
   // ── Process lifecycle ──
 
-  async loadProject(rootPath: string, windowId: number): Promise<void> {
+  async loadProject(rootPath: string, windowId: number): Promise<HostLoadKind> {
     if (this.isDisposed) {
       throw new Error("WorkspaceClient disposed");
     }

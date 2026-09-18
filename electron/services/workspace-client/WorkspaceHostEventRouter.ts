@@ -6,6 +6,7 @@ import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
 import { fileSearchCacheInvalidator } from "./fileSearchCacheInvalidation.js";
+import { projectSwitchStatusTiming } from "../ProjectSwitchStatusTiming.js";
 import { type ProcessEntry, type CopyTreeProgressCallback, sendToEntryWindows } from "./types.js";
 import type { WorkspaceHostEvent, WorktreeSnapshot } from "../../../shared/types/workspace-host.js";
 
@@ -431,6 +432,11 @@ export class WorkspaceHostEventRouter {
         // the persistent indicator disappearing (Tier-1 ambient signal).
         this.inotifyLimitToastSent = false;
         this.emfileLimitToastSent = false;
+        break;
+      }
+
+      case "switch-status-timing": {
+        projectSwitchStatusTiming.complete(event);
         break;
       }
     }

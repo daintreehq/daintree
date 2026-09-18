@@ -38,6 +38,7 @@ import {
 } from "./utils/reactRootErrorCallbacks";
 import { WorktreeStoreProvider } from "./contexts/WorktreeStoreContext";
 import { installPluginDocumentRuntime } from "./services/plugin/pluginDocumentRuntime";
+import { installProjectSwitchStatusTiming } from "./services/projectSwitchStatusTiming";
 
 let cleanupGlobalErrorHandlers: (() => void) | undefined;
 let cleanupScrollbarGutterWatch: (() => void) | undefined;
@@ -93,6 +94,10 @@ async function bootstrap() {
   }
 
   cleanupOrchestrator = initStoreOrchestrator();
+
+  // Synchronous with module evaluation, so it is listening before main's
+  // `did-finish-load` gate lets it send `project:on-switch` to a new view.
+  installProjectSwitchStatusTiming();
 
   // Kick off the agent-settings store so `App.tsx`, `Toolbar`, and the tray
   // all read from a normalized snapshot on cold boot. The install-aware

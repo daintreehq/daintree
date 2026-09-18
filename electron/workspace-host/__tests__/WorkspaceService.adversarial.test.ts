@@ -171,6 +171,63 @@ describe("WorkspaceService adversarial", () => {
     expect(service["projectRootPath"]).toBeNull();
   });
 
+  describe("status timing marks (#12461)", () => {
+    it("ends the load's enumeration even when the load fails", async () => {
+      const listService = service["listService"] as unknown as {
+        list: Mock;
+        mapToWorktrees: Mock;
+      };
+      listService.list = vi.fn().mockResolvedValue([{ path: "/broken" }]);
+      listService.mapToWorktrees = vi.fn(() => {
+        throw new Error("Corrupted worktree metadata");
+      });
+
+      await service.loadProject("req-load", "/repo", "ws-test-project-id");
+
+      // A load stuck "enumerating" would refuse every later status report.
+      expect(service.isLoadEnumerating()).toBe(false);
+      expect(service.getStatusTimingMarks()).toMatchObject({
+        enumeratedAt: null,
+        monitorCount: 0,
+      });
+      expect(service.getStatusTimingMarks().loadStartedAt).toEqual(expect.any(Number));
+    });
+
+    it("counts a folder with no repository as enumerated with no worktrees", async () => {
+      mockSimpleGit.checkIsRepo.mockResolvedValue(false);
+
+      await service.loadProject("req-plain", "/downloads", "ws-plain");
+
+      const marks = service.getStatusTimingMarks();
+      expect(service.isLoadEnumerating()).toBe(false);
+      expect(marks.enumeratedAt).toEqual(expect.any(Number));
+      expect(marks).toMatchObject({ firstStatusAt: [], monitorCount: 0 });
+    });
+
+    it("stamps a monitor's first status from either emit path, once", () => {
+      const withStatus = { worktreeChanges: { changedFileCount: 0 } };
+      const monitor = { getSnapshot: () => withStatus };
+      const quiet = { getSnapshot: () => ({ worktreeChanges: null }) };
+      const monitors = service["monitors"] as Map<string, unknown>;
+      monitors.set("wt-a", monitor);
+      monitors.set("wt-b", quiet);
+
+      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
+      (service as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](quiet);
+      (service as unknown as { handleMonitorUpdate: (m: unknown, s: unknown) => void })[
+        "handleMonitorUpdate"
+      ](monitor, withStatus);
+      nowSpy.mockReturnValue(2_000);
+      (service as unknown as { emitUpdate: (m: unknown) => void })["emitUpdate"](monitor);
+
+      expect(service.getStatusTimingMarks()).toMatchObject({
+        firstStatusAt: [1_000],
+        monitorCount: 2,
+      });
+      expect(sentEvents.filter((e) => e.type === "worktree-update")).toHaveLength(3);
+    });
+  });
+
   describe("a folder with no git repository (#11405)", () => {
     /**
      * Every monitor is a `GitStatusPass` poller, and its first tick against a

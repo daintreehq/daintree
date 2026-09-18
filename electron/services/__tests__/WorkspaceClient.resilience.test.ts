@@ -1967,7 +1967,7 @@ describe("WorkspaceClient multi-process manager", () => {
     it("loadProject resolves without error", async () => {
       const load = client.loadProject("/project-a", 1);
       await readyAndResolveLoad(0);
-      await expect(load).resolves.toBeUndefined();
+      await expect(load).resolves.toBe("cold");
     });
   });
 

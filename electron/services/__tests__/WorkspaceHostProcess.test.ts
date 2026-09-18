@@ -283,6 +283,38 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
+  it("routes switch-status-timing as host-event with payload intact (#12461)", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const onHostEvent = vi.fn();
+    host.on("host-event", onHostEvent);
+
+    const event = {
+      type: "switch-status-timing",
+      switchId: "switch-1",
+      rendererAppliedAt: 2_000,
+      rendererStatusCount: 1,
+      host: {
+        loadStartedAt: 100,
+        enumeratedAt: 200,
+        firstSnapshotAt: 210,
+        firstStatusAt: [1_900],
+        monitorCount: 1,
+      },
+    };
+    const child = mockChildren[0] as MockUtilityChild;
+    child.emit("message", event);
+
+    expect(onHostEvent).toHaveBeenCalledWith(event);
+
+    host.dispose();
+  });
+
   it("routes worktree-activated as host-event with payload intact (#10778)", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {

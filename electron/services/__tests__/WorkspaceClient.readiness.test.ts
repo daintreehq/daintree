@@ -293,7 +293,8 @@ describe("WorkspaceClient.waitForReady after host restart", () => {
     expect(newReq.type).toBe("load-project");
     h(1).resolveRequest(newReq.requestId);
 
-    await expect(load).resolves.toBeUndefined();
+    // A poisoned entry is replaced by a freshly spawned host, so the load is cold.
+    await expect(load).resolves.toBe("cold");
     consoleError.mockRestore();
   });
 });
