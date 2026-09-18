@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, renameSync, rmSy
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { GitFileWatcher } from "../gitFileWatcher.js";
+import { settleParcelWatcherLifecycle } from "../parcelWatcherBackend.js";
 
 /**
  * The burst-skip decision rests on claims about what real `git check-ignore`
@@ -59,10 +60,15 @@ interface Observed {
   fileSignals: number;
 }
 
-/** Arm a real watcher on `root`, run `act`, and report what the callbacks saw. */
-async function observe(root: string, act: () => void): Promise<Observed> {
+/**
+ * Arm a real watcher on `root` and return a probe that runs `act` and reports
+ * what the callbacks saw. Reusing one probe lets a test prove the same live
+ * subscription that stayed quiet for one mutation still hears another.
+ */
+async function arm(root: string): Promise<(act: () => void) => Promise<Observed>> {
   let changes = 0;
   let fileSignals = 0;
+  let failed = false;
   const watcher = new GitFileWatcher({
     worktreePath: root,
     branch: "main",
@@ -76,21 +82,35 @@ async function observe(root: string, act: () => void): Promise<Observed> {
     onWorktreeFilesChanged: () => {
       fileSignals++;
     },
+    onWatcherFailed: () => {
+      failed = true;
+    },
   });
   watchers.push(watcher);
   expect(await watcher.start()).toBe(true);
   // The recursive subscription arms asynchronously; let it settle so the
   // mutation under test is not raced by the arm itself.
+  await settleParcelWatcherLifecycle();
   await new Promise((resolve) => setTimeout(resolve, 900));
-  changes = 0;
-  fileSignals = 0;
-  act();
-  await new Promise((resolve) => setTimeout(resolve, 3500));
-  return { changes, fileSignals };
+  return async (act) => {
+    changes = 0;
+    fileSignals = 0;
+    act();
+    await new Promise((resolve) => setTimeout(resolve, 3500));
+    // A dead subscription would report silence for any mutation at all.
+    expect(failed).toBe(false);
+    return { changes, fileSignals };
+  };
 }
 
-afterEach(() => {
+async function observe(root: string, act: () => void): Promise<Observed> {
+  return (await arm(root))(act);
+}
+
+afterEach(async () => {
   for (const watcher of watchers.splice(0)) watcher.dispose();
+  // Let the native unsubscribes land before the watched trees disappear.
+  await settleParcelWatcherLifecycle();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -198,7 +218,8 @@ describe("OS-level exclusion of hot directories", () => {
     git(["add", "-A"]);
     git(["commit", "-m", "init"]);
 
-    const churn = await observe(root, () => {
+    const probe = await arm(root);
+    const churn = await probe(() => {
       for (let i = 0; i < 15; i++) {
         for (const modules of [
           join(root, "node_modules"),
@@ -211,7 +232,7 @@ describe("OS-level exclusion of hot directories", () => {
     });
     expect(churn).toEqual({ changes: 0, fileSignals: 0 });
 
-    const edit = await observe(root, () => {
+    const edit = await probe(() => {
       writeFileSync(join(root, "src.txt"), "modified\n");
     });
     expect(edit.changes).toBeGreaterThan(0);

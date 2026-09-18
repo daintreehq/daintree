@@ -1,6 +1,6 @@
 import { existsSync, watch as fsWatch, type FSWatcher } from "node:fs";
-import { lstat } from "node:fs/promises";
-import { join, matchesGlob, normalize, relative, resolve } from "node:path";
+import { readdir } from "node:fs/promises";
+import { matchesGlob, normalize, relative, resolve } from "node:path";
 import parcelWatcher, {
   type AsyncSubscription,
   type BackendType,
@@ -122,25 +122,32 @@ export const MAX_PARCEL_EXCLUSION_PATHS = 8;
  * path under an ancestor containing `[` or `(` would read as a glob.
  *
  * Only real directories qualify: a symlink's contents are not under the
- * watched tree, and a linked worktree's `.git` is a file. Existence is sampled
- * once, so a directory created after subscribe (a fresh `npm install`) is only
- * excluded from the next re-arm on — the caller's globs cover it meanwhile.
- * Linux and the Windows fallback honour the same literals, so passing them
- * there is harmless.
+ * watched tree, and a linked worktree's `.git` is a file. Names must match the
+ * directory entry exactly — on case-insensitive APFS a lookup of `build` finds
+ * `Build/`, which case-sensitive globs leave visible and FSEvents would then
+ * silence. Existence is sampled once, so a directory created after subscribe
+ * (a fresh `npm install`) is only excluded from the next re-arm on — the
+ * caller's globs cover it meanwhile.
+ *
+ * macOS only. Linux's inotify walk already prunes glob matches before adding
+ * watches, and the Windows fallback matches literals case-insensitively, so
+ * elsewhere literals would add nothing or hide more than the globs do.
  */
 export async function resolveParcelWatcherExclusions(
   root: string,
   candidates: readonly string[]
 ): Promise<string[]> {
-  const present = await Promise.all(
-    candidates.map((name) =>
-      lstat(join(root, name)).then(
-        (stats) => stats.isDirectory(),
-        () => false
-      )
-    )
-  );
-  return candidates.filter((_, index) => present[index]).slice(0, MAX_PARCEL_EXCLUSION_PATHS);
+  if (process.platform !== "darwin") return [];
+  let directories: Set<string>;
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    directories = new Set(
+      entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name)
+    );
+  } catch {
+    return [];
+  }
+  return candidates.filter((name) => directories.has(name)).slice(0, MAX_PARCEL_EXCLUSION_PATHS);
 }
 
 function slashPath(value: string): string {

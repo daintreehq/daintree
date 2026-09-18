@@ -207,10 +207,12 @@ describe("resolveParcelWatcherExclusions", () => {
   let root: string;
 
   beforeEach(async () => {
+    setPlatform("darwin");
     root = await mkdtemp(join(tmpdir(), "daintree-exclusions-"));
   });
 
   afterEach(async () => {
+    setPlatform(originalPlatform);
     await rm(root, { recursive: true, force: true });
   });
 
@@ -249,6 +251,26 @@ describe("resolveParcelWatcherExclusions", () => {
     // Over the limit FSEvents applies none of them, so the cap is exact.
     expect(exclusions).toHaveLength(MAX_PARCEL_EXCLUSION_PATHS);
     expect(exclusions).toEqual([".git", "a", "b", "c", "d", "e", "f", "g"]);
+  });
+
+  it("skips a directory whose name differs only in case", async () => {
+    // On case-insensitive APFS a lookup of `build` would find `Build/`, which
+    // the case-sensitive globs leave visible; excluding it would silence it.
+    await mkdir(join(root, "Build"));
+    await mkdir(join(root, "dist"));
+
+    await expect(resolveParcelWatcherExclusions(root, ["build", "dist"])).resolves.toEqual([
+      "dist",
+    ]);
+  });
+
+  it("excludes nothing off macOS, where literals add no OS-level exclusion", async () => {
+    await mkdir(join(root, "node_modules"));
+
+    for (const platform of ["linux", "win32"] as const) {
+      setPlatform(platform);
+      await expect(resolveParcelWatcherExclusions(root, ["node_modules"])).resolves.toEqual([]);
+    }
   });
 
   it("returns nothing for a root that does not exist", async () => {

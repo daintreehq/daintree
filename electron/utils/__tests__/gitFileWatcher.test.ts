@@ -1721,13 +1721,18 @@ describe("GitFileWatcher", () => {
       expect(onWorktreeFilesChanged).toHaveBeenCalledTimes(3);
       expect(onWorktreeFilesChanged).toHaveBeenLastCalledWith(null);
 
-      await vi.advanceTimersByTimeAsync(15_000);
+      // One millisecond short of the window is still inside it.
+      await vi.advanceTimersByTimeAsync(14_999);
+      fireError(cb, dropped);
+      expect(rescanWarnings()).toHaveLength(1);
+
+      await vi.advanceTimersByTimeAsync(1);
       fireError(cb, dropped);
       expect(rescanWarnings()).toHaveLength(2);
       expect(rescanWarnings()[1][1]).toEqual({
         path: "/repo",
         error: dropped.message,
-        suppressed: 2,
+        suppressed: 3,
       });
 
       // The count restarts once it has been reported.
