@@ -378,9 +378,9 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
         ...(isWindowsCI
           ? {
               // Playwright already owns CDP sessions for WebContentsView
-              // targets on Windows CI. Cached-view CPU throttling is a memory
-              // optimization only; skip it in e2e so LRU tests don't collide
-              // with Playwright's debugger attachment.
+              // targets on Windows CI. The cached-view CDP memory purge and
+              // CPU-rate reset are optimizations only; skip them in e2e so LRU
+              // tests don't collide with Playwright's debugger attachment.
               DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE: "1",
             }
           : {}),

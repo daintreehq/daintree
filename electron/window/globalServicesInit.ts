@@ -663,10 +663,10 @@ export async function initGlobalServices(
             for (const wCtx of windowRegistry.all()) {
               const w = wCtx.browserWindow;
               if (w.isDestroyed()) continue;
-              // Cached/loading views are CPU-throttled (Emulation.setCPUThrottlingRate)
-              // or Efficiency-frozen (Page.setWebLifecycleState) which slows
-              // JS timers and the LoAF observer, producing burst signal that
-              // doesn't reflect user-visible lag. Only sample active views;
+              // Cached views are hidden, demote their own periodic work and may
+              // be Efficiency-frozen (Page.setWebLifecycleState); loading views
+              // are still booting. Either produces burst signal that doesn't
+              // reflect user-visible lag. Only sample active views;
               // fall back to the app webContents for windows still on the
               // bootstrap shell (no PVM yet).
               const pvm = wCtx.services.projectViewManager;

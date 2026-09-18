@@ -415,8 +415,8 @@ export function broadcastToProjectRenderers(
  * Broadcast that skips cached (deactivated) project views. Two valid uses:
  *
  * - High-frequency streams the renderer can re-fetch on activation (e.g. log
- *   batches via LOGS_GET_ALL) — cached renderers are CPU-throttled or frozen,
- *   so pushed messages would queue unbounded in their task queues.
+ *   batches via LOGS_GET_ALL) — pushing them is wasted work in a cached
+ *   renderer, and one that is frozen queues them unbounded in its task queue.
  * - Visibility-scoped effects whose audience is *defined* as the non-cached
  *   renderers at emission time (e.g. SOUND_TRIGGER — every view owns an
  *   AudioContext, so a global broadcast plays one copy per open project and

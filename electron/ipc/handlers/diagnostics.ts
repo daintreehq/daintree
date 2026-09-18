@@ -177,8 +177,9 @@ function beginCpuProfileCapture(session: RendererCpuProfileSession): Promise<unk
     const result = (await session.wc.debugger.sendCommand("Profiler.stop")) as {
       profile: unknown;
     };
-    // The debugger attachment is shared with webContentsLifecycle (freeze/
-    // throttle), so only disable the Profiler domain — never detach.
+    // The debugger attachment is shared with webContentsLifecycle (freeze,
+    // memory purge, CPU-rate reset), so only disable the Profiler domain —
+    // never detach.
     if (!session.discarded) {
       session.wc.debugger.sendCommand("Profiler.disable").catch(() => {});
     }

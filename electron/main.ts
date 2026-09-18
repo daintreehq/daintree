@@ -253,17 +253,17 @@ app.commandLine.appendSwitch(
 );
 
 // Allow autoplay without user gesture (voice input, media panels).
-// Per-view CPU throttling for cached views is managed by ProjectViewManager
-// via CDP Emulation.setCPUThrottlingRate (per-renderer; window-wide
-// setBackgroundThrottling is unsuitable since Electron 28 — #8599).
+// Cached-view background cost is managed per view by ProjectViewManager —
+// hide, cache IPC, guarded CDP freeze. Window-wide setBackgroundThrottling is
+// unsuitable since Electron 28 (#8599), and CDP CPU throttling busy-spins the
+// renderer it "slows" (#12456).
 app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 // BackForwardCache wastes memory in an Electron app (no browser navigation history).
 // Translate: Chrome's page-translate feature has no surface in Electron and we never
 // invoke it — disabling skips its startup wiring. The feature is "Translate" (the
 // old "TranslateUI" name was renamed in Chromium ~M86 and is a no-op now).
 // (CalculateNativeWinOcclusion was considered and rejected: it's a runtime power
-// lever, not a boot win, and disabling it fights the per-view CDP throttling
-// ProjectViewManager already does.)
+// lever, not a boot win.)
 const disabledFeatures = ["BackForwardCache", "Translate"];
 app.commandLine.appendSwitch("disable-features", disabledFeatures.join(","));
 
@@ -455,9 +455,9 @@ if (!gotTheLock) {
           });
       },
       onViewCached: (wcId) => {
-        // Same producer cleanup as eviction: a cached view becomes
-        // freeze-eligible once CPU throttling lands. Live worktree/workspace
-        // ports would otherwise queue messages into a frozen renderer
+        // Same producer cleanup as eviction: a cached view is freeze-eligible
+        // the moment it is parked. Live worktree/workspace ports would
+        // otherwise queue messages into a frozen renderer
         // (#6273). Reactivation re-brokers a fresh port via
         // activateProjectView in projectCrud/switch.ts.
         // Each cleanup is isolated so a throw in one path can't leave the

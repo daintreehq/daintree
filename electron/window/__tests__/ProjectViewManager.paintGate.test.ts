@@ -200,7 +200,6 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
-  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -416,7 +415,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
       // The healthy outgoing view is still the attached, active one — and it
       // was never detached in the first place. Asserting only that it ends up
       // attached would also pass if the branch detached it and the rollback put
-      // it back, which still fires the cache/throttle/freeze side effects and
+      // it back, which still fires the cache/hide/freeze side effects and
       // flashes the blank frame this whole path exists to prevent.
       expect(manager.getActiveProjectId()).toBe("proj-a");
       const outgoing = manager.getActiveView();
@@ -1633,7 +1632,7 @@ describe("ProjectViewManager — paint gate (cold-start visible swap)", () => {
     await switchPromise;
 
     // The outgoing project-a view was cached → its renderer is told so it can
-    // cancel any in-flight wake/repaint rAFs before being throttled/frozen.
+    // cancel any in-flight wake/repaint rAFs before being hidden/frozen.
     expect(initialWc.send).toHaveBeenCalledWith(CHANNELS.APP_VIEW_CACHED);
   });
 });

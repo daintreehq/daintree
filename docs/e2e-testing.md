@@ -219,7 +219,7 @@ Two distinct smoke checks run at different points in the pipeline:
 
 ## `test:freeze-harness` — why it can't be a Playwright spec
 
-`npm run test:freeze-harness` (`scripts/run-freeze-harness.mjs` + `electron/services/freezeHarness.ts`) measures whether a cached project view's renderer genuinely stops executing tasks when the efficiency-freeze path freezes it, and resumes when it is thawed.
+`npm run test:freeze-harness` (`scripts/run-freeze-harness.mjs` + `electron/services/freezeHarness.ts`) measures whether a cached project view's renderer genuinely stops executing tasks when the efficiency-freeze path freezes it, resumes when it is thawed, and costs close to no CPU while cached and idle.
 
 **Do not port this to Playwright.** Playwright sends `Emulation.setFocusEmulationEnabled` to every page target it attaches to. That handler takes out a `WebContents` capturer with `stay_hidden=false`, which permanently tells the renderer it is user-visible. `Page.setWebLifecycleState(frozen)` calls `WasHidden()` internally, so on a forced-visible page it no-ops — while still returning success. A freeze assertion written in Playwright passes whether or not freeze works, in every project view, always (#11846). A second CDP session can't undo it either: `capture_handle_` and `focus_emulation_enabled_` are per-session handler state.
 
@@ -232,11 +232,13 @@ npm run build && npm run test:freeze-harness
 FREEZE_HARNESS_RUNS=5 npm run test:freeze-harness   # variance
 ```
 
+The idle-CPU leg is the one deliberate bound (#12456). Task counts cannot see a CDP CPU throttle: `Emulation.setCPUThrottlingRate` busy-spins the renderer main thread from a signal handler, outside any task and frozen or not, so the freeze legs passed while every cached view burned 25–40% of a core. After the freeze legs the harness switches back to A, so B — never probed — is freshly cached with efficiency freeze off, then reads B's renderer `cpu.cumulativeCPUUsage` from `app.getAppMetrics()` across a 10 s window and requires under 10% of one core. It fails on a missing counter, a replaced process, a pid shared with the active view, or a window that closes past B's purge deadline. `percentCPUUsage` is not used because every other `getAppMetrics()` caller resets its interval.
+
 All three measurement windows have to close before the cached view's first memory purge (`CACHED_VIEW_PURGE_DELAY_MS`, armed as the view is parked), or the purge perturbs the throughput being measured. The planned schedule is checked against the elapsed clock just before the control leg, and the actual finish is checked again after the last window — so widening `DAINTREE_FREEZE_HARNESS_WINDOW_MS` past what fits, or timers running long on a loaded box, fails the run with the shortfall rather than reporting a number measured across a purge.
 
 Reference numbers (macOS, Electron 42, 3s windows): control ~54,000 ticks, frozen **0**, recovered ~52,000. With `freezeWebContents` neutered the same run reads control 54,026 / frozen 53,875 — a ratio of 1.0x against 54,000x, so the harness is discriminating by a wide margin.
 
-**Measured on macOS only.** The mechanism is Chromium/CDP semantics and should be platform-independent, but that is an inference; Windows is unverified and is the platform most likely to differ. The harness is not wired into any workflow yet — run it on demand.
+**Freeze legs measured on macOS only.** The mechanism is Chromium/CDP semantics and should be platform-independent, but that is an inference; Windows is unverified and is the platform most likely to differ. The idle-CPU leg has not been run on any platform yet: its 10% ceiling comes from the 25–40% spin measured in #12456, so record the first real reading here. The harness is not wired into any workflow yet — run it on demand.
 
 ## Smoke Audit Cadence
 

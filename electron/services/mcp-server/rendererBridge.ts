@@ -164,12 +164,10 @@ function routeTimeoutSuffix(route: BridgeRoute | undefined, timeoutMs: number): 
  * lifecycle call sites: those only need the view running again eventually,
  * whereas the IPC queued here is precisely what the thaw has to precede.
  *
- * CPU throttling is deliberately left in place, matching `unfreezeActiveAgentViews`.
- * `Emulation.setCPUThrottlingRate` is orthogonal to lifecycle state and slows
- * JS without suspending it, so a thawed-but-throttled view still answers — and
- * clearing it would hand a background workspace the CPU budget of a foreground
- * one. Nothing here attaches, shows, focuses, or activates the view either: a
- * bound session driving project A must never disturb what the user is looking at.
+ * Thaw only, matching `unfreezeActiveAgentViews`: the view stays cached, so its
+ * renderer keeps demoting its own periodic work. Nothing here attaches, shows,
+ * focuses, or activates the view either: a bound session driving project A must
+ * never disturb what the user is looking at.
  */
 function thawThenSend(
   webContents: Electron.WebContents,

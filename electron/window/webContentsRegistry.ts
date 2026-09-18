@@ -44,9 +44,9 @@ const projectViewDestroyListeners = new Map<
 >();
 
 // Cached (deactivated) project views. Two kinds of send skip these renderers:
-// high-frequency replayable streams (log batches), because a CPU-throttled/
-// frozen renderer has no backpressure and pushed messages pile up in its task
-// queue; and visibility-scoped effects (sound triggers), where a cached view
+// high-frequency replayable streams (log batches), because they are wasted
+// work in a cached renderer and a frozen one has no backpressure, so pushed
+// messages pile up in its task queue; and visibility-scoped effects (sound triggers), where a cached view
 // playing along is the bug itself (#12177). State broadcasts and cleanup
 // commands must NOT consult this set: cached views have no replay path on warm
 // reactivation (#9490).

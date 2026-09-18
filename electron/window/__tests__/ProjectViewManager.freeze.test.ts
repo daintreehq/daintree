@@ -121,7 +121,6 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
-  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -130,6 +129,7 @@ import { events } from "../../services/events.js";
 import {
   freezeWebContents,
   unfreezeWebContents,
+  unthrottleCpuWebContents,
   purgeMemoryWebContents,
 } from "../../utils/webContentsLifecycle.js";
 import {
@@ -339,14 +339,47 @@ describe("ProjectViewManager — efficiency freeze", () => {
     expect(cachedCalls.every((call) => call[0] !== activeWc)).toBe(true);
   });
 
-  it("marks the view cached before applying the CPU throttle", async () => {
-    const { throttleCpuWebContents } = await import("../../utils/webContentsLifecycle.js");
+  it("marks the view cached before freezing it", async () => {
+    manager.setEfficiencyFreeze(true);
+    vi.advanceTimersByTime(500);
 
     await manager.switchTo("proj-b", "/path/b");
 
     const markOrder = vi.mocked(registerCachedViewWebContents).mock.invocationCallOrder[0];
-    const throttleOrder = vi.mocked(throttleCpuWebContents).mock.invocationCallOrder[0];
-    expect(markOrder).toBeLessThan(throttleOrder);
+    const freezeOrder = vi.mocked(freezeWebContents).mock.invocationCallOrder[0];
+    expect(markOrder).toBeDefined();
+    expect(freezeOrder).toBeDefined();
+    expect(markOrder).toBeLessThan(freezeOrder!);
+  });
+
+  it("sends no CPU-rate command when a view is cached (#12456)", async () => {
+    vi.mocked(unthrottleCpuWebContents).mockClear();
+
+    await manager.switchTo("proj-b", "/path/b");
+
+    expect(vi.mocked(unthrottleCpuWebContents)).not.toHaveBeenCalledWith(initialWc);
+  });
+
+  it("resets the CPU rate BEFORE unfreezing on warm reactivation", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    vi.mocked(unthrottleCpuWebContents).mockClear();
+    vi.mocked(unfreezeWebContents).mockClear();
+
+    await manager.switchTo("proj-a", "/path/a");
+
+    // The reset only acts on an already-attached debugger session, and the
+    // thaw attaches one — so the reset has to go first or it always fires.
+    const resetIdx = vi
+      .mocked(unthrottleCpuWebContents)
+      .mock.calls.findIndex((call) => (call[0] as unknown) === initialWc);
+    const unfreezeIdx = vi
+      .mocked(unfreezeWebContents)
+      .mock.calls.findIndex((call) => (call[0] as unknown) === initialWc);
+    expect(resetIdx).toBeGreaterThanOrEqual(0);
+    expect(unfreezeIdx).toBeGreaterThanOrEqual(0);
+    const resetOrder = vi.mocked(unthrottleCpuWebContents).mock.invocationCallOrder[resetIdx]!;
+    const unfreezeOrder = vi.mocked(unfreezeWebContents).mock.invocationCallOrder[unfreezeIdx]!;
+    expect(resetOrder).toBeLessThan(unfreezeOrder);
   });
 
   it("warm reactivation clears the cached mark", async () => {

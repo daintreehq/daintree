@@ -228,7 +228,6 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
   purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
-  throttleCpuWebContents: vi.fn().mockResolvedValue(undefined),
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -1157,7 +1156,7 @@ describe("ProjectViewManager — background restore", () => {
     wcQueue.push(wc);
     const promise = setup.manager.restoreInBackground("proj-b", "/proj-b", { lastUsed: 10 });
     await flushMicrotasks();
-    // Loaded but not hydrated: parking here would throttle and freeze a
+    // Loaded but not hydrated: parking here would hide and freeze a
     // renderer that has not yet respawned its agents.
     expect(setup.manager.views.get("proj-b")?.state).toBe("loading");
     setup.manager.signalViewHydrated(wc.id);
@@ -1279,7 +1278,7 @@ describe("ProjectViewManager — background restore", () => {
   });
 
   it("does not publish a view that never reported hydration", async () => {
-    // Parking it as "cached" would throttle and freeze a half-booted renderer
+    // Parking it as "cached" would hide and freeze a half-booted renderer
     // and hand the user a blank project the next time they switched to it.
     vi.useFakeTimers();
     try {
