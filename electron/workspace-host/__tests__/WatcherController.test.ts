@@ -61,6 +61,8 @@ async function settle(): Promise<void> {
 interface MutableHost {
   isRunning: boolean;
   isElevated: boolean;
+  recursiveAllowed: boolean;
+  suspended: boolean;
   gitWatchEnabled: boolean;
   gitWatchDebounceMs: number;
   worktreeId: string;
@@ -79,6 +81,8 @@ function makeHost(overrides: Partial<MutableHost> = {}): MutableHost {
   return {
     isRunning: true,
     isElevated: true,
+    recursiveAllowed: true,
+    suspended: false,
     gitWatchEnabled: true,
     gitWatchDebounceMs: 300,
     worktreeId: "/test/worktree",
@@ -1187,6 +1191,145 @@ describe("WatcherController", () => {
 
       expect(ctrl.currentMode).toBe("recursive");
       expect(host.onWatcherRecovered).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("backgrounded (suspended) host", () => {
+    it("arms nothing while suspended", async () => {
+      mockWatcherStartResult = true;
+      const host = makeHost({ isElevated: true, suspended: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      ctrl.ensureState();
+      await settle();
+
+      expect(watcherStartCallCount).toBe(0);
+      expect(ctrl.hasWatcher).toBe(false);
+    });
+
+    it("ensureState() lets go of the watcher on suspension and re-arms at the desired mode after", async () => {
+      mockWatcherStartResult = true;
+      const host = makeHost({ isElevated: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+      ctrl.start();
+      await settle();
+      expect(ctrl.currentMode).toBe("recursive");
+
+      host.suspended = true;
+      ctrl.ensureState();
+      expect(ctrl.hasWatcher).toBe(false);
+      expect(ctrl.currentMode).toBe("none");
+
+      host.suspended = false;
+      ctrl.ensureState();
+      await settle();
+      expect(ctrl.currentMode).toBe("recursive");
+    });
+
+    it("releases immediately on an elevation loss while suspended — no downgrade delay", async () => {
+      mockWatcherStartResult = true;
+      const host = makeHost({ isElevated: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+      ctrl.start();
+      await settle();
+
+      host.isElevated = false;
+      host.suspended = true;
+      const rotated = ctrl.handleElevationChange(false);
+
+      expect(rotated).toBe(true);
+      expect(ctrl.hasWatcher).toBe(false);
+    });
+
+    it("keeps the degradation episode across a suspension so recovery still signals", async () => {
+      mockRecursiveStartResult = false;
+      mockGitOnlyStartResult = true;
+      const host = makeHost({ isElevated: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+      ctrl.start();
+      await settle();
+      expect(ctrl.currentMode).toBe("git-only");
+
+      host.suspended = true;
+      ctrl.ensureState();
+      expect(ctrl.hasWatcher).toBe(false);
+
+      mockRecursiveStartResult = true;
+      host.suspended = false;
+      ctrl.ensureState();
+      await settle();
+
+      expect(ctrl.currentMode).toBe("recursive");
+      expect(host.onWatcherRecovered).toHaveBeenCalledTimes(1);
+    });
+
+    it("cancels a pending recursive retry on suspension", async () => {
+      mockRecursiveStartResult = false;
+      mockGitOnlyStartResult = true;
+      const host = makeHost({ isElevated: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+      ctrl.start();
+      await settle();
+      const armsBeforeSuspend = watcherStartCallCount;
+
+      host.suspended = true;
+      ctrl.ensureState();
+      mockRecursiveStartResult = true;
+      await vi.advanceTimersByTimeAsync(120_000);
+      await settle();
+
+      expect(watcherStartCallCount).toBe(armsBeforeSuspend);
+      expect(ctrl.hasWatcher).toBe(false);
+    });
+  });
+
+  describe("recursive budget", () => {
+    it("keeps an elevated worktree past the recursive cap on git-only", async () => {
+      mockWatcherStartResult = true;
+      const host = makeHost({ isElevated: true, recursiveAllowed: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+
+      expect(ctrl.desiredMode()).toBe("git-only");
+      expect(ctrl.currentMode).toBe("git-only");
+      // Still elevated, so the git-only fallback polls at the tightened cadence.
+      expect(ctrl.pollIntervalMs(() => 2_000)).toBe(60_000);
+    });
+
+    it("drops to git-only immediately when the recursive grant is withdrawn", async () => {
+      mockWatcherStartResult = true;
+      const host = makeHost({ isElevated: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+      ctrl.start();
+      await settle();
+      expect(ctrl.currentMode).toBe("recursive");
+
+      host.recursiveAllowed = false;
+      ctrl.ensureState();
+      await settle();
+
+      expect(ctrl.currentMode).toBe("git-only");
+    });
+
+    it("does not retry the recursive arm for a worktree past the cap", async () => {
+      mockRecursiveStartResult = false;
+      mockGitOnlyStartResult = true;
+      const host = makeHost({ isElevated: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+      ctrl.start();
+      await settle();
+      expect(ctrl.currentMode).toBe("git-only");
+
+      // Withdrawn during the backoff window: the retry must not re-arm recursive.
+      host.recursiveAllowed = false;
+      mockRecursiveStartResult = true;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(ctrl.currentMode).toBe("git-only");
     });
   });
 });

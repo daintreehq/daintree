@@ -281,4 +281,139 @@ describe("WorkspaceService agent-activity elevation", () => {
     expect(a.agentActive).toBe(true);
     expect(service["agentActiveWorktreeIds"].size).toBe(1);
   });
+
+  function modeOf(monitor: WorktreeMonitor): string {
+    return (monitor as unknown as { watcherController: { currentMode: string } }).watcherController
+      .currentMode;
+  }
+
+  describe("agent recursive cap", () => {
+    it("caps recursive coverage for agent-active worktrees; the rest keep a git-only watcher", () => {
+      service["agentRecursiveWatcherCap"] = 1;
+      registerMonitor("active", true);
+      setActive("active");
+      const a = registerMonitor("a");
+      const b = registerMonitor("b");
+      service["applyWatcherBudget"]();
+
+      service.setAgentActivity([a.id, b.id]);
+
+      expect(modeOf(a)).toBe("recursive");
+      expect(b.hasWatcher).toBe(true);
+      expect(modeOf(b)).toBe("git-only");
+    });
+
+    it("arms an over-cap newcomer git-only directly, never recursive first", () => {
+      service["agentRecursiveWatcherCap"] = 1;
+      const a = registerMonitor("a");
+      const b = registerMonitor("b");
+      service["applyWatcherBudget"]();
+      service.setAgentActivity([a.id]);
+      watcherArms.length = 0;
+
+      service.setAgentActivity([a.id, b.id]);
+
+      expect(modeOf(b)).toBe("git-only");
+      expect(watcherArms).not.toContainEqual({ watchWorktree: true });
+    });
+
+    it("a newcomer never evicts an established agent's recursive stream, whatever the broadcast order", () => {
+      service["agentRecursiveWatcherCap"] = 1;
+      const a = registerMonitor("a");
+      const b = registerMonitor("b");
+      service["applyWatcherBudget"]();
+      service.setAgentActivity([a.id]);
+      expect(modeOf(a)).toBe("recursive");
+
+      service.setAgentActivity([b.id, a.id]);
+
+      expect(modeOf(a)).toBe("recursive");
+      expect(modeOf(b)).toBe("git-only");
+    });
+
+    it("a freed slot promotes the next agent in activation order", () => {
+      service["agentRecursiveWatcherCap"] = 1;
+      const a = registerMonitor("a");
+      const b = registerMonitor("b");
+      service["applyWatcherBudget"]();
+      service.setAgentActivity([a.id, b.id]);
+      expect(modeOf(b)).toBe("git-only");
+
+      service.setAgentActivity([b.id]);
+
+      expect(modeOf(b)).toBe("recursive");
+    });
+
+    it("the focused worktree is outside the cap", () => {
+      service["agentRecursiveWatcherCap"] = 0;
+      const active = registerMonitor("active", true);
+      setActive("active");
+      const a = registerMonitor("a");
+      service["applyWatcherBudget"]();
+
+      service.setAgentActivity([active.id, a.id]);
+
+      expect(modeOf(active)).toBe("recursive");
+      expect(a.hasWatcher).toBe(true);
+      expect(modeOf(a)).toBe("git-only");
+    });
+
+    it("a shrunk cap from the resource profile demotes the newest agents", () => {
+      const a = registerMonitor("a");
+      const b = registerMonitor("b");
+      service["applyWatcherBudget"]();
+      service.setAgentActivity([a.id, b.id]);
+      expect(modeOf(a)).toBe("recursive");
+      expect(modeOf(b)).toBe("recursive");
+
+      service.updateMonitorConfig({ agentRecursiveWatcherCap: 1 });
+
+      expect(modeOf(a)).toBe("recursive");
+      expect(modeOf(b)).toBe("git-only");
+    });
+  });
+
+  describe("backgrounded project (#12459)", () => {
+    it("pause tears down non-agent watchers, the focused one included, and keeps agent-active ones", () => {
+      const active = registerMonitor("active", true);
+      setActive("active");
+      const a = registerMonitor("a");
+      const b = registerMonitor("b");
+      service["applyWatcherBudget"]();
+      service.setAgentActivity([a.id]);
+
+      service.setPollingEnabled(false);
+
+      expect(active.hasWatcher).toBe(false);
+      expect(b.hasWatcher).toBe(false);
+      expect(a.hasWatcher).toBe(true);
+      expect(modeOf(a)).toBe("recursive");
+    });
+
+    it("agent activity changes while paused re-evaluate the watcher both ways", () => {
+      const a = registerMonitor("a");
+      const b = registerMonitor("b");
+      service["applyWatcherBudget"]();
+      service.setAgentActivity([a.id]);
+      service.setPollingEnabled(false);
+
+      service.setAgentActivity([b.id]);
+
+      // a's agent finished on a project nobody is looking at: released now.
+      expect(a.hasWatcher).toBe(false);
+      // b's agent started: it gets the recursive watcher back.
+      expect(b.hasWatcher).toBe(true);
+      expect(modeOf(b)).toBe("recursive");
+    });
+
+    it("a worktree added while paused joins paused", async () => {
+      service.setPollingEnabled(false);
+
+      await service["addNewWorktreeMonitor"](createTestWorktree("late"), false, true);
+
+      const monitor = service["monitors"].get(wtPath("late"));
+      expect(monitor).toBeDefined();
+      expect(monitor!.hasWatcher).toBe(false);
+    });
+  });
 });

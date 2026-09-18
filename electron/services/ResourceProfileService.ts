@@ -1123,6 +1123,7 @@ export class ResourceProfileService {
           fetchIntervalActiveMs: config.fetchIntervalActiveMs,
           fetchIntervalBackgroundMs: config.fetchIntervalBackgroundMs,
           backgroundGitWatcherCap: config.backgroundGitWatcherCap,
+          agentRecursiveWatcherCap: config.agentRecursiveWatcherCap,
         });
       } catch {
         // non-critical

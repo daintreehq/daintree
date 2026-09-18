@@ -15,6 +15,15 @@ export interface ResourceProfileConfig {
    * efficiency to maximize headroom on constrained hardware.
    */
   backgroundGitWatcherCap: number;
+  /**
+   * Maximum number of agent-active worktrees allowed to hold a recursive
+   * (working-tree) watcher concurrently, per workspace-host. Agent-active
+   * worktrees are exempt from `backgroundGitWatcherCap` and always keep a
+   * watcher; this separate, generous cap only bounds how many of them stream
+   * the whole working tree. Agents past it keep a `git-only` watcher plus the
+   * 60 s elevated poll. The focused worktree is excluded.
+   */
+  agentRecursiveWatcherCap: number;
   /** ProcessTreeCache polling interval (ms) */
   processTreePollInterval: number;
   /** ProjectStatsService polling interval (ms) */
@@ -182,6 +191,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     pollIntervalActive: 1500,
     pollIntervalBackground: 5000,
     backgroundGitWatcherCap: 20,
+    agentRecursiveWatcherCap: 48,
     processTreePollInterval: 2000,
     projectStatsPollInterval: 5000,
     memoryPressureInactiveMs: 60 * 60 * 1000, // 60 min
@@ -200,6 +210,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     pollIntervalActive: 2000,
     pollIntervalBackground: 10000,
     backgroundGitWatcherCap: 12,
+    agentRecursiveWatcherCap: 32,
     processTreePollInterval: 2500,
     projectStatsPollInterval: 5000,
     memoryPressureInactiveMs: 30 * 60 * 1000, // 30 min
@@ -224,6 +235,7 @@ export const RESOURCE_PROFILE_CONFIGS: Record<ResourceProfile, BaseResourceProfi
     pollIntervalActive: 4000,
     pollIntervalBackground: 20000,
     backgroundGitWatcherCap: 6,
+    agentRecursiveWatcherCap: 16,
     processTreePollInterval: 5000,
     projectStatsPollInterval: 25000,
     memoryPressureInactiveMs: 15 * 60 * 1000, // 15 min

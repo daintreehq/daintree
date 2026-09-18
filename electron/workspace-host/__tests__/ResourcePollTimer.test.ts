@@ -3,6 +3,7 @@ import { ResourcePollTimer, type ResourcePollTimerHost } from "../ResourcePollTi
 
 interface MutableHost {
   isRunning: boolean;
+  pollingEnabled: boolean;
   hasResourceConfig: boolean;
   hasStatusCommand: boolean;
   resourcePollIntervalMs: number;
@@ -13,6 +14,7 @@ interface MutableHost {
 function makeHost(overrides: Partial<MutableHost> = {}): MutableHost {
   return {
     isRunning: true,
+    pollingEnabled: true,
     hasResourceConfig: true,
     hasStatusCommand: true,
     resourcePollIntervalMs: 30_000,
@@ -186,5 +188,39 @@ describe("ResourcePollTimer", () => {
     await vi.advanceTimersByTimeAsync(1_500);
 
     expect(host.onResourceStatusPoll).not.toHaveBeenCalled();
+  });
+
+  it("does not schedule while polling is paused", async () => {
+    const host = makeHost({ pollingEnabled: false, resourcePollIntervalMs: 1_000 });
+    const timer = new ResourcePollTimer(host as ResourcePollTimerHost);
+
+    timer.schedule();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(host.onResourceStatusPoll).not.toHaveBeenCalled();
+  });
+
+  it("does not re-arm when a poll in flight at pause completes", async () => {
+    let resolvePoll!: () => void;
+    const host = makeHost({
+      resourcePollIntervalMs: 1_000,
+      onResourceStatusPoll: vi.fn().mockImplementation(
+        () =>
+          new Promise<void>((resolve) => {
+            resolvePoll = resolve;
+          })
+      ),
+    });
+    const timer = new ResourcePollTimer(host as ResourcePollTimerHost);
+
+    timer.schedule();
+    await vi.advanceTimersByTimeAsync(1_101);
+    expect(host.onResourceStatusPoll).toHaveBeenCalledTimes(1);
+
+    host.pollingEnabled = false;
+    resolvePoll();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(host.onResourceStatusPoll).toHaveBeenCalledTimes(1);
   });
 });
