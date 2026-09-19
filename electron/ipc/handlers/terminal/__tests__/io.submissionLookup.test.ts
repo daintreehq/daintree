@@ -95,6 +95,7 @@ describe("terminal:get-submissions (#12337)", () => {
     getTerminalsForProjectAsync.mockResolvedValue([]);
     getTerminalAsync.mockImplementation(async (id: string, token?: string) => ({
       id,
+      projectId: TERMINAL_OWNERS.get(id) ?? undefined,
       submission: token === undefined ? undefined : { token, phase: "pty_written", at: 7 },
     }));
     registerTerminalIOHandlers(buildDeps());
@@ -134,6 +135,11 @@ describe("terminal:get-submissions (#12337)", () => {
     // project's own inventory places it rather than calling it foreign.
     getTerminalProjectId.mockReturnValue(null);
     getTerminalsForProjectAsync.mockResolvedValue(["term-exited"]);
+    getTerminalAsync.mockImplementation(async (id: string, token?: string) => ({
+      id,
+      projectId: "project-a",
+      submission: { token, phase: "pty_written", at: 7 },
+    }));
 
     await expect(getSubmissions(SENDER_A, ["term-exited"], "tok-1")).resolves.toEqual({
       "term-exited": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
@@ -141,8 +147,28 @@ describe("terminal:get-submissions (#12337)", () => {
     expect(getTerminalsForProjectAsync).toHaveBeenCalledWith("project-a");
   });
 
+  it("never serves an unbound sender a record another project owns once main forgot its owner", async () => {
+    // Main's null for an exited terminal matches an unbound sender's null
+    // project; the record's own owner is what refuses it.
+    getProjectForWebContentsMock.mockReturnValue(null);
+    getTerminalProjectId.mockReturnValue(null);
+    getTerminalAsync.mockResolvedValue({
+      id: "term-exited",
+      projectId: "project-a",
+      submission: { token: "tok-1", phase: "pty_written", at: 7 },
+    });
+
+    await expect(getSubmissions(SENDER_A, ["term-exited"], "tok-1")).resolves.toEqual({
+      "term-exited": { status: "unreadable" },
+    });
+  });
+
   it("reports a read terminal holding no record as absent, not unreadable", async () => {
-    getTerminalAsync.mockResolvedValue({ id: "term-a", submission: undefined });
+    getTerminalAsync.mockResolvedValue({
+      id: "term-a",
+      projectId: "project-a",
+      submission: undefined,
+    });
 
     await expect(getSubmissions(SENDER_A, ["term-a"], "tok-1")).resolves.toEqual({
       "term-a": { status: "absent" },
@@ -164,8 +190,8 @@ describe("terminal:get-submissions (#12337)", () => {
     getTerminalProjectId.mockReturnValue("project-a");
     getTerminalAsync.mockImplementation(async (id: string, token?: string) => {
       if (id === "term-gone") return null;
-      if (id === "term-empty") return { id, submission: undefined };
-      return { id, submission: { token, phase: "pty_written", at: 7 } };
+      if (id === "term-empty") return { id, projectId: "project-a", submission: undefined };
+      return { id, projectId: "project-a", submission: { token, phase: "pty_written", at: 7 } };
     });
 
     await expect(

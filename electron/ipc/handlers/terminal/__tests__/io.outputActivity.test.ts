@@ -90,6 +90,7 @@ describe("terminal:get-output-activity (#12495)", () => {
     getTerminalsForProjectAsync.mockResolvedValue([]);
     getTerminalAsync.mockImplementation(async (id: string) => ({
       id,
+      projectId: TERMINAL_OWNERS.get(id) ?? undefined,
       lastOutputChangeAt: 5_000,
     }));
     registerTerminalIOHandlers(buildDeps());
@@ -104,7 +105,11 @@ describe("terminal:get-output-activity (#12495)", () => {
   });
 
   it("reports a read terminal with no observed change as read, without a timestamp", async () => {
-    getTerminalAsync.mockResolvedValue({ id: "term-a", lastOutputChangeAt: undefined });
+    getTerminalAsync.mockResolvedValue({
+      id: "term-a",
+      projectId: "project-a",
+      lastOutputChangeAt: undefined,
+    });
 
     const result = (await getOutputActivity(SENDER_A, ["term-a"])) as Record<string, object>;
 
@@ -126,8 +131,8 @@ describe("terminal:get-output-activity (#12495)", () => {
     getTerminalProjectId.mockReturnValue("project-a");
     getTerminalAsync.mockImplementation(async (id: string) => {
       if (id === "term-gone") return null;
-      if (id === "term-quiet") return { id };
-      return { id, lastOutputChangeAt: 9 };
+      if (id === "term-quiet") return { id, projectId: "project-a" };
+      return { id, projectId: "project-a", lastOutputChangeAt: 9 };
     });
 
     await expect(
@@ -154,6 +159,11 @@ describe("terminal:get-output-activity (#12495)", () => {
       id === "term-b" ? "project-b" : id === "term-a" ? "project-a" : null
     );
     getTerminalsForProjectAsync.mockResolvedValue(["term-exited", "term-b"]);
+    getTerminalAsync.mockImplementation(async (id: string) => ({
+      id,
+      projectId: "project-a",
+      lastOutputChangeAt: 5_000,
+    }));
 
     const result = await getOutputActivity(SENDER_A, ["term-a", "term-exited", "term-b", "term-x"]);
 
@@ -168,6 +178,22 @@ describe("terminal:get-output-activity (#12495)", () => {
     expect(getTerminalsForProjectAsync).toHaveBeenCalledTimes(1);
     expect(getTerminalsForProjectAsync).toHaveBeenCalledWith("project-a");
     expect(getTerminalAsync.mock.calls.map(([id]) => id)).toEqual(["term-a", "term-exited"]);
+  });
+
+  it("never serves an unbound sender a record another project owns once main forgot its owner", async () => {
+    // Main's null for an exited terminal matches an unbound sender's null
+    // project; the record's own owner is what refuses it.
+    getProjectForWebContentsMock.mockReturnValue(null);
+    getTerminalProjectId.mockReturnValue(null);
+    getTerminalAsync.mockResolvedValue({
+      id: "term-exited",
+      projectId: "project-a",
+      lastOutputChangeAt: 5_000,
+    });
+
+    await expect(getOutputActivity(SENDER_A, ["term-exited"])).resolves.toEqual({
+      "term-exited": { status: "unreadable" },
+    });
   });
 
   it("skips the inventory when every id is already placed", async () => {

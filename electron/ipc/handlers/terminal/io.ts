@@ -512,6 +512,15 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   };
 
   /**
+   * The record's own owner has the last word. Main answers `null` for a
+   * terminal whose spawn entry it dropped on exit, which an unbound sender's
+   * `null` project would otherwise match whichever project the terminal is
+   * really in.
+   */
+  const isRecordOwnedBy = (info: { projectId?: string }, ctx: IpcContext): boolean =>
+    (info.projectId ?? null) === ctx.projectId;
+
+  /**
    * Resolve one submission token against a set of terminals (#12337).
    *
    * Scoped to the sender's own project by {@link resolveOwnedLookupIds}.
@@ -557,6 +566,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       // `getTerminalAsync` folds an RPC failure into `null`, so a null record
       // is genuinely "not observed" and must not become `absent`.
       if (!info) return;
+      if (!isRecordOwnedBy(info, ctx)) return;
       const record = info.submission;
       out[id] = record === undefined ? { status: "absent" } : { status: "found", record };
     });
@@ -585,6 +595,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       const info = records[index];
       // `getTerminalAsync` folds an RPC failure into `null`.
       if (!info) return;
+      if (!isRecordOwnedBy(info, ctx)) return;
       out[id] =
         info.lastOutputChangeAt === undefined
           ? { status: "read" }
