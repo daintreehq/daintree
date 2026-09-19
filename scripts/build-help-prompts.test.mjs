@@ -153,7 +153,7 @@ describe("help prompt outputs", () => {
         expect(body).toMatch(
           /(?:No|missing) `lastHandback` never means (?:the agent is )?still working/i
         );
-        expect(body).toMatch(/question[^.]*next prompt[^.]*no longer working/i);
+        expect(body).toMatch(/question[^\n]*next prompt[^\n]*status[^.\n]*no longer working/i);
       }
     );
   });
