@@ -152,24 +152,34 @@ export function getDevPreviewTool(toolId: string): DevPreviewTool | undefined {
 const warnedUndeclared = new Set<string>();
 
 /**
- * Whether this plugin's manifest declares the tool. A tool registered by a
- * renderer entry but absent from `contributes.previewTools` is a half-landed
- * contribution — an entry that was renamed on one side only, or a tool a
- * manifest never meant to ship — so it stays hidden and says so once.
+ * Whether this plugin's manifest declares the tool. Pure, so it is safe in a
+ * render body — the report an undeclared tool earns lives in
+ * {@link warnUndeclared}, which callers reach from an effect or from outside
+ * React.
  *
- * Silent while `meta` is undefined: that is the pre-snapshot state the enable
- * gate already covers, and warning there would fire on every cold start.
+ * False while `meta` is undefined: that is the pre-snapshot state the enable
+ * gate already covers.
  */
 function isDeclared(tool: DevPreviewTool, meta: PluginRuntimeMeta | undefined): boolean {
   if (!meta) return false;
-  if (meta.previewToolIds?.has(tool.id) === true) return true;
-  if (!warnedUndeclared.has(tool.id)) {
-    warnedUndeclared.add(tool.id);
-    logWarn(
-      `Dev-preview tool "${tool.id}" is registered but plugin "${tool.pluginId}" does not declare it in contributes.previewTools — hiding it.`
-    );
-  }
-  return false;
+  return meta.previewToolIds?.has(tool.id) === true;
+}
+
+/**
+ * A tool registered by a renderer entry but absent from
+ * `contributes.previewTools` is a half-landed contribution — an entry renamed
+ * on one side only, or a tool a manifest never meant to ship — so it stays
+ * hidden and says so once per id per session.
+ *
+ * Only ever called with a known `meta`: reporting before the first plugin
+ * snapshot lands would fire on every cold start.
+ */
+function warnUndeclared(tool: DevPreviewTool): void {
+  if (warnedUndeclared.has(tool.id)) return;
+  warnedUndeclared.add(tool.id);
+  logWarn(
+    `Dev-preview tool "${tool.id}" is registered but plugin "${tool.pluginId}" does not declare it in contributes.previewTools — hiding it.`
+  );
 }
 
 /**
@@ -181,7 +191,10 @@ export function getAvailableDevPreviewTool(toolId: string): DevPreviewTool | und
   if (!tool) return undefined;
   const { pluginMetaById, disabledPluginIds } = usePluginRuntimeStore.getState();
   if (disabledPluginIds.has(tool.pluginId)) return undefined;
-  return isDeclared(tool, pluginMetaById.get(tool.pluginId)) ? tool : undefined;
+  const meta = pluginMetaById.get(tool.pluginId);
+  if (isDeclared(tool, meta)) return tool;
+  if (meta) warnUndeclared(tool);
+  return undefined;
 }
 
 /** Registered tools whose plugin is loaded, enabled and declares them right now. */
@@ -191,6 +204,16 @@ export function useDevPreviewTools(): readonly DevPreviewTool[] {
   const known = usePluginRuntimeStore((s) => s.pluginMetaById);
   const init = usePluginRuntimeStore((s) => s.init);
   useEffect(() => init(), [init]);
+  // Reporting a half-landed contribution mutates module state and logs, so it
+  // belongs after the commit, never in the filter below — a render React
+  // discards or replays must not decide whether the warning was already said.
+  useEffect(() => {
+    for (const tool of tools) {
+      if (disabled.has(tool.pluginId)) continue;
+      const meta = known.get(tool.pluginId);
+      if (meta && !isDeclared(tool, meta)) warnUndeclared(tool);
+    }
+  }, [tools, disabled, known]);
   return tools.filter(
     (tool) => !disabled.has(tool.pluginId) && isDeclared(tool, known.get(tool.pluginId))
   );

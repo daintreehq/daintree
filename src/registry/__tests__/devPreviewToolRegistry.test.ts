@@ -1,9 +1,12 @@
+// @vitest-environment jsdom
+import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __resetDevPreviewToolsForTests,
   getAvailableDevPreviewTool,
   getDevPreviewTool,
   registerDevPreviewTool,
+  useDevPreviewTools,
 } from "@/registry/devPreviewToolRegistry";
 import { _resetPluginRuntimeStoreForTest, usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
@@ -82,5 +85,44 @@ describe("dev preview tool manifest gate", () => {
   it("returns undefined for an id nothing registered", () => {
     snapshot([TOOL]);
     expect(getAvailableDevPreviewTool(TOOL)).toBeUndefined();
+  });
+});
+
+describe("useDevPreviewTools", () => {
+  it("serves declared tools and hides undeclared ones", () => {
+    register();
+    register("acme.tools.ghost");
+    snapshot([TOOL]);
+    const { result } = renderHook(() => useDevPreviewTools());
+    expect(result.current.map((tool) => tool.id)).toEqual([TOOL]);
+  });
+
+  it("reports drift after the commit, once, without warning during render", () => {
+    register();
+    snapshot(["acme.tools.other"]);
+    // The filter itself must be pure: rendering it in isolation says nothing.
+    const { rerender } = renderHook(() => useDevPreviewTools());
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    rerender();
+    rerender();
+    expect(logWarn).toHaveBeenCalledTimes(1);
+  });
+
+  it("stays silent before the first plugin snapshot arrives", () => {
+    register();
+    const { result } = renderHook(() => useDevPreviewTools());
+    expect(result.current).toEqual([]);
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("drops a tool live when its plugin is disabled, without reporting drift", () => {
+    register();
+    snapshot([TOOL]);
+    const { result } = renderHook(() => useDevPreviewTools());
+    expect(result.current).toHaveLength(1);
+
+    act(() => snapshot([TOOL], [PLUGIN]));
+    expect(result.current).toEqual([]);
+    expect(logWarn).not.toHaveBeenCalled();
   });
 });

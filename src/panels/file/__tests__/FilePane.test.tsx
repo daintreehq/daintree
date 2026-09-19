@@ -276,6 +276,7 @@ const fileEditorState = vi.hoisted(() => ({
 }));
 vi.mock("@/registry/fileEditorRegistry", () => ({
   resolveFileEditor: () => null,
+  useResolvedFileEditor: () => null,
   useFileEditor: () =>
     fileEditorState.resolved === null
       ? null

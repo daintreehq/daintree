@@ -11,6 +11,7 @@ import {
   registerFileEditor,
   resolveFileEditor,
   useFileEditor,
+  useResolvedFileEditor,
 } from "../fileEditorRegistry";
 
 // The runtime mirror is a live store in this test so the enable gate can be
@@ -162,6 +163,45 @@ describe("fileEditorRegistry (#12323)", () => {
       // Only the metadata moved — the disabled set is the very same instance.
       act(() => setRuntime());
       expect(result.current?.registration.id).toBe("markdown");
+    });
+  });
+
+  describe("useResolvedFileEditor", () => {
+    it("answers as the non-reactive route does, keeping the disabled fallback", () => {
+      const { result } = renderHook(() => useResolvedFileEditor("/repo/plan.md"));
+      expect(result.current?.id).toBe("markdown");
+      expect(result.current?.maxBytes).toBe(2048);
+
+      act(() => setDisabled(["daintree.markdown-editor"]));
+      // Still the claimant: the banner's whole job is to offer to enable it.
+      expect(result.current?.id).toBe("markdown");
+    });
+
+    it("re-resolves when the runtime mirror moves rather than snapshotting it", () => {
+      const second = "daintree.other-editor";
+      registerFileEditor({
+        id: "other",
+        pluginId: second,
+        slot: "other.editor",
+        extensions: ["md"],
+      });
+      registerBuiltinView("markdown.editor", Editor, { pluginId: "daintree.markdown-editor" });
+      registerBuiltinView("other.editor", Editor, { pluginId: second });
+
+      const { result } = renderHook(() => useResolvedFileEditor("/repo/plan.md"));
+      expect(result.current?.id).toBe("markdown");
+
+      // A Preferences toggle: an unsubscribed getState() read would sit here.
+      act(() => setDisabled(["daintree.markdown-editor"]));
+      expect(result.current?.id).toBe("other");
+
+      act(() => setDisabled([]));
+      expect(result.current?.id).toBe("markdown");
+    });
+
+    it("resolves null when nothing claims the extension", () => {
+      const { result } = renderHook(() => useResolvedFileEditor("/repo/index.ts"));
+      expect(result.current).toBeNull();
     });
   });
 

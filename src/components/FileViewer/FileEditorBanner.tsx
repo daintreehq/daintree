@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
-import { resolveFileEditor } from "@/registry/fileEditorRegistry";
+import { useResolvedFileEditor } from "@/registry/fileEditorRegistry";
 import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 import { FileEditorHintBar } from "@/components/FileViewer/FileEditorHintBar";
 
@@ -12,7 +12,7 @@ interface FileEditorBannerProps {
 
 /** Both readers use the same discovery route, even while the plugin's view is disabled. */
 export function FileEditorBanner({ filePath, content, onEdit }: FileEditorBannerProps) {
-  const registration = resolveFileEditor(filePath);
+  const registration = useResolvedFileEditor(filePath);
   const contentBytes = useMemo(() => new TextEncoder().encode(content).byteLength, [content]);
   const meta = usePluginRuntimeStore((state) =>
     registration ? state.pluginMetaById.get(registration.pluginId) : undefined

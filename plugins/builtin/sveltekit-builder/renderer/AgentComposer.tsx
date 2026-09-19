@@ -1,4 +1,13 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from "react";
 import { ChevronRight, SquareTerminal } from "lucide-react";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getAgentConfig } from "@/config/agents";
@@ -186,7 +195,12 @@ export function AgentComposer({
   const memory = useComposerMemory(memoryKey);
   const { draft, pinned, chosen, deliveries } = memory;
   const setDraft = (next: string) => updateComposerMemory(memoryKey, { draft: next });
-  const setPinned = (next: Pinned | null) => updateComposerMemory(memoryKey, { pinned: next });
+  // Stable: two effects below take it as a dependency, and a fresh identity
+  // each render would make their dependency arrays meaningless.
+  const setPinned = useCallback(
+    (next: Pinned | null) => updateComposerMemory(memoryKey, { pinned: next }),
+    [memoryKey]
+  );
   const setChosen = (next: string | null) => updateComposerMemory(memoryKey, { chosen: next });
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
@@ -219,23 +233,28 @@ export function AgentComposer({
   const destination = chosen === null ? destinations[0] : committed;
   const destinationGone = chosen !== null && committed === undefined;
 
-  const current: Pinned | null =
-    selection.status === "ready"
-      ? {
-          selection: selection.selection,
-          file: ownerFile(selection.selection, worktreePath),
-          // A component picked on the page is what the request is about.
-          scope: scopesFor(
-            selection.selection,
-            selection.scope === "component" ? selection.component : null,
-            selection.definitions
-          ).pickedIndex,
-          picked:
-            selection.scope === "component" && selection.component ? selection.component : null,
-          definitions: selection.definitions,
-          revisions: selection.revisions,
-        }
-      : null;
+  // Memoised so the effects below can depend on it: `selection` is the
+  // controller's own snapshot and only changes when the controller publishes.
+  const current: Pinned | null = useMemo(
+    () =>
+      selection.status === "ready"
+        ? {
+            selection: selection.selection,
+            file: ownerFile(selection.selection, worktreePath),
+            // A component picked on the page is what the request is about.
+            scope: scopesFor(
+              selection.selection,
+              selection.scope === "component" ? selection.component : null,
+              selection.definitions
+            ).pickedIndex,
+            picked:
+              selection.scope === "component" && selection.component ? selection.component : null,
+            definitions: selection.definitions,
+            revisions: selection.revisions,
+          }
+        : null,
+    [selection, worktreePath]
+  );
   const [unpinnedScope, setUnpinnedScope] = useState<{ selectionId: string; scope: number } | null>(
     null
   );
@@ -265,7 +284,7 @@ export function AgentComposer({
       return;
     }
     settlePinnedDefinitions(controller, memoryKey, pinned);
-  });
+  }, [pinned, current, controller, memoryKey, setPinned]);
   // A selection the page proved again after a hot update is the same subject
   // on newer bytes. The draft follows it: left on the old one it would cite
   // revisions that can no longer verify, and offer "use current selection" for
@@ -282,7 +301,7 @@ export function AgentComposer({
     );
     if (scope < 0) return;
     setPinned({ ...current, scope });
-  });
+  }, [pinned, current, supersedes, setPinned]);
   // The picked component's identity travels with the pin, so a pinned request
   // keeps naming the component the user highlighted.
   const scopes = subject ? scopesFor(subject.selection, subject.picked, definitions).scopes : [];

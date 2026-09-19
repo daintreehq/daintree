@@ -112,27 +112,49 @@ function isUsable(
 }
 
 /**
- * A registration for the file, resolved outside React: the first usable
- * candidate, else the first candidate at all.
+ * The first usable candidate for the file, else the first candidate at all.
  *
- * The fallback is deliberate. `FileEditorBanner` discovers through this
- * function precisely so it can offer to enable the plugin that claims the
- * file, which means a disabled-only answer has to stay visible here. Callers
- * that must not reach a disabled plugin resolve through {@link useFileEditor}
- * instead, which returns null rather than falling back.
+ * The fallback is deliberate. `FileEditorBanner` discovers this way precisely
+ * so it can offer to enable the plugin that claims the file, which means a
+ * disabled-only answer has to stay visible. Callers that must not reach a
+ * disabled plugin resolve through {@link useFileEditor} instead, which returns
+ * null rather than falling back.
+ *
+ * The usability test is the one the hooks apply, so the two never disagree
+ * about which candidate is the live one — a banner that hid because a
+ * *different* plugin was enabled would leave no route to the editor at all.
  */
-export function resolveFileEditor(filePath: string): FileEditorRegistration | null {
+function pickRegistration(
+  filePath: string,
+  known: ReadonlyMap<string, unknown>,
+  disabled: ReadonlySet<string>
+): FileEditorRegistration | null {
   const candidates = candidatesFor(filePath);
   if (candidates.length === 0) return null;
+  return candidates.find((entry) => isUsable(entry, known, disabled)) ?? candidates[0] ?? null;
+}
+
+/**
+ * {@link pickRegistration} resolved outside React, against the runtime store as
+ * it stands right now. For callers that are not rendering; a component reads
+ * through {@link useResolvedFileEditor} so it re-resolves when the store moves.
+ */
+export function resolveFileEditor(filePath: string): FileEditorRegistration | null {
   const { pluginMetaById, disabledPluginIds } = usePluginRuntimeStore.getState();
-  // The same usability test the hook applies, so the two never disagree about
-  // which candidate is the live one — a banner that hid because a *different*
-  // plugin was enabled would leave no route to the editor at all.
-  return (
-    candidates.find((entry) => isUsable(entry, pluginMetaById, disabledPluginIds)) ??
-    candidates[0] ??
-    null
-  );
+  return pickRegistration(filePath, pluginMetaById, disabledPluginIds);
+}
+
+/**
+ * {@link resolveFileEditor} as a subscribed read: the same fallback-bearing
+ * answer, but recomputed when either half of the plugin-runtime mirror moves,
+ * so a Preferences toggle re-resolves instead of leaving a stale registration
+ * on screen. Both selectors return the stored collections themselves, so a
+ * toggle that moves neither costs nothing.
+ */
+export function useResolvedFileEditor(filePath: string): FileEditorRegistration | null {
+  const known = usePluginRuntimeStore((s) => s.pluginMetaById);
+  const disabled = usePluginRuntimeStore((s) => s.disabledPluginIds);
+  return pickRegistration(filePath, known, disabled);
 }
 
 export interface ResolvedFileEditor {
