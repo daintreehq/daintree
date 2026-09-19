@@ -447,34 +447,49 @@ describe("routeHostEvent", () => {
     expect(spawnListener).toHaveBeenCalled();
   });
 
-  it("emits fd-leak-warning and returns true", () => {
-    const { deps, emitter } = makeDeps();
-    const listener = vi.fn();
-    emitter.on("fd-leak-warning", listener);
+  it.each(["elevated", "recovered"] as const)(
+    "forwards a %s fd-growth transition without the discriminant",
+    (state) => {
+      const { deps, emitter } = makeDeps();
+      const listener = vi.fn();
+      emitter.on("fd-growth", listener);
 
-    const handled = routeHostEvent(
-      {
-        type: "fd-leak-warning",
-        fdCount: 50,
-        activeTerminals: 5,
-        estimatedLeaked: 30,
-        orphanedPids: [],
-        ptmxLimit: 511,
+      const payload = {
+        state,
+        hostPid: 4242,
+        terminals: 25,
+        pooledPtys: 2,
+        pluginPtys: 1,
+        analysisWorkers: 3,
+        fdCount: 140,
+        expectedFds: 62,
+        baselineFds: 37,
+        growth: 41,
+        sustainedSamples: 3,
+        sampleIntervalMs: 30000,
+        episodeStartedAt: 900,
+        ...(state === "elevated"
+          ? {
+              descriptorTypes: {
+                charDevice: 30,
+                socket: 4,
+                fifo: 60,
+                file: 40,
+                directory: 4,
+                other: 1,
+                unavailable: 1,
+              },
+            }
+          : {}),
         timestamp: 1000,
-      },
-      deps
-    );
+      };
+      const handled = routeHostEvent({ type: "fd-growth", ...payload }, deps);
 
-    expect(handled).toBe(true);
-    expect(listener).toHaveBeenCalledWith({
-      fdCount: 50,
-      activeTerminals: 5,
-      estimatedLeaked: 30,
-      orphanedPids: [],
-      ptmxLimit: 511,
-      timestamp: 1000,
-    });
-  });
+      expect(handled).toBe(true);
+      expect(listener).toHaveBeenCalledTimes(1);
+      expect(listener).toHaveBeenCalledWith(payload);
+    }
+  );
 
   it("emits resource-metrics with timestamp", () => {
     const { deps, emitter } = makeDeps();

@@ -87,7 +87,6 @@ Live IPC → store reducers for panel/terminal state run through `panelStoreList
 | `backendHealth.ts` | pty-host backend crash/ready | crash-type normalization + recovery-timer state |
 | `resource.ts` | `onResourceMetrics`, memory pressure | `resourceMonitoringStore`; reduces background scrollback under pressure |
 | `watchdogHealth.ts` | watchdog disabled | `panelStore.setWatchdogDisabled` |
-| `fdLeakWarning.ts` | FD-leak warning | **Tier 0 — `console.warn` only** (5-min cooldown). Demoted from a toast in `c41d0ab50`; do not re-promote. |
 
 Two more modules in that directory are helpers rather than reducers: `identityReducer.ts` (the pure identity-field reduction `identity.ts` applies) and `identityDiagnostics.ts` (the bounded diagnostics ring behind identity transitions).
 

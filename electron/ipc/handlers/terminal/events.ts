@@ -4,6 +4,7 @@
 
 import { CHANNELS } from "../../channels.js";
 import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
+import { logInfo, logWarn } from "../../../utils/logger.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
 import { getMcpServerServiceRef } from "../../../window/serviceRefs.js";
@@ -15,7 +16,7 @@ import type {
   SpawnResult,
   TerminalResizeResult,
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
+  FdGrowthPayload,
   TerminalSubmitStatusPayload,
 } from "../../../../shared/types/pty-host.js";
 import type { HandlerDependencies } from "../../types.js";
@@ -165,13 +166,20 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   ptyClient.on("resource-metrics", handleResourceMetrics);
   handlers.push(() => ptyClient.off("resource-metrics", handleResourceMetrics));
 
-  // FD leak warning — forwarded to renderer as a diagnostic-only event.
-  // Deduplication is handled renderer-side with a 5-min log cooldown.
-  const handleFdLeakWarning = (payload: FdLeakWarningPayload) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_FD_LEAK_WARNING, payload);
+  // FD growth — the pty-host already emits once per episode transition, so
+  // this writes exactly one record each. It is logged here, not relayed: every
+  // project view is its own renderer, and a renderer-side log line repeated
+  // once per open view (#12520).
+  const handleFdGrowth = (payload: FdGrowthPayload) => {
+    const message = formatFdGrowth(payload);
+    if (payload.state === "elevated") {
+      logWarn(message, { ...payload });
+    } else {
+      logInfo(message, { ...payload });
+    }
   };
-  ptyClient.on("fd-leak-warning", handleFdLeakWarning);
-  handlers.push(() => ptyClient.off("fd-leak-warning", handleFdLeakWarning));
+  ptyClient.on("fd-growth", handleFdGrowth);
+  handlers.push(() => ptyClient.off("fd-growth", handleFdGrowth));
 
   // Terminal activity — per-terminal headline updates, project-scoped like
   // the status pulses above.
@@ -215,4 +223,36 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   handlers.push(unsubSessionCaptured);
 
   return () => handlers.forEach((cleanup) => cleanup());
+}
+
+function formatFdGrowth(payload: FdGrowthPayload): string {
+  const owners =
+    `${payload.terminals} terminals, ${payload.pooledPtys} pooled PTYs, ` +
+    `${payload.pluginPtys} plugin PTYs, ${payload.analysisWorkers} analysis workers`;
+  const span =
+    `for ${payload.sustainedSamples} samples ` +
+    `${Math.round(payload.sampleIntervalMs / 1000)}s apart`;
+  const counts =
+    `${payload.fdCount} open descriptors, ${payload.expectedFds} expected for ${owners}; ` +
+    `growth ${payload.growth} over the post-restore baseline of ${payload.baselineFds}`;
+
+  if (payload.state === "recovered") {
+    const minutes = Math.round((payload.timestamp - payload.episodeStartedAt) / 60000);
+    return (
+      `[TerminalDiagnostics] pty-host ${payload.hostPid} FD count back near baseline: ` +
+      `${counts} ${span}, ${minutes} min after it rose.`
+    );
+  }
+
+  const types = payload.descriptorTypes
+    ? Object.entries(payload.descriptorTypes)
+        .filter(([, count]) => count > 0)
+        .map(([type, count]) => `${type} ${count}`)
+        .join(", ")
+    : "";
+  return (
+    `[TerminalDiagnostics] pty-host ${payload.hostPid} FD count elevated: ` +
+    `${counts} ${span}.` +
+    (types ? ` Descriptor types: ${types}.` : "")
+  );
 }

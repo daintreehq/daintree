@@ -53,7 +53,8 @@ import type { WorkerMemoryAccounting } from "../../../electron/services/pty/anal
  *   - `electron/pty-host/ResourceGovernor.ts` unmodified: the real EMA, the
  *     real warmup gate, the real critical bypass, the real trim-before-pause
  *     one-shot, the real idle-first/agent-last pause and resume ordering, the
- *     real FD sweep, and the real gauge emissions.
+ *     real killed-PID sweep, and the real gauge emissions. FD sampling runs on
+ *     its own interval, which the fixture never starts.
  *   - Every byte budget and watermark comes from the shipped
  *     `electron/services/pty/types.ts`, never from a number this file chose.
  *
@@ -285,8 +286,8 @@ export class FlowControlFleet {
   /** Deliveries carrying bytes that are not this terminal's own marker. */
   corruptDeliveryCount = 0;
 
-  /** Ticks on which the governor asked how many terminals exist (FD sweep). */
-  governorTerminalCountCalls = 0;
+  /** Calls to the governor's FD owner read — FD sampling, never the resource tick. */
+  governorFdOwnerCalls = 0;
   /** Ticks on which the governor drained the data-loss counter (ungated). */
   governorDropSnapshotCalls = 0;
   /** Targeted pre-pause trims, in the order the governor asked for them. */
@@ -417,9 +418,9 @@ export class FlowControlFleet {
       this.governor = new modules.governor.ResourceGovernor({
         getTerminalIds: () => [...this.ids],
         getPauseCoordinator,
-        getTerminalCount: () => {
-          this.governorTerminalCountCalls += 1;
-          return this.ids.length;
+        getFdOwners: () => {
+          this.governorFdOwnerCalls += 1;
+          return { terminals: this.ids.length, pooledPtys: 0, pluginPtys: 0, analysisWorkers: 0 };
         },
         incrementPauseCount: (count) => {
           this.governorReportedPauseCount += count;

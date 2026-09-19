@@ -848,7 +848,7 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
       const observedSmoothed: number[] = [];
       const observedThrottling: boolean[] = [];
       const dropSnapshotsPerTick: number[] = [];
-      const terminalCountCallsPerTick: number[] = [];
+      const fdOwnerCallsPerTick: number[] = [];
       const pauseGaugePerTick: number[] = [];
       const pausedBeforeTick: boolean[] = [];
 
@@ -862,13 +862,13 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
           if (!fleet.workerTermDominates()) shortfall += 1;
           pausedBeforeTick.push(fleet.ids.some((id) => fleet.coordinator(id)?.isPaused === true));
           const dropsBefore = fleet.governorDropSnapshotCalls;
-          const countsBefore = fleet.governorTerminalCountCalls;
+          const fdOwnersBefore = fleet.governorFdOwnerCalls;
           const gaugeBefore = fleet.metricEvents.length;
           const at = performance.now();
           fleet.tickGovernor();
           sweepMs += performance.now() - at;
           dropSnapshotsPerTick.push(fleet.governorDropSnapshotCalls - dropsBefore);
-          terminalCountCallsPerTick.push(fleet.governorTerminalCountCalls - countsBefore);
+          fdOwnerCallsPerTick.push(fleet.governorFdOwnerCalls - fdOwnersBefore);
           pauseGaugePerTick.push(
             fleet.metricEvents
               .slice(gaugeBefore)
@@ -963,16 +963,14 @@ export const ptyFlowControlScenarios: PerfScenario[] = [
 
       // --- The gauges. Two ungated readings (the drop counter is drained on
       // every tick regardless of the metrics gate; the pause-duration gauge is
-      // load-bearing for the renderer's held-duration tooltip) plus the FD
-      // sweep's terminal-count read, which only runs where FD monitoring is
-      // supported.
-      const fdSupported = process.platform === "darwin" || process.platform === "linux";
+      // load-bearing for the renderer's held-duration tooltip). FD sampling has
+      // its own slower interval, so the resource tick never reads FD owners.
       let gaugeMisses = 0;
       dropSnapshotsPerTick.forEach((count) => {
         if (count !== 1) gaugeMisses += 1;
       });
-      terminalCountCallsPerTick.forEach((count) => {
-        if (count !== (fdSupported ? 1 : 0)) gaugeMisses += 1;
+      fdOwnerCallsPerTick.forEach((count) => {
+        if (count !== 0) gaugeMisses += 1;
       });
       pauseGaugePerTick.forEach((count, tick) => {
         if (count !== (pausedBeforeTick[tick] === true ? 1 : 0)) gaugeMisses += 1;

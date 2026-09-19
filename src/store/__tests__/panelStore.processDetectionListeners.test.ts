@@ -221,7 +221,6 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   terminal: {
     onResourceMetrics: vi.fn(() => vi.fn()),
     onReclaimMemory: vi.fn(() => vi.fn()),
-    onFdLeakWarning: vi.fn(() => vi.fn()),
   },
   terminalConfig: {
     get: vi.fn().mockResolvedValue({}),

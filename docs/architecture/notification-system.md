@@ -177,7 +177,7 @@ The Tier 0–4b model from `.claude/rules/user-signals.md`, mapped to the machin
 
 | Tier | Meaning | Surface / enforcing code |
 | --- | --- | --- |
-| **0** | Silent log — user can't act differently | `console.warn` / log only; e.g. FD-leak warning (`src/store/listeners/panel/fdLeakWarning.ts`, demoted in c41d0ab50) |
+| **0** | Silent log — user can't act differently | `console.warn` / log only; e.g. pty-host FD growth, logged once per episode in main (`electron/ipc/handlers/terminal/events.ts`; demoted from a toast in c41d0ab50) |
 | **1** | Ambient indicator — observable, non-blocking | `panel-state-*` frame borders (`ContentPanel`); toolbar pips; flow-status pill |
 | **2** | Inline warning banner — risk/threshold, no failure yet | `InlineStatusBanner` warning severity; `TerminalCountWarning` |
 | **3** | Inline error banner — pane-local failure + recovery | `InlineStatusBanner` error severity (single-action enforced by `ErrorActionProps`); `TerminalErrorBanner`/`SpawnErrorBanner`/`ReconnectErrorBanner` |
