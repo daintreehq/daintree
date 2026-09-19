@@ -103,7 +103,28 @@ describe("ForegroundProcessGroupProbe", () => {
     execFileMock.calls[0]!.resolve("4242 4243\n");
     await flush();
 
-    expect(probe.readSnapshot()).toEqual({ shellPgid: 4242, foregroundPgid: 4243 });
+    expect(probe.readSnapshot()).toEqual({
+      shellPgid: 4242,
+      foregroundPgid: 4243,
+      sampledAt: expect.any(Number),
+    });
+  });
+
+  it("stamps a reading with when its probe started, not when it landed", async () => {
+    vi.useFakeTimers();
+    try {
+      const probe = new ForegroundProcessGroupProbe(createHost());
+      const startedAt = Date.now();
+      probe.readSnapshot();
+      // A slow `ps`: the reading lands well after it was sampled.
+      vi.advanceTimersByTime(700);
+      execFileMock.calls[0]!.resolve("100 101\n");
+      await flush();
+
+      expect(probe.readSnapshot()?.sampledAt).toBe(startedAt);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("persists null when ps fails (process exited / abort) so callers fall back", async () => {
@@ -126,7 +147,7 @@ describe("ForegroundProcessGroupProbe", () => {
       await flush();
 
       // Within fresh window
-      expect(probe.readSnapshot()).toEqual({ shellPgid: 100, foregroundPgid: 101 });
+      expect(probe.readSnapshot()).toMatchObject({ shellPgid: 100, foregroundPgid: 101 });
 
       // Advance past hard-max (1500ms)
       vi.advanceTimersByTime(1600);
@@ -152,7 +173,7 @@ describe("ForegroundProcessGroupProbe", () => {
       vi.advanceTimersByTime(600); // past soft-stale (500ms), within hard-max (1500ms)
 
       // Soft-stale read returns cached value AND triggers refresh
-      expect(probe.readSnapshot()).toEqual({ shellPgid: 100, foregroundPgid: 101 });
+      expect(probe.readSnapshot()).toMatchObject({ shellPgid: 100, foregroundPgid: 101 });
       expect(execFileMock.calls.length).toBe(callsBefore + 1);
     } finally {
       vi.useRealTimers();

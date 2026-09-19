@@ -7,10 +7,7 @@ import {
 } from "../ProcessDetector.js";
 import { stripAnsi } from "./AgentPatternDetector.js";
 import { detectPrompt } from "./PromptDetector.js";
-import {
-  FOREGROUND_SNAPSHOT_MAX_AGE_MS,
-  INITIAL_FOREGROUND_SENTINEL,
-} from "./ForegroundProcessGroupProbe.js";
+import { INITIAL_FOREGROUND_SENTINEL } from "./ForegroundProcessGroupProbe.js";
 import { MutableDisposable, toDisposable, type IDisposable } from "../../utils/lifecycle.js";
 
 export const SHELL_IDENTITY_FALLBACK_COMMIT_MS = 1200;
@@ -129,6 +126,8 @@ interface ForegroundShellIdleReading {
   // True when the read produced no real reading (warm-up sentinel or a
   // stale/failed probe) — the caller may want to look again shortly.
   readonly empty: boolean;
+  // When the probe behind a real reading started, if the probe says.
+  readonly sampledAt?: number;
 }
 
 // The only two answers a latched probe can give while an agent is committed:
@@ -182,7 +181,11 @@ export interface IdentityWatcherDelegate {
   getRecentOutput?(): string;
   getLastCommand(): string | undefined;
   getPtyDescendantCount(): number | undefined;
-  readForegroundProcessGroupSnapshot(): { shellPgid: number; foregroundPgid: number } | null;
+  readForegroundProcessGroupSnapshot(): {
+    shellPgid: number;
+    foregroundPgid: number;
+    sampledAt?: number;
+  } | null;
   handleAgentDetection(result: DetectionResult, spawnedAt: number): void;
 }
 
@@ -703,6 +706,7 @@ export class IdentityWatcher {
         shellIdle: snapshot.shellPgid === snapshot.foregroundPgid,
         supported: true,
         empty: isSentinel,
+        sampledAt: snapshot.sampledAt,
       };
     }
 
@@ -915,12 +919,12 @@ export class IdentityWatcher {
   private judgePromptReturnWithGatedProbe(signals: CommittedPollSignals): PromptReturnVerdict {
     const ifShellIdle = this.judgePromptReturn(signals, FOREGROUND_SHELL_IDLE);
     if (!ifShellIdle.advance) {
-      this.foregroundCandidateSince = 0;
+      this.resetForegroundCandidate();
       return ifShellIdle;
     }
     const ifShellBusy = this.judgePromptReturn(signals, FOREGROUND_SHELL_BUSY);
     if (ifShellBusy.advance) {
-      this.foregroundCandidateSince = 0;
+      this.resetForegroundCandidate();
       return ifShellBusy;
     }
 
@@ -948,11 +952,14 @@ export class IdentityWatcher {
     if (!foreground.empty) {
       if (foreground.shellIdle) {
         this.foregroundRefutedAt = 0;
-      } else if (now - this.foregroundCandidateSince >= FOREGROUND_SNAPSHOT_MAX_AGE_MS) {
-        // The probe serves a cached reading up to its max age, so only one
-        // read this long after the evidence is known to have been sampled
-        // after it. An earlier busy answer may predate a prompt that has since
-        // returned, and must not buy the agent a five-second hold.
+      } else if (
+        foreground.sampledAt !== undefined &&
+        foreground.sampledAt >= this.foregroundCandidateSince
+      ) {
+        // Only a reading sampled after the evidence can refute it. The probe
+        // keeps serving a cached reading for a while, and a slow one lands
+        // late, so a busy answer taken before a prompt returned must not buy
+        // the agent a five-second hold; until a later one arrives, keep asking.
         this.foregroundRefutedAt = now;
       }
     }

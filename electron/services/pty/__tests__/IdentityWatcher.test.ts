@@ -8,10 +8,7 @@ import {
   type IdentityWatcherDelegate,
 } from "../IdentityWatcher.js";
 import type { ProcessDetector } from "../../ProcessDetector.js";
-import {
-  FOREGROUND_SNAPSHOT_MAX_AGE_MS,
-  INITIAL_FOREGROUND_SENTINEL,
-} from "../ForegroundProcessGroupProbe.js";
+import { INITIAL_FOREGROUND_SENTINEL } from "../ForegroundProcessGroupProbe.js";
 
 interface FakeDelegateState {
   isExited: boolean;
@@ -1793,7 +1790,12 @@ describe("IdentityWatcher", () => {
         foreground: { shellPgid: 123, foregroundPgid: 456 },
         ...overrides,
       });
-      const probe = vi.spyOn(delegate, "readForegroundProcessGroupSnapshot");
+      // Every read is a fresh sample, as when the probe's refresh has landed.
+      const probe = vi
+        .spyOn(delegate, "readForegroundProcessGroupSnapshot")
+        .mockImplementation(
+          () => state.foreground && { ...state.foreground, sampledAt: Date.now() }
+        );
       const watcher = new IdentityWatcher(delegate);
       return { delegate, state, clear, probe, watcher };
     }
@@ -1869,8 +1871,7 @@ describe("IdentityWatcher", () => {
       watcher.dispose();
     });
 
-    // Long enough for a read that is guaranteed to post-date the evidence.
-    const VERIFY_MS = FOREGROUND_SNAPSHOT_MAX_AGE_MS + 2 * SHELL_IDENTITY_FALLBACK_POLL_MS;
+    const VERIFY_MS = 2 * SHELL_IDENTITY_FALLBACK_POLL_MS;
 
     function showAgentPromptLookalike(state: FakeDelegateState) {
       // The agent leaves a shell-prompt-looking line on screen while it still
@@ -1882,18 +1883,19 @@ describe("IdentityWatcher", () => {
     it("re-probes an unchanged refuted candidate once per refutation window", async () => {
       const { state, probe, watcher, clear } = makeCommittedAgent();
       await commit(watcher);
+      probe.mockClear();
       showAgentPromptLookalike(state);
-      await vi.advanceTimersByTimeAsync(VERIFY_MS);
-      expect(probe).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(probe).toHaveBeenCalledTimes(1);
 
       // Refuted: the rest of the window asks nothing...
       probe.mockClear();
       await vi.advanceTimersByTimeAsync(
-        FOREGROUND_PROBE_REFUTATION_MS - 2 * SHELL_IDENTITY_FALLBACK_POLL_MS
+        FOREGROUND_PROBE_REFUTATION_MS - SHELL_IDENTITY_FALLBACK_POLL_MS
       );
       expect(probe).not.toHaveBeenCalled();
-      // ...and the next window costs one read, since the evidence is old.
-      await vi.advanceTimersByTimeAsync(2 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      // ...and the next window costs one read.
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
       expect(probe).toHaveBeenCalledTimes(1);
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
 
@@ -1941,20 +1943,71 @@ describe("IdentityWatcher", () => {
     });
 
     it("does not let a cached busy reading re-arm the hold after the prompt returns", async () => {
-      const { state, watcher, clear } = makeCommittedAgent({ ptyDescendantCount: 2 });
+      const { state, probe, watcher, clear } = makeCommittedAgent({ ptyDescendantCount: 2 });
       await commit(watcher);
       showAgentPromptLookalike(state);
       await vi.advanceTimersByTimeAsync(VERIFY_MS);
 
       // The agent exits (a helper lingers, so the tree does not move) and the
-      // shell prompt prints — but the probe keeps serving its cached busy
-      // reading for a few reads before the refresh lands.
+      // shell prompt prints — but the probe keeps serving the busy reading it
+      // took before, until its refresh lands.
+      const cachedBusy = { shellPgid: 123, foregroundPgid: 456, sampledAt: Date.now() };
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      probe.mockReturnValueOnce(cachedBusy).mockReturnValueOnce(cachedBusy);
+      probe.mockReturnValueOnce(cachedBusy);
+      await vi.advanceTimersByTimeAsync(1);
       watcher.observeOutput("user@host:~/repo$ ");
       await vi.advanceTimersByTimeAsync(2 * SHELL_IDENTITY_FALLBACK_POLL_MS);
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
 
-      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
       await vi.advanceTimersByTimeAsync(3 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("does not let a slow probe's pre-prompt sample re-arm the hold", async () => {
+      const { state, probe, watcher, clear } = makeCommittedAgent({ ptyDescendantCount: 2 });
+      await commit(watcher);
+      showAgentPromptLookalike(state);
+      await vi.advanceTimersByTimeAsync(VERIFY_MS);
+
+      // A probe started before the prompt returned lands late and is then
+      // served from cache: every busy answer for the next two seconds
+      // predates the prompt, however long after it they are read.
+      const sampledBeforePrompt = { shellPgid: 123, foregroundPgid: 456, sampledAt: Date.now() };
+      await vi.advanceTimersByTimeAsync(1);
+      watcher.observeOutput("user@host:~/repo$ ");
+      probe.mockImplementation(() => sampledBeforePrompt);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+      probe.mockImplementation(() => ({
+        shellPgid: 123,
+        foregroundPgid: 123,
+        sampledAt: Date.now(),
+      }));
+      await vi.advanceTimersByTimeAsync(3 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("drops the hold when its candidate leaves the screen", async () => {
+      const { state, probe, watcher, clear } = makeCommittedAgent();
+      await commit(watcher);
+      showAgentPromptLookalike(state);
+      await vi.advanceTimersByTimeAsync(VERIFY_MS);
+
+      // The lookalike scrolls away, then a real prompt arrives in chunks the
+      // output matcher never saw whole — same tree, shell back in front.
+      state.visibleLines = ["Codex ready", "working..."];
+      state.cursorLine = "working...";
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      probe.mockClear();
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.ptyDescendantCount = 1;
+      state.visibleLines = ["Codex exited", "user@host daintree % "];
+      state.cursorLine = "user@host daintree % ";
+      await vi.advanceTimersByTimeAsync(3 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(probe).toHaveBeenCalled();
       expect(clear).toHaveBeenCalledWith("prompt-return");
     });
 
