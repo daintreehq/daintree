@@ -36,7 +36,7 @@ import {
   getResourceProfileService,
   getWorkspaceClientRef,
 } from "../window/serviceRefs.js";
-import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
+import { refreshAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import {
   isSpawnCensusInstalled,
   runUncounted,
@@ -57,6 +57,7 @@ import {
   checkRendererContinuity,
   checkWindowEvents,
   checkWindowTiming,
+  censusCoverage,
   computeTreeUsage,
   cpuPercent,
   IDLE_HARNESS_CONFIG_ENV,
@@ -280,8 +281,11 @@ async function switchToProject(
   const hydration = await pvm.waitForViewHydrated(entry.view.webContents.id, {
     timeoutMs: SWITCH_TIMEOUT_MS,
   });
-  if (hydration !== "hydrated") {
-    throw new Error(`project ${project.index + 1}'s view never reported hydration (${hydration})`);
+  // "hydrated" means hydration ran — the renderer reports from a `finally` —
+  // and teardown settles the same way, so the view must still be this one.
+  const current = pvm.getAllViews().find((view) => view.projectId === project.id);
+  if (hydration !== "hydrated" || current !== entry || entry.view.webContents.isDestroyed()) {
+    throw new Error(`project ${project.index + 1}'s view never finished hydrating (${hydration})`);
   }
 }
 
@@ -378,7 +382,9 @@ function collectLabels(
   labels: Map<number, string>
 ): void {
   labels.set(process.pid, "main");
-  for (const metric of getAppMetricsSnapshot()) {
+  // Fresh, not the shared cache: a host born seconds before an edge must carry
+  // its role, or it escapes the census coverage check as an anonymous child.
+  for (const metric of refreshAppMetricsSnapshot()) {
     if (metric.type === "GPU") labels.set(metric.pid, "gpu");
     else if (metric.type === "Utility") labels.set(metric.pid, utilityLabel(metric));
     else if (metric.type === "Tab" && !labels.has(metric.pid))
@@ -452,7 +458,15 @@ async function readCensus(dir: string): Promise<CensusFileLike[]> {
     if (!name.endsWith(".json")) continue;
     try {
       const parsed = JSON.parse(await readFile(path.join(dir, name), "utf8")) as CensusFileLike;
-      if (parsed && typeof parsed.role === "string" && parsed.buckets) files.push(parsed);
+      if (
+        parsed &&
+        typeof parsed.role === "string" &&
+        typeof parsed.pid === "number" &&
+        typeof parsed.startedAtMs === "number" &&
+        parsed.buckets
+      ) {
+        files.push(parsed);
+      }
     } catch {
       // A torn or foreign file is reported as missing coverage below.
     }
@@ -915,9 +929,9 @@ async function readProtectedLifecycle(
 
 /**
  * Launches inside the window by role and command. Every census-bearing process
- * alive at the close must have a census that kept flushing through it — a gap
- * fails the run rather than reading as zero launches. One that departed
- * mid-window may have lost its last few seconds to the kill; that is reported.
+ * alive at the close must have its own census that kept flushing through it —
+ * a gap fails the run rather than reading as zero launches. One that departed
+ * mid-window may have lost its last seconds to a kill; that is reported.
  */
 async function spawnReport(
   censusDir: string,
@@ -927,20 +941,21 @@ async function spawnReport(
   await delay(CENSUS_DRAIN_MS);
   const files = await readCensus(censusDir);
   const slice = sliceSpawnCensus(files, reading.startMs, reading.endMs);
-  const alive = usage.processes.filter((p) => CENSUS_ROLES.has(p.label));
-  const alivePids = new Set(alive.map((p) => p.pid));
-  const censusPids = new Set(files.map((file) => file.pid));
-  const missing = alive
-    .filter((p) => !censusPids.has(p.pid))
-    .map((p) => ({ pid: p.pid, label: p.label }));
-  const stalled = slice.stale.filter((file) => alivePids.has(file.pid));
+  const coverage = censusCoverage({
+    alive: usage.processes.filter((p) => CENSUS_ROLES.has(p.label)),
+    departed: usage.departed.filter((p) => CENSUS_ROLES.has(p.label)),
+    files,
+    windowEndMs: reading.endMs,
+  });
   const failures: string[] = [];
-  if (missing.length > 0) {
-    failures.push(`no spawn census from ${missing.map((m) => `${m.label} ${m.pid}`).join(", ")}`);
-  }
-  if (stalled.length > 0) {
+  if (coverage.missing.length > 0) {
     failures.push(
-      `spawn census stopped flushing in ${stalled.map((f) => `${f.role} ${f.pid}`).join(", ")}`
+      `no spawn census from ${coverage.missing.map((m) => `${m.label} ${m.pid}`).join(", ")}`
+    );
+  }
+  if (coverage.stalled.length > 0) {
+    failures.push(
+      `spawn census stopped flushing in ${coverage.stalled.map((m) => `${m.label} ${m.pid}`).join(", ")}`
     );
   }
   return {
@@ -948,10 +963,7 @@ async function spawnReport(
       total: slice.total,
       perSecond: round(slice.total / ((reading.endMs - reading.startMs) / 1000), 2),
       byCommand: Object.fromEntries(Object.entries(slice.byCommand).sort(([, a], [, b]) => b - a)),
-      partialFromDeparted: slice.stale.filter(
-        (file) => !alivePids.has(file.pid) && file.flushedAtMs >= reading.startMs
-      ),
-      missingCensus: missing,
+      departedCoverage: coverage.departed,
     },
     failures,
   };
@@ -1067,8 +1079,9 @@ export async function runIdleHarness(
     const sampledEndMs = reading.end.atUs / 1000;
     // Events count up to whichever edge is later, so nothing that touched the
     // CPU samples escapes the checks.
+    const closedAtMs = Math.max(reading.endMs, sampledEndMs);
     const within = <T extends { atMs: number }>(list: T[]) =>
-      inWindow(list, reading.startMs, Math.max(reading.endMs, sampledEndMs));
+      inWindow(list, reading.startMs, closedAtMs);
 
     const usage = computeTreeUsage({
       start: reading.start,
@@ -1097,7 +1110,7 @@ export async function runIdleHarness(
       }),
       ...checkWindowEvents({
         windowStartMs: reading.startMs,
-        windowEndMs: reading.endMs,
+        windowEndMs: closedAtMs,
         terminalExits: within(observed.terminalExits).length,
         focusChanges: within(observed.focusChanges).length,
         processesGone:

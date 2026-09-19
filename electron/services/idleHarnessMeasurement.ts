@@ -116,6 +116,7 @@ export function parseDaemonCpu(
 export interface ProcessUsage {
   pid: number;
   ppid: number;
+  startUs: number;
   name: string;
   label: string;
   /** Not present when the window opened. */
@@ -132,6 +133,7 @@ export interface ProcessUsage {
 
 export interface DepartedProcess {
   pid: number;
+  startUs: number;
   name: string;
   label: string;
   /** The live ancestor its pre-window share was charged against, if any. */
@@ -301,6 +303,7 @@ export function computeTreeUsage({
     usageByPid.set(pid, {
       pid,
       ppid: now.ppid,
+      startUs: now.startUs,
       name: now.name,
       label: resolveLabel(end, pid, labels.end),
       born: !before,
@@ -347,6 +350,7 @@ export function computeTreeUsage({
     }
     departed.push({
       pid: sample.pid,
+      startUs: sample.startUs,
       name: sample.name,
       label: resolveLabel(start, sample.pid, labels.start),
       chargedToPid: chargedTo?.pid ?? null,
@@ -401,6 +405,7 @@ export function cpuPercent(cpuNs: number, elapsedMs: number): number {
 export interface CensusFileLike {
   role: string;
   pid: number;
+  startedAtMs: number;
   flushedAtMs: number;
   exited: boolean;
   buckets: Record<string, Record<string, number>>;
@@ -410,8 +415,6 @@ export interface CensusSlice {
   /** role:command -> launches inside the window. */
   byCommand: Record<string, number>;
   total: number;
-  /** Processes whose last flush predates the window's close without exiting. */
-  stale: Array<{ role: string; pid: number; flushedAtMs: number }>;
   files: number;
 }
 
@@ -425,12 +428,8 @@ export function sliceSpawnCensus(
   endMs: number
 ): CensusSlice {
   const byCommand: Record<string, number> = {};
-  const stale: CensusSlice["stale"] = [];
   let total = 0;
   for (const file of files) {
-    if (!file.exited && file.flushedAtMs < endMs) {
-      stale.push({ role: file.role, pid: file.pid, flushedAtMs: file.flushedAtMs });
-    }
     for (const [secondText, counts] of Object.entries(file.buckets)) {
       const bucketStart = Number(secondText) * 1000;
       if (!(bucketStart >= startMs && bucketStart + 1000 <= endMs)) continue;
@@ -441,7 +440,56 @@ export function sliceSpawnCensus(
       }
     }
   }
-  return { byCommand, total, stale, files: files.length };
+  return { byCommand, total, files: files.length };
+}
+
+export interface CensusCoverage {
+  /** Alive at the close with no census of its own. */
+  missing: Array<{ pid: number; label: string }>;
+  /** Alive at the close, but its census stopped flushing before it. */
+  stalled: Array<{ pid: number; label: string; flushedAtMs: number }>;
+  /** Departed mid-window; a signal kill can cost the last few seconds. */
+  departed: Array<{ pid: number; label: string; coverage: "complete" | "partial" | "missing" }>;
+}
+
+/**
+ * Match census files to process incarnations. A file belongs to a process
+ * when role and pid agree and the census started after the process did — the
+ * census installs at bootstrap, so an older incarnation's file always started
+ * before the current one was forked. Both clocks are the wall clock.
+ */
+export function censusCoverage({
+  alive,
+  departed,
+  files,
+  windowEndMs,
+}: {
+  alive: ReadonlyArray<{ pid: number; label: string; startUs: number }>;
+  departed: ReadonlyArray<{ pid: number; label: string; startUs: number }>;
+  files: readonly CensusFileLike[];
+  windowEndMs: number;
+}): CensusCoverage {
+  const fileFor = (p: { pid: number; label: string; startUs: number }) =>
+    files
+      .filter((f) => f.pid === p.pid && f.role === p.label && f.startedAtMs >= p.startUs / 1000)
+      .sort((a, b) => b.startedAtMs - a.startedAtMs)[0];
+  const coverage: CensusCoverage = { missing: [], stalled: [], departed: [] };
+  for (const p of alive) {
+    const file = fileFor(p);
+    if (!file) coverage.missing.push({ pid: p.pid, label: p.label });
+    else if (!file.exited && file.flushedAtMs < windowEndMs) {
+      coverage.stalled.push({ pid: p.pid, label: p.label, flushedAtMs: file.flushedAtMs });
+    }
+  }
+  for (const p of departed) {
+    const file = fileFor(p);
+    coverage.departed.push({
+      pid: p.pid,
+      label: p.label,
+      coverage: !file ? "missing" : file.exited ? "complete" : "partial",
+    });
+  }
+  return coverage;
 }
 
 export const IDLE_HARNESS_CONFIG_ENV = "DAINTREE_IDLE_HARNESS_CONFIG";

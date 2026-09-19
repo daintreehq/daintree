@@ -4,6 +4,7 @@ import {
   checkRendererContinuity,
   checkWindowEvents,
   checkWindowTiming,
+  censusCoverage,
   computeTreeUsage,
   cpuPercent,
   descendantsOf,
@@ -15,6 +16,7 @@ import {
   resolveLabel,
   sliceSpawnCensus,
   type CellObservation,
+  type CensusFileLike,
   type IdleHarnessConfig,
   type ProcessSample,
   type SamplerSnapshot,
@@ -215,6 +217,7 @@ describe("computeTreeUsage", () => {
     expect(usage.departed).toEqual([
       {
         pid: 12,
+        startUs: 12_000,
         name: "proc-12",
         label: "workspace-host",
         chargedToPid: 10,
@@ -360,31 +363,102 @@ describe("sliceSpawnCensus", () => {
         {
           role: "pty-host",
           pid: 5,
+          startedAtMs: 1_000,
           flushedAtMs: 20_000,
           exited: false,
           buckets: { "9": { ps: 100 }, "10": { ps: 3 }, "11": { ps: 4, git: 1 }, "12": { ps: 50 } },
         },
-        { role: "main", pid: 1, flushedAtMs: 20_000, exited: false, buckets: { "10": { git: 2 } } },
+        {
+          role: "main",
+          pid: 1,
+          startedAtMs: 1_000,
+          flushedAtMs: 20_000,
+          exited: false,
+          buckets: { "10": { git: 2 } },
+        },
       ],
       10_000,
       12_000
     );
     expect(slice.byCommand).toEqual({ "pty-host:ps": 7, "pty-host:git": 1, "main:git": 2 });
     expect(slice.total).toBe(10);
-    expect(slice.stale).toEqual([]);
     expect(slice.files).toBe(2);
   });
+});
 
-  it("flags a live process whose last flush predates the window's close", () => {
-    const slice = sliceSpawnCensus(
-      [
-        { role: "workspace-host", pid: 7, flushedAtMs: 11_000, exited: false, buckets: {} },
-        { role: "workspace-host", pid: 8, flushedAtMs: 11_000, exited: true, buckets: {} },
-      ],
-      10_000,
-      12_000
-    );
-    expect(slice.stale).toEqual([{ role: "workspace-host", pid: 7, flushedAtMs: 11_000 }]);
+describe("censusCoverage", () => {
+  const file = (over: Partial<CensusFileLike>): CensusFileLike => ({
+    role: "workspace-host",
+    pid: 7,
+    startedAtMs: 5_000,
+    flushedAtMs: 20_000,
+    exited: false,
+    buckets: {},
+    ...over,
+  });
+  const host = { pid: 7, label: "workspace-host", startUs: 4_900_000 };
+
+  it("accepts a live process whose own census flushed past the close", () => {
+    expect(
+      censusCoverage({ alive: [host], departed: [], files: [file({})], windowEndMs: 12_000 })
+    ).toEqual({
+      missing: [],
+      stalled: [],
+      departed: [],
+    });
+  });
+
+  it("fails a live process with no census, or one that stopped flushing", () => {
+    expect(
+      censusCoverage({ alive: [host], departed: [], files: [], windowEndMs: 12_000 }).missing
+    ).toEqual([{ pid: 7, label: "workspace-host" }]);
+    expect(
+      censusCoverage({
+        alive: [host],
+        departed: [],
+        files: [file({ flushedAtMs: 11_000 })],
+        windowEndMs: 12_000,
+      }).stalled
+    ).toEqual([{ pid: 7, label: "workspace-host", flushedAtMs: 11_000 }]);
+  });
+
+  it("matches incarnations, so a reused pid neither borrows nor inherits a file", () => {
+    const reborn = { pid: 7, label: "workspace-host", startUs: 9_000_000 };
+    const oldFile = file({ startedAtMs: 5_000, flushedAtMs: 8_000, exited: true });
+    expect(
+      censusCoverage({ alive: [reborn], departed: [], files: [oldFile], windowEndMs: 12_000 })
+        .missing
+    ).toEqual([{ pid: 7, label: "workspace-host" }]);
+    const staleOld = file({ startedAtMs: 5_000, flushedAtMs: 8_000 });
+    const current = file({ startedAtMs: 9_100, flushedAtMs: 20_000 });
+    expect(
+      censusCoverage({
+        alive: [reborn],
+        departed: [],
+        files: [staleOld, current],
+        windowEndMs: 12_000,
+      })
+    ).toEqual({ missing: [], stalled: [], departed: [] });
+  });
+
+  it("reports how much of a departed process's census survived", () => {
+    const departed = [
+      { pid: 7, label: "workspace-host", startUs: 4_900_000 },
+      { pid: 8, label: "workspace-host", startUs: 4_900_000 },
+      { pid: 9, label: "workspace-host", startUs: 4_900_000 },
+    ];
+    expect(
+      censusCoverage({
+        alive: [],
+        departed,
+        files: [file({ exited: true }), file({ pid: 8, flushedAtMs: 11_000 })],
+        windowEndMs: 12_000,
+      }).departed
+    ).toEqual([
+      { pid: 7, label: "workspace-host", coverage: "complete" },
+      { pid: 8, label: "workspace-host", coverage: "partial" },
+      { pid: 9, label: "workspace-host", coverage: "missing" },
+    ]);
   });
 });
 
