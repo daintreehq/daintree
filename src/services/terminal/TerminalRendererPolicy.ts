@@ -9,6 +9,11 @@ export interface RendererPolicyDeps {
   onResumeFlush?: (id: string) => void;
   onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
   applyDeferredResize?: (id: string) => boolean;
+  /**
+   * Whether this project view is cached (#12514). A cached view holds no
+   * foreground tier: every request clamps to BACKGROUND and applies at once.
+   */
+  isViewCached?: () => boolean;
 }
 
 // Backend cadence hint sent to the PTY host alongside the binary
@@ -60,10 +65,16 @@ export class TerminalRendererPolicy {
     terminalClient.setActivityTier(id, tier, pollingIntervalMs);
   }
 
-  applyRendererPolicy(id: string, tier: TerminalRefreshTier): void {
+  applyRendererPolicy(id: string, requestedTier: TerminalRefreshTier): void {
     this.knownTerminalIds.add(id);
     const managed = this.deps.getInstance(id);
     if (!managed) return;
+
+    // Clamped here rather than only in the tier providers because overrides
+    // bypass them — the write-burst path requests BURST on every chunk a
+    // cached agent streams.
+    const isCached = this.deps.isViewCached?.() === true;
+    const tier = isCached ? TerminalRefreshTier.BACKGROUND : requestedTier;
 
     // #9779: A pending BACKGROUND downgrade in the hysteresis window means the
     // ingest queue is holding bytes (the computed-tier gate). If the computed
@@ -114,6 +125,18 @@ export class TerminalRendererPolicy {
     const isUpgrade = tier < currentAppliedTier;
 
     if (isUpgrade) {
+      if (managed.tierChangeTimer !== undefined) {
+        clearTimeout(managed.tierChangeTimer);
+        managed.tierChangeTimer = undefined;
+      }
+      managed.pendingTier = undefined;
+      this.applyRendererPolicyImmediate(id, managed, tier);
+      return;
+    }
+
+    // No hysteresis for a cached view: the downgrade guards against focus and
+    // scroll flapping, and nothing flaps in a view nobody can see.
+    if (isCached) {
       if (managed.tierChangeTimer !== undefined) {
         clearTimeout(managed.tierChangeTimer);
         managed.tierChangeTimer = undefined;

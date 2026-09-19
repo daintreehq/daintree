@@ -41,6 +41,7 @@ import { isAssistantFocused } from "./macroFocusStore";
 import { isMcpSpawnFocusSuppressed } from "./mcpSpawnFocusGuard";
 import type { CrashType } from "@shared/types/pty-host";
 import { isRuntimeAgentTerminal } from "@/utils/terminalType";
+import { isProjectViewCached } from "@/lib/viewCacheState";
 import { logInfo, logWarn, logError } from "@/utils/logger";
 import { clearTerminalRestartGuard } from "./restartExitSuppression";
 import { buildPanelSnapshotOptions } from "@/services/terminal/panelDuplicationService";
@@ -145,6 +146,13 @@ export function getTerminalRefreshTier(
   isFocused: boolean,
   options: { isFleetArmed?: boolean } = {}
 ): TerminalRefreshTier {
+  // A cached project view is on nobody's screen, whatever its panes' local
+  // focus, layout visibility or agent state say (#12514). First, so no
+  // early return below can hand it a foreground tier.
+  if (isProjectViewCached()) {
+    return TerminalRefreshTierEnum.BACKGROUND;
+  }
+
   if (!terminal) {
     return TerminalRefreshTierEnum.VISIBLE;
   }

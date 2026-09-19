@@ -22,6 +22,8 @@ const INTERACTIVE_OVERRIDE_THROTTLE_MS = 500;
 export interface TerminalBurstControllerDeps {
   getInstance: (id: string) => ManagedTerminal | undefined;
   applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
+  /** Whether this project view is cached — output there earns no burst (#12514). */
+  isViewCached?: () => boolean;
 }
 
 /**
@@ -197,6 +199,9 @@ export class TerminalBurstController {
    * stranding the terminal at FOCUSED/VISIBLE/BACKGROUND mid-stream.
    */
   onPtyWrite(id: string): void {
+    // A streaming agent in a cached view would otherwise re-request BURST and
+    // re-arm the decay timer on every chunk, only for the policy to clamp it.
+    if (this.deps.isViewCached?.() === true) return;
     const managed = this.deps.getInstance(id);
     if (!managed) return;
 

@@ -1,4 +1,12 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
+
+const viewCache = vi.hoisted(() => ({ cached: false }));
+
+vi.mock("@/lib/viewCacheState", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/viewCacheState")>()),
+  isProjectViewCached: () => viewCache.cached,
+}));
+
 import { getTerminalRefreshTier } from "../panelStore";
 import { TerminalRefreshTier } from "@shared/types/panel";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -292,5 +300,39 @@ describe("getTerminalRefreshTier - runtime agent identity", () => {
       activityStatus: "working",
     });
     expect(getTerminalRefreshTier(terminal, false)).toBe(TerminalRefreshTier.BACKGROUND);
+  });
+});
+
+describe("getTerminalRefreshTier - cached project view (#12514)", () => {
+  afterEach(() => {
+    viewCache.cached = false;
+  });
+
+  it("answers BACKGROUND for every pane of a cached view, whatever its local state", () => {
+    viewCache.cached = true;
+    const workingAgent = makeTerminal({
+      kind: "terminal",
+      detectedAgentId: "claude",
+      agentState: "working",
+    });
+
+    // Focused, working and fleet-armed each short-circuit to a foreground tier
+    // in a visible view — none of them may survive caching.
+    expect(getTerminalRefreshTier(workingAgent, true)).toBe(TerminalRefreshTier.BACKGROUND);
+    expect(getTerminalRefreshTier(workingAgent, false)).toBe(TerminalRefreshTier.BACKGROUND);
+    expect(
+      getTerminalRefreshTier(makeTerminal({ kind: "terminal" }), false, { isFleetArmed: true })
+    ).toBe(TerminalRefreshTier.BACKGROUND);
+    expect(getTerminalRefreshTier(undefined, false)).toBe(TerminalRefreshTier.BACKGROUND);
+  });
+
+  it("restores the ordinary tier once the view is no longer cached", () => {
+    const workingAgent = makeTerminal({
+      kind: "terminal",
+      detectedAgentId: "claude",
+      agentState: "working",
+    });
+
+    expect(getTerminalRefreshTier(workingAgent, true)).toBe(TerminalRefreshTier.FOCUSED);
   });
 });
