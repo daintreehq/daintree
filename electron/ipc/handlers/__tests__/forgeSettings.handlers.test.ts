@@ -42,6 +42,7 @@ vi.mock("../../../services/forgeProviderRegistry.js", () => registryMock);
 
 const workspaceClientMock = vi.hoisted(() => ({
   updateForgeCredentials: vi.fn(),
+  updateForgeSettingsForAllProjects: vi.fn(async () => {}),
 }));
 
 vi.mock("../../../services/WorkspaceClient.js", () => ({
@@ -106,6 +107,7 @@ describe("registerForgeSettingsHandlers", () => {
     registryMock.getRegisteredForgeProviders.mockReturnValue([]);
     registryMock.getForgeProviderImpl.mockReturnValue(undefined);
     workspaceClientMock.updateForgeCredentials.mockReset();
+    workspaceClientMock.updateForgeSettingsForAllProjects.mockClear();
     projectStoreMock.getProjectById.mockReturnValue({
       id: "project-1",
       path: "/repo",
@@ -164,6 +166,34 @@ describe("registerForgeSettingsHandlers", () => {
     const setDefault = findHandler("forge:set-default-provider");
     expect(setDefault(null, "acme.gitea")).toEqual({ defaultProviderId: "acme.gitea" });
     expect(storeMock.set).toHaveBeenCalledWith("forgeDefaultProviderId", "acme.gitea");
+  });
+
+  it("setDefaultProvider pushes a changed default to every live workspace host (#12519)", async () => {
+    storeMock._data["forgeDefaultProviderId"] = "acme.gitea";
+    registerForgeSettingsHandlers();
+    const setDefault = findHandler("forge:set-default-provider");
+
+    setDefault(null, "daintree.github.github");
+
+    await vi.waitFor(() =>
+      expect(workspaceClientMock.updateForgeSettingsForAllProjects).toHaveBeenCalledTimes(1)
+    );
+  });
+
+  it("setDefaultProvider does not push an unchanged default", async () => {
+    storeMock._data["forgeDefaultProviderId"] = "acme.gitea";
+    registerForgeSettingsHandlers();
+    const setDefault = findHandler("forge:set-default-provider");
+
+    setDefault(null, "acme.gitea");
+    // A real change afterwards: its push landing proves the first had its chance.
+    setDefault(null, "daintree.github.github");
+    await vi.waitFor(() =>
+      expect(workspaceClientMock.updateForgeSettingsForAllProjects).toHaveBeenCalled()
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(workspaceClientMock.updateForgeSettingsForAllProjects).toHaveBeenCalledTimes(1);
   });
 
   it("setDefaultProvider clears the value when called with null", () => {

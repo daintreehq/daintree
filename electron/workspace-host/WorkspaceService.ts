@@ -510,6 +510,17 @@ export class WorkspaceService {
   private forgeRemoteDetectionActive = false;
   // Set by `pause()`, cleared by `resume()`.
   private backgrounded = false;
+  // The resume reprobe the PR poller waits on; see `resume()`.
+  private pendingResumeSettle: Promise<void> | null = null;
+  // Stopped by `pause()` rather than by an unload, so `resume()` restarts it.
+  private wslDistroPollerSuspended = false;
+  // The last credential change that reached this host while backgrounded,
+  // replayed by `resume()` — it would otherwise fetch every worktree and poll
+  // PRs in a host nothing is looking at.
+  private deferredCredentialUpdate: {
+    providerId: string;
+    credentials: import("../../shared/types/forge.js").Credentials | null;
+  } | null = null;
   private git: SimpleGit | null = null;
   /**
    * Whether the loaded folder is a git repository, as observed by `loadProject`.
@@ -1336,6 +1347,7 @@ export class WorkspaceService {
     // across a project switch could refresh the next project's monitors with
     // this project's distro.
     this.wslProbeSeq++;
+    this.wslDistroPollerSuspended = false;
     if (this.wslDistroPoller) {
       clearInterval(this.wslDistroPoller);
       this.wslDistroPoller = null;
@@ -2451,6 +2463,7 @@ export class WorkspaceService {
 
   private stopForgeRemoteDetection(): void {
     this.forgeRemoteDetectionActive = false;
+    this.pendingResumeSettle = null;
     this.disarmForgeConfigBackstop();
     if (this.forgeReselectTimer) {
       clearTimeout(this.forgeReselectTimer);
@@ -5298,6 +5311,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     // the transition is worth a line; the stops below stay idempotent.
     if (!this.backgrounded) console.log("[WorkspaceService] Pausing (backgrounded)");
     this.backgrounded = true;
+    this.pendingResumeSettle = null;
     this.setPollingEnabled(false);
     this.prService.pause();
     // The pool keeps a backgrounded host for as long as its project's view is
@@ -5305,6 +5319,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     // a host nothing is looking at. Nothing else watches `.git/config` while
     // paused either — `resume()` reprobes once to catch what it missed.
     this.disarmForgeConfigBackstop();
+    if (this.wslDistroPoller) {
+      this.stopWslDistroPoller();
+      this.wslDistroPollerSuspended = true;
+    }
     try {
       os.setPriority(process.pid, os.constants.priority.PRIORITY_LOW);
     } catch {
@@ -5322,20 +5340,35 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     const wasBackgrounded = this.backgrounded;
     this.backgrounded = false;
     this.setPollingEnabled(true);
-    if (!wasBackgrounded || !this.forgeRemoteDetectionActive) {
-      this.prService.resume();
+    if (this.wslDistroPollerSuspended) {
+      this.wslDistroPollerSuspended = false;
+      this.startWslDistroPoller();
+    }
+    const deferredCredentials = this.deferredCredentialUpdate;
+    this.deferredCredentialUpdate = null;
+    if (deferredCredentials) {
+      this.updateForgeCredentials(deferredCredentials.providerId, deferredCredentials.credentials);
+    }
+    if (wasBackgrounded && this.forgeRemoteDetectionActive) {
+      this.armForgeConfigBackstop();
+      // Settle the remotes before the PR poller restarts on the provider it
+      // resolved before the pause: nothing watched `.git/config` meanwhile.
+      // Stat-gated, so an unchanged config costs one stat and no git; a changed
+      // one emits `sys:forge:remote-changed`, which drops that resolution first.
+      const settle = this.reprobeForgeRemoteAsync().catch(() => {});
+      this.pendingResumeSettle = settle;
+      void settle.then(() => {
+        // Superseded by a pause or an unload, each of which clears it.
+        if (this.pendingResumeSettle !== settle) return;
+        this.pendingResumeSettle = null;
+        this.prService.resume();
+      });
       return;
     }
-    this.armForgeConfigBackstop();
-    // Settle the remotes before the PR poller restarts on the provider it
-    // resolved before the pause: nothing watched `.git/config` meanwhile.
-    // Stat-gated, so an unchanged config costs one stat and no git; a changed
-    // one emits `sys:forge:remote-changed`, which drops that resolution first.
-    void this.reprobeForgeRemoteAsync()
-      .catch(() => {})
-      .finally(() => {
-        if (!this.backgrounded) this.prService.resume();
-      });
+    // A switch-back foregrounds twice (the switch handler, then the pool's warm
+    // re-attach); the second must not start the poller ahead of the settle.
+    if (this.pendingResumeSettle) return;
+    this.prService.resume();
   }
 
   getPRStatus(requestId: string): void {
@@ -5356,7 +5389,9 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     const remoteSelectionChanged = args.forgeRemote !== this.forgeRemoteName;
     this.forgeRemoteName = args.forgeRemote;
     pullRequestService.setForgeSettings(args);
-    void pullRequestService.refresh();
+    // A backgrounded host re-resolves when it is foregrounded; refreshing now
+    // would query the forge for a project nothing is showing (#12519).
+    if (!this.backgrounded) void pullRequestService.refresh();
     // The remote table on disk is unchanged, so the signature-gated reprobe
     // would never fire — but the remote we *select* from it just moved, which
     // changes the matched provider for every monitor (#11408).
@@ -5453,6 +5488,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
   ): void {
+    if (this.backgrounded) {
+      this.deferredCredentialUpdate = { providerId, credentials };
+      return;
+    }
     this.prService.updateForgeCredentials(
       providerId,
       credentials,
@@ -5528,6 +5567,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.stopWslDistroPoller();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
+    this.deferredCredentialUpdate = null;
 
     for (const id of this.monitors.keys()) {
       this.resourceActionExecutor.cleanupResourceActionState(id);
@@ -5677,6 +5717,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.stopWslDistroPoller();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
+    this.deferredCredentialUpdate = null;
     this.resourceActionExecutor.dispose();
     for (const monitor of this.monitors.values()) {
       monitor.stop();

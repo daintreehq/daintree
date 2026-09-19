@@ -1,4 +1,5 @@
 import { EventEmitter } from "events";
+import os from "os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
@@ -216,6 +217,44 @@ describe("WorkspaceService WSL eligibility refresh (#9924)", () => {
     await slowPoll;
     expect(ubuntu.setWslEligible).not.toHaveBeenCalled();
     expect(service["wslLastKnownDefaultDistro"]).toBe("Debian");
+  });
+
+  it("stops the distro poll while backgrounded and restarts it on resume (#12519)", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(os, "setPriority").mockImplementation(() => {});
+      getDefaultWslDistroMock.mockResolvedValue("Ubuntu");
+      service["startWslDistroPoller"]();
+
+      service.pause();
+      getDefaultWslDistroMock.mockClear();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getDefaultWslDistroMock).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("an unload while backgrounded does not revive the distro poll on resume", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(os, "setPriority").mockImplementation(() => {});
+      getDefaultWslDistroMock.mockResolvedValue("Ubuntu");
+      service["startWslDistroPoller"]();
+      service.pause();
+      service["stopWslDistroPoller"]();
+
+      service.resume();
+      getDefaultWslDistroMock.mockClear();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("the background poll refreshes monitors only when the default distro changes", async () => {

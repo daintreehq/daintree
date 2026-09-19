@@ -1669,6 +1669,11 @@ describe("ProcessMemoryMonitor", () => {
       stop = startAppMetricsMonitor(mockActions);
       await advanceToTier2();
 
+      expect(mockActions.reclaimDormantWorkspaceHosts).toHaveBeenCalledTimes(1);
+      expect(logWarn).toHaveBeenCalledWith(
+        "memory-pressure-tier2-action-failed",
+        expect.objectContaining({ action: "reclaimDormantWorkspaceHosts" })
+      );
       expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
       expect(logInfo).toHaveBeenCalledWith(
         "memory-pressure-tier2-reclaim",

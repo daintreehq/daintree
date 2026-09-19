@@ -254,6 +254,12 @@ export class WorkspaceHostPool {
       // owns the mapping and all attachment bookkeeping (including disposing a
       // ready-failed entry, which it detects itself on the same code path).
       if (isStale()) return "warm";
+      // No reference is held across that wait, so the entry was still dormant
+      // and a reclaim, the warm cap or the grace timer may have disposed it.
+      // Re-inserting it would attach the window to a dead host; start over.
+      if (this.entries.get(normalizedPath) !== existingEntry) {
+        return this.loadProject(rootPath, windowId);
+      }
       if (isReadyFailed) {
         existingEntry.host.dispose("ready-failed");
         this.entries.delete(normalizedPath);
@@ -494,6 +500,17 @@ export class WorkspaceHostPool {
       forgeDefaultProviderId: forgeSettings.forgeDefaultProviderId,
       forgeRemote: forgeSettings.forgeRemote,
     });
+  }
+
+  /**
+   * Push forge settings to every host. For the global default provider, which
+   * no per-project settings save carries and which a host otherwise reads only
+   * at `load-project` — stale for as long as a retained host lives (#12519).
+   */
+  async updateForgeSettingsForAll(): Promise<void> {
+    await Promise.allSettled(
+      [...this.entries.values()].map((entry) => this.updateForgeSettings(entry.projectPath))
+    );
   }
 
   // ── Eviction / dormant management ──

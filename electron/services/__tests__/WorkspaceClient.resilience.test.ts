@@ -2650,15 +2650,80 @@ describe("WorkspaceClient multi-process manager", () => {
         client.unregisterWindow(1);
         client.unregisterWindow(2);
 
+        const timersBefore = vi.getTimerCount();
         expect(client.reclaimDormantHosts()).toBe(2);
         expect(h(0).dispose).toHaveBeenCalledWith("memory-pressure");
         expect(h(1).dispose).toHaveBeenCalledWith("memory-pressure");
         expect(h(2).dispose).not.toHaveBeenCalled();
+        // Both grace timers cancelled, not merely rendered harmless.
+        expect(vi.getTimerCount()).toBe(timersBefore - 2);
 
-        // Reclaimed hosts leave no timer behind to fire a second dispose.
         await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
         expect(h(0).dispose).toHaveBeenCalledTimes(1);
         expect(h(1).dispose).toHaveBeenCalledTimes(1);
+      });
+
+      it("a warm load does not re-attach a host reclaimed while it waited on readiness", async () => {
+        client.prewarmProject("/project-a");
+        const load = client.loadProject("/project-a", 1);
+
+        // Still dormant while the load waits: the reclaim takes it.
+        expect(client.reclaimDormantHosts()).toBe(1);
+        await readyAndResolveLoadFake(0);
+
+        // The load starts over on a fresh host instead of the disposed one.
+        expect(mockHosts).toHaveLength(2);
+        await readyAndResolveLoadFake(1);
+        expect(await load).toBe("cold");
+        expect(h(1).dispose).not.toHaveBeenCalled();
+
+        const next = client.loadProject("/project-a", 2);
+        expect(await next).toBe("warm");
+        expect(mockHosts).toHaveLength(2);
+      });
+
+      it("pushes forge settings to every live host, dormant ones included", async () => {
+        await loadOn("/project-a", 1, 0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        await loadOn("/project-b", 1, 1);
+        h(0).send.mockClear();
+        h(1).send.mockClear();
+
+        await client.updateForgeSettingsForAllProjects();
+
+        for (const host of [h(0), h(1)]) {
+          expect(host.send).toHaveBeenCalledWith(
+            expect.objectContaining({ type: "update-forge-settings" })
+          );
+        }
+      });
+
+      it("re-pauses a dormant host that restarted after a crash", async () => {
+        await loadOn("/project-a", 1, 0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        await loadOn("/project-b", 1, 1);
+        h(0).send.mockClear();
+
+        h(0).emit("restarted");
+        await vi.advanceTimersByTimeAsync(0);
+        const req = h(0).getLastRequest()!;
+        expect(req.type).toBe("load-project");
+        h(0).resolveRequest(req.requestId);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+      });
+
+      it("does not pause a restarted host a window still holds", async () => {
+        await loadOn("/project-a", 1, 0);
+        h(0).send.mockClear();
+
+        h(0).emit("restarted");
+        await vi.advanceTimersByTimeAsync(0);
+        h(0).resolveRequest(h(0).getLastRequest()!.requestId);
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(h(0).send).not.toHaveBeenCalledWith({ type: "background" });
       });
 
       describe("app-wide focus and wake passes skip dormant hosts", () => {

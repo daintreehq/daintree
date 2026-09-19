@@ -100,6 +100,16 @@ async function syncWorkspaceCredential(
   }
 }
 
+async function syncWorkspaceDefaultProvider(): Promise<void> {
+  try {
+    const { getWorkspaceClient } = await import("../../services/WorkspaceClient.js");
+    await getWorkspaceClient().updateForgeSettingsForAllProjects();
+  } catch {
+    // WorkspaceClient may not be initialized yet — every later load-project
+    // reads the default from the store.
+  }
+}
+
 /**
  * Ask a provider to re-probe token health because its credential just changed.
  *
@@ -316,7 +326,11 @@ export function registerForgeSettingsHandlers(): () => void {
       // keeping the set→get round-trip consistent and avoiding a brief
       // "Unknown provider" flash in the renderer (#8451).
       const next = normalizeProviderId(providerId);
+      const previous = readDefaultProviderId();
       store.set("forgeDefaultProviderId", next);
+      // A live host reads the default only at load-project, and a retained one
+      // can live for as long as its project's view stays cached (#12519).
+      if (next !== previous) void syncWorkspaceDefaultProvider();
       return { defaultProviderId: next };
     })
   );

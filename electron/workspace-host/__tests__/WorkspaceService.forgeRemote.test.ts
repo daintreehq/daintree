@@ -725,10 +725,13 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       await seedBaseline([]);
       service.pause();
       mockPullRequestService.start.mockClear();
+      mockStat.mockClear();
 
       service.resume();
       await vi.advanceTimersByTimeAsync(0);
 
+      const configStats = mockStat.mock.calls.filter(([p]) => String(p).endsWith("config"));
+      expect(configStats).toHaveLength(1);
       expect(mockSimpleGit.getRemotes).not.toHaveBeenCalled();
       expect(sysRemoteChanged).not.toHaveBeenCalled();
       expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
@@ -749,6 +752,105 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
 
       expect(sysRemoteChanged).toHaveBeenCalledTimes(1);
       expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+    });
+
+    /** Hold every `.git/config` stat until released, in call order. */
+    function holdConfigStats(): Array<() => void> {
+      const releases: Array<() => void> = [];
+      mockStat.mockImplementation((p: unknown) =>
+        String(p).endsWith("config")
+          ? new Promise((resolve) => releases.push(() => resolve({ ...configStat })))
+          : Promise.resolve({ ...configStat })
+      );
+      return releases;
+    }
+
+    it("a repeat foreground does not start PR polling ahead of the settle", async () => {
+      // A switch-back foregrounds twice: the switch handler, then the pool's
+      // warm re-attach.
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      const releases = holdConfigStats();
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("a settle superseded by a pause does not restart PR polling in the next cycle", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      const releases = holdConfigStats();
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      service.pause();
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // The first cycle's reprobe lands while the second's is still pending.
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+      releases[1]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("an unload during the settle leaves PR polling to the next load", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      const releases = holdConfigStats();
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      service["stopForgeRemoteDetection"]();
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
+    });
+
+    it("takes a forge settings push while backgrounded without querying the forge", async () => {
+      await seedBaseline([]);
+      service.pause();
+      mockPullRequestService.refresh.mockClear();
+
+      service.updateForgeSettings({
+        forgeProviderOverride: GITHUB_PROVIDER_ID,
+        forgeDefaultProviderId: null,
+        forgeRemote: null,
+      });
+
+      expect(mockPullRequestService.setForgeSettings).toHaveBeenCalled();
+      expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+    });
+
+    it("replays a credential change on resume instead of fetching while backgrounded", async () => {
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      const fetchNow = vi.spyOn(main, "triggerFetchNow").mockResolvedValue(undefined);
+      service.pause();
+      mockPullRequestService.refresh.mockClear();
+
+      service.updateForgeCredentials(GITHUB_PROVIDER_ID, { kind: "bearer", value: "token" });
+      expect(fetchNow).not.toHaveBeenCalled();
+      expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+      service.resume();
+      expect(fetchNow).toHaveBeenCalledTimes(1);
+      expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
     });
 
     it("does not restart PR polling when paused again before the reprobe lands", async () => {

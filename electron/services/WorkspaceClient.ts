@@ -217,6 +217,12 @@ export class WorkspaceClient extends EventEmitter {
     await this.pool.updateForgeSettings(projectPath);
   }
 
+  /** Push forge settings to every live host — the global default provider changed. */
+  async updateForgeSettingsForAllProjects(): Promise<void> {
+    if (this.isDisposed) return;
+    await this.pool.updateForgeSettingsForAll();
+  }
+
   // ── Direct port management ──
 
   attachDirectPort(windowId: number, webContents: Electron.WebContents): void {
