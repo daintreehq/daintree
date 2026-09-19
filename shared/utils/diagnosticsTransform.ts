@@ -145,7 +145,7 @@ export const PREBUILT_REDACTIONS: PrebuiltRedaction[] = [
   },
 ];
 
-/** Human-readable labels for the twelve diagnostic sections. */
+/** Human-readable labels for diagnostic sections; unlisted keys render as-is. */
 export const SECTION_LABELS: Record<string, string> = {
   metadata: "Metadata",
   runtime: "Runtime",
@@ -157,6 +157,7 @@ export const SECTION_LABELS: Record<string, string> = {
   git: "Git",
   config: "Configuration",
   terminals: "Terminals",
+  mcpAudit: "MCP Audit",
   logs: "Logs",
   events: "Events",
 };

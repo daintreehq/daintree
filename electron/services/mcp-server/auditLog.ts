@@ -82,6 +82,74 @@ function evidenceExpiry(timestamps: readonly number[], minCount: number): number
   return newestFirst[minCount - 1]! + ANOMALY_RECENCY_WINDOW_MS;
 }
 
+// Latency drift emits one signal per outlier record, so a full 10k ring could
+// otherwise balloon a bundle that leaves the machine. The total is kept.
+const DIAGNOSTICS_MAX_SIGNALS = 200;
+
+/**
+ * An anomaly signal as it appears in the diagnostics bundle. An explicit
+ * allowlist: signal and record ids are dropped along with everything else that
+ * is not needed to say which detector fired, for which tool, and how hard.
+ */
+export interface McpAuditDiagnosticsSignal {
+  kind: McpAnomalySignal["kind"];
+  toolId: string;
+  tier?: string;
+  severity: McpAnomalySignal["severity"];
+  timestamp: number;
+  zScore?: number;
+  durationMs?: number;
+  baselineMedianMs?: number;
+  p95Ms?: number;
+  clusterSize?: number;
+  clusterWindow?: number;
+}
+
+export interface McpAuditDiagnosticsToolCounts {
+  toolId: string;
+  callCount: number;
+  failureCount: number;
+}
+
+/**
+ * Collection-time summary of the audit ring for the diagnostics bundle. Tool
+ * ids, tiers, timings and counts only — never arguments, results, or session
+ * identity, because the bundle is built to leave the machine.
+ */
+export interface McpAuditDiagnosticsSnapshot {
+  enabled: boolean;
+  maxRecords: number;
+  recordCount: number;
+  dispatchRecordCount: number;
+  anomalyRecordFloor: number;
+  anomalySuppressed: boolean;
+  auth401Count: number;
+  anomalySignalCount: number;
+  anomalySignals: McpAuditDiagnosticsSignal[];
+  perTool: McpAuditDiagnosticsToolCounts[];
+}
+
+function isDispatchFailure(result: McpAuditResult): boolean {
+  return result !== "success" && result !== "dedup";
+}
+
+function projectDiagnosticsSignal(signal: McpAnomalySignal): McpAuditDiagnosticsSignal {
+  const out: McpAuditDiagnosticsSignal = {
+    kind: signal.kind,
+    toolId: signal.toolId,
+    severity: signal.severity,
+    timestamp: signal.timestamp,
+  };
+  if (signal.tier !== undefined) out.tier = signal.tier;
+  if (signal.zScore !== undefined) out.zScore = signal.zScore;
+  if (signal.durationMs !== undefined) out.durationMs = signal.durationMs;
+  if (signal.baselineMedianMs !== undefined) out.baselineMedianMs = signal.baselineMedianMs;
+  if (signal.p95Ms !== undefined) out.p95Ms = signal.p95Ms;
+  if (signal.clusterSize !== undefined) out.clusterSize = signal.clusterSize;
+  if (signal.clusterWindow !== undefined) out.clusterWindow = signal.clusterWindow;
+  return out;
+}
+
 export interface McpAuditLogStore {
   read(): unknown;
   write(records: McpLogRecord[], options?: { sync?: boolean }): void;
@@ -442,6 +510,49 @@ export class AuditService {
   }
 
   /**
+   * Summary of the audit state for the diagnostics bundle. Always a passive
+   * read: exporting diagnostics must not acknowledge `first-seen-combination`
+   * signals, so there is deliberately no `markSeen` parameter to get wrong.
+   */
+  getDiagnosticsSnapshot(): McpAuditDiagnosticsSnapshot {
+    const stats = this.getAuditStats(false);
+    const config = this.getAuditConfig();
+
+    const byTool = new Map<string, McpAuditDiagnosticsToolCounts>();
+    for (const r of this.records) {
+      if (isGrantRecord(r)) continue;
+      let counts = byTool.get(r.toolId);
+      if (!counts) {
+        counts = { toolId: r.toolId, callCount: 0, failureCount: 0 };
+        byTool.set(r.toolId, counts);
+      }
+      counts.callCount += 1;
+      if (isDispatchFailure(r.result)) counts.failureCount += 1;
+    }
+    const perTool = [...byTool.values()].sort((a, b) =>
+      a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0
+    );
+
+    const anomalySignals = [...stats.anomalySignals]
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, DIAGNOSTICS_MAX_SIGNALS)
+      .map(projectDiagnosticsSignal);
+
+    return {
+      enabled: config.enabled,
+      maxRecords: config.maxRecords,
+      recordCount: this.records.length,
+      dispatchRecordCount: this.dispatchRecordCount(),
+      anomalyRecordFloor: stats.anomalyRecordFloor,
+      anomalySuppressed: stats.anomalySuppressed,
+      auth401Count: stats.auth401Count,
+      anomalySignalCount: stats.anomalySignals.length,
+      anomalySignals,
+      perTool,
+    };
+  }
+
+  /**
    * Compute the current anomaly signals across the dispatch ring buffer.
    *
    * `markSeen` (default `true`) governs the one stateful signal kind,
@@ -570,7 +681,7 @@ export class AuditService {
       const windowRecords = records.slice(start, start + FAILURE_CLUSTER_WINDOW);
       const failuresByTool = new Map<string, McpAuditRecord[]>();
       for (const r of windowRecords) {
-        if (r.result === "success" || r.result === "dedup") continue;
+        if (!isDispatchFailure(r.result)) continue;
         if (!isRecent(r.timestamp, now)) continue;
         const list = failuresByTool.get(r.toolId);
         if (list) list.push(r);

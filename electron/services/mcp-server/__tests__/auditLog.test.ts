@@ -1679,3 +1679,182 @@ describe("AuditService.pruneByAge (#10776)", () => {
     expect(persistedIds).toEqual([`r-${now - 1 * DAY}`]);
   });
 });
+
+describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
+  const errorOutcome: AuditOutcome = {
+    kind: "result",
+    value: {
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "fail" },
+    } as import("../../../../shared/types/actions.js").ActionDispatchResult,
+  };
+
+  function append(
+    service: AuditService,
+    opts: {
+      toolId?: string;
+      tier?: "workbench" | "action" | "system" | "external";
+      durationMs?: number;
+      outcome?: AuditOutcome;
+      argsSummary?: string;
+      resultSummary?: string;
+      sessionId?: string;
+    } = {}
+  ) {
+    service.appendRecord({
+      toolId: opts.toolId ?? "tool.a",
+      sessionId: opts.sessionId ?? "sess-1",
+      tier: opts.tier ?? "action",
+      args: {},
+      durationMs: opts.durationMs ?? 10,
+      outcome: opts.outcome ?? successOutcome,
+      argsSummary: opts.argsSummary ?? "{}",
+      ...(opts.resultSummary !== undefined ? { resultSummary: opts.resultSummary } : {}),
+    });
+  }
+
+  it("reports an empty ring as suppressed with zero counts", () => {
+    const { service } = makeFixture();
+    expect(service.getDiagnosticsSnapshot()).toEqual({
+      enabled: true,
+      maxRecords: 500,
+      recordCount: 0,
+      dispatchRecordCount: 0,
+      anomalyRecordFloor: expect.any(Number),
+      anomalySuppressed: true,
+      auth401Count: 0,
+      anomalySignalCount: 0,
+      anomalySignals: [],
+      perTool: [],
+    });
+  });
+
+  it("counts calls and failures per tool, excluding grant records", () => {
+    const { service } = makeFixture();
+    append(service, { toolId: "tool.b" });
+    append(service, { toolId: "tool.b", outcome: errorOutcome });
+    append(service, { toolId: "tool.b", outcome: { kind: "dedup" } });
+    append(service, { toolId: "tool.a", outcome: { kind: "unauthorized" } });
+    append(service, { toolId: "tool.a", outcome: { kind: "collision" } });
+    append(service, { toolId: "tool.a", outcome: { kind: "throw", error: new Error("x") } });
+    service.appendGrantRecord({ type: "grant.issued", sessionId: "s", toolId: "tool.a", ttlMs: 1 });
+    service.recordAuth401();
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.recordCount).toBe(8);
+    expect(snapshot.dispatchRecordCount).toBe(7);
+    expect(snapshot.auth401Count).toBe(1);
+    // Sorted by tool id; failure = anything but success/dedup, matching the
+    // failure-cluster detector.
+    expect(snapshot.perTool).toEqual([
+      { toolId: "mcp.pre-auth", callCount: 1, failureCount: 1 },
+      { toolId: "tool.a", callCount: 3, failureCount: 3 },
+      { toolId: "tool.b", callCount: 3, failureCount: 1 },
+    ]);
+  });
+
+  it("reports the dispatch count against the floor at the suppression boundary", () => {
+    const { service } = makeFixture();
+    for (let i = 0; i < 49; i++) append(service);
+    service.appendGrantRecord({ type: "grant.issued", sessionId: "s", toolId: "tool.a", ttlMs: 1 });
+    const below = service.getDiagnosticsSnapshot();
+    expect(below.dispatchRecordCount).toBe(49);
+    expect(below.dispatchRecordCount).toBe(below.anomalyRecordFloor - 1);
+    expect(below.anomalySuppressed).toBe(true);
+
+    append(service);
+    const at = service.getDiagnosticsSnapshot();
+    expect(at.dispatchRecordCount).toBe(at.anomalyRecordFloor);
+    expect(at.anomalySuppressed).toBe(false);
+  });
+
+  it("keeps reporting retained history after recording is disabled", () => {
+    const { service } = makeFixture();
+    append(service, { toolId: "tool.a" });
+    service.setEnabled(false);
+    append(service, { toolId: "tool.b" });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.enabled).toBe(false);
+    expect(snapshot.perTool).toEqual([{ toolId: "tool.a", callCount: 1, failureCount: 0 }]);
+  });
+
+  it("never acknowledges first-seen-combination signals", () => {
+    const { service } = makeFixture();
+    for (let i = 0; i < 50; i++) append(service);
+    service.getAuditStats(); // seed the baseline
+    append(service, { toolId: "tool.new", tier: "external" });
+
+    for (let i = 0; i < 2; i++) {
+      const firstSeen = service
+        .getDiagnosticsSnapshot()
+        .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+      expect(firstSeen).toEqual([
+        expect.objectContaining({ toolId: "tool.new", tier: "external", severity: "danger" }),
+      ]);
+    }
+
+    // The user-facing read still gets to acknowledge it.
+    const acknowledged = service
+      .getAuditStats()
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(acknowledged).toHaveLength(1);
+  });
+
+  it("projects signal diagnostics without ids, arguments, results or session identity", () => {
+    const { service } = makeFixture();
+    for (let i = 0; i < 60; i++) {
+      append(service, {
+        durationMs: i % 2 === 0 ? 10 : 12,
+        argsSummary: '{"prompt":"ARGS_SENTINEL"}',
+        resultSummary: "RESULT_SENTINEL",
+        sessionId: "SESSION_SENTINEL",
+      });
+    }
+    append(service, { durationMs: 5000 });
+    for (let i = 0; i < 3; i++) append(service, { toolId: "tool.flaky", outcome: errorOutcome });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const drift = snapshot.anomalySignals.find((s) => s.kind === "latency-drift");
+    expect(drift).toEqual({
+      kind: "latency-drift",
+      toolId: "tool.a",
+      tier: "action",
+      severity: "danger",
+      timestamp: expect.any(Number),
+      zScore: expect.any(Number),
+      durationMs: 5000,
+      baselineMedianMs: 12,
+    });
+    const cluster = snapshot.anomalySignals.find((s) => s.kind === "failure-cluster");
+    expect(cluster).toEqual({
+      kind: "failure-cluster",
+      toolId: "tool.flaky",
+      severity: "danger",
+      timestamp: expect.any(Number),
+      clusterSize: 3,
+      clusterWindow: 10,
+    });
+
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain("ARGS_SENTINEL");
+    expect(serialized).not.toContain("RESULT_SENTINEL");
+    expect(serialized).not.toContain("SESSION_SENTINEL");
+    expect(serialized).not.toContain("recordIds");
+    expect(serialized).not.toContain('"id"');
+  });
+
+  it("caps exported signals to the newest 200 while reporting the full count", () => {
+    const { service } = makeFixture({ auditMaxRecords: 1000 });
+    // 399 fast calls (median 12ms, MAD 2ms) plus 201 slow outliers: each slow
+    // call is its own latency-drift signal.
+    for (let i = 0; i < 399; i++) append(service, { durationMs: i % 2 === 0 ? 10 : 12 });
+    for (let i = 0; i < 201; i++) append(service, { durationMs: 1000 });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.anomalySignalCount).toBe(201);
+    expect(snapshot.anomalySignals).toHaveLength(200);
+    const timestamps = snapshot.anomalySignals.map((s) => s.timestamp);
+    expect(timestamps).toEqual([...timestamps].sort((a, b) => b - a));
+  });
+});
