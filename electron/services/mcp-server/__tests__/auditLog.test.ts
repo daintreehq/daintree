@@ -884,6 +884,58 @@ describe("AuditService anomaly detection", () => {
     expect(firstSeen).toHaveLength(0);
   });
 
+  // Nothing polls the stats at startup (#12509), so the first read can come
+  // long after a new combo was used. The baseline must already exist by then.
+  it("first-seen: a combo used before the first read still fires", () => {
+    const service = makeRecords(50, () => ({
+      toolId: "tool.a",
+      tier: "action",
+      durationMs: 10,
+    }));
+
+    service.appendRecord({
+      toolId: "tool.new",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const firstSeen = service
+      .getAuditStats()
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstSeen.map((s) => s.toolId)).toEqual(["tool.new"]);
+  });
+
+  it("first-seen: a persisted log over the floor is the baseline for this session", () => {
+    const persisted = Array.from({ length: 50 }, (_, i) => ({
+      id: `old-${i}`,
+      timestamp: 1000 + i,
+      toolId: "tool.a",
+      sessionId: "sess-old",
+      tier: "action",
+      argsSummary: "{}",
+      result: "success",
+      durationMs: 10,
+    }));
+    const { service } = makeFixture({}, persisted);
+
+    service.appendRecord({
+      toolId: "tool.new",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+    const firstSeen = service
+      .getAuditStats()
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstSeen.map((s) => s.toolId)).toEqual(["tool.new"]);
+  });
+
   it("latency-drift: no signal when all durations are uniform", () => {
     const service = makeRecords(50, () => ({ durationMs: 10 }));
     const stats = service.getAuditStats();

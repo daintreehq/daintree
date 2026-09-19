@@ -31,7 +31,6 @@ import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener
 
 import { useKeepMounted } from "./hooks/useKeepMounted";
 import { useMcpBridge } from "./hooks/useMcpBridge";
-import { useMcpAnomalyStats } from "./hooks/useMcpAnomalyStats";
 import { usePluginBridge } from "./hooks/usePluginBridge";
 import { usePluginPromptBridge } from "./hooks/usePluginPromptBridge";
 import { useFileDropGuard } from "./hooks/useFileDropGuard";
@@ -138,7 +137,6 @@ function AppInner() {
   useMainProcessToastListener();
 
   useMcpBridge();
-  useMcpAnomalyStats();
   usePluginBridge();
   usePluginPromptBridge();
   const { homeDir } = useHomeDir();
