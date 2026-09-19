@@ -542,3 +542,57 @@ export function checkRendererContinuity(start: CellObservation, end: CellObserva
   });
   return failures;
 }
+
+export interface WindowEvents {
+  windowEndMs: number;
+  terminalExits: number;
+  focusChanges: number;
+  processesGone: number;
+  protectedAgentStates: string[];
+  /** Last output time of the streaming terminal; undefined when the cell does not stream. */
+  streamLastOutputAt?: number;
+  /**
+   * The protected view's recorded `freeze`/`resume` events, or why they could
+   * not be read (a frozen view does not answer); undefined without one.
+   */
+  protectedLifecycle?: Array<[string, number]> | string;
+}
+
+/** A streaming terminal must have produced output this recently at the close. */
+export const STREAM_FRESHNESS_MS = 3_000;
+
+/** What happened inside the window that makes its reading not the requested cell's. */
+export function checkWindowEvents(events: WindowEvents): string[] {
+  const failures: string[] = [];
+  if (events.terminalExits > 0) {
+    failures.push(`${events.terminalExits} fixture terminal(s) exited inside the window`);
+  }
+  if (events.focusChanges > 0) {
+    failures.push("window focus changed inside the window — someone used the machine");
+  }
+  if (events.processesGone > 0) {
+    failures.push("a process crashed or was killed inside the window");
+  }
+  if (events.protectedAgentStates.length > 0) {
+    failures.push(
+      `protected agent changed state inside the window (${events.protectedAgentStates.join(", ")})`
+    );
+  }
+  if (
+    events.streamLastOutputAt !== undefined &&
+    events.windowEndMs - events.streamLastOutputAt > STREAM_FRESHNESS_MS
+  ) {
+    failures.push("streaming terminal had gone quiet by the end of the window");
+  }
+  const lifecycle = events.protectedLifecycle;
+  if (
+    typeof lifecycle === "string" ||
+    (Array.isArray(lifecycle) &&
+      lifecycle.some(([type, atMs]) => type === "freeze" && atMs < events.windowEndMs))
+  ) {
+    failures.push(
+      "the protected view was frozen, so the freeze-exempt population was not measured"
+    );
+  }
+  return failures;
+}

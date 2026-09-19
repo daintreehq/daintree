@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   checkMaterialised,
   checkRendererContinuity,
+  checkWindowEvents,
   computeTreeUsage,
   cpuPercent,
   descendantsOf,
@@ -441,5 +442,56 @@ describe("checkRendererContinuity", () => {
     expect(checkRendererContinuity(before, after)).toEqual([
       "project 2's renderer was replaced inside the window (pid 102 -> 999)",
     ]);
+  });
+});
+
+describe("checkWindowEvents", () => {
+  const quiet = {
+    windowEndMs: 100_000,
+    terminalExits: 0,
+    focusChanges: 0,
+    processesGone: 0,
+    protectedAgentStates: [],
+  };
+
+  it("passes a window where nothing happened", () => {
+    expect(checkWindowEvents(quiet)).toEqual([]);
+    expect(
+      checkWindowEvents({
+        ...quiet,
+        streamLastOutputAt: 99_500,
+        protectedLifecycle: [["freeze", 100_500]],
+      })
+    ).toEqual([]);
+  });
+
+  it("names each event that invalidates the reading", () => {
+    expect(
+      checkWindowEvents({
+        windowEndMs: 100_000,
+        terminalExits: 2,
+        focusChanges: 1,
+        processesGone: 1,
+        protectedAgentStates: ["waiting", "completed"],
+        streamLastOutputAt: 90_000,
+        protectedLifecycle: [
+          ["freeze", 50_000],
+          ["resume", 51_000],
+        ],
+      })
+    ).toEqual([
+      "2 fixture terminal(s) exited inside the window",
+      "window focus changed inside the window — someone used the machine",
+      "a process crashed or was killed inside the window",
+      "protected agent changed state inside the window (waiting, completed)",
+      "streaming terminal had gone quiet by the end of the window",
+      "the protected view was frozen, so the freeze-exempt population was not measured",
+    ]);
+  });
+
+  it("treats a protected view that did not answer as frozen", () => {
+    expect(
+      checkWindowEvents({ ...quiet, protectedLifecycle: "no answer — the view is frozen or gone" })
+    ).toEqual(["the protected view was frozen, so the freeze-exempt population was not measured"]);
   });
 });

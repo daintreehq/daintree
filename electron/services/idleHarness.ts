@@ -50,9 +50,12 @@ import { computeDefaultCachedViews } from "../utils/cachedProjectViews.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import type { ProjectState } from "../../shared/types/project.js";
 import type { PtyClient } from "./PtyClient.js";
+import type { ResourceProfileService } from "./ResourceProfileService.js";
+import type { WorkspaceClient } from "./WorkspaceClient.js";
 import {
   checkMaterialised,
   checkRendererContinuity,
+  checkWindowEvents,
   computeTreeUsage,
   cpuPercent,
   IDLE_HARNESS_CONFIG_ENV,
@@ -83,9 +86,9 @@ const FOCUS_SETTLE_MS = 2_000;
 /** One census flush interval plus slack, so the closing second is on disk. */
 const CENSUS_DRAIN_MS = 6_500;
 const CLEANUP_KILL_TIMEOUT_MS = 10_000;
-/** A streaming terminal must have produced output this recently at the close. */
-const STREAM_FRESHNESS_MS = 3_000;
 const DAEMONS = ["sysmond", "fseventsd"] as const;
+/** In-app processes that install the spawn census; one alive all window must have a file. */
+const CENSUS_ROLES = new Set(["main", "pty-host", "workspace-host"]);
 /** Deterministic shell: the user's rc files (prompt daemons, plugins) are not app cost. */
 const FIXTURE_SHELL = "/bin/sh";
 
@@ -505,6 +508,466 @@ function environmentReport(win: BrowserWindow) {
   };
 }
 
+interface HarnessServices {
+  pty: PtyClient;
+  workspace: WorkspaceClient;
+  profiles: ResourceProfileService;
+}
+
+async function waitForApp(): Promise<HarnessServices> {
+  const pty = await waitFor(() => getPtyClient(), READY_TIMEOUT_MS, "the PTY client");
+  await pty.waitForReady();
+  const workspace = await waitFor(
+    () => getWorkspaceClientRef(),
+    READY_TIMEOUT_MS,
+    "the workspace client"
+  );
+  const profiles = await waitFor(
+    () => getResourceProfileService(),
+    READY_TIMEOUT_MS,
+    "the resource profile service"
+  );
+  await waitFor(
+    () => getDeferredQueueState().drainState === "drained",
+    READY_TIMEOUT_MS,
+    "deferred startup work to drain"
+  );
+  return { pty, workspace, profiles };
+}
+
+/**
+ * Give one terminal a live agent state so the efficiency freeze skips its
+ * project's view. Done while the view is active, so its deactivation already
+ * sees the agent. `cat` is a foreground process the pty-host's probes can find,
+ * standing in for the agent CLI; it reads a TTY nothing writes, so it is idle.
+ */
+async function protectWithAgent(
+  pvm: ProjectViewManager,
+  pty: PtyClient,
+  project: FixtureProject,
+  terminal: { id: string; spawnedAt: number }
+): Promise<void> {
+  pty.write(terminal.id, "cat\r");
+  const accepted = await pty.transitionState(
+    terminal.id,
+    { type: "start" },
+    "activity",
+    1,
+    terminal.spawnedAt
+  );
+  if (!accepted) throw new Error("the pty-host rejected the protected terminal's agent state");
+  await waitFor(
+    () => hasActiveAgent(pvm, project.id),
+    AGENT_STATE_TIMEOUT_MS,
+    "the view manager to see the protected project's agent"
+  );
+  // Passive record of the Page Lifecycle `freeze`/`resume` events, read after
+  // the window: no task loop in the view, and a frozen view that never thaws
+  // shows up as a view that does not answer.
+  const entry = pvm.getAllViews().find((view) => view.projectId === project.id)!;
+  await entry.view.webContents.executeJavaScript(
+    `(() => { if (window.__daintreeIdleLifecycle) return true;
+       const log = []; window.__daintreeIdleLifecycle = log;
+       for (const type of ["freeze", "resume"]) document.addEventListener(type, () => log.push([type, Date.now()]), true);
+       return true; })()`
+  );
+}
+
+/**
+ * Create the projects and their saved state, then open them through the
+ * production switch. Appends to `projects` and `terminals` as it goes, so the
+ * caller's teardown covers whatever exists even when a later step throws.
+ */
+async function buildFixture(
+  config: IdleHarnessConfig,
+  pvm: ProjectViewManager,
+  appView: WebContentsView,
+  pty: PtyClient,
+  tempRoot: string,
+  projects: FixtureProject[],
+  terminals: FixtureTerminal[]
+): Promise<void> {
+  for (const [index, count] of config.terminalsPerProject.entries()) {
+    const repoPath = await createFixtureRepo(tempRoot, `project-${index + 1}`);
+    const project = await projectStore.addProject(repoPath);
+    const fixture: FixtureProject = { index, id: project.id, path: repoPath, terminals: count };
+    projects.push(fixture);
+    const settings = await projectStore.getProjectSettings(project.id);
+    await projectStore.saveProjectSettings(project.id, {
+      ...settings,
+      terminalSettings: { ...settings.terminalSettings, shell: FIXTURE_SHELL },
+    });
+    await projectStore.saveProjectState(project.id, projectState(fixture));
+  }
+
+  // The requested project count is part of the cell. The RAM-derived default
+  // can be lower, which would evict a project out of the fixture; pressure
+  // eviction stays live and fails the run if it fires.
+  const terminalConfig = store.get("terminalConfig");
+  store.set("terminalConfig", { ...terminalConfig, cachedProjectViews: projects.length });
+  pvm.setCachedViewLimit(projects.length);
+
+  // Last project first, so the first ends active and the rest are cached.
+  for (const project of [...projects].reverse()) {
+    await switchToProject(pvm, appView, project);
+    const live = await waitFor(
+      async () => {
+        const inventory = await liveTerminalsByProject(pty, projects);
+        return !inventory.degraded && inventory.counts[project.index] === project.terminals
+          ? inventory
+          : null;
+      },
+      TERMINALS_TIMEOUT_MS,
+      `project ${project.index + 1}'s ${project.terminals} terminals`
+    );
+    if (project.index === config.protectedProjectIndex) {
+      const agent = live.byProject.get(project.id)![0]!;
+      await protectWithAgent(pvm, pty, project, agent);
+      terminals.push({ ...agent, projectIndex: project.index, shellPid: null, role: "agent" });
+    }
+  }
+
+  const live = await liveTerminalsByProject(pty, projects);
+  for (const project of projects) {
+    for (const terminal of live.byProject.get(project.id) ?? []) {
+      if (terminals.some((known) => known.id === terminal.id)) continue;
+      const stream =
+        config.stream && project.index === 0 && !terminals.some((t) => t.role === "stream");
+      terminals.push({
+        id: terminal.id,
+        spawnedAt: terminal.spawnedAt,
+        projectIndex: project.index,
+        shellPid: null,
+        role: stream ? "stream" : "shell",
+      });
+    }
+  }
+  for (const terminal of terminals) {
+    terminal.shellPid = (await pty.getTerminalInfo(terminal.id))?.ptyPid ?? null;
+  }
+  const stream = terminals.find((terminal) => terminal.role === "stream");
+  if (stream) {
+    pty.write(
+      stream.id,
+      `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} -e ${shellQuote(STREAM_WORKLOAD_JS)}\r`
+    );
+  }
+  log(
+    "CHECK: fixture materialised — projects=%d terminals=%s stream=%s protected=%s",
+    projects.length,
+    JSON.stringify(live.counts),
+    String(config.stream),
+    config.protectedProjectIndex === null ? "none" : `project ${config.protectedProjectIndex + 1}`
+  );
+}
+
+async function applyFocus(
+  config: IdleHarnessConfig,
+  win: BrowserWindow,
+  pvm: ProjectViewManager
+): Promise<boolean> {
+  if (config.blurred) {
+    win.blur();
+  } else {
+    app.focus({ steal: true });
+    win.show();
+    win.focus();
+    pvm.getActiveView()?.webContents.focus();
+  }
+  await delay(FOCUS_SETTLE_MS);
+  return win.isFocused() !== config.blurred;
+}
+
+/** Passive listeners only; each records a timestamp and nothing else. */
+function installObservers(
+  { pty, workspace, profiles }: HarnessServices,
+  win: BrowserWindow,
+  terminals: readonly FixtureTerminal[]
+): { observed: Observations; dispose: () => void } {
+  const observed: Observations = {
+    profileTransitions: [],
+    workspaceHostRestarts: [],
+    workspaceHostCrashes: [],
+    ptyHostCrashes: [],
+    terminalExits: [],
+    agentStateChanges: [],
+    focusChanges: [],
+    processesGone: [],
+  };
+  const disposers: Array<() => void> = [];
+
+  disposers.push(
+    profiles.onProfileChanged(({ from, to }) =>
+      observed.profileTransitions.push({ atMs: Date.now(), from, to })
+    )
+  );
+
+  const onRestart = () => observed.workspaceHostRestarts.push({ atMs: Date.now() });
+  const onWorkspaceCrash = (code: unknown) =>
+    observed.workspaceHostCrashes.push({ atMs: Date.now(), code });
+  workspace.on("host-restarted", onRestart);
+  workspace.on("host-crash", onWorkspaceCrash);
+  disposers.push(() => {
+    workspace.off("host-restarted", onRestart);
+    workspace.off("host-crash", onWorkspaceCrash);
+  });
+
+  const fixtureTerminalIds = new Set(terminals.map((terminal) => terminal.id));
+  const onExit = (id: string) => {
+    if (fixtureTerminalIds.has(id)) observed.terminalExits.push({ atMs: Date.now(), id });
+  };
+  const onPtyCrash = () => observed.ptyHostCrashes.push({ atMs: Date.now() });
+  pty.on("exit", onExit);
+  pty.on("host-crash", onPtyCrash);
+  disposers.push(() => {
+    pty.off("exit", onExit);
+    pty.off("host-crash", onPtyCrash);
+  });
+
+  const agentTerminalId = terminals.find((terminal) => terminal.role === "agent")?.id;
+  disposers.push(
+    events.on("agent:state-changed", (payload) => {
+      if (agentTerminalId && payload.terminalId === agentTerminalId) {
+        observed.agentStateChanges.push({
+          atMs: Date.now(),
+          terminalId: agentTerminalId,
+          state: payload.state,
+        });
+      }
+    })
+  );
+
+  const onFocus = () => observed.focusChanges.push({ atMs: Date.now(), event: "focus" });
+  const onBlur = () => observed.focusChanges.push({ atMs: Date.now(), event: "blur" });
+  win.on("focus", onFocus);
+  win.on("blur", onBlur);
+  disposers.push(() => {
+    if (win.isDestroyed()) return;
+    win.off("focus", onFocus);
+    win.off("blur", onBlur);
+  });
+
+  const onChildGone = (_event: unknown, details: Electron.Details) =>
+    observed.processesGone.push({ atMs: Date.now(), type: details.type, reason: details.reason });
+  const onRenderGone = (
+    _event: unknown,
+    _wc: unknown,
+    details: Electron.RenderProcessGoneDetails
+  ) => observed.processesGone.push({ atMs: Date.now(), type: "renderer", reason: details.reason });
+  app.on("child-process-gone", onChildGone);
+  app.on("render-process-gone", onRenderGone);
+  disposers.push(() => {
+    app.off("child-process-gone", onChildGone);
+    app.off("render-process-gone", onRenderGone);
+  });
+
+  return {
+    observed,
+    dispose: () => {
+      for (const dispose of disposers) {
+        try {
+          dispose();
+        } catch {
+          // best-effort
+        }
+      }
+    },
+  };
+}
+
+interface WindowReading {
+  startMs: number;
+  endMs: number;
+  start: SamplerSnapshot;
+  end: SamplerSnapshot;
+  labels: Map<number, string>;
+  startObservation: CellObservation;
+  endObservation: CellObservation;
+  endLive: Awaited<ReturnType<typeof liveTerminalsByProject>>;
+  daemonsStart: Awaited<ReturnType<typeof readDaemons>>;
+  daemonsEnd: Awaited<ReturnType<typeof readDaemons>>;
+  profile: { atStart: string; atEnd: string; freezeAtStart: boolean; freezeAtEnd: boolean };
+}
+
+/**
+ * The window itself. Everything that talks to a renderer or the pty-host
+ * happens before the opening sample or after the closing one, so none of the
+ * harness's own IPC lands inside it.
+ */
+async function measureWindow(
+  config: IdleHarnessConfig,
+  { pty, profiles }: HarnessServices,
+  win: BrowserWindow,
+  pvm: ProjectViewManager,
+  projects: readonly FixtureProject[],
+  terminals: readonly FixtureTerminal[]
+): Promise<WindowReading> {
+  const labels = new Map<number, string>();
+  collectLabels(pvm, projects, terminals, config.protectedProjectIndex, labels);
+  const startObservation = observeCell(
+    config,
+    pvm,
+    projects,
+    await liveTerminalsByProject(pty, projects),
+    win,
+    await readDocumentFocus(pvm),
+    null
+  );
+  const atStart = profiles.getProfile();
+  const freezeAtStart = pvm.efficiencyFreezeEnabled;
+
+  // Whole seconds, so the spawn census's one-second buckets slice exactly.
+  const startMs = Math.ceil(Date.now() / 1000) * 1000;
+  const endMs = startMs + config.windowMs;
+  await delay(startMs - Date.now());
+  // Daemon reads sit outside the process samples at both edges, so their own
+  // `ps` fork never falls inside the tree's window.
+  const daemonsStart = await readDaemons();
+  const start = await runSampler(config.samplerPath);
+  labels.set(start.pid, "harness:sampler");
+  startObservation.streamWorkloadAlive = streamWorkloadRunning(start.snapshot, terminals);
+  log("CHECK: window open — %dms", config.windowMs);
+
+  await delay(endMs - Date.now());
+  const end = await runSampler(config.samplerPath);
+  labels.set(end.pid, "harness:sampler");
+  const daemonsEnd = await readDaemons();
+  log("CHECK: window closed");
+
+  const atEnd = profiles.getProfile();
+  const freezeAtEnd = pvm.efficiencyFreezeEnabled;
+  collectLabels(pvm, projects, terminals, config.protectedProjectIndex, labels);
+  const endLive = await liveTerminalsByProject(pty, projects);
+  const endObservation = observeCell(
+    config,
+    pvm,
+    projects,
+    endLive,
+    win,
+    await readDocumentFocus(pvm),
+    streamWorkloadRunning(end.snapshot, terminals)
+  );
+  return {
+    startMs,
+    endMs,
+    start: start.snapshot,
+    end: end.snapshot,
+    labels,
+    startObservation,
+    endObservation,
+    endLive,
+    daemonsStart,
+    daemonsEnd,
+    profile: { atStart, atEnd, freezeAtStart, freezeAtEnd },
+  };
+}
+
+async function readProtectedLifecycle(
+  pvm: ProjectViewManager,
+  project: FixtureProject
+): Promise<Array<[string, number]> | string> {
+  const entry = pvm.getAllViews().find((view) => view.projectId === project.id);
+  if (!entry || entry.view.webContents.isDestroyed()) return "view missing";
+  return withTimeout(
+    entry.view.webContents.executeJavaScript("window.__daintreeIdleLifecycle ?? []") as Promise<
+      Array<[string, number]>
+    >,
+    RENDERER_SCRIPT_TIMEOUT_MS,
+    "no answer"
+  ).catch(() => "no answer — the view is frozen or gone");
+}
+
+/**
+ * Launches inside the window by role and command, and which in-app processes
+ * that were alive throughout left no census — a gap reported, never a zero.
+ */
+async function spawnReport(
+  censusDir: string,
+  usage: TreeUsage,
+  reading: WindowReading
+): Promise<{ report: unknown; failures: string[] }> {
+  await delay(CENSUS_DRAIN_MS);
+  const files = await readCensus(censusDir);
+  const slice = sliceSpawnCensus(files, reading.startMs, reading.endMs);
+  const censusPids = new Set(files.map((file) => file.pid));
+  const missing = usage.processes
+    .filter((p) => CENSUS_ROLES.has(p.label) && !p.born && !censusPids.has(p.pid))
+    .map((p) => ({ pid: p.pid, label: p.label }));
+  return {
+    report: {
+      total: slice.total,
+      perSecond: round(slice.total / ((reading.endMs - reading.startMs) / 1000), 2),
+      byCommand: Object.fromEntries(Object.entries(slice.byCommand).sort(([, a], [, b]) => b - a)),
+      staleFiles: slice.stale,
+      missingCensus: missing,
+    },
+    failures:
+      missing.length > 0
+        ? [`no spawn census from ${missing.map((m) => `${m.label} ${m.pid}`).join(", ")}`]
+        : [],
+  };
+}
+
+function daemonReport(reading: WindowReading) {
+  const { daemonsStart, daemonsEnd } = reading;
+  const seconds = (daemonsEnd.atMs - daemonsStart.atMs) / 1000;
+  return Object.fromEntries(
+    DAEMONS.map((name) => {
+      const before = daemonsStart.readings[name];
+      const after = daemonsEnd.readings[name];
+      if (!before || !after || before.pid !== after.pid) return [name, null];
+      const percent = ((after.cpuSeconds - before.cpuSeconds) / seconds) * 100;
+      return [name, { pid: after.pid, cpuPercent: round(percent, 3) }];
+    })
+  );
+}
+
+function rendererTerminalReport(pvm: ProjectViewManager, projects: readonly FixtureProject[]) {
+  const samples = getRendererTerminalDiagnosticsSamples();
+  return projects.map((project) => {
+    const entry = pvm.getAllViews().find((view) => view.projectId === project.id);
+    const sample = entry
+      ? samples.find((s) => s.webContentsId === entry.view.webContents.id)
+      : undefined;
+    return sample
+      ? {
+          project: project.index + 1,
+          terminalCount: sample.terminalCount,
+          countsByTier: sample.countsByTier,
+          webglMode: sample.webglMode,
+          ageMs: sample.ageMs,
+        }
+      : { project: project.index + 1, sample: null };
+  });
+}
+
+async function teardownFixture(
+  projects: readonly FixtureProject[],
+  tempRoot: string | null
+): Promise<void> {
+  const pty = getPtyClient();
+  for (const project of projects) {
+    try {
+      if (pty) {
+        await withTimeout(pty.killByProject(project.id), CLEANUP_KILL_TIMEOUT_MS, "kill timed out");
+      }
+    } catch {
+      // best-effort
+    }
+    try {
+      await projectStore.removeProject(project.id);
+    } catch {
+      // best-effort
+    }
+  }
+  if (!tempRoot) return;
+  try {
+    await rm(tempRoot, { recursive: true, force: true });
+  } catch (error) {
+    log("WARN — could not remove %s: %s", tempRoot, formatErrorMessage(error, "unknown"));
+  }
+}
+
 /**
  * Runs one cell and reports it. Returns false when the fixture did not
  * materialise or the measurement was unusable; true otherwise, whatever the
@@ -526,36 +989,10 @@ export async function runIdleHarness(
   let tempRoot: string | null = null;
   const projects: FixtureProject[] = [];
   const terminals: FixtureTerminal[] = [];
-  const cleanups: Array<() => void> = [];
-  const observed: Observations = {
-    profileTransitions: [],
-    workspaceHostRestarts: [],
-    workspaceHostCrashes: [],
-    ptyHostCrashes: [],
-    terminalExits: [],
-    agentStateChanges: [],
-    focusChanges: [],
-    processesGone: [],
-  };
+  let disposeObservers: (() => void) | null = null;
 
   try {
-    const pty = await waitFor(() => getPtyClient(), READY_TIMEOUT_MS, "the PTY client");
-    await pty.waitForReady();
-    const workspace = await waitFor(
-      () => getWorkspaceClientRef(),
-      READY_TIMEOUT_MS,
-      "the workspace client"
-    );
-    const profiles = await waitFor(
-      () => getResourceProfileService(),
-      READY_TIMEOUT_MS,
-      "the resource profile service"
-    );
-    await waitFor(
-      () => getDeferredQueueState().drainState === "drained",
-      READY_TIMEOUT_MS,
-      "deferred startup work to drain"
-    );
+    const services = await waitForApp();
     if (censusDir && !isSpawnCensusInstalled()) {
       log("FAILED — %s is set but main's spawn census is not installed", SPAWN_CENSUS_DIR_ENV);
       return false;
@@ -565,365 +1002,58 @@ export async function runIdleHarness(
     // realpath: macOS tmpdir is a symlink, and git reports worktrees by their
     // real path. Worktree ids are paths, so the seeded state must match it.
     tempRoot = await realpath(await mkdtemp(path.join(os.tmpdir(), "daintree-idle-harness-")));
-    for (const [index, count] of config.terminalsPerProject.entries()) {
-      const repoPath = await createFixtureRepo(tempRoot, `project-${index + 1}`);
-      const project = await projectStore.addProject(repoPath);
-      const fixture: FixtureProject = { index, id: project.id, path: repoPath, terminals: count };
-      projects.push(fixture);
-      const settings = await projectStore.getProjectSettings(project.id);
-      await projectStore.saveProjectSettings(project.id, {
-        ...settings,
-        terminalSettings: { ...settings.terminalSettings, shell: FIXTURE_SHELL },
-      });
-      await projectStore.saveProjectState(project.id, projectState(fixture));
-    }
+    await buildFixture(config, pvm, appView, services.pty, tempRoot, projects, terminals);
 
-    // The requested project count is part of the cell. The RAM-derived default
-    // can be lower, which would evict a project out of the fixture; pressure
-    // eviction stays live and fails the run if it fires.
-    const terminalConfig = store.get("terminalConfig");
-    store.set("terminalConfig", { ...terminalConfig, cachedProjectViews: projects.length });
-    pvm.setCachedViewLimit(projects.length);
-
-    // Open the last project first so the first ends active and the rest are
-    // cached in order. The protected project's agent goes live while its view
-    // is active, so its deactivation already sees the agent.
-    for (const project of [...projects].reverse()) {
-      await switchToProject(pvm, appView, project);
-      await waitFor(
-        async () => {
-          const live = await liveTerminalsByProject(pty, projects);
-          return !live.degraded && live.counts[project.index] === project.terminals;
-        },
-        TERMINALS_TIMEOUT_MS,
-        `project ${project.index + 1}'s ${project.terminals} terminals`
-      );
-      if (project.index === config.protectedProjectIndex) {
-        const live = await liveTerminalsByProject(pty, projects);
-        const agent = live.byProject.get(project.id)![0]!;
-        // A foreground process the pty-host's probes can find, standing in for
-        // the agent CLI. It reads a TTY that is never written, so it is idle.
-        pty.write(agent.id, "cat\r");
-        const accepted = await pty.transitionState(
-          agent.id,
-          { type: "start" },
-          "activity",
-          1,
-          agent.spawnedAt
-        );
-        if (!accepted)
-          throw new Error("the pty-host rejected the protected terminal's agent state");
-        await waitFor(
-          () => hasActiveAgent(pvm, project.id),
-          AGENT_STATE_TIMEOUT_MS,
-          "the view manager to see the protected project's agent"
-        );
-        const entry = pvm.getAllViews().find((view) => view.projectId === project.id)!;
-        await entry.view.webContents.executeJavaScript(
-          `(() => { if (window.__daintreeIdleLifecycle) return true;
-             const log = []; window.__daintreeIdleLifecycle = log;
-             for (const type of ["freeze", "resume"]) document.addEventListener(type, () => log.push([type, Date.now()]), true);
-             return true; })()`
-        );
-        terminals.push({
-          id: agent.id,
-          projectIndex: project.index,
-          spawnedAt: agent.spawnedAt,
-          shellPid: null,
-          role: "agent",
-        });
-      }
-    }
-
-    const live = await liveTerminalsByProject(pty, projects);
-    for (const project of projects) {
-      for (const terminal of live.byProject.get(project.id) ?? []) {
-        if (terminals.some((known) => known.id === terminal.id)) continue;
-        terminals.push({
-          id: terminal.id,
-          projectIndex: project.index,
-          spawnedAt: terminal.spawnedAt,
-          shellPid: null,
-          role:
-            config.stream && project.index === 0 && !terminals.some((t) => t.role === "stream")
-              ? "stream"
-              : "shell",
-        });
-      }
-    }
-    for (const terminal of terminals) {
-      terminal.shellPid = (await pty.getTerminalInfo(terminal.id))?.ptyPid ?? null;
-    }
-    const stream = terminals.find((terminal) => terminal.role === "stream");
-    if (stream) {
-      pty.write(
-        stream.id,
-        `ELECTRON_RUN_AS_NODE=1 ${shellQuote(process.execPath)} -e ${shellQuote(STREAM_WORKLOAD_JS)}\r`
-      );
-    }
-    log(
-      "CHECK: fixture materialised — projects=%d terminals=%s stream=%s protected=%s",
-      projects.length,
-      JSON.stringify(live.counts),
-      String(config.stream),
-      config.protectedProjectIndex === null ? "none" : `project ${config.protectedProjectIndex + 1}`
-    );
-
-    if (config.blurred) {
-      win.blur();
-    } else {
-      app.focus({ steal: true });
-      win.show();
-      win.focus();
-      pvm.getActiveView()?.webContents.focus();
-    }
-    await delay(FOCUS_SETTLE_MS);
-    if (win.isFocused() === config.blurred) {
+    if (!(await applyFocus(config, win, pvm))) {
       log("FAILED — could not make the window %s", config.blurred ? "blurred" : "focused");
       return false;
     }
-
-    const onProfile = profiles.onProfileChanged(({ from, to }) =>
-      observed.profileTransitions.push({ atMs: Date.now(), from, to })
-    );
-    cleanups.push(onProfile);
-    const onRestart = () => observed.workspaceHostRestarts.push({ atMs: Date.now() });
-    const onWorkspaceCrash = (code: unknown) =>
-      observed.workspaceHostCrashes.push({ atMs: Date.now(), code });
-    workspace.on("host-restarted", onRestart);
-    workspace.on("host-crash", onWorkspaceCrash);
-    cleanups.push(() => {
-      workspace.off("host-restarted", onRestart);
-      workspace.off("host-crash", onWorkspaceCrash);
-    });
-    const fixtureTerminalIds = new Set(terminals.map((terminal) => terminal.id));
-    const onExit = (id: string) => {
-      if (fixtureTerminalIds.has(id)) observed.terminalExits.push({ atMs: Date.now(), id });
-    };
-    const onPtyCrash = () => observed.ptyHostCrashes.push({ atMs: Date.now() });
-    pty.on("exit", onExit);
-    pty.on("host-crash", onPtyCrash);
-    cleanups.push(() => {
-      pty.off("exit", onExit);
-      pty.off("host-crash", onPtyCrash);
-    });
-    const agentTerminal = terminals.find((terminal) => terminal.role === "agent");
-    cleanups.push(
-      events.on("agent:state-changed", (payload) => {
-        if (payload.terminalId && payload.terminalId === agentTerminal?.id) {
-          observed.agentStateChanges.push({
-            atMs: Date.now(),
-            terminalId: payload.terminalId,
-            state: payload.state,
-          });
-        }
-      })
-    );
-    const onFocus = () => observed.focusChanges.push({ atMs: Date.now(), event: "focus" });
-    const onBlur = () => observed.focusChanges.push({ atMs: Date.now(), event: "blur" });
-    win.on("focus", onFocus);
-    win.on("blur", onBlur);
-    cleanups.push(() => {
-      if (!win.isDestroyed()) {
-        win.off("focus", onFocus);
-        win.off("blur", onBlur);
-      }
-    });
-    const onChildGone = (_event: unknown, details: Electron.Details) =>
-      observed.processesGone.push({ atMs: Date.now(), type: details.type, reason: details.reason });
-    const onRenderGone = (
-      _event: unknown,
-      _wc: unknown,
-      details: Electron.RenderProcessGoneDetails
-    ) =>
-      observed.processesGone.push({ atMs: Date.now(), type: "renderer", reason: details.reason });
-    app.on("child-process-gone", onChildGone);
-    app.on("render-process-gone", onRenderGone);
-    cleanups.push(() => {
-      app.off("child-process-gone", onChildGone);
-      app.off("render-process-gone", onRenderGone);
-    });
+    const { observed, dispose } = installObservers(services, win, terminals);
+    disposeObservers = dispose;
 
     log("settling for %dms", config.settleMs);
     await delay(config.settleMs);
-
-    // Everything that talks to a renderer or the pty-host happens here, before
-    // the window opens: no IPC traffic of the harness's own lands inside it.
-    const labels = new Map<number, string>();
-    collectLabels(pvm, projects, terminals, config.protectedProjectIndex, labels);
-    const startObservation = observeCell(
-      config,
-      pvm,
-      projects,
-      await liveTerminalsByProject(pty, projects),
-      win,
-      await readDocumentFocus(pvm),
-      null
-    );
-    const profileAtStart = profiles.getProfile();
-    const freezeAtStart = pvm.efficiencyFreezeEnabled;
-
-    // Whole seconds, so the spawn census's one-second buckets slice exactly.
-    const windowStartMs = Math.ceil(Date.now() / 1000) * 1000;
-    const windowEndMs = windowStartMs + config.windowMs;
-    await delay(windowStartMs - Date.now());
-    // Daemon reads sit outside the process samples at both edges, so their
-    // own `ps` fork is never inside the tree's window.
-    const daemonsStart = await readDaemons();
-    const start = await runSampler(config.samplerPath);
-    labels.set(start.pid, "harness:sampler");
-    startObservation.streamWorkloadAlive = streamWorkloadRunning(start.snapshot, terminals);
-    log("CHECK: window open — %dms", config.windowMs);
-
-    await delay(windowEndMs - Date.now());
-    const end = await runSampler(config.samplerPath);
-    labels.set(end.pid, "harness:sampler");
-    const daemonsEnd = await readDaemons();
-    log("CHECK: window closed");
-
-    const profileAtEnd = profiles.getProfile();
-    const freezeAtEnd = pvm.efficiencyFreezeEnabled;
-    collectLabels(pvm, projects, terminals, config.protectedProjectIndex, labels);
-    const endLive = await liveTerminalsByProject(pty, projects);
-    const endObservation = observeCell(
-      config,
-      pvm,
-      projects,
-      endLive,
-      win,
-      await readDocumentFocus(pvm),
-      streamWorkloadRunning(end.snapshot, terminals)
-    );
+    const reading = await measureWindow(config, services, win, pvm, projects, terminals);
+    const within = <T extends { atMs: number }>(list: T[]) =>
+      inWindow(list, reading.startMs, reading.endMs);
 
     const usage = computeTreeUsage({
-      start: start.snapshot,
-      end: end.snapshot,
+      start: reading.start,
+      end: reading.end,
       rootPid: process.pid,
-      labels,
+      labels: reading.labels,
     });
 
+    const stream = terminals.find((terminal) => terminal.role === "stream");
+    const protectedLifecycle =
+      config.protectedProjectIndex === null
+        ? undefined
+        : await readProtectedLifecycle(pvm, projects[config.protectedProjectIndex]!);
     const failures = [
-      ...checkMaterialised(config, startObservation, "start"),
-      ...checkMaterialised(config, endObservation, "end"),
-      ...checkRendererContinuity(startObservation, endObservation),
+      ...checkMaterialised(config, reading.startObservation, "start"),
+      ...checkMaterialised(config, reading.endObservation, "end"),
+      ...checkRendererContinuity(reading.startObservation, reading.endObservation),
+      ...checkWindowEvents({
+        windowEndMs: reading.endMs,
+        terminalExits: within(observed.terminalExits).length,
+        focusChanges: within(observed.focusChanges).length,
+        processesGone:
+          within(observed.processesGone).length + within(observed.ptyHostCrashes).length,
+        protectedAgentStates: within(observed.agentStateChanges).map((change) => change.state),
+        streamLastOutputAt: stream
+          ? (reading.endLive.byProject.get(projects[0]!.id)?.find((t) => t.id === stream.id)
+              ?.lastOutputTime ?? 0)
+          : undefined,
+        protectedLifecycle,
+      }),
     ];
-    const windowEvents = {
-      terminalExits: inWindow(observed.terminalExits, windowStartMs, windowEndMs),
-      focusChanges: inWindow(observed.focusChanges, windowStartMs, windowEndMs),
-      agentStateChanges: inWindow(observed.agentStateChanges, windowStartMs, windowEndMs),
-      processesGone: inWindow(observed.processesGone, windowStartMs, windowEndMs),
-      ptyHostCrashes: inWindow(observed.ptyHostCrashes, windowStartMs, windowEndMs),
-    };
-    if (windowEvents.terminalExits.length > 0) {
-      failures.push(
-        `${windowEvents.terminalExits.length} fixture terminal(s) exited inside the window`
-      );
-    }
-    if (windowEvents.focusChanges.length > 0) {
-      failures.push("window focus changed inside the window — someone used the machine");
-    }
-    if (windowEvents.agentStateChanges.length > 0) {
-      failures.push(
-        `protected agent changed state inside the window (${windowEvents.agentStateChanges.map((c) => c.state).join(", ")})`
-      );
-    }
-    if (windowEvents.processesGone.length > 0 || windowEvents.ptyHostCrashes.length > 0) {
-      failures.push("a process crashed or was killed inside the window");
-    }
-    if (stream) {
-      const lastOutput =
-        endLive.byProject.get(projects[0]!.id)?.find((t) => t.id === stream.id)?.lastOutputTime ??
-        0;
-      if (windowEndMs - lastOutput > STREAM_FRESHNESS_MS) {
-        failures.push("streaming terminal had gone quiet by the end of the window");
-      }
-    }
-
-    let protectedLifecycle: unknown = null;
-    if (config.protectedProjectIndex !== null) {
-      const entry = pvm
-        .getAllViews()
-        .find((view) => view.projectId === projects[config.protectedProjectIndex!]!.id);
-      protectedLifecycle = entry
-        ? await withTimeout(
-            entry.view.webContents.executeJavaScript(
-              "window.__daintreeIdleLifecycle ?? null"
-            ) as Promise<unknown>,
-            RENDERER_SCRIPT_TIMEOUT_MS,
-            "no answer"
-          ).catch(() => "no answer — the view is frozen or gone")
-        : "view missing";
-      if (
-        typeof protectedLifecycle === "string" ||
-        (Array.isArray(protectedLifecycle) &&
-          protectedLifecycle.some(([type, atMs]) => type === "freeze" && atMs < windowEndMs))
-      ) {
-        failures.push(
-          "the protected view was frozen, so the freeze-exempt population was not measured"
-        );
-      }
-    }
 
     let spawns: unknown = null;
     if (censusDir) {
-      await delay(CENSUS_DRAIN_MS);
-      const files = await readCensus(censusDir);
-      const slice = sliceSpawnCensus(files, windowStartMs, windowEndMs);
-      const censusPids = new Set(files.map((file) => file.pid));
-      const expected = usage.processes.filter(
-        (p) =>
-          (p.label === "main" || p.label === "pty-host" || p.label === "workspace-host") && !p.born
-      );
-      const missing = expected
-        .filter((p) => !censusPids.has(p.pid))
-        .map((p) => ({ pid: p.pid, label: p.label }));
-      spawns = {
-        total: slice.total,
-        perSecond: round(slice.total / (config.windowMs / 1000), 2),
-        byCommand: Object.fromEntries(
-          Object.entries(slice.byCommand).sort(([, a], [, b]) => b - a)
-        ),
-        staleFiles: slice.stale,
-        missingCensus: missing,
-      };
-      if (missing.length > 0)
-        failures.push(
-          `no spawn census from ${missing.map((m) => `${m.label} ${m.pid}`).join(", ")}`
-        );
+      const census = await spawnReport(censusDir, usage, reading);
+      spawns = census.report;
+      failures.push(...census.failures);
     }
-
-    const daemonWindowS = (daemonsEnd.atMs - daemonsStart.atMs) / 1000;
-    const daemons = Object.fromEntries(
-      DAEMONS.map((name) => {
-        const a = daemonsStart.readings[name];
-        const b = daemonsEnd.readings[name];
-        if (!a || !b || a.pid !== b.pid) return [name, null];
-        return [
-          name,
-          {
-            pid: b.pid,
-            cpuPercent: round(((b.cpuSeconds - a.cpuSeconds) / daemonWindowS) * 100, 3),
-          },
-        ];
-      })
-    );
-
-    const diagnostics = getRendererTerminalDiagnosticsSamples();
-    const rendererTerminals = projects.map((project) => {
-      const entry = pvm.getAllViews().find((view) => view.projectId === project.id);
-      const sample = entry
-        ? diagnostics.find((d) => d.webContentsId === entry.view.webContents.id)
-        : undefined;
-      return sample
-        ? {
-            project: project.index + 1,
-            terminalCount: sample.terminalCount,
-            countsByTier: sample.countsByTier,
-            webglMode: sample.webglMode,
-            ageMs: sample.ageMs,
-          }
-        : { project: project.index + 1, sample: null };
-    });
 
     const result = {
       schema: IDLE_HARNESS_RESULT_SCHEMA,
@@ -939,23 +1069,20 @@ export async function runIdleHarness(
       valid: failures.length === 0,
       failures,
       environment: environmentReport(win),
-      window: { startMs: windowStartMs, endMs: windowEndMs },
+      window: { startMs: reading.startMs, endMs: reading.endMs },
       tree: summariseUsage(usage),
-      daemons,
+      daemons: daemonReport(reading),
       spawns,
       workspaceHosts: {
-        restarts: inWindow(observed.workspaceHostRestarts, windowStartMs, windowEndMs).length,
-        crashes: inWindow(observed.workspaceHostCrashes, windowStartMs, windowEndMs).length,
+        restarts: within(observed.workspaceHostRestarts).length,
+        crashes: within(observed.workspaceHostCrashes).length,
       },
       resourceProfile: {
-        atStart: profileAtStart,
-        atEnd: profileAtEnd,
-        efficiencyFreezeAtStart: freezeAtStart,
-        efficiencyFreezeAtEnd: freezeAtEnd,
-        transitions: inWindow(observed.profileTransitions, windowStartMs, windowEndMs),
+        ...reading.profile,
+        transitions: within(observed.profileTransitions),
       },
-      protectedLifecycle,
-      rendererTerminals,
+      protectedLifecycle: protectedLifecycle ?? null,
+      rendererTerminals: rendererTerminalReport(pvm, projects),
     };
     log("RESULT %s", JSON.stringify(result));
 
@@ -969,38 +1096,8 @@ export async function runIdleHarness(
     log("FAILED — %s", formatErrorMessage(error, "idle harness threw"));
     return false;
   } finally {
-    for (const cleanup of cleanups) {
-      try {
-        cleanup();
-      } catch {
-        // best-effort
-      }
-    }
-    const pty = getPtyClient();
-    for (const project of projects) {
-      try {
-        if (pty)
-          await withTimeout(
-            pty.killByProject(project.id),
-            CLEANUP_KILL_TIMEOUT_MS,
-            "kill timed out"
-          );
-      } catch {
-        // best-effort
-      }
-      try {
-        await projectStore.removeProject(project.id);
-      } catch {
-        // best-effort
-      }
-    }
-    if (tempRoot) {
-      try {
-        await rm(tempRoot, { recursive: true, force: true });
-      } catch (error) {
-        log("WARN — could not remove %s: %s", tempRoot, formatErrorMessage(error, "unknown"));
-      }
-    }
+    disposeObservers?.();
+    await teardownFixture(projects, tempRoot);
   }
 }
 
