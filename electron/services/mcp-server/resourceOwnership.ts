@@ -104,7 +104,8 @@ export class ResourceOwnershipLedger {
   private readonly principalBySession = new Map<string, string>();
   /**
    * Principal owner keys whose bearer has not been revoked. A principal id is
-   * minted per bearer and never reused, so leaving this set is final.
+   * minted per bearer, and the handshake resolves it only from a live token, so
+   * nothing binds a principal again once it has left this set.
    */
   private readonly livePrincipals = new Set<string>();
 

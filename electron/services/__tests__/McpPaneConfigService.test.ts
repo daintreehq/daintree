@@ -510,7 +510,9 @@ describe("McpPaneConfigService", () => {
       });
 
       expect(listener).toHaveBeenCalledExactlyOnceWith(firstPrincipal);
-      expect(service.getOwnershipPrincipalForToken(second.token)).not.toBe(firstPrincipal);
+      const secondPrincipal = service.getOwnershipPrincipalForToken(second.token);
+      expect(secondPrincipal).toEqual(expect.any(String));
+      expect(secondPrincipal).not.toBe(firstPrincipal);
     });
 
     it("revokes every pane's principal on revokeAll", async () => {

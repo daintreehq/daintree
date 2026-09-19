@@ -3114,6 +3114,23 @@ describe("HttpLifecycle", () => {
         expect(deps.sessionStore.resourceOwnership.ownerOf(sessionId)).toBe(sessionId);
       });
 
+      it("writes no session state when the principal resolver throws", async () => {
+        // Resolved ahead of every map write, like the workspace binding, so a
+        // failing lookup leaves nothing for the reaper to miss.
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        lc.setPaneOwnershipPrincipalResolver(() => {
+          throw new Error("resolver failed");
+        });
+
+        await expect(openSse(lc, deps, PANE_AUTH)).rejects.toThrow("resolver failed");
+
+        expect(deps.sessionStore.sessions.size).toBe(0);
+        expect(deps.sessionStore.sessionTierMap.size).toBe(0);
+        expect(deps.sessionStore.sessionOriginMap.size).toBe(0);
+        expect(deps.sessionStore.sessionCredentialMap.size).toBe(0);
+      });
+
       it("keeps a bearer that resolves to no principal session-scoped", async () => {
         // A pane token revoked between the auth gate and the handshake resolves
         // to nothing, and the session falls back to the api-key behaviour.

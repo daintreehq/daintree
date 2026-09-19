@@ -804,6 +804,70 @@ describe("McpServerService", () => {
     expect(httpSessions.has(paneSessionId)).toBe(false);
   });
 
+  it("keeps a pane bearer's terminals across a reconnect and a restart, until the bearer is revoked (#12487)", async () => {
+    const listing = {
+      terminals: [{ id: "terminal-pane" }, { id: "terminal-users-own" }],
+    };
+    const { window, webContents } = createMockWindow({
+      getManifest: () => [
+        createManifestEntry({ id: "terminal.new", title: "New", description: "Open a terminal" }),
+        createManifestEntry({
+          id: "terminal.list",
+          title: "List",
+          description: "List terminals",
+          kind: "query",
+        }),
+      ],
+      dispatchAction: ({ actionId }) =>
+        actionId === "terminal.new"
+          ? { ok: true, result: { terminalId: "terminal-pane" } }
+          : { ok: true, result: listing },
+    });
+    paneTokenTiers.set("pane-token", "system");
+    service.setPaneOwnershipPrincipalResolver((token) =>
+      token === "pane-token" ? "principal-pane" : null
+    );
+    await service.start(window);
+    const paneAuth = { Authorization: "Bearer pane-token" };
+    const ownedIds = async (client: Client): Promise<string[]> => {
+      const result = getTextResult(
+        await client.callTool({ name: "terminal.list", arguments: { owned: true } })
+      );
+      expect(result.isError).not.toBe(true);
+      return (JSON.parse(result.content[0].text) as typeof listing).terminals.map((t) => t.id);
+    };
+
+    // Created over SSE, the transport Claude panes use.
+    const first = await connectClient(service.currentPort!, paneAuth);
+    transports.push(first.transport);
+    await first.client.callTool({ name: "terminal.new", arguments: {} });
+    await first.client.close();
+    await vi.waitFor(() => expect(service._sessions.size).toBe(0));
+
+    // The same bearer, reconnecting on a different transport, still owns it.
+    const second = await connectHttpClient(service.currentPort!, paneAuth);
+    httpTransports.push(second.transport);
+    expect(await ownedIds(second.client)).toEqual(["terminal-pane"]);
+
+    // An api-key client owns none of it.
+    const apiKeyClient = await connectHttpClient(service.currentPort!);
+    httpTransports.push(apiKeyClient.transport);
+    expect(await ownedIds(apiKeyClient.client)).toEqual([]);
+
+    // A server restart revokes no pane bearer, so it keeps the terminal too.
+    await service.stop();
+    await service.start(window);
+    const third = await connectHttpClient(service.currentPort!, paneAuth);
+    httpTransports.push(third.transport);
+    expect(await ownedIds(third.client)).toEqual(["terminal-pane"]);
+
+    // Revoking the bearer's principal takes the authority, and nothing else.
+    const sentBeforeRevoke = webContents.send.mock.calls.length;
+    service.revokeOwnershipPrincipal("principal-pane");
+    expect(webContents.send.mock.calls.length).toBe(sentBeforeRevoke);
+    expect(await ownedIds(third.client)).toEqual([]);
+  });
+
   it("writes no session binding for a handshake the SDK refuses before initializing", async () => {
     // The binding is written from `onsessioninitialized`, so a pre-initialize
     // refusal must leave no row behind for an id nobody was ever given.
