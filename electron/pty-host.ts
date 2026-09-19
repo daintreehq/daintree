@@ -177,7 +177,9 @@ if (!analysisWorkersDisabled()) {
 // ~3s to commit an agent/process change. Short enough for "I just ran claude
 // and want to see the chrome flip" to feel responsive, long enough to filter
 // `claude --version`-style blips. Adaptive backoff (see ProcessTreeCache)
-// stretches this out when the tree is quiet.
+// stretches this out when the tree is quiet. This is only the boot cadence:
+// main's resource-profile push, replayed on every ready, replaces it with the
+// profile's interval.
 const processTreeCache = new ProcessTreeCache(1500);
 // Records every descendant ever seen under a PTY shell so teardown can still
 // reach the ones that reparented to PID 1 before it ran (#12203). Persisted

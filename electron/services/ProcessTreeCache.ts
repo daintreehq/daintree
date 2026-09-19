@@ -571,7 +571,15 @@ export class ProcessTreeCache {
   ): boolean {
     const collectDescendants = (childrenMap: Map<number, number[]>): Set<number> => {
       const descendants = new Set<number>();
-      const pending = [...(childrenMap.get(process.pid) ?? [])];
+      // Childless direct children are left out. The host's own probes — the
+      // foreground `ps`, the lineage `lstart` batches, `lsof`, `git` — all
+      // have that shape and were caught in nearly every sweep, so counting
+      // them reset the backoff forever (#12513). A bare shell has the same
+      // shape and nothing to detect; whatever runs in it is a grandchild and
+      // still counts, as does a shell losing its last child.
+      const pending = (childrenMap.get(process.pid) ?? []).filter(
+        (pid) => (childrenMap.get(pid)?.length ?? 0) > 0
+      );
 
       while (pending.length > 0) {
         const pid = pending.pop()!;

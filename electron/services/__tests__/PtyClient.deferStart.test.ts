@@ -159,4 +159,39 @@ describe("PtyClient deferStart", () => {
 
     client.dispose();
   });
+
+  it("replays a resource profile set before the deferred host was ready", () => {
+    const client = new PtyClientClass({ deferStart: true });
+
+    // ResourceProfileService's startup push can land before the host exists.
+    client.setResourceProfile("efficiency");
+    client.setProcessTreePollInterval(25_000);
+
+    client.start();
+    mockChild.emit("message", { type: "ready" });
+
+    const sent = mockChild.postMessage.mock.calls.map((c: unknown[]) => c[0] as { type: string });
+    const profileIndex = sent.findIndex((m) => m.type === "set-resource-profile");
+    const intervalIndex = sent.findIndex((m) => m.type === "set-process-tree-poll-interval");
+    expect(sent[profileIndex]).toMatchObject({ profile: "efficiency" });
+    expect(sent[intervalIndex]).toMatchObject({ ms: 25_000 });
+    expect(profileIndex).toBeLessThan(intervalIndex);
+
+    client.dispose();
+  });
+
+  it("replays a resource profile posted between fork and the host's first ready", () => {
+    const client = new PtyClientClass();
+    // Posted before the host's listener exists — the real host drops it.
+    client.setResourceProfile("efficiency");
+    mockChild.postMessage.mockClear();
+
+    mockChild.emit("message", { type: "ready" });
+
+    expect(mockChild.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "set-resource-profile", profile: "efficiency" })
+    );
+
+    client.dispose();
+  });
 });

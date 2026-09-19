@@ -745,7 +745,7 @@ describe("ProcessTreeCache command/env construction", () => {
         ) => {
           cb(
             null,
-            `  PID  PPID %CPU RSS COMM COMMAND\n  100    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh`,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  100    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh\n  201  200 0.0 1000 node node dev.js`,
             ""
           );
           return { pid: 991 };
@@ -760,7 +760,7 @@ describe("ProcessTreeCache command/env construction", () => {
         ) => {
           cb(
             null,
-            `  PID  PPID %CPU RSS COMM COMMAND\n  101    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh`,
+            `  PID  PPID %CPU RSS COMM COMMAND\n  101    1 0.0 1000 runner runner\n  200 ${process.pid} 0.0 1000 zsh zsh\n  201  200 0.0 1000 node node dev.js`,
             ""
           );
           return { pid: 992 };
@@ -807,8 +807,72 @@ describe("ProcessTreeCache command/env construction", () => {
     const cache = new ProcessTreeCache(2500);
     const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
 
+    // A bare shell has nothing to detect, so it is not a change by itself
+    // (the host's own short-lived probes share its shape, #12513); the agent
+    // it then runs is.
+    expect(await internals.refreshUnix()).toBe(false);
     expect(await internals.refreshUnix()).toBe(true);
-    expect(await internals.refreshUnix()).toBe(true);
+  });
+
+  describe("owned-tree churn from the host's own probes (#12513)", () => {
+    const HEADER = "  PID  PPID %CPU RSS COMM COMMAND";
+    const shellWithAgent = `  200 ${process.pid} 0.0 1000 zsh zsh\n  201  200 0.0 1000 node node agent.js`;
+
+    function queueCensuses(...rows: string[]): void {
+      rows.forEach((body, index) => {
+        mockExecFile.mockImplementationOnce(
+          (
+            _file: string,
+            _args: unknown,
+            _opts: unknown,
+            cb: (err: null, stdout: string, stderr: string) => void
+          ) => {
+            cb(null, `${HEADER}\n${body}`, "");
+            return { pid: 9000 + index };
+          }
+        );
+      });
+    }
+
+    it("does not let short-lived probe children of the host reset the backoff", async () => {
+      queueCensuses(
+        shellWithAgent,
+        `${shellWithAgent}\n  991 ${process.pid} 0.0 900 ps ps -o pgid=,tpgid= -p 200`,
+        `${shellWithAgent}\n  992 ${process.pid} 0.0 900 lsof lsof -a -d txt -p 201 -Fn`,
+        // Caught between fork and exec, a probe still carries the host's name.
+        `${shellWithAgent}\n  993 ${process.pid} 0.0 900 node node`,
+        shellWithAgent
+      );
+      const cache = new ProcessTreeCache(2500);
+      const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+      expect(await internals.refreshUnix()).toBe(true);
+      for (let i = 0; i < 4; i++) {
+        expect(await internals.refreshUnix()).toBe(false);
+      }
+      // Only the backoff looks past them: the census still reports them.
+      queueCensuses(`${shellWithAgent}\n  994 ${process.pid} 0.0 900 ps ps -p 201`);
+      await internals.refreshUnix();
+      expect(cache.getProcess(994)?.comm).toBe("ps");
+    });
+
+    it("still counts a command run inside a shell as churn, whatever its name", async () => {
+      queueCensuses(shellWithAgent, `${shellWithAgent}\n  995  200 0.0 900 ps ps aux`);
+      const cache = new ProcessTreeCache(2500);
+      const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+      expect(await internals.refreshUnix()).toBe(true);
+      expect(await internals.refreshUnix()).toBe(true);
+    });
+
+    it("counts a shell losing its last child as a change", async () => {
+      queueCensuses(shellWithAgent, `  200 ${process.pid} 0.0 1000 zsh zsh`);
+      const cache = new ProcessTreeCache(2500);
+      const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+      expect(await internals.refreshUnix()).toBe(true);
+      expect(await internals.refreshUnix()).toBe(true);
+    });
   });
 
   describe("Windows refresh", () => {

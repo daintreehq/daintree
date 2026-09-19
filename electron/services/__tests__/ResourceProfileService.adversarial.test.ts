@@ -310,6 +310,8 @@ describe("ResourceProfileService adversarial", () => {
 
     service.start();
     service.stop();
+    // start() pushes the starting profile to the pty host; nothing after stop may.
+    pty.setResourceProfile.mockClear();
 
     mockGetAppMetrics.mockReturnValue([makeMetric(1300)]);
     mockIsOnBatteryPower.mockReturnValue(true);

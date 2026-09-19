@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   FOREGROUND_PROBE_FOLLOW_UP_MS,
   FOREGROUND_PROBE_KEEPWARM_MS,
+  FOREGROUND_PROBE_REFUTATION_MS,
+  SHELL_IDENTITY_FALLBACK_POLL_MS,
   IdentityWatcher,
   type IdentityWatcherDelegate,
 } from "../IdentityWatcher.js";
@@ -1632,7 +1634,7 @@ describe("IdentityWatcher", () => {
   });
 
   describe("observeOutput foreground probe", () => {
-    it("rations prompt-less reads to one per keep-warm window and always reads on a prompt", () => {
+    it("rations prompt-less reads until the probe latches and always reads on a prompt", () => {
       const { delegate, state } = createFakeDelegate({ detectedAgentId: "codex" });
       const probe = vi.spyOn(delegate, "readForegroundProcessGroupSnapshot");
       const watcher = new IdentityWatcher(delegate);
@@ -1674,10 +1676,41 @@ describe("IdentityWatcher", () => {
       watcher.observeOutput("runner@host:/repo$ ");
       expect(probe).toHaveBeenCalledTimes(3);
 
-      // Past the window a prompt-less chunk keeps the cache warm again.
+      // Once latched, a prompt-less read has nothing left to earn — a prompt
+      // on a cold cache is re-judged by its own follow-up — so prompt-less
+      // output never reads again, however long it runs (#12513).
+      for (let i = 0; i < 3; i++) {
+        vi.advanceTimersByTime(FOREGROUND_PROBE_KEEPWARM_MS + 1);
+        watcher.observeOutput(sparkleFrame);
+      }
+      expect(probe).toHaveBeenCalledTimes(3);
+      watcher.dispose();
+    });
+
+    it("keeps the keep-warm ration while the probe has never produced a reading", () => {
+      const { delegate, state } = createFakeDelegate({ detectedAgentId: "codex" });
+      const probe = vi.spyOn(delegate, "readForegroundProcessGroupSnapshot");
+      const watcher = new IdentityWatcher(delegate);
+      const frame = "\x1b[12;33H⠁";
+
+      // A probe that answers but has never latched (every reading is the
+      // warm-up sentinel) still gets its rationed reads, so a probe that comes
+      // good later can latch.
+      state.foreground = INITIAL_FOREGROUND_SENTINEL;
+      watcher.observeOutput(frame);
+      vi.advanceTimersByTime(FOREGROUND_PROBE_FOLLOW_UP_MS);
+      watcher.observeOutput(frame);
+      const readsAfterWarmUp = probe.mock.calls.length;
+
+      state.foreground = { shellPgid: 123, foregroundPgid: 456 };
       vi.advanceTimersByTime(FOREGROUND_PROBE_KEEPWARM_MS + 1);
-      watcher.observeOutput(sparkleFrame);
-      expect(probe).toHaveBeenCalledTimes(4);
+      watcher.observeOutput(frame);
+      expect(probe.mock.calls.length).toBe(readsAfterWarmUp + 1);
+
+      // That read latched, so the next window stays quiet.
+      vi.advanceTimersByTime(FOREGROUND_PROBE_KEEPWARM_MS + 1);
+      watcher.observeOutput(frame);
+      expect(probe.mock.calls.length).toBe(readsAfterWarmUp + 1);
       watcher.dispose();
     });
 
@@ -1736,6 +1769,166 @@ describe("IdentityWatcher", () => {
       vi.advanceTimersByTime(FOREGROUND_PROBE_FOLLOW_UP_MS);
       expect(clear).not.toHaveBeenCalled();
       watcher.dispose();
+    });
+  });
+
+  describe("poll foreground probe (#12513)", () => {
+    // Every stale read of the real probe is a `ps` spawn, so the read count is
+    // the spawn budget. These pin that a stable fleet costs nothing and that
+    // reads scale with the events that can actually demote an agent.
+    function makeCommittedAgent(overrides: Partial<FakeDelegateState> = {}) {
+      const clear = vi.fn();
+      const fakeDetector = {
+        injectShellCommandEvidence: vi.fn(),
+        clearShellCommandEvidence: clear,
+      } as unknown as ProcessDetector;
+      const { delegate, state } = createFakeDelegate({
+        processDetector: fakeDetector,
+        visibleLines: ["codex", "Codex ready"],
+        cursorLine: "Codex ready",
+        ptyDescendantCount: 1,
+        foreground: { shellPgid: 123, foregroundPgid: 456 },
+        ...overrides,
+      });
+      const probe = vi.spyOn(delegate, "readForegroundProcessGroupSnapshot");
+      const watcher = new IdentityWatcher(delegate);
+      return { delegate, state, clear, probe, watcher };
+    }
+
+    async function commit(watcher: IdentityWatcher, command = "codex") {
+      watcher.onShellSubmit(command);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(watcher.isFallbackCommitted).toBe(true);
+    }
+
+    it("reads the probe before commit, then stops for a stable agent", async () => {
+      const { probe, watcher, clear } = makeCommittedAgent();
+      await commit(watcher);
+      // The pre-commit reads are what latch the probe for the gate.
+      expect(probe).toHaveBeenCalled();
+      probe.mockClear();
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(probe).not.toHaveBeenCalled();
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("does not read the probe for a repainting agent's prompt-less output", async () => {
+      const { probe, watcher } = makeCommittedAgent();
+      await commit(watcher);
+      probe.mockClear();
+
+      const sparkleFrame = "\x1b[12;33H\x1b[38;2;105;105;105;48;2;30;30;30m⠁";
+      for (let i = 0; i < 900; i++) {
+        await vi.advanceTimersByTimeAsync(66);
+        watcher.observeOutput(sparkleFrame);
+      }
+
+      expect(probe).not.toHaveBeenCalled();
+      watcher.dispose();
+    });
+
+    it("never reads the probe for a non-agent command", async () => {
+      const { probe, watcher } = makeCommittedAgent({
+        visibleLines: ["pnpm dev", "> dev output"],
+        cursorLine: "> dev output",
+        ptyDescendantCount: 2,
+      });
+      watcher.onShellSubmit("pnpm dev");
+      expect(watcher.pendingFallbackIdentity).toMatchObject({ processIconId: "pnpm" });
+      expect(watcher.pendingFallbackIdentity?.agentType).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(watcher.isFallbackCommitted).toBe(true);
+      expect(probe).not.toHaveBeenCalled();
+      watcher.dispose();
+    });
+
+    it("demotes from a cold cache: the stale read holds, the fresh one decides", async () => {
+      const { state, probe, watcher, clear } = makeCommittedAgent();
+      await commit(watcher);
+
+      // The agent exits. The first read lands on a cache that went stale
+      // while nothing needed it, so it fails closed and starts a refresh.
+      probe.mockReturnValueOnce(null);
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.visibleLines = ["Codex exited", "user@host daintree % "];
+      state.cursorLine = "user@host daintree % ";
+      state.ptyDescendantCount = 0;
+
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+      await vi.advanceTimersByTimeAsync(2 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
+    });
+
+    it("re-probes an unchanged refuted candidate once per refutation window", async () => {
+      const { state, probe, watcher, clear } = makeCommittedAgent();
+      await commit(watcher);
+      probe.mockClear();
+
+      // The agent leaves a shell-prompt-looking line on screen while it still
+      // owns the foreground. A fresh reading refutes the candidate; it is not
+      // asked again on every tick.
+      state.visibleLines = ["Codex ready", "user@host:~/repo$ "];
+      state.cursorLine = "user@host:~/repo$ ";
+      const ticks = 3 * (FOREGROUND_PROBE_REFUTATION_MS / SHELL_IDENTITY_FALLBACK_POLL_MS);
+      await vi.advanceTimersByTimeAsync(ticks * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(probe.mock.calls.length).toBeGreaterThan(0);
+      expect(probe.mock.calls.length).toBeLessThanOrEqual(3);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+      // A change in the tree reopens the candidate on the next tick.
+      const readsBefore = probe.mock.calls.length;
+      state.ptyDescendantCount = 2;
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(probe.mock.calls.length).toBe(readsBefore + 1);
+      watcher.dispose();
+    });
+
+    it("demotes promptly when a refuted candidate turns into a real exit", async () => {
+      const { state, watcher, clear } = makeCommittedAgent();
+      await commit(watcher);
+
+      state.visibleLines = ["Codex ready", "user@host:~/repo$ "];
+      state.cursorLine = "user@host:~/repo$ ";
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      // The agent exits inside the refutation window: its child leaves the
+      // tree and the shell takes the foreground back.
+      state.ptyDescendantCount = 0;
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      await vi.advanceTimersByTimeAsync(3 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("reopens a refuted candidate when the shell prompt is printed again", async () => {
+      const { state, probe, watcher, clear } = makeCommittedAgent({ ptyDescendantCount: 2 });
+      await commit(watcher);
+
+      state.visibleLines = ["Codex ready", "user@host:~/repo$ "];
+      state.cursorLine = "user@host:~/repo$ ";
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      // A background helper keeps the tree non-empty, so only the printed
+      // prompt can reopen the candidate inside the window. Its own read lands
+      // on a cold cache; the next tick asks again rather than waiting it out.
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      probe.mockClear();
+      probe.mockReturnValueOnce(null);
+      watcher.observeOutput("user@host:~/repo$ ");
+      expect(probe).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(probe).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(2 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
     });
   });
 });
