@@ -1,9 +1,10 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Unplug } from "lucide-react";
 import { Joystick } from "@/components/icons";
 import { usePanelStore } from "@/store";
 import { useTerminalAdoptionStore } from "@/store/terminalAdoptionStore";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import type { RestoreFocusTarget } from "@/components/ui/AppDialog";
 import {
   ContextMenuItem,
   ContextMenuSub,
@@ -39,23 +40,34 @@ export function useOrchestratorCandidates(terminalId: string): {
   candidateIds: string[];
   refresh: () => void;
 } {
-  const [candidateIds, setCandidateIds] = useState<string[]>([]);
+  // Tagged with the terminal they were fetched for: the dock hands one menu a
+  // new terminal when its active tab changes, and a list fetched for the old
+  // one would offer the new one to itself.
+  const [candidates, setCandidates] = useState<{ terminalId: string; ids: string[] } | null>(null);
+  const latestRequestRef = useRef(0);
   const refresh = useCallback(() => {
+    const request = ++latestRequestRef.current;
     safeFireAndForget(
       window.electron.mcpServer.listOrchestratorPanes().then((paneIds) => {
+        // An older opening's answer must not overwrite a newer one's.
+        if (request !== latestRequestRef.current) return;
         const { panelsById } = usePanelStore.getState();
-        setCandidateIds(
-          paneIds.filter((paneId) => {
+        setCandidates({
+          terminalId,
+          ids: paneIds.filter((paneId) => {
             const panel = panelsById[paneId];
             return paneId !== terminalId && panel !== undefined && panel.location !== "trash";
-          })
-        );
+          }),
+        });
       }),
       { context: "TerminalHandOver listOrchestratorPanes" }
     );
   }, [terminalId]);
+  const candidateIds = candidates?.terminalId === terminalId ? candidates.ids : NO_CANDIDATES;
   return { candidateIds, refresh };
 }
+
+const NO_CANDIDATES: string[] = [];
 
 function OrchestratorMenuItem({
   paneId,
@@ -156,10 +168,13 @@ export function TerminalHandOverDialog({
   terminalId,
   orchestratorPaneId,
   onClose,
+  restoreFocusTo,
 }: {
   terminalId: string;
   orchestratorPaneId: string;
   onClose: () => void;
+  /** Where focus goes when the dialog closes — the pane the menu opened on. */
+  restoreFocusTo?: RestoreFocusTarget;
 }) {
   const terminalName = usePaneName(terminalId) ?? "this terminal";
   const orchestratorName = usePaneName(orchestratorPaneId) ?? "the orchestrator";
@@ -205,6 +220,7 @@ export function TerminalHandOverDialog({
       confirmLabel="Hand over terminal"
       variant="destructive"
       onConfirm={handleConfirm}
+      restoreFocusTo={restoreFocusTo}
       isConfirmLoading={isSubmitting}
       confirmDisabled={refusal !== null}
       hint={

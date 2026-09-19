@@ -24,7 +24,8 @@ import { principalOwnerKey } from "./resourceOwnership.js";
  *    handed to another is refused rather than transferred: two agents typing
  *    into one composer is the failure #11875 exists to prevent.
  * 3. **It ends with either pane.** The orchestrator's exit revokes its bearer;
- *    the handed-over terminal's exit drops its record here.
+ *    the handed-over terminal's exit, a later launch under its id, or the
+ *    failure of the launch that was handed over drops its record here.
  */
 export interface TerminalAdoptionRecord {
   terminalId: string;
@@ -35,6 +36,12 @@ export interface TerminalAdoptionRecord {
    * a reveal's destination the way an ownership record's does.
    */
   workspaceId?: string;
+  /**
+   * The launch generation of the process that was handed over, when main knew
+   * it. A spawn result for a later launch under the same id is a different
+   * process, and ends the hand-over; one for this launch does not.
+   */
+  launchGeneration?: number;
   adoptedAt: number;
 }
 
@@ -59,6 +66,7 @@ export class TerminalAdoptionLedger {
     orchestratorPaneId: string;
     principalId: string;
     workspaceId?: string;
+    launchGeneration?: number;
     now?: number;
   }): TerminalAdoptionOutcome {
     const owner = principalOwnerKey(params.principalId);
@@ -71,6 +79,9 @@ export class TerminalAdoptionLedger {
       terminalId: params.terminalId,
       orchestratorPaneId: params.orchestratorPaneId,
       ...(params.workspaceId !== undefined ? { workspaceId: params.workspaceId } : {}),
+      ...(params.launchGeneration !== undefined
+        ? { launchGeneration: params.launchGeneration }
+        : {}),
       adoptedAt: params.now ?? Date.now(),
     };
     this.byTerminal.set(params.terminalId, { record, owner });

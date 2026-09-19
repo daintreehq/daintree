@@ -97,6 +97,13 @@ const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 // Anything past that is found by searching the picker.
 const MOVE_TO_WORKTREE_SUBMENU_LIMIT = 10;
 
+/** A pending hand-over consent (#12490): which terminal, to which pane. */
+interface HandOverRequest {
+  id: number;
+  terminalId: string;
+  orchestratorPaneId: string;
+}
+
 /** A zero-size point the picker hangs off, tracking the pane it sits in. */
 interface MovePickerAnchor {
   contextElement: HTMLElement;
@@ -171,18 +178,34 @@ export function TerminalContextMenu({
 
   const { candidateIds: orchestratorCandidateIds, refresh: refreshOrchestratorCandidates } =
     useOrchestratorCandidates(terminalId);
-  // Which terminal the consent dialog is for, not only the pane it goes to: the
-  // dock hands this menu a new terminal when its active tab changes, and the
-  // dialog must keep naming the one the user picked.
-  const [handOverRequest, setHandOverRequest] = useState<{
-    terminalId: string;
-    orchestratorPaneId: string;
-  } | null>(null);
+  // The consent dialog's request, carrying the terminal it is for: the dock
+  // hands this menu a new terminal when its active tab changes, and a consent
+  // must never quietly retarget. Dropped during render so switching back
+  // can't reopen it, the way the move picker is.
+  const [handOverRequest, setHandOverRequest] = useState<HandOverRequest | null>(null);
+  if (handOverRequest !== null && handOverRequest.terminalId !== terminalId) {
+    setHandOverRequest(null);
+  }
+  // Picking a pane records the request and the root content's close hook
+  // opens the dialog — the same handoff as the move picker, so the menu's own
+  // focus return can't land after the dialog has taken focus.
+  const pendingHandOverRef = useRef<HandOverRequest | null>(null);
+  const nextHandOverIdRef = useRef(0);
   const handleRequestHandOver = useCallback(
-    (orchestratorPaneId: string) => setHandOverRequest({ terminalId, orchestratorPaneId }),
+    (orchestratorPaneId: string) => {
+      pendingHandOverRef.current = {
+        id: ++nextHandOverIdRef.current,
+        terminalId,
+        orchestratorPaneId,
+      };
+    },
     [terminalId]
   );
-  const closeHandOverDialog = useCallback(() => setHandOverRequest(null), []);
+  // Closes only the request it was handed: a confirm that resolves after the
+  // user dismissed its dialog and opened another must not close the new one.
+  const closeHandOverRequest = useCallback((request: HandOverRequest) => {
+    setHandOverRequest((current) => (current?.id === request.id ? null : current));
+  }, []);
 
   const handleMenuOpenChange = useCallback(
     (open: boolean) => {
@@ -191,6 +214,7 @@ export function TerminalContextMenu({
       // the picker on some later, unrelated close.
       if (open) {
         pendingMovePickerRef.current = null;
+        pendingHandOverRef.current = null;
         // Only a PTY can be handed over; the other kinds' menus never ask.
         if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
           refreshOrchestratorCandidates();
@@ -659,6 +683,15 @@ export function TerminalContextMenu({
         suppressNextCloseAutoFocusRef.current = false;
         event.preventDefault();
       }
+      const pendingHandOver = pendingHandOverRef.current;
+      pendingHandOverRef.current = null;
+      if (pendingHandOver !== null && pendingHandOver.terminalId === terminalId) {
+        // The dialog takes focus into its own controls and hands it back to
+        // the pane when it closes.
+        event.preventDefault();
+        setHandOverRequest(pendingHandOver);
+        return;
+      }
       const pendingPanelId = pendingMovePickerRef.current;
       pendingMovePickerRef.current = null;
       if (pendingPanelId === null || pendingPanelId !== terminalId) return;
@@ -1057,9 +1090,11 @@ export function TerminalContextMenu({
       {destructiveConfirmDialog}
       {handOverRequest !== null && (
         <TerminalHandOverDialog
+          key={handOverRequest.id}
           terminalId={handOverRequest.terminalId}
           orchestratorPaneId={handOverRequest.orchestratorPaneId}
-          onClose={closeHandOverDialog}
+          onClose={() => closeHandOverRequest(handOverRequest)}
+          restoreFocusTo={movePickerReturnFocusRef}
         />
       )}
       <ContextMenu onOpenChange={handleMenuOpenChange}>

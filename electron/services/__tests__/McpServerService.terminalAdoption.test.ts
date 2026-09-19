@@ -51,14 +51,18 @@ const ORCHESTRATOR: OrchestratorPaneIdentity = {
 describe("McpServerService terminal hand-over (#12490)", () => {
   const service = new McpServerService();
   const terminals = new Map<string, string | null>();
+  const generations = new Map<string, number>();
 
   beforeEach(() => {
     terminals.clear();
+    generations.clear();
     terminals.set("terminal-1", "project-a");
     terminals.set("pane-orch", "project-a");
+    generations.set("terminal-1", 3);
     setPtyClientRef({
       hasTerminal: (id: string) => terminals.has(id),
       getTerminalProjectId: (id: string) => terminals.get(id) ?? null,
+      getLaunchGeneration: (id: string) => generations.get(id) ?? null,
     } as unknown as PtyClient);
   });
 
@@ -162,6 +166,37 @@ describe("McpServerService terminal hand-over (#12490)", () => {
     adopt();
 
     events.emit("terminal:trashed", { id: "terminal-1", expiresAt: Date.now() + 60_000 });
+
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("survives the spawn result of the launch it was made against, and earlier ones", () => {
+    // A terminal can be handed over while its own spawn is still pending; the
+    // confirmation of that very launch is not a new process.
+    adopt();
+
+    service.handleTerminalSpawnResult("terminal-1", true, 3);
+    service.handleTerminalSpawnResult("terminal-1", true, 2);
+    service.handleTerminalSpawnResult("terminal-1", false, 4);
+
+    expect(service.listTerminalAdoptions().map((a) => a.terminalId)).toEqual(["terminal-1"]);
+  });
+
+  it("ends when a later launch takes the id, or the handed-over launch never starts", () => {
+    adopt();
+    service.handleTerminalSpawnResult("terminal-1", true, 4);
+    expect(service.listTerminalAdoptions()).toEqual([]);
+
+    adopt();
+    service.handleTerminalSpawnResult("terminal-1", false, 3);
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("ends on a spawn result it cannot place", () => {
+    generations.delete("terminal-1");
+    adopt();
+
+    service.handleTerminalSpawnResult("terminal-1", true, 3);
 
     expect(service.listTerminalAdoptions()).toEqual([]);
   });

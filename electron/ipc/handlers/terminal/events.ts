@@ -74,13 +74,17 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
+    // A hand-over is of one process (#12490): a later launch under the id, or
+    // the handed-over launch failing to start, ends it.
+    getMcpServerServiceRef()?.handleTerminalSpawnResult(
+      id,
+      result.success,
+      result.launchGeneration
+    );
     if (result.success) {
       // A confirmed relaunch may supersede a session a natural exit left on
       // the pane (#12433); a refused one leaves the running process's id alone.
       releaseSupersededCapturedSession(id, result.launchGeneration);
-      // A new process under a handed-over id is not the one the user handed
-      // over, so the hand-over does not follow it (#12490).
-      getMcpServerServiceRef()?.releaseTerminalAdoption(id);
     } else {
       // Async pty-host spawn rejection (PENDING_SPAWNS_CAPPED, bad shell path,
       // etc.) doesn't throw from ptyClient.spawn(). Revoke any minted pane

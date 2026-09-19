@@ -147,6 +147,31 @@ describe("useOrchestratorCandidates", () => {
 
     await waitFor(() => expect(result.current.candidateIds).toEqual(["pane-orch"]));
   });
+
+  it("never offers a list fetched for another terminal, or an older opening's answer", async () => {
+    const answers: Array<(ids: string[]) => void> = [];
+    listOrchestratorPanes.mockImplementation(
+      () => new Promise<string[]>((resolve) => answers.push(resolve))
+    );
+    const { result, rerender } = renderHook(
+      ({ terminalId }: { terminalId: string }) => useOrchestratorCandidates(terminalId),
+      { initialProps: { terminalId: "terminal-1" } }
+    );
+
+    // Fetched for terminal-1, answered after the dock retargeted the menu to
+    // the orchestrator itself.
+    act(() => result.current.refresh());
+    rerender({ terminalId: "pane-orch" });
+    await act(async () => answers[0]!(["pane-orch", "pane-other"]));
+    expect(result.current.candidateIds).toEqual([]);
+
+    // Two openings for the same terminal: the older answer lands last.
+    act(() => result.current.refresh());
+    act(() => result.current.refresh());
+    await act(async () => answers[2]!(["pane-other"]));
+    await act(async () => answers[1]!(["terminal-1", "pane-other"]));
+    expect(result.current.candidateIds).toEqual(["pane-other"]);
+  });
 });
 
 describe("TerminalHandOverDialog", () => {

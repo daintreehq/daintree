@@ -460,11 +460,13 @@ export class McpServerService {
       );
     }
     const workspaceId = workspaces[0];
+    const launchGeneration = ptyClient.getLaunchGeneration(terminalId);
     const outcome = this.sessionStore.terminalAdoption.adopt({
       terminalId,
       orchestratorPaneId,
       principalId: orchestrator.principalId,
       ...(workspaceId !== undefined ? { workspaceId } : {}),
+      ...(launchGeneration !== null ? { launchGeneration } : {}),
     });
     if (!outcome.ok) {
       return { status: "refused", reason: "already-handed", heldByPaneId: outcome.heldByPaneId };
@@ -483,6 +485,29 @@ export class McpServerService {
     return panes
       .filter((pane) => canDriveTerminals(pane) && ptyClient?.hasTerminal(pane.paneId) === true)
       .map((pane) => pane.paneId);
+  }
+
+  /**
+   * End a hand-over that a spawn result shows is no longer of the process the
+   * user handed over (#12490): a later launch under the id succeeded, or the
+   * handed-over launch itself never started. A result for an earlier launch,
+   * or a refused respawn that left the process running, changes nothing.
+   * Where either generation is unknown the hand-over ends, since the result
+   * cannot be placed.
+   */
+  handleTerminalSpawnResult(
+    terminalId: string,
+    success: boolean,
+    launchGeneration: number | undefined
+  ): void {
+    const record = this.sessionStore.terminalAdoption.getForTerminal(terminalId);
+    if (record === undefined) return;
+    const adopted = record.launchGeneration;
+    const known = adopted !== undefined && launchGeneration !== undefined;
+    const ends = success
+      ? !known || launchGeneration > adopted
+      : !known || launchGeneration === adopted;
+    if (ends) this.sessionStore.terminalAdoption.release(terminalId);
   }
 
   /** Take a handed-over terminal back. Resolves false when it wasn't handed over. */

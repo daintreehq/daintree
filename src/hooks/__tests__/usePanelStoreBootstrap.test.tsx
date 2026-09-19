@@ -19,6 +19,9 @@ vi.mock("@/store/projectStatsStore", () => ({
 vi.mock("@/store/fleetSnapshotStore", () => ({
   setupFleetSnapshotListeners: vi.fn(() => () => {}),
 }));
+vi.mock("@/store/terminalAdoptionStore", () => ({
+  setupTerminalAdoptionListeners: vi.fn(() => () => {}),
+}));
 vi.mock("@/store/systemWakeStore", () => ({
   setupSystemWakeListeners: vi.fn(() => () => {}),
 }));

@@ -116,6 +116,7 @@ import {
   type OwnedResourceKind,
   type OwnedResourceRecord,
 } from "./resourceOwnership.js";
+import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -1176,11 +1177,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
     let ownedResourceRecord: OwnedResourceRecord | undefined;
-    // Whether the gate admitted the call on a hand-over rather than a
-    // creation (#12490). Checked again just before dispatch, because the
-    // user can take the terminal back while the call waits on a manifest or a
-    // view.
-    let ownedResourceAdopted = false;
+    // The hand-over the gate admitted the call on, when it was one rather than
+    // a creation (#12490). Checked again just before dispatch, because the user
+    // can take the terminal back while the call waits on a manifest — and
+    // checked by identity, so a take-back followed by a fresh hand-over is not
+    // mistaken for the consent this call was admitted under. The thaw of a
+    // frozen view inside the bridge still follows; a call caught there is no
+    // different from one sent the moment before the take-back.
+    let admittedAdoption: TerminalAdoptionRecord | undefined;
 
     /**
      * Dispatch the real action an `*Owned` tool stands in for, with arguments
@@ -1206,7 +1210,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       entry: RendererOwnedResourceTool,
       resourceId: string
     ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
-      if (ownedResourceAdopted && adoptedRecordFor(entry.resourceKind, resourceId) === undefined) {
+      if (
+        admittedAdoption !== undefined &&
+        sessionStore.terminalAdoption.get(ownershipOwner, resourceId) !== admittedAdoption
+      ) {
         return {
           envelope: {
             result: {
@@ -1900,7 +1907,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           ownedResourceId = resourceId;
           ownedResourceRecord = record;
-          ownedResourceAdopted = createdRecord === undefined;
+          admittedAdoption =
+            createdRecord === undefined
+              ? sessionStore.terminalAdoption.get(ownershipOwner, resourceId)
+              : undefined;
         }
 
         // A main-executed owned tool (#12479) runs straight after the gate
