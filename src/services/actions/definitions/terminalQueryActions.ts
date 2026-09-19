@@ -24,7 +24,11 @@ import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
-import type { TerminalStatusEntry } from "@shared/types/terminalStatus";
+import type {
+  TerminalOutputActivityLookup,
+  TerminalStatusEntry,
+  TerminalStatusUnavailableField,
+} from "@shared/types/terminalStatus";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
 import type { SerializedTerminalSnapshot } from "@shared/types/terminal";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -351,7 +355,7 @@ export function registerTerminalQueryActions(
           })
           .optional()
           .describe(
-            "Opt-in. When set, each entry includes `recentOutput` with the last N lines of scrollback. Off by default to keep responses small."
+            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` when observed. Off by default to keep responses small."
           ),
       })
       .optional(),
@@ -420,16 +424,42 @@ export function registerTerminalQueryActions(
 
       let outputs: Record<string, SerializedTerminalSnapshot | null> | null = null;
       let outputError: string | undefined;
+      // `lastOutputChangeAt` lives on the pty-host's viewport tracker, so it is
+      // read only when output was asked for (#12495): that call already pays
+      // for a batched hop, and the default poll still issues none.
+      let activity: Record<string, TerminalOutputActivityLookup> | null = null;
+      let activityError: string | undefined;
       if (includeOutput) {
         const idsToFetch = resolved.filter((r) => r.terminal !== undefined).map((r) => r.id);
-        if (idsToFetch.length > 0) {
-          try {
-            outputs = await window.electron.terminal.getSerializedStates(idsToFetch);
-          } catch (err) {
-            outputError = formatErrorMessage(err, "Failed to fetch terminal output");
-          }
+        // Only a PTY panel has a tracker to read.
+        const activityIds = resolved
+          .filter((r) => r.terminal !== undefined && isPtyPanel(r.terminal))
+          .map((r) => r.id);
+        // Async wrappers so a bridge that throws synchronously settles as a
+        // rejection like any other failure, rather than escaping the call.
+        const readOutputs = async (): Promise<Record<string, SerializedTerminalSnapshot | null>> =>
+          idsToFetch.length > 0 ? window.electron.terminal.getSerializedStates(idsToFetch) : {};
+        const readActivity = async (): Promise<Record<string, TerminalOutputActivityLookup>> =>
+          activityIds.length > 0 ? terminalClient.getOutputActivity(activityIds) : {};
+        // Independent reads, run side by side so the activity hop adds no
+        // latency on top of serialization, and settled separately so either
+        // can fail without costing the caller the other.
+        const [outputRead, activityRead] = await Promise.allSettled([
+          readOutputs(),
+          readActivity(),
+        ]);
+        if (outputRead.status === "fulfilled") {
+          outputs = outputRead.value;
         } else {
-          outputs = {};
+          outputError = formatErrorMessage(outputRead.reason, "Failed to fetch terminal output");
+        }
+        if (activityRead.status === "fulfilled") {
+          activity = activityRead.value;
+        } else {
+          activityError = formatErrorMessage(
+            activityRead.reason,
+            "Failed to fetch output activity"
+          );
         }
       }
 
@@ -542,6 +572,21 @@ export function registerTerminalQueryActions(
               if (tail.truncated) entry.recentOutputTruncated = true;
             }
           }
+
+          if (isPtyPanel(terminal)) {
+            if (activityError !== undefined) {
+              appendError(activityError);
+            } else if (activity !== null) {
+              const lookup = activity[terminal.id] ?? { status: "unreadable" as const };
+              if (lookup.status === "unreadable") {
+                // Nothing was read. Left silent, the missing timestamp would
+                // pass for a terminal whose screen has not changed yet.
+                appendError("Output activity unavailable for this terminal");
+              } else if (lookup.lastOutputChangeAt !== undefined) {
+                entry.lastOutputChangeAt = lookup.lastOutputChangeAt;
+              }
+            }
+          }
         }
 
         return entry;
@@ -560,17 +605,22 @@ export function registerTerminalQueryActions(
       // nothing while claiming a view saw everything; deriving it from
       // `runtimeStatus` would publish an interpretation as a process fact. The
       // pty-host computes it, so the reduced answer reports it and this one
-      // says it could not look. `lastOutputChangeAt` is the same case: it is
-      // read off the pty-host's viewport tracker (#12428), and fetching it here
-      // would put an IPC on every default poll.
+      // says it could not look. `lastOutputChangeAt` is also read off the
+      // pty-host (#12428), but only on calls that asked for output (#12495), so
+      // it is unobservable on the default poll and on a call whose activity
+      // read failed outright.
       //
       // Tails are fitted last, once every other field is in place, so the
       // budget they split is what the rest of the snapshot leaves (#12450).
+      const unavailableFields: TerminalStatusUnavailableField[] =
+        includeOutput && activityError === undefined
+          ? ["hasPty"]
+          : ["hasPty", "lastOutputChangeAt"];
       return boundTerminalStatusOutput(
         {
           terminals: entries,
           source: "renderer" as const,
-          unavailableFields: ["hasPty" as const, "lastOutputChangeAt" as const],
+          unavailableFields,
         },
         MCP_RESPONSE_TEXT_MAX_BYTES
       );

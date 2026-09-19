@@ -1228,6 +1228,10 @@ function buildElectronApi(): ElectronAPI {
       getSubmissions: (terminalIds: string[], submissionToken: string) =>
         _unwrappingInvoke(CHANNELS.TERMINAL_GET_SUBMISSIONS, terminalIds, submissionToken),
 
+      /** Read `lastOutputChangeAt` across several terminals (#12495). */
+      getOutputActivity: (terminalIds: string[]) =>
+        _unwrappingInvoke(CHANNELS.TERMINAL_GET_OUTPUT_ACTIVITY, terminalIds),
+
       resize: (id: string, cols: number, rows: number) =>
         ipcRenderer.send(CHANNELS.TERMINAL_RESIZE, { id, cols, rows }),
 

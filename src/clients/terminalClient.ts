@@ -21,6 +21,7 @@ import type {
 } from "@shared/types/pty-host";
 import type { PanelTitleMode } from "@shared/types/panel";
 import type { TerminalSubmissionLookup } from "@shared/types/terminalSubmission";
+import type { TerminalOutputActivityLookup } from "@shared/types/terminalStatus";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
@@ -395,6 +396,17 @@ export const terminalClient = {
     submissionToken: string
   ): Promise<Record<string, TerminalSubmissionLookup>> => {
     return window.electron.terminal.getSubmissions(terminalIds, submissionToken);
+  },
+
+  /**
+   * Read `lastOutputChangeAt` across several terminals (#12495). Answers
+   * `read` / `unreadable` per id, so a terminal that could not be read is never
+   * mistaken for one whose screen has not changed.
+   */
+  getOutputActivity: (
+    terminalIds: string[]
+  ): Promise<Record<string, TerminalOutputActivityLookup>> => {
+    return window.electron.terminal.getOutputActivity(terminalIds);
   },
 
   /**

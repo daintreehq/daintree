@@ -5,6 +5,7 @@ import type { AgentId } from "../agent.js";
 import type { TabGroup, PanelTitleMode } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
 import type { TerminalSubmissionLookup } from "../terminalSubmission.js";
+import type { TerminalOutputActivityLookup } from "../terminalStatus.js";
 import type {
   Project,
   ProjectAddOptions,
@@ -306,6 +307,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       terminalIds: string[],
       submissionToken: string
     ): Promise<Record<string, TerminalSubmissionLookup>>;
+    /**
+     * Read `lastOutputChangeAt` across several terminals (#12495). Answers
+     * `read` / `unreadable` per id — a terminal that could not be read is never
+     * reported as one whose screen has not changed.
+     */
+    getOutputActivity(terminalIds: string[]): Promise<Record<string, TerminalOutputActivityLookup>>;
     resize(id: string, cols: number, rows: number): void;
     kill(id: string): Promise<void>;
     gracefulKill(id: string): Promise<string | null>;

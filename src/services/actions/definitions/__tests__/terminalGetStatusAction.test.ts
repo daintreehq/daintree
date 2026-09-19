@@ -2,7 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
-const terminalClientMock = vi.hoisted(() => ({ submit: vi.fn(), getSubmissions: vi.fn() }));
+const terminalClientMock = vi.hoisted(() => ({
+  submit: vi.fn(),
+  getSubmissions: vi.fn(),
+  getOutputActivity: vi.fn(),
+}));
 const getSerializedStatesMock = vi.hoisted(() => vi.fn());
 const fleetArmingMock = vi.hoisted(() => ({ armedIds: new Set<string>() }));
 
@@ -60,6 +64,11 @@ async function callGetStatus(actions: ActionRegistry, args?: unknown): Promise<S
 beforeEach(() => {
   vi.clearAllMocks();
   fleetArmingMock.armedIds = new Set<string>();
+  // Every terminal reads back with no change observed unless a test says
+  // otherwise, so `includeOutput` cases about other fields see no row error.
+  terminalClientMock.getOutputActivity.mockImplementation(async (ids: string[]) =>
+    Object.fromEntries(ids.map((id) => [id, { status: "read" }]))
+  );
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
@@ -568,6 +577,13 @@ describe("terminal.getStatus", () => {
     getSerializedStatesMock.mockResolvedValue(
       snapshotMap(Object.fromEntries(ids.map((id) => [id, linesFor(id).join("\n")])))
     );
+    // Activity rides the same call (#12495), so its bytes are part of what the
+    // tails have to fit around.
+    terminalClientMock.getOutputActivity.mockResolvedValue(
+      Object.fromEntries(
+        ids.map((id, i) => [id, { status: "read", lastOutputChangeAt: 1_700_000_000_000 + i }])
+      )
+    );
 
     const result = await callGetStatus(setupActions(), { includeOutput: { lines: 50 } });
 
@@ -575,13 +591,14 @@ describe("terminal.getStatus", () => {
       MCP_RESPONSE_TEXT_MAX_BYTES
     );
     expect(result.terminals.map((t) => t.terminalId)).toEqual(ids);
-    for (const entry of result.terminals) {
+    for (const [i, entry] of result.terminals.entries()) {
       const lines = linesFor(entry.terminalId);
       expect(entry.recentOutput).not.toBe("");
       const kept = (entry.recentOutput ?? "").split("\n");
       expect(kept).toEqual(lines.slice(-kept.length));
       expect(entry.recentOutputTruncated).toBe(true);
       expect(entry.agentState).toBe("working");
+      expect(entry.lastOutputChangeAt).toBe(1_700_000_000_000 + i);
     }
   });
 
@@ -1011,5 +1028,241 @@ describe("terminal.getStatus submission correlation (#12337)", () => {
     expect(terminalClientMock.getSubmissions).toHaveBeenCalledWith(["t1"], "tok-1");
     expect(result.terminals[1]?.error).toBe("Terminal not found");
     expect(result.terminals[1]?.submission).toBeUndefined();
+  });
+});
+
+describe("terminal.getStatus output activity (#12495)", () => {
+  function panels(...entries: Array<Record<string, unknown>>) {
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: entries.map((e) => e.id),
+      panelsById: Object.fromEntries(entries.map((e) => [e.id, e])),
+    });
+  }
+
+  it("issues no activity read unless output was asked for", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    terminalClientMock.getSubmissions.mockResolvedValue({ t1: { status: "absent" } });
+
+    const plain = await callGetStatus(setupActions());
+    const tokened = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+    });
+
+    // The default poll is the hot path; it must stay free of pty-host hops.
+    expect(terminalClientMock.getOutputActivity).not.toHaveBeenCalled();
+    for (const result of [plain, tokened]) {
+      expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
+      expect(JSON.parse(JSON.stringify(result.terminals[0]))).not.toHaveProperty(
+        "lastOutputChangeAt"
+      );
+    }
+  });
+
+  it("fills the host's timestamp for working and settled terminals alike", async () => {
+    panels(
+      // A stray panel property is not an observation; the host's value wins.
+      {
+        id: "t1",
+        kind: "terminal",
+        location: "grid",
+        agentState: "working",
+        lastOutputChangeAt: 1,
+      },
+      { id: "t2", kind: "terminal", location: "grid", agentState: "idle" }
+    );
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha", t2: "beta" }));
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      t1: { status: "read", lastOutputChangeAt: 5_000 },
+      t2: { status: "read", lastOutputChangeAt: 6_000 },
+    });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: { lines: 5 } });
+
+    expect(terminalClientMock.getOutputActivity).toHaveBeenCalledWith(["t1", "t2"]);
+    for (const entry of result.terminals) expect(entry.error).toBeUndefined();
+    expect(result.terminals[0]?.recentOutput).toBe("alpha");
+    // Read off the parsed result: dispatch parses against this schema, and a
+    // Zod object strips keys it does not declare.
+    const parsed = TerminalStatusResultSchema.parse(result);
+    expect(parsed.terminals.map((t) => t.lastOutputChangeAt)).toEqual([5_000, 6_000]);
+    // Looked for on this call, so no longer a field the surface cannot see.
+    expect(parsed.unavailableFields).toEqual(["hasPty"]);
+  });
+
+  it("omits the key without an error when no change has been observed yet", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha" }));
+    terminalClientMock.getOutputActivity.mockResolvedValue({ t1: { status: "read" } });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    expect(JSON.parse(JSON.stringify(result.terminals[0]))).not.toHaveProperty(
+      "lastOutputChangeAt"
+    );
+    expect(result.terminals[0]?.error).toBeUndefined();
+    expect(result.unavailableFields).toEqual(["hasPty"]);
+  });
+
+  it("reports an unreadable terminal as an error rather than an unchanged screen", async () => {
+    panels(
+      { id: "t1", kind: "terminal", location: "grid", agentState: "working" },
+      { id: "t2", kind: "terminal", location: "grid", agentState: "working" },
+      { id: "t3", kind: "terminal", location: "grid", agentState: "working" }
+    );
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "a", t2: "b", t3: "c" }));
+    // t3 is missing from the reply entirely, which is no more of a read.
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      t1: { status: "unreadable" },
+      t2: { status: "read", lastOutputChangeAt: 42 },
+    });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    const [t1, t2, t3] = result.terminals;
+    expect(t1?.error).toBe("Output activity unavailable for this terminal");
+    expect(t3?.error).toBe("Output activity unavailable for this terminal");
+    expect(t1).not.toHaveProperty("lastOutputChangeAt");
+    expect(t3).not.toHaveProperty("lastOutputChangeAt");
+    // One bad read costs only its own row, and says so there rather than
+    // taking the field away from the whole answer.
+    expect(t2?.lastOutputChangeAt).toBe(42);
+    expect(t2?.error).toBeUndefined();
+    expect(t1?.recentOutput).toBe("a");
+    expect(result.unavailableFields).toEqual(["hasPty"]);
+  });
+
+  it("keeps the field available when every row of a completed read is unreadable", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha" }));
+    terminalClientMock.getOutputActivity.mockResolvedValue({ t1: { status: "unreadable" } });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    // Per-row failures are row errors. Only a hop that failed outright makes
+    // the surface itself unable to look.
+    expect(result.terminals[0]?.error).toBe("Output activity unavailable for this terminal");
+    expect(result.unavailableFields).toEqual(["hasPty"]);
+  });
+
+  it("asks only about resolved PTY panels", async () => {
+    panels(
+      { id: "t1", kind: "terminal", location: "grid", agentState: "working" },
+      { id: "f1", kind: "file", location: "grid" }
+    );
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha", f1: null }));
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      t1: { status: "read", lastOutputChangeAt: 7 },
+    });
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1", "f1", "ghost"],
+      includeOutput: {},
+    });
+
+    expect(terminalClientMock.getOutputActivity).toHaveBeenCalledWith(["t1"]);
+    expect(result.terminals[0]?.lastOutputChangeAt).toBe(7);
+    // A panel with no tracker is not an unread one.
+    expect(result.terminals[1]?.error).toBeUndefined();
+    expect(result.terminals[2]?.error).toBe("Terminal not found");
+  });
+
+  it("issues no activity read when no PTY panel resolved", async () => {
+    panels({ id: "f1", kind: "file", location: "grid" });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ f1: null }));
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    expect(terminalClientMock.getOutputActivity).not.toHaveBeenCalled();
+    expect(result.unavailableFields).toEqual(["hasPty"]);
+  });
+
+  it("issues the activity and output reads together rather than one after the other", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    // Both held open: a sequential implementation, in either order, leaves the
+    // second read unissued while the first is pending.
+    let releaseOutput!: (value: unknown) => void;
+    let releaseActivity!: (value: unknown) => void;
+    getSerializedStatesMock.mockReturnValue(
+      new Promise((resolve) => {
+        releaseOutput = resolve;
+      })
+    );
+    terminalClientMock.getOutputActivity.mockReturnValue(
+      new Promise((resolve) => {
+        releaseActivity = resolve;
+      })
+    );
+
+    const pending = callGetStatus(setupActions(), { includeOutput: {} });
+    await Promise.resolve();
+
+    expect(getSerializedStatesMock).toHaveBeenCalledTimes(1);
+    expect(terminalClientMock.getOutputActivity).toHaveBeenCalledTimes(1);
+    releaseOutput(snapshotMap({ t1: "alpha" }));
+    releaseActivity({ t1: { status: "read", lastOutputChangeAt: 3 } });
+    const result = await pending;
+    expect(result.terminals[0]).toMatchObject({ recentOutput: "alpha", lastOutputChangeAt: 3 });
+  });
+
+  it("keeps the tail when the activity read fails, and says the field went unobserved", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha" }));
+    terminalClientMock.getOutputActivity.mockRejectedValue(new Error("activity died"));
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    expect(result.terminals[0]?.recentOutput).toBe("alpha");
+    expect(result.terminals[0]?.error).toContain("activity died");
+    expect(result.terminals[0]).not.toHaveProperty("lastOutputChangeAt");
+    expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
+  });
+
+  it("contains a bridge that throws synchronously to its own field", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    getSerializedStatesMock.mockImplementation(() => {
+      throw new Error("bridge missing");
+    });
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      t1: { status: "read", lastOutputChangeAt: 8 },
+    });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    expect(result.terminals[0]?.error).toBe("bridge missing");
+    expect(result.terminals[0]?.recentOutput).toBeNull();
+    expect(result.terminals[0]?.lastOutputChangeAt).toBe(8);
+  });
+
+  it("keeps the timestamp when only the output fetch failed", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    getSerializedStatesMock.mockRejectedValue(new Error("output fetch died"));
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      t1: { status: "read", lastOutputChangeAt: 77 },
+    });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    expect(result.terminals[0]?.lastOutputChangeAt).toBe(77);
+    expect(result.terminals[0]?.recentOutput).toBeNull();
+    expect(result.terminals[0]?.error).toBe("output fetch died");
+    expect(result.unavailableFields).toEqual(["hasPty"]);
+  });
+
+  it("reports every batch failure instead of letting one hide the others", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    terminalClientMock.getSubmissions.mockRejectedValue(new Error("submission lookup died"));
+    getSerializedStatesMock.mockRejectedValue(new Error("output fetch died"));
+    terminalClientMock.getOutputActivity.mockRejectedValue(new Error("activity died"));
+
+    const result = await callGetStatus(setupActions(), {
+      terminalIds: ["t1"],
+      submissionToken: "tok-1",
+      includeOutput: {},
+    });
+
+    expect(result.terminals[0]?.error).toBe(
+      "submission lookup died; output fetch died; activity died"
+    );
   });
 });
