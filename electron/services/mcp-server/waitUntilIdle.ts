@@ -13,7 +13,7 @@ import {
   MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
 import { mapAgentStateToBusyState, mapAgentStateToIdleReason } from "./shared.js";
-import type { AgentAvailabilityStore } from "../AgentAvailabilityStore.js";
+import type { AgentAvailabilityStore, TerminalAgentSnapshot } from "../AgentAvailabilityStore.js";
 import { getPtyClient } from "../../window/serviceRefs.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 
@@ -221,9 +221,9 @@ async function waitForTerminalIdle(
   }
 
   const store = getAgentAvailabilityStore();
-  const agentId = store.getAgentIdForTerminal(terminalId);
+  const initial = store.getTerminalSnapshot(terminalId);
 
-  if (!agentId) {
+  if (!initial) {
     return {
       terminalId,
       busyState: "idle",
@@ -270,7 +270,7 @@ async function waitForTerminalIdle(
         exitCode?: number | null;
         exitSignal?: number;
       }
-    | { kind: "already-idle"; state: AgentState; waitingReason?: WaitingReason }
+    | { kind: "already-idle"; snapshot: Readonly<TerminalAgentSnapshot> }
     | { kind: "killed" }
     | { kind: "timeout" }
     | { kind: "abort" };
@@ -289,8 +289,8 @@ async function waitForTerminalIdle(
     };
   };
 
-  const agentSnapshotMatchesTerminal = () => store.getTerminalIdForAgent(agentId) === terminalId;
-  const previousState = agentSnapshotMatchesTerminal() ? store.getState(agentId) : "working";
+  const agentId = initial.agentId;
+  const previousState = initial.state;
 
   // Read at return time, not seeded above: a kill landing mid-wait settles the
   // wait via its `idle` state change and only then releases the mapping, so a
@@ -333,13 +333,16 @@ async function waitForTerminalIdle(
         settle({ kind: "killed" });
       });
 
-      const currentState = agentSnapshotMatchesTerminal() ? store.getState(agentId) : "working";
-      if (currentState !== "working") {
-        settle({
-          kind: "already-idle",
-          state: currentState ?? "idle",
-          waitingReason: store.getWaitingReason(agentId),
-        });
+      // Re-read now that the listeners are live, and keep the whole snapshot:
+      // the result is built after the await, by which point the terminal may
+      // have been released or respawned.
+      const current = store.getTerminalSnapshot(terminalId);
+      if (current === undefined) {
+        settle({ kind: "killed" });
+        return;
+      }
+      if (current.state !== "working") {
+        settle({ kind: "already-idle", snapshot: current });
         return;
       }
 
@@ -376,9 +379,7 @@ async function waitForTerminalIdle(
         busyState: "working",
         trackingState: currentTrackingState(),
         previousBusyState: mapAgentStateToBusyState(previousState),
-        lastTransitionAt: agentSnapshotMatchesTerminal()
-          ? store.getLastStateChange(agentId)
-          : undefined,
+        lastTransitionAt: store.getTerminalSnapshot(terminalId)?.lastStateChange,
         timedOut: true,
       };
     }
@@ -401,21 +402,22 @@ async function waitForTerminalIdle(
       };
     }
 
-    const idleReason = mapAgentStateToIdleReason(settlement.state);
+    const { snapshot } = settlement;
+    const idleReason = mapAgentStateToIdleReason(snapshot.state);
     return {
       terminalId,
       agentId,
-      busyState: mapAgentStateToBusyState(settlement.state),
+      busyState: mapAgentStateToBusyState(snapshot.state),
       idleReason,
       trackingState: currentTrackingState(),
-      ...(idleReason === "waiting_for_user" && settlement.waitingReason
-        ? { waitingReason: settlement.waitingReason }
+      ...(idleReason === "waiting_for_user" && snapshot.waitingReason
+        ? { waitingReason: snapshot.waitingReason }
         : {}),
       previousBusyState: mapAgentStateToBusyState(previousState),
-      lastTransitionAt: store.getLastStateChange(agentId),
+      lastTransitionAt: snapshot.lastStateChange,
       // already-idle: the completion happened before this call, so the live
-      // payload is gone — fall back to the store's cached exit metadata.
-      ...exitFields(settlement.state, store.getExitCode(agentId), store.getExitSignal(agentId)),
+      // payload is gone — fall back to this terminal's cached exit metadata.
+      ...exitFields(snapshot.state, snapshot.exitCode, snapshot.exitSignal),
       timedOut: false,
     };
   } finally {
@@ -451,31 +453,33 @@ function batchExitFields(
   };
 }
 
-// Fill a track from an agent already in a non-working state (read from the
-// store, not a live transition payload). `previousState` is the best guess for
-// what it transitioned from — at call time we only know the current state, so
-// the caller passes it through.
-function settleTrackFromState(
-  store: AgentAvailabilityStore,
+// Fill a track from a terminal already in a non-working state (read from the
+// store, not a live transition payload). At call time only the current state is
+// known, so it stands in for the state it transitioned from too.
+function settleTrackFromSnapshot(
   track: BatchTrack,
-  agentId: string,
-  state: AgentState,
-  previousState: AgentState
+  snapshot: Readonly<TerminalAgentSnapshot>
 ): void {
-  const idleReason = mapAgentStateToIdleReason(state);
+  const idleReason = mapAgentStateToIdleReason(snapshot.state);
   track.settled = true;
-  track.busyState = mapAgentStateToBusyState(state);
+  track.busyState = mapAgentStateToBusyState(snapshot.state);
   track.idleReason = idleReason;
-  if (idleReason === "waiting_for_user") {
-    const reason = store.getWaitingReason(agentId);
-    if (reason !== undefined) track.waitingReason = reason;
+  if (idleReason === "waiting_for_user" && snapshot.waitingReason !== undefined) {
+    track.waitingReason = snapshot.waitingReason;
   }
-  track.previousBusyState = mapAgentStateToBusyState(previousState);
-  track.lastTransitionAt = store.getLastStateChange(agentId);
-  Object.assign(
-    track,
-    batchExitFields(state, store.getExitCode(agentId), store.getExitSignal(agentId))
-  );
+  track.previousBusyState = mapAgentStateToBusyState(snapshot.state);
+  track.lastTransitionAt = snapshot.lastStateChange;
+  Object.assign(track, batchExitFields(snapshot.state, snapshot.exitCode, snapshot.exitSignal));
+}
+
+// A kill leaves nothing to read a final state from — it can be an idle->idle
+// no-op that emits no transition at all — so the row reports what the kill
+// itself says: idle, reason unknown, having been working when the wait began.
+function settleTrackAsKilled(track: BatchTrack): void {
+  track.settled = true;
+  track.busyState = "idle";
+  track.idleReason = "unknown";
+  track.previousBusyState = "working";
 }
 
 function buildBatchResult(
@@ -631,8 +635,8 @@ async function waitForBatchIdle(
   // single-terminal handler's no-agent branch.
   const tracks = new Map<string, BatchTrack>();
   for (const terminalId of orderedIds) {
-    const agentId = store.getAgentIdForTerminal(terminalId);
-    if (!agentId) {
+    const snapshot = store.getTerminalSnapshot(terminalId);
+    if (!snapshot) {
       tracks.set(terminalId, {
         terminalId,
         settled: true,
@@ -644,19 +648,14 @@ async function waitForBatchIdle(
     }
     tracks.set(terminalId, {
       terminalId,
-      agentId,
+      agentId: snapshot.agentId,
       settled: false,
       busyState: "working",
       previousBusyState: "working",
       // Mirror the single handler's timeout result, which reports the last
       // transition even while still working. Settled tracks overwrite this with
-      // their transition timestamp. Only trust the agent-level snapshot when
-      // the reverse mapping still points at this terminal; agent ids currently
-      // identify agent type, so several terminals can share one id.
-      lastTransitionAt:
-        store.getTerminalIdForAgent(agentId) === terminalId
-          ? store.getLastStateChange(agentId)
-          : undefined,
+      // their transition timestamp.
+      lastTransitionAt: snapshot.lastStateChange,
     });
   }
 
@@ -733,25 +732,21 @@ async function waitForBatchIdle(
         if (!payload.terminalId) return;
         const track = tracks.get(payload.terminalId);
         if (!track || track.settled) return;
-        track.settled = true;
-        track.busyState = "idle";
-        track.idleReason = "unknown";
-        track.previousBusyState = "working";
+        settleTrackAsKilled(track);
         if (predicateMet()) finish("settled");
       });
 
       // Authoritative snapshot now that we're subscribed: settle any terminal
-      // already non-working. Mirror the single handler — an agent that is mapped
-      // but has no recorded state (`undefined`) counts as already-idle, not
-      // working, so `mode: "all"` can't hang on a stateless terminal.
+      // already non-working, each from its own record. Mirror the single
+      // handler — a record gone since seeding was released by a kill, so it
+      // settles the way a kill does rather than holding `mode: "all"` open.
       for (const track of tracks.values()) {
         if (track.settled || !track.agentId) continue;
-        const state =
-          store.getTerminalIdForAgent(track.agentId) === track.terminalId
-            ? store.getState(track.agentId)
-            : "working";
-        if (state !== "working") {
-          settleTrackFromState(store, track, track.agentId, state ?? "idle", state ?? "idle");
+        const snapshot = store.getTerminalSnapshot(track.terminalId);
+        if (snapshot === undefined) {
+          settleTrackAsKilled(track);
+        } else if (snapshot.state !== "working") {
+          settleTrackFromSnapshot(track, snapshot);
         }
       }
 

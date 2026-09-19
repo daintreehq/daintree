@@ -40,13 +40,12 @@ import type { PtyClient } from "../PtyClient.js";
  * `lastCheckResult` is parsed out of agent stdout by `CheckResultDetector` —
  * both only ever reach the renderer's panel record, and main keeps no copy.
  *
- * `exitCode` is the one that looks reachable and is not. Main does cache exit
- * metadata, but `AgentAvailabilityStore` keys it by agent id, and an agent id
- * names the agent *type* ("claude"), not the spawn — so several terminals share
- * one, and `agentToTerminal` keeps only the most recent. Joining through it
- * would report whichever same-type terminal exited last, which for a fleet of
- * identical agents is a wrong answer far more often than a right one. The
- * renderer path has the code on the panel itself and reports it there.
+ * `exitCode` is the one that looks reachable. Main caches exit metadata per
+ * terminal in `AgentAvailabilityStore` (#12494), but everything else in this
+ * answer comes from the pty-host record, and the store is a second copy fed
+ * separately by events — the two can disagree mid-respawn, and splicing one
+ * field in from it is a contract change of its own. The renderer path has the
+ * code on the panel itself and reports it there.
  *
  * All three are reported as unavailable rather than defaulted or guessed:
  * `armed: false` and a borrowed exit code are both interpretations main has no

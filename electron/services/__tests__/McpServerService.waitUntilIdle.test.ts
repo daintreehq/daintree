@@ -889,9 +889,6 @@ describe("McpServerService", () => {
       const terminalA = `share-A-${Math.random().toString(36).slice(2)}`;
       const terminalB = `share-B-${Math.random().toString(36).slice(2)}`;
       await seedTerminalAgent(terminalA, sharedAgentId, "working");
-      // Note: emitting agent:spawned for terminalB overwrites the
-      // agentToTerminal mapping for sharedAgentId; this is a known
-      // AgentAvailabilityStore limitation and not something this tool can fix.
       events.emit("agent:spawned", {
         agentId: sharedAgentId,
         terminalId: terminalB,
@@ -926,6 +923,42 @@ describe("McpServerService", () => {
       const payload = JSON.parse(result.content[0]!.text);
       expect(payload.timedOut).toBe(true);
       expect(payload.terminalId).toBe(terminalA);
+    });
+
+    // #12494 — the sibling's transition lands before the call, so the wait
+    // reads it from the store rather than a live event.
+    it("does not settle on a same-type sibling that was already waiting before the call", async () => {
+      const { events } = await import("../events.js");
+      const sharedAgentId = "claude";
+      const terminalA = `pre-A-${Math.random().toString(36).slice(2)}`;
+      const terminalB = `pre-B-${Math.random().toString(36).slice(2)}`;
+      await seedTerminalAgent(terminalA, sharedAgentId, "working");
+      await seedTerminalAgent(terminalB, sharedAgentId, "working");
+      events.emit("agent:state-changed", {
+        agentId: sharedAgentId,
+        terminalId: terminalA,
+        state: "waiting",
+        previousState: "working",
+        trigger: "output",
+        confidence: 1,
+        timestamp: Date.now(),
+        waitingReason: "question",
+      });
+
+      const { window } = createMockWindow({ getManifest: () => [] });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const result = (await client.callTool({
+        name: "terminal.waitUntilIdle",
+        arguments: { terminalId: terminalB, timeoutMs: 120 },
+      })) as TextToolResult;
+      const payload = JSON.parse(result.content[0]!.text);
+      expect(payload.timedOut).toBe(true);
+      expect(payload.busyState).toBe("working");
+      expect(payload.terminalId).toBe(terminalB);
+      expect(payload).not.toHaveProperty("waitingReason");
     });
 
     it("rejects calls with a missing or empty terminalId", async () => {
