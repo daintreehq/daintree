@@ -13,7 +13,7 @@ import { app, BrowserWindow, crashReporter, protocol } from "electron";
 nodeV8.setHeapSnapshotNearHeapLimit(2);
 import { registerGlobalErrorHandlers } from "./setup/globalErrorHandlers.js";
 import { startDevDiagnostics } from "./setup/devDiagnostics.js";
-import { isE2EFaultMode, isE2EMode } from "./setup/runtimeFlags.js";
+import { isE2EFaultMode, isE2EMode, isIdleHarness } from "./setup/runtimeFlags.js";
 import path from "path";
 import { fileURLToPath } from "url";
 import { PERF_MARKS } from "../shared/perf/marks.js";
@@ -299,7 +299,9 @@ if (!gotTheLock) {
   initializeCrashLoopGuard();
   registerGlobalErrorHandlers();
 
-  if (!app.isPackaged) {
+  // Dev-only listener and fd sweeps are not part of what users run, so the
+  // idle harness (#12521) keeps them out of its reading.
+  if (!app.isPackaged && !isIdleHarness) {
     startDevDiagnostics();
   }
 
@@ -696,6 +698,16 @@ if (!gotTheLock) {
 
     registerWindowForFocusThrottle(win);
     registerWindowSessionEndHandler(win);
+
+    // Idle harness (#12521). Started here rather than beside the freeze harness
+    // in setupWindowServices: the agent-state cache the freeze-skip reads and
+    // the window-focus throttle the blurred cells measure are wired just above.
+    // Loaded lazily so a normal boot never evaluates it.
+    if (isIdleHarness) {
+      void import("./services/idleHarness.js").then(({ runIdleHarnessAndExit }) =>
+        runIdleHarnessAndExit(win, pvm, appView)
+      );
+    }
 
     return "ok";
   }

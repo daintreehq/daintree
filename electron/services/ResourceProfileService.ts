@@ -233,6 +233,9 @@ export class ResourceProfileService {
   // an actively-scrolled full-screen TUI keeps full PTY throughput. Renderer-
   // driven and time-boxed (see requestInteractiveOverride); 0 = inactive.
   private interactiveOverrideUntil = 0;
+  private readonly profileListeners = new Set<
+    (change: { from: ResourceProfile; to: ResourceProfile }) => void
+  >();
 
   constructor(private deps: ResourceProfileDeps) {
     const totalRamMb = os.totalmem() / 1024 / 1024;
@@ -312,6 +315,21 @@ export class ResourceProfileService {
 
   getProfile(): ResourceProfile {
     return this.currentProfile;
+  }
+
+  /**
+   * Observe every applied transition. Main-process only — renderers get the
+   * `resource:profile-changed` push. Polling `getProfile()` would miss a
+   * transition that reverts between polls, which is what the idle harness
+   * (#12521) needs to count.
+   */
+  onProfileChanged(
+    listener: (change: { from: ResourceProfile; to: ResourceProfile }) => void
+  ): () => void {
+    this.profileListeners.add(listener);
+    return () => {
+      this.profileListeners.delete(listener);
+    };
   }
 
   private isInteractiveOverrideActive(): boolean {
@@ -1128,6 +1146,14 @@ export class ResourceProfileService {
     const config = RESOURCE_PROFILE_CONFIGS[profile];
 
     logInfo("resource-profile-changed", { from: previous, to: profile });
+
+    for (const listener of this.profileListeners) {
+      try {
+        listener({ from: previous, to: profile });
+      } catch {
+        // An observer must not be able to abort a transition.
+      }
+    }
 
     // While the window-focus throttle is engaged, polling cadences are owned
     // by the throttle (profile baseline × multiplier). Push multiplied values
