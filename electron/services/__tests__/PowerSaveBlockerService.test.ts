@@ -19,7 +19,11 @@ vi.mock("electron", () => {
 });
 
 import { powerSaveBlocker } from "electron";
-import { PowerSaveBlockerService } from "../PowerSaveBlockerService.js";
+import {
+  PowerSaveBlockerService,
+  initializePowerSaveBlockerService,
+  disposePowerSaveBlockerService,
+} from "../PowerSaveBlockerService.js";
 import { events } from "../events.js";
 import type { AgentState } from "../../../shared/types/agent.js";
 
@@ -336,5 +340,95 @@ describe("PowerSaveBlockerService", () => {
 
       expect(service.isBlocking()).toBe(false);
     });
+  });
+});
+
+describe("initializePowerSaveBlockerService", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.clearAllMocks();
+    disposePowerSaveBlockerService();
+  });
+
+  afterEach(() => {
+    disposePowerSaveBlockerService();
+    vi.useRealTimers();
+  });
+
+  function startWorking(terminalId: string) {
+    events.emit("agent:state-changed", {
+      terminalId,
+      agentId: "agent-1",
+      state: "working" as AgentState,
+      previousState: "idle" as AgentState,
+      timestamp: Date.now(),
+      trigger: "output" as const,
+      confidence: 1.0,
+    });
+  }
+
+  it("keeps the live instance, its assertion and its tracked agents when a second window initializes", () => {
+    // Per-window setup calls this for every window. Replacing the instance here
+    // released the blocker and started one with an empty map, which a steadily
+    // working agent never refills — it emits no further agent:state-changed.
+    const first = initializePowerSaveBlockerService();
+    startWorking("term-1");
+    expect(first.isBlocking()).toBe(true);
+    expect(first.getActiveCount()).toBe(1);
+
+    const second = initializePowerSaveBlockerService();
+
+    expect(second).toBe(first);
+    expect(second.isBlocking()).toBe(true);
+    expect(second.getActiveCount()).toBe(1);
+    expect(powerSaveBlocker.stop).not.toHaveBeenCalled();
+  });
+
+  it("does not re-subscribe on a second initialize", () => {
+    // The map and the blocker guard both hide a duplicate subscription, so this
+    // counts the subscriptions themselves rather than their visible effect.
+    const onSpy = vi.spyOn(events, "on");
+    initializePowerSaveBlockerService();
+    const afterFirst = onSpy.mock.calls.filter(([event]) => event === "agent:state-changed").length;
+
+    initializePowerSaveBlockerService();
+    initializePowerSaveBlockerService();
+
+    expect(onSpy.mock.calls.filter(([event]) => event === "agent:state-changed").length).toBe(
+      afterFirst
+    );
+    onSpy.mockRestore();
+  });
+
+  it("leaves the instance an earlier caller is holding still subscribed and counting once", () => {
+    // Anything holding the reference from the first call kept a DISPOSED service
+    // once a second window initialized: unsubscribed, counting nothing. And the
+    // one acquisition must stay one acquisition.
+    const service = initializePowerSaveBlockerService();
+    initializePowerSaveBlockerService();
+
+    startWorking("term-1");
+
+    expect(service.getActiveCount()).toBe(1);
+    expect((powerSaveBlocker.start as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+  });
+
+  it("still builds a live instance after an explicit dispose, and the old one goes quiet", () => {
+    // Identity alone would also be satisfied by a disposer that just nulls the
+    // singleton, so this checks that the old service really unsubscribed and the
+    // new one really receives events.
+    const first = initializePowerSaveBlockerService();
+    startWorking("term-1");
+    expect(first.isBlocking()).toBe(true);
+
+    disposePowerSaveBlockerService();
+    const second = initializePowerSaveBlockerService();
+    expect(second).not.toBe(first);
+
+    startWorking("term-2");
+
+    expect(second.isBlocking()).toBe(true);
+    expect(second.getActiveCount()).toBe(1);
+    expect(first.getActiveCount()).toBe(0);
   });
 });
