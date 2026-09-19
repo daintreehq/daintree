@@ -585,27 +585,38 @@ describe("initializePowerSaveBlockerService", () => {
     // call must still reach that instance, and rebinding must not buy the lease
     // more time.
     const HOUR = 60 * 60 * 1000;
-    const live = new Set(["term-1"]);
+    const live = new Set(["term-1", "term-2"]);
     const registry = { hasTerminal: vi.fn((id: string) => live.has(id)) };
     const replacement = { hasTerminal: vi.fn((id: string) => live.has(id)) };
     const first = initializePowerSaveBlockerService();
     startWorking("term-1");
 
+    vi.advanceTimersByTime(2 * HOUR);
     expect(initializePowerSaveBlockerService(registry)).toBe(first);
-    vi.advanceTimersByTime(5 * HOUR);
+    vi.advanceTimersByTime(3 * HOUR);
+    expect(registry.hasTerminal).toHaveBeenCalledTimes(1);
+
     // A later window with nothing to pass must not unbind it.
     initializePowerSaveBlockerService();
     vi.advanceTimersByTime(3 * HOUR);
     expect(first.isBlocking()).toBe(true);
+    expect(registry.hasTerminal).toHaveBeenCalledTimes(2);
 
+    // Nor may one passing a different registry buy the lease more time.
+    vi.advanceTimersByTime(1 * HOUR);
     initializePowerSaveBlockerService(replacement);
-    vi.advanceTimersByTime(4 * HOUR - 1);
+    vi.advanceTimersByTime(3 * HOUR - 1);
     expect(first.isBlocking()).toBe(true);
-
     vi.advanceTimersByTime(1);
     expect(first.isBlocking()).toBe(false);
-    expect(registry.hasTerminal).toHaveBeenCalledTimes(2);
     expect((powerSaveBlocker.start as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
+
+    // The replacement is what the next lease consults.
+    startWorking("term-2");
+    vi.advanceTimersByTime(4 * HOUR);
+    expect(first.isBlocking()).toBe(true);
+    expect(replacement.hasTerminal).toHaveBeenCalledWith("term-2");
+    expect(registry.hasTerminal).toHaveBeenCalledTimes(2);
   });
 
   it("still builds a live instance after an explicit dispose, and the old one goes quiet", () => {

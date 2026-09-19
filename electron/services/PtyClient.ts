@@ -1638,7 +1638,9 @@ export class PtyClient extends EventEmitter {
     // the send so events and per-terminal requests route consistently.
     const shard = this.ensureShardForProject(resolvedProjectId);
     this.terminalOwners.set(id, shard.key);
-    const displaced = this.pendingSpawns.get(id);
+    // A duplicate still awaiting its answer keeps the entry it displaced — that
+    // is the terminal actually running, not the attempt queued behind it.
+    const displaced = this.displacedSpawns.get(id)?.entry ?? this.pendingSpawns.get(id);
     if (displaced) {
       this.displacedSpawns.set(id, { byGeneration: generation, entry: displaced });
     } else {
@@ -1652,12 +1654,16 @@ export class PtyClient extends EventEmitter {
    * Put back the entry a spawn displaced when the host refused that spawn
    * because the id is still live. Runs after the router has already dropped the
    * refused spawn's own entry; any other outcome just forgets the displaced one.
+   * A later generation resolving means a crash replay superseded the refused
+   * spawn, which retires the record too.
    */
   private settleDisplacedSpawn(id: string, result: SpawnResult): void {
     const displaced = this.displacedSpawns.get(id);
-    if (!displaced || result.launchGeneration !== displaced.byGeneration) return;
+    const generation = result.launchGeneration;
+    if (!displaced || generation === undefined || generation < displaced.byGeneration) return;
     this.displacedSpawns.delete(id);
     if (
+      generation === displaced.byGeneration &&
       !result.success &&
       result.error?.code === "TERMINAL_ALREADY_LIVE" &&
       !this.pendingSpawns.has(id)

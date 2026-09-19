@@ -369,6 +369,19 @@ describe("PtyClient lifecycle ledger", () => {
       expect(client.getTerminalProjectId("t1")).toBe("p-live");
     });
 
+    it("restores the running spawn, not an earlier refused one, when duplicates overlap", () => {
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, projectId: "p-live" }); // generation 1
+      client.spawn("t1", { ...baseOptions, projectId: "p-first-duplicate" }); // generation 2
+      client.spawn("t1", { ...baseOptions, projectId: "p-second-duplicate" }); // generation 3
+
+      refuseAsLive(2);
+      refuseAsLive(3);
+
+      expect(client.hasTerminal("t1")).toBe(true);
+      expect(client.getTerminalProjectId("t1")).toBe("p-live");
+    });
+
     it("does not resurrect a terminal killed before the refusal arrives", () => {
       const client = createReadyClient();
       client.spawn("t1", baseOptions);
