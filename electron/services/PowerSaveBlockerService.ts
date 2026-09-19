@@ -118,11 +118,27 @@ export function getPowerSaveBlockerService(): PowerSaveBlockerService {
   return instance;
 }
 
+/**
+ * Called from per-window setup (`electron/window/windowServices.ts`), so it runs
+ * again for every window the user opens.
+ *
+ * It used to dispose the existing instance and replace it, and both halves of
+ * that hurt. Disposing stops the blocker, and the replacement starts with an
+ * empty agent map — which cannot refill itself, because `AgentStateService`
+ * suppresses a transition to the state a terminal is already in, so an agent
+ * that simply keeps working emits nothing after its first one. So opening a
+ * second window while agents were working released the assertion and left it
+ * released until some terminal happened to transition. On a long unattended run
+ * that is a machine going to sleep under a working fleet.
+ *
+ * The live instance is kept instead. It is a global service with no per-window
+ * state: `shutdown.ts` disposes it once, and last-window-close deliberately
+ * preserves globals.
+ */
 export function initializePowerSaveBlockerService(): PowerSaveBlockerService {
-  if (instance) {
-    instance.dispose();
+  if (!instance) {
+    instance = new PowerSaveBlockerService();
   }
-  instance = new PowerSaveBlockerService();
   return instance;
 }
 
