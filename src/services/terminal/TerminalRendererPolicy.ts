@@ -66,14 +66,18 @@ export class TerminalRendererPolicy {
   }
 
   /**
-   * Send the recorded backend tier again even though it has not changed. The
-   * pty-host keeps one cadence per terminal and the last writer wins, so this
-   * view's record can be stale against what another window last asserted.
+   * Tell the host this terminal is background, bypassing the dedupe. The host
+   * keeps one cadence per terminal and the last writer wins, so this view's
+   * record can be stale against what another window last asserted — and a
+   * cold-created BACKGROUND pane records "active" on purpose (see
+   * `initializeBackendTier`'s caller), so replaying the record is not enough.
    */
-  resendBackendTier(id: string): void {
-    const tier = this.lastBackendTier.get(id);
-    if (tier === undefined) return;
-    terminalClient.setActivityTier(id, tier, this.lastBackendPollingMs.get(id));
+  reassertBackgroundTier(id: string): void {
+    const pollingIntervalMs = backendPollingIntervalForTier(TerminalRefreshTier.BACKGROUND);
+    this.knownTerminalIds.add(id);
+    this.lastBackendTier.set(id, "background");
+    this.lastBackendPollingMs.set(id, pollingIntervalMs);
+    terminalClient.setActivityTier(id, "background", pollingIntervalMs);
   }
 
   applyRendererPolicy(id: string, requestedTier: TerminalRefreshTier): void {

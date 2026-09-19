@@ -61,7 +61,7 @@ type ViewCacheTestService = {
   instances: Map<string, ManagedTerminal>;
   rendererPolicy: {
     applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
-    resendBackendTier: (id: string) => void;
+    reassertBackgroundTier: (id: string) => void;
     deps: {
       onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
     };
@@ -147,7 +147,7 @@ describe("TerminalInstanceService project-view cache lifecycle (#12514)", () => 
     // Another window showing this project may have raised the host cadence
     // since this view last sent it; the policy alone would send nothing.
     const resend = vi
-      .spyOn(service.rendererPolicy, "resendBackendTier")
+      .spyOn(service.rendererPolicy, "reassertBackgroundTier")
       .mockImplementation(() => {});
     service.instances.set(
       "hidden",

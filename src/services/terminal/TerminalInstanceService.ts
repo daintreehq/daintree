@@ -413,7 +413,7 @@ class TerminalInstanceService {
         // this project may have raised it since (its cached-view demotions
         // are dropped while it is visible). Now that this view is cached too,
         // say so again.
-        this.rendererPolicy.resendBackendTier(id);
+        this.rendererPolicy.reassertBackgroundTier(id);
       } else {
         this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
       }

@@ -516,21 +516,22 @@ describe("TerminalRendererPolicy", () => {
       expect(onResumeFlush).toHaveBeenCalledWith("test-id");
     });
 
-    it("re-sends the recorded backend tier on request, even when unchanged", async () => {
+    it("reasserts background to the host even when its record says active", async () => {
+      // A cold-created BACKGROUND pane records its backend tier as "active" on
+      // purpose; replaying that record on cache would send "active".
       const { terminalClient } = await import("@/clients");
-      mockDeps.isViewCached = () => true;
       const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
       policy = new TerminalRendererPolicy(mockDeps);
-      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
-      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
-      vi.mocked(terminalClient.setActivityTier).mockClear();
+      policy.initializeBackendTier("test-id", "active");
 
-      policy.resendBackendTier("test-id");
-      policy.resendBackendTier("unknown-id");
+      policy.reassertBackgroundTier("test-id");
+      policy.reassertBackgroundTier("test-id");
 
       expect(vi.mocked(terminalClient.setActivityTier).mock.calls).toEqual([
         ["test-id", "background", 500],
+        ["test-id", "background", 500],
       ]);
+      expect(policy.getLastBackendTier("test-id")).toBe("background");
     });
 
     it("keeps downgrade hysteresis for a view that is not cached", async () => {
