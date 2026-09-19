@@ -8453,7 +8453,7 @@ describe("session-scoped resource ownership (#11909)", () => {
     function paneSession(
       store: RealSessionStore,
       sessionId: string,
-      dispatchAction: ReturnType<typeof vi.fn>,
+      dispatchAction: SessionServerDeps["dispatchAction"],
       principal: string = PRINCIPAL
     ) {
       seedLiveSession(store, sessionId, "action");
