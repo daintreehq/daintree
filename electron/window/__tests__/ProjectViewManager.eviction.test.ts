@@ -175,6 +175,7 @@ vi.mock("../../utils/webContentsLifecycle.js", () => ({
 }));
 
 vi.mock("../../utils/logger.js", () => ({
+  logDebug: vi.fn(),
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   createLogger: vi.fn(() => ({
@@ -223,7 +224,7 @@ const isTerminalLive = (terminalId: string): boolean => liveTerminals.has(termin
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
 import { events } from "../../services/events.js";
-import { logInfo } from "../../utils/logger.js";
+import { logDebug, logInfo } from "../../utils/logger.js";
 import { forgetBlinkSample, forgetEluSample } from "../../services/ProcessMemoryMonitor.js";
 import { detachRendererConsoleCapture } from "../rendererConsoleCapture.js";
 import {
@@ -1736,12 +1737,12 @@ describe("ProjectViewManager — telemetry", () => {
     // during the awaits above, and the 5s snapshot TTL would otherwise shadow
     // the mock this test just set.
     resetAppMetricsSnapshotForTesting();
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     // proj-b is the active view; only proj-a (cached) should be sampled
     expect(memoryCalls.length).toBe(1);
@@ -1787,12 +1788,12 @@ describe("ProjectViewManager — telemetry", () => {
     // during the awaits above, and the 5s snapshot TTL would otherwise shadow
     // the mock this test just set.
     resetAppMetricsSnapshotForTesting();
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(1);
     expect(memoryCalls[0][1]).toMatchObject({
@@ -1820,12 +1821,12 @@ describe("ProjectViewManager — telemetry", () => {
       { pid: wcA.osPid, memory: { workingSetSize: 250 * 1024, privateBytes: 0 } },
     ] as unknown as Electron.ProcessMetric[]);
 
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
   });
@@ -1850,12 +1851,12 @@ describe("ProjectViewManager — telemetry", () => {
     // Metrics return nothing for proj-a's pid — sampler must skip silently.
     mockGetAppMetrics.mockReturnValue([]);
 
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
   });
@@ -1897,7 +1898,7 @@ describe("ProjectViewManager — telemetry", () => {
     // during the awaits above, and the 5s snapshot TTL would otherwise shadow
     // the mock this test just set.
     resetAppMetricsSnapshotForTesting();
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
     resetAppMetricsSnapshotForTesting();
 
     expect(() =>
@@ -1905,7 +1906,7 @@ describe("ProjectViewManager — telemetry", () => {
     ).not.toThrow();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(1);
     expect(memoryCalls[0][1]).toMatchObject({
@@ -1940,7 +1941,7 @@ describe("ProjectViewManager — telemetry", () => {
     ).not.toThrow();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
   });
@@ -1968,14 +1969,14 @@ describe("ProjectViewManager — telemetry", () => {
 
     manager.dispose();
 
-    vi.mocked(logInfo).mockClear();
+    vi.mocked(logDebug).mockClear();
 
     // Manually invoke the sampler post-dispose — even if a stale interval tick
     // were to fire, the sampler must not emit because views were cleared.
     (manager as unknown as { sampleCachedViewMemory(): void }).sampleCachedViewMemory();
 
     const memoryCalls = vi
-      .mocked(logInfo)
+      .mocked(logDebug)
       .mock.calls.filter(([event]) => event === "projectview.cached-memory");
     expect(memoryCalls.length).toBe(0);
   });
@@ -2743,8 +2744,9 @@ describe("ProjectViewManager — low-memory eviction", () => {
     expect(manager.getAllViews().length).toBe(3);
 
     // The same machine with its cache spent is genuinely short, and the ladder
-    // still answers — the fix moved the measurement, not the band.
-    fileBackedKb = 0;
+    // still answers — the fix moved the measurement, not the band. Spent, not
+    // zero: a reported zero is an unreadable reading, never a low one (#12517).
+    fileBackedKb = 64 * 1024;
     tickPressureCheck(manager);
     tickPressureCheck(manager);
     expect(manager.getAllViews().length).toBe(2);
@@ -3239,6 +3241,60 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       "projectview.eviction-skipped",
       expect.anything()
     );
+  });
+
+  it("reports an assistant-pinned overflow once per episode, not on every tick (#12517)", async () => {
+    setAvailableMb(2500);
+    await seedThreeViews(manager);
+    // Both cached views back a live assistant, so no pressure pass may take either.
+    for (const [projectId, terminalId] of [
+      ["proj-a", "t-help-a"],
+      ["proj-b", "t-help-b"],
+    ] as const) {
+      const wc = manager.getAllViews().find((v) => v.projectId === projectId)!.view.webContents;
+      assistantBackends.set(projectId, { terminalId, webContentsId: wc.id });
+      liveTerminals.add(terminalId);
+    }
+    const logged = (event: string) =>
+      vi
+        .mocked(logInfo)
+        .mock.calls.filter(([name]) => name === event)
+        .map(([, ctx]) => ctx as Record<string, unknown>);
+
+    setAvailableMb(1200);
+    armPressureLadder(manager);
+    for (let tick = 0; tick < 5; tick++) tickPressureCheck(manager);
+
+    // Five confirmed passes that can take nothing: one override, reported after
+    // the pass found that out, and one account of what is holding the cache.
+    expect(manager.getAllViews().length).toBe(3);
+    expect(logged("projectview.pressure-override")).toEqual([
+      expect.objectContaining({ pressureLevel: "soft", evictedCount: 0 }),
+    ]);
+    expect(logged("projectview.eviction-skipped")).toEqual([
+      expect.objectContaining({ viewCount: 3, protectedProjectIds: ["proj-a", "proj-b"] }),
+    ]);
+
+    // proj-b's assistant exits, so the next pass takes its view and says so;
+    // what still holds the cache over has changed too.
+    liveTerminals.delete("t-help-b");
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
+    expect(evictedProjectIds()).toEqual(["proj-b"]);
+    expect(logged("projectview.pressure-override").map((ctx) => ctx.evictedCount)).toEqual([0, 1]);
+    expect(logged("projectview.eviction-skipped").map((ctx) => ctx.protectedProjectIds)).toEqual([
+      ["proj-a", "proj-b"],
+      ["proj-a"],
+    ]);
+
+    // Memory recovers and then runs short again: a new episode, reported afresh.
+    setAvailableMb(2500);
+    tickPressureCheck(manager);
+    setAvailableMb(1200);
+    tickPressureCheck(manager);
+    tickPressureCheck(manager);
+    expect(logged("projectview.pressure-override")).toHaveLength(3);
+    expect(logged("projectview.eviction-skipped")).toHaveLength(3);
   });
 
   it("takes only one view per pass even when the cache sits above its cap", async () => {

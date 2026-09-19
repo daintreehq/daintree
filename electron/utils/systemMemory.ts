@@ -96,10 +96,21 @@ export function getSystemMemoryThresholds(totalMb: number): SystemMemoryThreshol
   };
 }
 
-/** A Darwin-only component (KB) as MB. Absent on Windows and Linux; a malformed
- *  figure contributes nothing rather than failing a reading `free` vouches for. */
-function darwinComponentMb(kb: unknown): number {
-  return typeof kb === "number" && Number.isFinite(kb) && kb > 0 ? kb / 1024 : 0;
+/**
+ * A Darwin-only component (KB) as MB: 0 when the platform does not report it
+ * (Windows and Linux), null when it is reported but unusable.
+ *
+ * A reported component that is malformed means the reading is incomplete, not
+ * that the component is empty. Summing the rest would under-count exactly the
+ * way #12517's two days of false "critical" did — 71 MB available on an 18 GB
+ * Mac, because the file cache was missing from the sum — so the caller treats
+ * it as unreadable rather than as a low figure.
+ */
+function darwinComponentMb(kb: unknown, mustBePositive: boolean): number | null {
+  if (kb === undefined) return 0;
+  if (typeof kb !== "number" || !Number.isFinite(kb) || kb < 0) return null;
+  if (mustBePositive && kb === 0) return null;
+  return kb / 1024;
 }
 
 /**
@@ -117,6 +128,14 @@ function darwinComponentMb(kb: unknown): number {
  * pages as well as idle cache, and pages under heavy churn cost more to reclaim
  * than clean ones. Pressure Daintree causes itself still reaches
  * ProcessMemoryMonitor's own-process RSS tiers, which never read this.
+ *
+ * Returns null for a reading that cannot be true, so every consumer reads it as
+ * "no signal" rather than as critical (#12517). A reported `fileBacked` of zero
+ * is one: it is Darwin's external page count, and a running Mac always has
+ * file-backed pages resident — the executables and shared cache of everything
+ * running — so zero is an unpopulated field, not an exhausted machine. A
+ * genuinely low but well-formed reading is still trusted however small it is;
+ * there is no floor, because real exhaustion is exactly when it should be.
  */
 export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
   const totalMb = os.totalmem() / 1024 / 1024;
@@ -150,8 +169,9 @@ export function readSystemMemorySnapshot(): SystemMemorySnapshot | null {
     // sum back into a healthy-looking figure.
     if (typeof info.free !== "number" || !Number.isFinite(info.free) || info.free < 0) return null;
     const freeMb = info.free / 1024;
-    const purgeableMb = darwinComponentMb(info.purgeable);
-    const fileBackedMb = darwinComponentMb(info.fileBacked);
+    const purgeableMb = darwinComponentMb(info.purgeable, false);
+    const fileBackedMb = darwinComponentMb(info.fileBacked, true);
+    if (purgeableMb === null || fileBackedMb === null) return null;
     const availableMb = freeMb + purgeableMb + fileBackedMb;
     // A zero total is treated as an API artifact, not a maximally-critical
     // reading: a transiently zeroed struct must not collapse every cached view
