@@ -686,9 +686,8 @@ export function TerminalContextMenu({
       const pendingHandOver = pendingHandOverRef.current;
       pendingHandOverRef.current = null;
       if (pendingHandOver !== null && pendingHandOver.terminalId === terminalId) {
-        // The dialog takes focus into its own controls and hands it back to
-        // the pane when it closes.
-        event.preventDefault();
+        // Restoration is left to run: focus goes back to the pane before the
+        // dialog mounts, so the dialog records the pane as where to return it.
         setHandOverRequest(pendingHandOver);
         return;
       }

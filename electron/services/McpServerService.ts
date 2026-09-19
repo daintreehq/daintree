@@ -488,25 +488,43 @@ export class McpServerService {
   }
 
   /**
+   * End a hand-over when the process the user handed over has exited (#12490).
+   * The exit carries no launch generation, so it is placed by what main still
+   * tracks under the id: a kill followed by a respawn leaves the successor
+   * tracked, and a hand-over of that successor outlives its predecessor's
+   * late exit.
+   */
+  handleTerminalExit(terminalId: string): void {
+    const record = this.sessionStore.terminalAdoption.getForTerminal(terminalId);
+    if (record === undefined) return;
+    const tracked = getPtyClient()?.getLaunchGeneration(terminalId) ?? null;
+    if (tracked !== null && tracked === record.launchGeneration) return;
+    this.sessionStore.terminalAdoption.release(terminalId);
+  }
+
+  /**
    * End a hand-over that a spawn result shows is no longer of the process the
-   * user handed over (#12490): a later launch under the id succeeded, or the
-   * handed-over launch itself never started. A result for an earlier launch,
-   * or a refused respawn that left the process running, changes nothing.
-   * Where either generation is unknown the hand-over ends, since the result
-   * cannot be placed.
+   * user handed over (#12490): a later launch under the id succeeded, or a
+   * launch at or after the handed-over one failed to start — crash recovery
+   * included, which reports no exit for the process it lost. A refused
+   * respawn (`TERMINAL_ALREADY_LIVE`) left the process running, and a result
+   * for an earlier launch is stale; neither changes anything. Where either
+   * generation is unknown the hand-over ends, since the result cannot be
+   * placed.
    */
   handleTerminalSpawnResult(
     terminalId: string,
-    success: boolean,
-    launchGeneration: number | undefined
+    result: { success: boolean; launchGeneration?: number; error?: { code?: string } }
   ): void {
     const record = this.sessionStore.terminalAdoption.getForTerminal(terminalId);
     if (record === undefined) return;
+    if (!result.success && result.error?.code === "TERMINAL_ALREADY_LIVE") return;
     const adopted = record.launchGeneration;
-    const known = adopted !== undefined && launchGeneration !== undefined;
-    const ends = success
-      ? !known || launchGeneration > adopted
-      : !known || launchGeneration === adopted;
+    const reported = result.launchGeneration;
+    const ends =
+      adopted === undefined ||
+      reported === undefined ||
+      (result.success ? reported > adopted : reported >= adopted);
     if (ends) this.sessionStore.terminalAdoption.release(terminalId);
   }
 

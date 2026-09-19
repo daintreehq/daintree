@@ -170,25 +170,44 @@ describe("McpServerService terminal hand-over (#12490)", () => {
     expect(service.listTerminalAdoptions()).toEqual([]);
   });
 
+  const spawned = (launchGeneration: number) => ({ success: true, launchGeneration });
+  const failed = (launchGeneration: number, code = "ENOENT") => ({
+    success: false,
+    launchGeneration,
+    error: { code },
+  });
+
   it("survives the spawn result of the launch it was made against, and earlier ones", () => {
     // A terminal can be handed over while its own spawn is still pending; the
     // confirmation of that very launch is not a new process.
     adopt();
 
-    service.handleTerminalSpawnResult("terminal-1", true, 3);
-    service.handleTerminalSpawnResult("terminal-1", true, 2);
-    service.handleTerminalSpawnResult("terminal-1", false, 4);
+    service.handleTerminalSpawnResult("terminal-1", spawned(3));
+    service.handleTerminalSpawnResult("terminal-1", spawned(2));
+    service.handleTerminalSpawnResult("terminal-1", failed(2));
+    // A respawn refused because the process is still running leaves it running.
+    service.handleTerminalSpawnResult("terminal-1", failed(4, "TERMINAL_ALREADY_LIVE"));
 
     expect(service.listTerminalAdoptions().map((a) => a.terminalId)).toEqual(["terminal-1"]);
   });
 
   it("ends when a later launch takes the id, or the handed-over launch never starts", () => {
     adopt();
-    service.handleTerminalSpawnResult("terminal-1", true, 4);
+    service.handleTerminalSpawnResult("terminal-1", spawned(4));
     expect(service.listTerminalAdoptions()).toEqual([]);
 
     adopt();
-    service.handleTerminalSpawnResult("terminal-1", false, 3);
+    service.handleTerminalSpawnResult("terminal-1", failed(3));
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("ends when crash recovery fails to bring the process back", () => {
+    // A pty-host crash reports no exit for the process it lost; the failed
+    // respawn is the only word that it is gone.
+    adopt();
+
+    service.handleTerminalSpawnResult("terminal-1", failed(4));
+
     expect(service.listTerminalAdoptions()).toEqual([]);
   });
 
@@ -196,7 +215,36 @@ describe("McpServerService terminal hand-over (#12490)", () => {
     generations.delete("terminal-1");
     adopt();
 
-    service.handleTerminalSpawnResult("terminal-1", true, 3);
+    service.handleTerminalSpawnResult("terminal-1", spawned(3));
+
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("ends when the handed-over process exits", () => {
+    adopt();
+    // A natural exit or a kill leaves nothing tracked under the id.
+    terminals.delete("terminal-1");
+    generations.delete("terminal-1");
+
+    service.handleTerminalExit("terminal-1");
+
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("outlives a killed predecessor's exit that lands after the successor was handed over", () => {
+    // Kill generation 2, respawn as generation 3, hand 3 over, then 2's exit.
+    adopt();
+
+    service.handleTerminalExit("terminal-1");
+
+    expect(service.listTerminalAdoptions().map((a) => a.terminalId)).toEqual(["terminal-1"]);
+  });
+
+  it("ends when a restart has already replaced the handed-over process", () => {
+    adopt();
+    generations.set("terminal-1", 4);
+
+    service.handleTerminalExit("terminal-1");
 
     expect(service.listTerminalAdoptions()).toEqual([]);
   });

@@ -45,7 +45,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     // A hand-over ends with the terminal that was handed over (#12490). The
     // orchestrator's side ends with its bearer, which the revocation above
     // covers. Unloaded means nothing was ever handed over.
-    getMcpServerServiceRef()?.releaseTerminalAdoption(id);
+    getMcpServerServiceRef()?.handleTerminalExit(id);
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: [id, exitCode],
@@ -76,11 +76,7 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   const handleSpawnResult = (id: string, result: SpawnResult) => {
     // A hand-over is of one process (#12490): a later launch under the id, or
     // the handed-over launch failing to start, ends it.
-    getMcpServerServiceRef()?.handleTerminalSpawnResult(
-      id,
-      result.success,
-      result.launchGeneration
-    );
+    getMcpServerServiceRef()?.handleTerminalSpawnResult(id, result);
     if (result.success) {
       // A confirmed relaunch may supersede a session a natural exit left on
       // the pane (#12433); a refused one leaves the running process's id alone.
