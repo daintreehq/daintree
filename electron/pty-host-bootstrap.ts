@@ -6,8 +6,8 @@ import { getCompileCacheMeta, markHostPerformance } from "./utils/hostPerformanc
 import { installBootstrapErrorGuard } from "./utils/bootstrapErrorGuard.js";
 import { installSpawnCensusFromEnv } from "./utils/spawnCensus.js";
 
-// Idle harness spawn census (#12521). Main strips the variable in packaged
-// builds, so it only ever reaches this host from the harness runner.
+// Idle harness spawn census (#12521). Main strips the variable from every
+// launch that is not an unpackaged idle-harness run, so only that reaches here.
 installSpawnCensusFromEnv("pty-host");
 
 const userData = process.env.DAINTREE_USER_DATA;

@@ -17,6 +17,7 @@ import {
   headline,
   judgeRun,
   parseArgs,
+  reapProcessGroup,
   sanitizeEnv,
   stats,
   summariseCell,
@@ -83,6 +84,10 @@ describe("parseArgs", () => {
     expect(parseArgs(["--terminals=1.5"]).errors).toHaveLength(1);
     expect(parseArgs(["--json="]).errors).toEqual(["--json needs a path"]);
     expect(parseArgs(["--disable-gpu"]).errors).toEqual(["unknown argument --disable-gpu"]);
+    expect(parseArgs(["--all=false"]).errors).toEqual(["--all takes no value"]);
+    expect(parseArgs(["--terminals=1", "--stream=false"]).errors).toEqual([
+      "--stream takes no value",
+    ]);
   });
 
   it("lets --all stand in for a single cell's stream flag", () => {
@@ -224,5 +229,30 @@ describe("stats / summariseCell", () => {
     expect(summary.cpuPercent).toEqual({ n: 3, min: 1, median: 2, max: 3 });
     expect(summary.fseventsdCpuPercent).toBeNull();
     expect(summary.cpuPercentByLabel.gpu).toEqual({ n: 3, min: 0.2, median: 0.4, max: 0.6 });
+  });
+});
+
+describe("reapProcessGroup", () => {
+  it("kills the whole group, addressed by the negated leader pid", () => {
+    const calls = [];
+    const kill = (pid, signal) => calls.push([pid, signal]);
+    expect(reapProcessGroup(4321, { platform: "darwin", kill })).toBe(true);
+    expect(calls).toEqual([[-4321, "SIGKILL"]]);
+  });
+
+  it("never signals without a real group to aim at", () => {
+    const kill = () => {
+      throw new Error("must not be called");
+    };
+    expect(reapProcessGroup(4321, { platform: "win32", kill })).toBe(false);
+    expect(reapProcessGroup(undefined, { platform: "darwin", kill })).toBe(false);
+    expect(reapProcessGroup(0, { platform: "darwin", kill })).toBe(false);
+  });
+
+  it("treats an already-empty group as nothing to do", () => {
+    const kill = () => {
+      throw Object.assign(new Error("ESRCH"), { code: "ESRCH" });
+    };
+    expect(reapProcessGroup(4321, { platform: "darwin", kill })).toBe(false);
   });
 });

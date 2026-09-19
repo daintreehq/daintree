@@ -22,7 +22,7 @@
  * opening sample or after the closing one.
  */
 
-import { app, powerMonitor, screen, type BrowserWindow, type WebContentsView } from "electron";
+import { app, BrowserWindow, powerMonitor, screen, type WebContentsView } from "electron";
 import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -56,6 +56,7 @@ import {
   checkMaterialised,
   checkRendererContinuity,
   checkWindowEvents,
+  checkWindowTiming,
   computeTreeUsage,
   cpuPercent,
   IDLE_HARNESS_CONFIG_ENV,
@@ -66,6 +67,7 @@ import {
   type CellObservation,
   type CensusFileLike,
   type DaemonCpuReading,
+  type EndpointLabels,
   type IdleHarnessConfig,
   type SamplerSnapshot,
   type TreeUsage,
@@ -83,6 +85,8 @@ const AGENT_STATE_TIMEOUT_MS = 15_000;
 const POLL_MS = 250;
 const RENDERER_SCRIPT_TIMEOUT_MS = 5_000;
 const FOCUS_SETTLE_MS = 2_000;
+/** Bounds each window-edge command; an edge that drifts further fails the run anyway. */
+const EDGE_COMMAND_TIMEOUT_MS = 5_000;
 /** One census flush interval plus slack, so the closing second is on disk. */
 const CENSUS_DRAIN_MS = 6_500;
 const CLEANUP_KILL_TIMEOUT_MS = 10_000;
@@ -220,7 +224,9 @@ function visibleWebContents(
  * Switch through the renderer's own bridge, which runs the full production
  * switch: workspace-host load, PTY routing, persistence. Fire and forget — the
  * outgoing renderer may be frozen before the promise resolves, so completion is
- * read from main-side state instead.
+ * read from main-side state instead, and a rejection is parked on the outgoing
+ * page for the timeout message. "Active and loaded" only proves the skeleton
+ * painted; the view's own hydration signal proves its panels were restored.
  */
 async function switchToProject(
   pvm: ProjectViewManager,
@@ -243,21 +249,40 @@ async function switchToProject(
     "the project-switch bridge"
   );
   await wc.executeJavaScript(
-    `void window.electron.project.switch(${JSON.stringify(project.id)}).catch(() => {}); true`
+    `void window.electron.project.switch(${JSON.stringify(project.id)}).catch((error) => {
+       window.__daintreeIdleSwitchError = String(error?.message ?? error);
+     }); true`
   );
-  await waitFor(
+  const entry = await waitFor(
     () => {
-      if (pvm.getActiveProjectId() !== project.id) return false;
-      const entry = pvm.getAllViews().find((view) => view.projectId === project.id);
-      return (
-        entry?.state === "active" &&
-        !entry.view.webContents.isDestroyed() &&
-        !entry.view.webContents.isLoading()
-      );
+      if (pvm.getActiveProjectId() !== project.id) return null;
+      const view = pvm.getAllViews().find((candidate) => candidate.projectId === project.id);
+      return view?.state === "active" &&
+        !view.view.webContents.isDestroyed() &&
+        !view.view.webContents.isLoading()
+        ? view
+        : null;
     },
     SWITCH_TIMEOUT_MS,
     `project ${project.index + 1} to become active`
-  );
+  ).catch(async (error: unknown) => {
+    const reason = wc.isDestroyed()
+      ? null
+      : await withTimeout(
+          wc.executeJavaScript("window.__daintreeIdleSwitchError ?? null") as Promise<
+            string | null
+          >,
+          RENDERER_SCRIPT_TIMEOUT_MS,
+          "no answer"
+        ).catch(() => null);
+    throw reason ? new Error(`project switch rejected: ${reason}`) : error;
+  });
+  const hydration = await pvm.waitForViewHydrated(entry.view.webContents.id, {
+    timeoutMs: SWITCH_TIMEOUT_MS,
+  });
+  if (hydration !== "hydrated") {
+    throw new Error(`project ${project.index + 1}'s view never reported hydration (${hydration})`);
+  }
 }
 
 async function liveTerminalsByProject(
@@ -304,7 +329,7 @@ async function runSampler(
       execFile(
         samplerPath,
         [],
-        { maxBuffer: 16 * 1024 * 1024, timeout: 15_000 },
+        { maxBuffer: 16 * 1024 * 1024, timeout: EDGE_COMMAND_TIMEOUT_MS },
         (error, stdout) => {
           if (error) {
             reject(error);
@@ -326,7 +351,10 @@ async function readDaemons(): Promise<{
   readings: Record<string, DaemonCpuReading>;
 }> {
   const { stdout } = await runUncounted(() =>
-    execFileAsync("ps", ["-axo", "pid=,time=,comm="], { maxBuffer: 16 * 1024 * 1024 })
+    execFileAsync("ps", ["-axo", "pid=,time=,comm="], {
+      maxBuffer: 16 * 1024 * 1024,
+      timeout: EDGE_COMMAND_TIMEOUT_MS,
+    })
   );
   return { atMs: Date.now(), readings: parseDaemonCpu(stdout, DAEMONS) };
 }
@@ -395,6 +423,7 @@ function observeCell(
     }),
     liveTerminals: live.counts,
     inventoryDegraded: live.degraded,
+    windowCount: BrowserWindow.getAllWindows().length,
     windowVisible: win.isVisible(),
     windowMinimized: win.isMinimized(),
     windowFocused: win.isFocused(),
@@ -478,6 +507,7 @@ function summariseUsage(usage: TreeUsage) {
     })),
     departed: usage.departed,
     unattributedMs: round(usage.unattributedNs / 1e6, 1),
+    uncertainMs: round(usage.uncertainNs / 1e6, 1),
   };
 }
 
@@ -747,8 +777,11 @@ function installObservers(
     win.off("blur", onBlur);
   });
 
-  const onChildGone = (_event: unknown, details: Electron.Details) =>
+  // A clean exit is a utility retiring on schedule, not a crash.
+  const onChildGone = (_event: unknown, details: Electron.Details) => {
+    if (details.reason === "clean-exit") return;
     observed.processesGone.push({ atMs: Date.now(), type: details.type, reason: details.reason });
+  };
   const onRenderGone = (
     _event: unknown,
     _wc: unknown,
@@ -780,7 +813,7 @@ interface WindowReading {
   endMs: number;
   start: SamplerSnapshot;
   end: SamplerSnapshot;
-  labels: Map<number, string>;
+  labels: EndpointLabels;
   startObservation: CellObservation;
   endObservation: CellObservation;
   endLive: Awaited<ReturnType<typeof liveTerminalsByProject>>;
@@ -802,8 +835,8 @@ async function measureWindow(
   projects: readonly FixtureProject[],
   terminals: readonly FixtureTerminal[]
 ): Promise<WindowReading> {
-  const labels = new Map<number, string>();
-  collectLabels(pvm, projects, terminals, config.protectedProjectIndex, labels);
+  const labels = { start: new Map<number, string>(), end: new Map<number, string>() };
+  collectLabels(pvm, projects, terminals, config.protectedProjectIndex, labels.start);
   const startObservation = observeCell(
     config,
     pvm,
@@ -824,19 +857,22 @@ async function measureWindow(
   // `ps` fork never falls inside the tree's window.
   const daemonsStart = await readDaemons();
   const start = await runSampler(config.samplerPath);
-  labels.set(start.pid, "harness:sampler");
+  labels.start.set(start.pid, "harness:sampler");
   startObservation.streamWorkloadAlive = streamWorkloadRunning(start.snapshot, terminals);
   log("CHECK: window open — %dms", config.windowMs);
 
   await delay(endMs - Date.now());
   const end = await runSampler(config.samplerPath);
-  labels.set(end.pid, "harness:sampler");
+  // The closing sampler's CPU so far is the harness's, not the app's. Dropped
+  // here, it is reaped after the window instead. The opening sampler stays: its
+  // pre-sample CPU is charged back when it departs, leaving only its exit.
+  end.snapshot.processes.delete(end.pid);
   const daemonsEnd = await readDaemons();
   log("CHECK: window closed");
 
   const atEnd = profiles.getProfile();
   const freezeAtEnd = pvm.efficiencyFreezeEnabled;
-  collectLabels(pvm, projects, terminals, config.protectedProjectIndex, labels);
+  collectLabels(pvm, projects, terminals, config.protectedProjectIndex, labels.end);
   const endLive = await liveTerminalsByProject(pty, projects);
   const endObservation = observeCell(
     config,
@@ -878,8 +914,10 @@ async function readProtectedLifecycle(
 }
 
 /**
- * Launches inside the window by role and command, and which in-app processes
- * that were alive throughout left no census — a gap reported, never a zero.
+ * Launches inside the window by role and command. Every census-bearing process
+ * alive at the close must have a census that kept flushing through it — a gap
+ * fails the run rather than reading as zero launches. One that departed
+ * mid-window may have lost its last few seconds to the kill; that is reported.
  */
 async function spawnReport(
   censusDir: string,
@@ -889,22 +927,33 @@ async function spawnReport(
   await delay(CENSUS_DRAIN_MS);
   const files = await readCensus(censusDir);
   const slice = sliceSpawnCensus(files, reading.startMs, reading.endMs);
+  const alive = usage.processes.filter((p) => CENSUS_ROLES.has(p.label));
+  const alivePids = new Set(alive.map((p) => p.pid));
   const censusPids = new Set(files.map((file) => file.pid));
-  const missing = usage.processes
-    .filter((p) => CENSUS_ROLES.has(p.label) && !p.born && !censusPids.has(p.pid))
+  const missing = alive
+    .filter((p) => !censusPids.has(p.pid))
     .map((p) => ({ pid: p.pid, label: p.label }));
+  const stalled = slice.stale.filter((file) => alivePids.has(file.pid));
+  const failures: string[] = [];
+  if (missing.length > 0) {
+    failures.push(`no spawn census from ${missing.map((m) => `${m.label} ${m.pid}`).join(", ")}`);
+  }
+  if (stalled.length > 0) {
+    failures.push(
+      `spawn census stopped flushing in ${stalled.map((f) => `${f.role} ${f.pid}`).join(", ")}`
+    );
+  }
   return {
     report: {
       total: slice.total,
       perSecond: round(slice.total / ((reading.endMs - reading.startMs) / 1000), 2),
       byCommand: Object.fromEntries(Object.entries(slice.byCommand).sort(([, a], [, b]) => b - a)),
-      staleFiles: slice.stale,
+      partialFromDeparted: slice.stale.filter(
+        (file) => !alivePids.has(file.pid) && file.flushedAtMs >= reading.startMs
+      ),
       missingCensus: missing,
     },
-    failures:
-      missing.length > 0
-        ? [`no spawn census from ${missing.map((m) => `${m.label} ${m.pid}`).join(", ")}`]
-        : [],
+    failures,
   };
 }
 
@@ -1014,8 +1063,12 @@ export async function runIdleHarness(
     log("settling for %dms", config.settleMs);
     await delay(config.settleMs);
     const reading = await measureWindow(config, services, win, pvm, projects, terminals);
+    const sampledStartMs = reading.start.atUs / 1000;
+    const sampledEndMs = reading.end.atUs / 1000;
+    // Events count up to whichever edge is later, so nothing that touched the
+    // CPU samples escapes the checks.
     const within = <T extends { atMs: number }>(list: T[]) =>
-      inWindow(list, reading.startMs, reading.endMs);
+      inWindow(list, reading.startMs, Math.max(reading.endMs, sampledEndMs));
 
     const usage = computeTreeUsage({
       start: reading.start,
@@ -1025,6 +1078,9 @@ export async function runIdleHarness(
     });
 
     const stream = terminals.find((terminal) => terminal.role === "stream");
+    const workload = stream
+      ? usage.processes.filter((p) => stream.shellPid && p.ppid === stream.shellPid)
+      : [];
     const protectedLifecycle =
       config.protectedProjectIndex === null
         ? undefined
@@ -1033,7 +1089,14 @@ export async function runIdleHarness(
       ...checkMaterialised(config, reading.startObservation, "start"),
       ...checkMaterialised(config, reading.endObservation, "end"),
       ...checkRendererContinuity(reading.startObservation, reading.endObservation),
+      ...checkWindowTiming({
+        nominalStartMs: reading.startMs,
+        nominalEndMs: reading.endMs,
+        sampledStartMs,
+        sampledEndMs,
+      }),
       ...checkWindowEvents({
+        windowStartMs: reading.startMs,
         windowEndMs: reading.endMs,
         terminalExits: within(observed.terminalExits).length,
         focusChanges: within(observed.focusChanges).length,
@@ -1044,6 +1107,8 @@ export async function runIdleHarness(
           ? (reading.endLive.byProject.get(projects[0]!.id)?.find((t) => t.id === stream.id)
               ?.lastOutputTime ?? 0)
           : undefined,
+        streamWorkloadCpuNs:
+          workload.length > 0 ? workload.reduce((sum, p) => sum + p.cpuNs, 0) : undefined,
         protectedLifecycle,
       }),
     ];
@@ -1069,7 +1134,7 @@ export async function runIdleHarness(
       valid: failures.length === 0,
       failures,
       environment: environmentReport(win),
-      window: { startMs: reading.startMs, endMs: reading.endMs },
+      window: { startMs: reading.startMs, endMs: reading.endMs, sampledStartMs, sampledEndMs },
       tree: summariseUsage(usage),
       daemons: daemonReport(reading),
       spawns,

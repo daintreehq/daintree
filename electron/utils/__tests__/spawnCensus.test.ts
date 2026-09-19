@@ -84,6 +84,15 @@ describe("spawn census", () => {
     expect(totals(readSpawnCensus())).toEqual({ true: 5, "sh -c true": 2 });
   });
 
+  it("names the shell a sync launch actually ran", () => {
+    installSpawnCensus("main", dir);
+    childProcess.spawnSync("true", undefined, { shell: true });
+    childProcess.spawnSync("true", { shell: "/bin/bash" });
+    childProcess.execFileSync("true", { shell: true });
+    childProcess.execSync("true", { shell: "/bin/bash" });
+    expect(totals(readSpawnCensus())).toEqual({ "sh -c true": 2, "bash -c true": 2 });
+  });
+
   it("keeps each call's return value and errors", () => {
     installSpawnCensus("main", dir);
     expect(childProcess.execFileSync("echo", ["hi"], { encoding: "utf8" })).toBe("hi\n");
@@ -104,7 +113,8 @@ describe("spawn census", () => {
     flushSpawnCensus(true);
 
     const files = fs.readdirSync(dir);
-    expect(files).toEqual([`pty-host-${process.pid}.json`]);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(new RegExp(`^pty-host-${process.pid}-\\d+\\.json$`));
     const file = JSON.parse(fs.readFileSync(path.join(dir, files[0]!), "utf8")) as SpawnCensusFile;
     expect(file).toMatchObject({ version: 1, role: "pty-host", pid: process.pid, exited: true });
     expect(totals(file)).toEqual({ true: 1 });

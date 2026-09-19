@@ -49,6 +49,7 @@ import {
   exitAfterFlush,
   launchHarnessRun,
   parsePositiveInt,
+  shouldDetach,
 } from "./run-freeze-harness.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -109,13 +110,11 @@ export function parseArgs(argv) {
         else options.terminals = int(MAX_TERMINALS) ?? options.terminals;
         break;
       case "--stream":
-        options.stream = true;
-        break;
       case "--blurred":
-        options.blurred = true;
-        break;
       case "--all":
-        options.all = true;
+        // Presence-only: `--stream=false` must not quietly mean "stream".
+        if (value !== undefined) errors.push(`${flag} takes no value`);
+        else options[flag.slice(2)] = true;
         break;
       case "--runs":
         options.runs = int(1_000) ?? options.runs;
@@ -218,6 +217,22 @@ export function judgeRun({ code, signal, output, timedOut }, result) {
   if (code !== 0) return `exited with code ${code} (signal ${signal})`;
   if (!String(output).includes(COMPLETE_MARKER)) return "no COMPLETE marker";
   return null;
+}
+
+/**
+ * Kill whatever of a finished run's process group is still alive — a host
+ * that outlived the app would otherwise run through the next cell's window.
+ * The group outlives its leader, so this reaches survivors after the root has
+ * exited. PTY shells lead their own sessions and are killed by the harness.
+ */
+export function reapProcessGroup(pid, { platform = process.platform, kill = process.kill } = {}) {
+  if (!shouldDetach(platform) || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    kill(-pid, "SIGKILL");
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function stats(values) {
@@ -365,6 +380,7 @@ async function main() {
             shouldEcho: (text) => text.includes(LOG_PREFIX) && !text.includes(RESULT_PREFIX),
             userDataPrefix: "daintree-idle-harness-run-",
           });
+          reapProcessGroup(outcome.pid);
           const result = extractIdleResult(outcome.output);
           const invalid = judgeRun(outcome, result);
           entry.runs.push(invalid ? { invalid, result } : result);

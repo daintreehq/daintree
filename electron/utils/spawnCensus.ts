@@ -18,6 +18,9 @@
  * Async launches all funnel through `ChildProcess.prototype.spawn`. The sync
  * family does not, so `spawnSync`/`execSync`/`execFileSync` are wrapped on the
  * module and republished to ESM importers with `syncBuiltinESMExports`.
+ *
+ * Counts attempts, recorded before Node launches anything: a launch that fails
+ * with ENOENT has still paid for the fork, which is the cost being measured.
  */
 
 import childProcess, { ChildProcess } from "node:child_process";
@@ -29,8 +32,8 @@ export const SPAWN_CENSUS_DIR_ENV = "DAINTREE_IDLE_SPAWN_CENSUS_DIR";
 export const SPAWN_CENSUS_VERSION = 1;
 
 const FLUSH_INTERVAL_MS = 5_000;
-/** Harness runs last minutes; an hour of buckets is ample and bounds memory. */
-const BUCKET_RETENTION_S = 3_600;
+/** Twice the runner's longest window, so a whole window survives to be read. */
+const BUCKET_RETENTION_S = 7_200;
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "fish", "cmd.exe", "powershell.exe"]);
 
 export interface SpawnCensusFile {
@@ -86,6 +89,19 @@ function record(key: string): void {
   bucket.set(key, (bucket.get(key) ?? 0) + 1);
 }
 
+/**
+ * The key for a sync launch. The sync APIs overload on position — options may
+ * sit where the argument list goes — and `shell` may name the shell to use.
+ */
+function syncCommandKey(file: unknown, args: unknown, options: unknown): string {
+  const argv = Array.isArray(args) ? args : [];
+  const opts = (Array.isArray(args) || args == null ? options : args) as
+    { shell?: unknown } | undefined;
+  if (!opts?.shell) return commandKey(file, argv);
+  const shell = typeof opts.shell === "string" ? opts.shell : "sh";
+  return commandKey(shell, ["-c", [file, ...argv].join(" ")]);
+}
+
 /** Snapshot of this process's census, in the on-disk shape. */
 export function readSpawnCensus(exited = false): SpawnCensusFile | null {
   if (!state) return null;
@@ -117,7 +133,8 @@ export function flushSpawnCensus(exited = false): void {
   }
   const snapshot = readSpawnCensus(exited);
   if (!snapshot) return;
-  const target = path.join(state.dir, `${state.role}-${process.pid}.json`);
+  // Start time in the name: a later process that reuses this pid gets its own file.
+  const target = path.join(state.dir, `${state.role}-${process.pid}-${state.startedAtMs}.json`);
   const temp = `${target}.tmp`;
   try {
     fs.mkdirSync(state.dir, { recursive: true });
@@ -183,22 +200,17 @@ export function installSpawnCensus(role: string, dir: string): boolean {
   type Variadic = (...args: unknown[]) => unknown;
   const patched = childProcess as unknown as Record<string, unknown>;
   patched.spawnSync = function (...callArgs: unknown[]) {
-    const [file, args, options] = callArgs;
-    const opts = (Array.isArray(args) ? options : args) as { shell?: unknown } | undefined;
-    record(
-      opts?.shell
-        ? commandKey("sh", ["-c", file])
-        : commandKey(file, Array.isArray(args) ? args : [])
-    );
+    record(syncCommandKey(callArgs[0], callArgs[1], callArgs[2]));
     return (originalSpawnSync as Variadic).apply(childProcess, callArgs);
   };
   patched.execSync = function (...callArgs: unknown[]) {
-    record(commandKey("sh", ["-c", callArgs[0]]));
+    // Always a shell; `options.shell` only chooses which.
+    const shell = (callArgs[1] as { shell?: unknown } | undefined)?.shell;
+    record(syncCommandKey(callArgs[0], undefined, { shell: shell || true }));
     return (originalExecSync as Variadic).apply(childProcess, callArgs);
   };
   patched.execFileSync = function (...callArgs: unknown[]) {
-    const [file, args] = callArgs;
-    record(commandKey(file, Array.isArray(args) ? args : []));
+    record(syncCommandKey(callArgs[0], callArgs[1], callArgs[2]));
     return (originalExecFileSync as Variadic).apply(childProcess, callArgs);
   };
   syncBuiltinESMExports();

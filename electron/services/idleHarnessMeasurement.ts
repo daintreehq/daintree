@@ -18,6 +18,8 @@
  * process's figure is its cost inside the window, not merely the tree total.
  */
 
+import { ACTIVE_AGENT_STATES, type AgentState } from "../../shared/types/agent.js";
+
 export interface ProcessSample {
   pid: number;
   ppid: number;
@@ -134,6 +136,11 @@ export interface DepartedProcess {
   label: string;
   /** The live ancestor its pre-window share was charged against, if any. */
   chargedToPid: number | null;
+  /**
+   * Its parent departed too, so the charge assumes the parent reaped it before
+   * exiting. If it was orphaned to launchd instead, the charge is wrong.
+   */
+  chargedThroughDeparted: boolean;
 }
 
 export interface LabelUsage {
@@ -157,6 +164,20 @@ export interface TreeUsage {
    * tree lost a branch to reparenting) is visible rather than silent.
    */
   unattributedNs: number;
+  /**
+   * Pre-window CPU charged through a departed parent (see
+   * `DepartedProcess.chargedThroughDeparted`). Two samples cannot tell a child
+   * its parent reaped from one orphaned to launchd, so this much of the total
+   * rests on the common case.
+   */
+  uncertainNs: number;
+}
+
+export interface EndpointLabels {
+  /** Labels of processes as they were at the opening sample. */
+  start: ReadonlyMap<number, string>;
+  /** Labels as at the closing sample — a pid reused in between is relabelled. */
+  end: ReadonlyMap<number, string>;
 }
 
 function identity(sample: ProcessSample): string {
@@ -207,6 +228,20 @@ export function resolveLabel(
   return "other";
 }
 
+const COUNTERS = [
+  "selfNs",
+  "childNs",
+  "idleWakeups",
+  "interruptWakeups",
+  "childIdleWakeups",
+  "childInterruptWakeups",
+] as const;
+
+/**
+ * Whole-tree usage between two samples. Throws when the pair cannot support a
+ * reading — a different root, no elapsed time, or a counter that went
+ * backwards — because a quietly wrong baseline is worse than a failed run.
+ */
 export function computeTreeUsage({
   start,
   end,
@@ -216,14 +251,24 @@ export function computeTreeUsage({
   start: SamplerSnapshot;
   end: SamplerSnapshot;
   rootPid: number;
-  labels: ReadonlyMap<number, string>;
+  labels: EndpointLabels;
 }): TreeUsage {
-  const startTree = descendantsOf(start, rootPid);
-  const endTree = descendantsOf(end, rootPid);
-  if (endTree.size === 0) {
-    throw new Error(`root pid ${rootPid} is missing from the closing sample`);
+  const rootAtStart = start.processes.get(rootPid);
+  const rootAtEnd = end.processes.get(rootPid);
+  if (!rootAtStart || !rootAtEnd) {
+    throw new Error(
+      `root pid ${rootPid} is missing from the ${rootAtStart ? "closing" : "opening"} sample`
+    );
+  }
+  if (identity(rootAtStart) !== identity(rootAtEnd)) {
+    throw new Error(`root pid ${rootPid} is a different process at each end of the window`);
+  }
+  if (!(end.atUs > start.atUs)) {
+    throw new Error("the closing sample is not later than the opening one");
   }
 
+  const startTree = descendantsOf(start, rootPid);
+  const endTree = descendantsOf(end, rootPid);
   const startByIdentity = new Map<string, ProcessSample>();
   for (const pid of startTree) {
     const sample = start.processes.get(pid)!;
@@ -233,21 +278,31 @@ export function computeTreeUsage({
   for (const sample of end.processes.values()) endIdentities.add(identity(sample));
 
   // A start-tree process still alive but no longer under the root (reparented
-  // away) keeps being accounted, or its CPU would drop out of the end total.
+  // away) keeps being accounted, with whatever it spawned since, or its CPU
+  // would drop out of the end total.
   const accounted = new Set(endTree);
   for (const [key, sample] of startByIdentity) {
-    if (endIdentities.has(key) && !endTree.has(sample.pid)) accounted.add(sample.pid);
+    if (endIdentities.has(key) && !endTree.has(sample.pid)) {
+      for (const pid of descendantsOf(end, sample.pid)) accounted.add(pid);
+    }
   }
 
   const usageByPid = new Map<number, ProcessUsage>();
   for (const pid of accounted) {
     const now = end.processes.get(pid)!;
     const before = startByIdentity.get(identity(now));
+    if (before) {
+      for (const counter of COUNTERS) {
+        if (now[counter] < before[counter]) {
+          throw new Error(`pid ${pid}'s ${counter} went backwards; the samples are unusable`);
+        }
+      }
+    }
     usageByPid.set(pid, {
       pid,
       ppid: now.ppid,
       name: now.name,
-      label: resolveLabel(end, pid, labels),
+      label: resolveLabel(end, pid, labels.end),
       born: !before,
       cpuNs: now.selfNs - (before?.selfNs ?? 0),
       reapedChildCpuNs: now.childNs - (before?.childNs ?? 0),
@@ -260,11 +315,15 @@ export function computeTreeUsage({
 
   const departed: DepartedProcess[] = [];
   let unattributedNs = 0;
+  let uncertainNs = 0;
   for (const [key, sample] of startByIdentity) {
     if (endIdentities.has(key)) continue;
     // Walk the start-time ancestry to the first process still alive as the
     // same incarnation — the one whose child counter absorbed this lifetime.
+    // Certain when that is the direct parent: a child is reparented only when
+    // its parent dies.
     let chargedTo: ProcessUsage | undefined;
+    let chargedThroughDeparted = false;
     let ancestor = start.processes.get(sample.ppid);
     const seen = new Set<number>([sample.pid]);
     while (ancestor && !seen.has(ancestor.pid)) {
@@ -273,6 +332,7 @@ export function computeTreeUsage({
         chargedTo = usageByPid.get(ancestor.pid);
         break;
       }
+      chargedThroughDeparted = true;
       ancestor = start.processes.get(ancestor.ppid);
     }
     const lifetimeNs = sample.selfNs + sample.childNs;
@@ -281,14 +341,16 @@ export function computeTreeUsage({
       chargedTo.reapedChildIdleWakeups -= sample.idleWakeups + sample.childIdleWakeups;
       chargedTo.reapedChildInterruptWakeups -=
         sample.interruptWakeups + sample.childInterruptWakeups;
+      if (chargedThroughDeparted) uncertainNs += lifetimeNs;
     } else {
       unattributedNs += lifetimeNs;
     }
     departed.push({
       pid: sample.pid,
       name: sample.name,
-      label: resolveLabel(start, sample.pid, labels),
+      label: resolveLabel(start, sample.pid, labels.start),
       chargedToPid: chargedTo?.pid ?? null,
+      chargedThroughDeparted: Boolean(chargedTo) && chargedThroughDeparted,
     });
   }
 
@@ -327,6 +389,7 @@ export function computeTreeUsage({
     byLabel,
     departed,
     unattributedNs,
+    uncertainNs,
   };
 }
 
@@ -415,6 +478,9 @@ export function parseIdleHarnessConfig(
   } catch {
     return { errors: [`${IDLE_HARNESS_CONFIG_ENV} is not JSON`] };
   }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return { errors: [`${IDLE_HARNESS_CONFIG_ENV} is not an object`] };
+  }
   const errors: string[] = [];
   const terminals = value.terminalsPerProject;
   if (
@@ -445,9 +511,12 @@ export function parseIdleHarnessConfig(
       errors.push("the protected project needs at least one terminal to hold its agent");
     }
   }
-  for (const key of ["windowMs", "settleMs"] as const) {
-    const n = value[key];
-    if (!Number.isInteger(n) || n! < 0) errors.push(`${key} must be a non-negative integer`);
+  // Whole seconds: the spawn census counts in one-second buckets.
+  if (!Number.isInteger(value.windowMs) || value.windowMs! <= 0 || value.windowMs! % 1000 !== 0) {
+    errors.push("windowMs must be a positive whole number of seconds");
+  }
+  if (!Number.isInteger(value.settleMs) || value.settleMs! < 0) {
+    errors.push("settleMs must be a non-negative integer");
   }
   if (typeof value.samplerPath !== "string" || value.samplerPath.length === 0) {
     errors.push("samplerPath must be set");
@@ -462,6 +531,8 @@ export interface CellObservation {
   /** Live PTYs per project, in config order. */
   liveTerminals: number[];
   inventoryDegraded: boolean;
+  /** Windows open in the process; the fixture has exactly one. */
+  windowCount: number;
   windowVisible: boolean;
   windowMinimized: boolean;
   windowFocused: boolean;
@@ -507,6 +578,9 @@ export function checkMaterialised(
   if (observed.inventoryDegraded) {
     failures.push(`a pty-host shard did not answer the terminal inventory ${at}`);
   }
+  if (observed.windowCount !== 1) {
+    failures.push(`${observed.windowCount} windows are open ${at}; the fixture has one`);
+  }
   if (!observed.windowVisible || observed.windowMinimized) {
     failures.push(`window is not visible ${at}`);
   }
@@ -515,7 +589,9 @@ export function checkMaterialised(
       `window is ${observed.windowFocused ? "focused" : "blurred"} ${at}, the cell asks otherwise`
     );
   }
-  if (observed.documentHasFocus !== null && observed.documentHasFocus === config.blurred) {
+  if (observed.documentHasFocus === null) {
+    failures.push(`active view did not answer document.hasFocus() ${at}`);
+  } else if (observed.documentHasFocus === config.blurred) {
     failures.push(`active view document.hasFocus() is ${observed.documentHasFocus} ${at}`);
   }
   if (config.protectedProjectIndex !== null && observed.protectedAgentActive !== true) {
@@ -544,13 +620,18 @@ export function checkRendererContinuity(start: CellObservation, end: CellObserva
 }
 
 export interface WindowEvents {
+  windowStartMs: number;
   windowEndMs: number;
   terminalExits: number;
   focusChanges: number;
+  /** Abnormal process exits; a clean utility exit is not one. */
   processesGone: number;
+  /** States the protected agent moved through inside the window. */
   protectedAgentStates: string[];
   /** Last output time of the streaming terminal; undefined when the cell does not stream. */
   streamLastOutputAt?: number;
+  /** CPU the streaming workload used inside the window; undefined when it was not found. */
+  streamWorkloadCpuNs?: number;
   /**
    * The protected view's recorded `freeze`/`resume` events, or why they could
    * not be read (a frozen view does not answer); undefined without one.
@@ -560,6 +641,24 @@ export interface WindowEvents {
 
 /** A streaming terminal must have produced output this recently at the close. */
 export const STREAM_FRESHNESS_MS = 3_000;
+
+/** Did any frozen interval in the recorded lifecycle overlap the window? */
+export function frozenDuring(
+  lifecycle: ReadonlyArray<readonly [string, number]>,
+  startMs: number,
+  endMs: number
+): boolean {
+  let frozenSince: number | null = null;
+  for (const [type, atMs] of [...lifecycle].sort((a, b) => a[1] - b[1])) {
+    if (type === "freeze") {
+      frozenSince ??= atMs;
+    } else if (type === "resume" && frozenSince !== null) {
+      if (frozenSince < endMs && atMs > startMs) return true;
+      frozenSince = null;
+    }
+  }
+  return frozenSince !== null && frozenSince < endMs;
+}
 
 /** What happened inside the window that makes its reading not the requested cell's. */
 export function checkWindowEvents(events: WindowEvents): string[] {
@@ -573,10 +672,12 @@ export function checkWindowEvents(events: WindowEvents): string[] {
   if (events.processesGone > 0) {
     failures.push("a process crashed or was killed inside the window");
   }
-  if (events.protectedAgentStates.length > 0) {
-    failures.push(
-      `protected agent changed state inside the window (${events.protectedAgentStates.join(", ")})`
-    );
+  // working <-> waiting keeps the freeze exemption; leaving the active set loses it.
+  const lost = events.protectedAgentStates.filter(
+    (state) => !ACTIVE_AGENT_STATES.has(state as AgentState)
+  );
+  if (lost.length > 0) {
+    failures.push(`protected agent left the active states inside the window (${lost.join(", ")})`);
   }
   if (
     events.streamLastOutputAt !== undefined &&
@@ -584,14 +685,47 @@ export function checkWindowEvents(events: WindowEvents): string[] {
   ) {
     failures.push("streaming terminal had gone quiet by the end of the window");
   }
+  if (events.streamWorkloadCpuNs === 0) {
+    failures.push("streaming workload used no CPU inside the window — it was blocked, not writing");
+  }
   const lifecycle = events.protectedLifecycle;
   if (
     typeof lifecycle === "string" ||
-    (Array.isArray(lifecycle) &&
-      lifecycle.some(([type, atMs]) => type === "freeze" && atMs < events.windowEndMs))
+    (Array.isArray(lifecycle) && frozenDuring(lifecycle, events.windowStartMs, events.windowEndMs))
   ) {
     failures.push(
       "the protected view was frozen, so the freeze-exempt population was not measured"
+    );
+  }
+  return failures;
+}
+
+/** Sampling edges may lag the nominal window; past this the rates mislead. */
+export const MAX_EDGE_DRIFT_MS = 1_000;
+
+/**
+ * The CPU samples bracket their own interval; the census and the event
+ * filters use the nominal one. They must agree closely or the rates are over
+ * different spans.
+ */
+export function checkWindowTiming({
+  nominalStartMs,
+  nominalEndMs,
+  sampledStartMs,
+  sampledEndMs,
+}: {
+  nominalStartMs: number;
+  nominalEndMs: number;
+  sampledStartMs: number;
+  sampledEndMs: number;
+}): string[] {
+  const failures: string[] = [];
+  const startDrift = Math.abs(sampledStartMs - nominalStartMs);
+  const endDrift = Math.abs(sampledEndMs - nominalEndMs);
+  if (startDrift > MAX_EDGE_DRIFT_MS || endDrift > MAX_EDGE_DRIFT_MS) {
+    failures.push(
+      `samples drifted from the window (start ${Math.round(startDrift)}ms, end ${Math.round(endDrift)}ms, ` +
+        `limit ${MAX_EDGE_DRIFT_MS}ms) — the machine stalled at an edge`
     );
   }
   return failures;

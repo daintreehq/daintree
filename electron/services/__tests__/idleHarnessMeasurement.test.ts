@@ -3,9 +3,11 @@ import {
   checkMaterialised,
   checkRendererContinuity,
   checkWindowEvents,
+  checkWindowTiming,
   computeTreeUsage,
   cpuPercent,
   descendantsOf,
+  frozenDuring,
   parseDaemonCpu,
   parseIdleHarnessConfig,
   parsePsCpuTime,
@@ -40,7 +42,11 @@ function snap(atUs: number, ...samples: ProcessSample[]): SamplerSnapshot {
   return { atUs, processes: new Map(samples.map((sample) => [sample.pid, sample])) };
 }
 
-const NO_LABELS = new Map<number, string>();
+/** The same labels at both ends of the window. */
+function both(entries: Array<[number, string]> = []) {
+  const map = new Map(entries);
+  return { start: map, end: map };
+}
 
 function treeTotal(snapshot: SamplerSnapshot, rootPid: number): number {
   let total = 0;
@@ -152,7 +158,7 @@ describe("computeTreeUsage", () => {
         proc(11, 10, { selfNs: 25 * MS })
       ),
       rootPid: 10,
-      labels: new Map([[10, "main"]]),
+      labels: both([[10, "main"]]),
     });
     expect(usage.elapsedMs).toBe(10_000);
     expect(usage.totalCpuNs).toBe(220 * MS);
@@ -173,7 +179,7 @@ describe("computeTreeUsage", () => {
       start: snap(0, proc(10, 1), proc(11, 10, { selfNs: 10 * MS, childNs: 1_000 * MS })),
       end: snap(1_000_000, proc(10, 1), proc(11, 10, { selfNs: 30 * MS, childNs: 1_400 * MS })),
       rootPid: 10,
-      labels: new Map([
+      labels: both([
         [10, "main"],
         [11, "pty-host"],
       ]),
@@ -198,7 +204,7 @@ describe("computeTreeUsage", () => {
       start,
       end,
       rootPid: 10,
-      labels: new Map([
+      labels: both([
         [10, "main"],
         [12, "workspace-host"],
       ]),
@@ -207,7 +213,13 @@ describe("computeTreeUsage", () => {
     expect(main.reapedChildCpuNs).toBe(100 * MS);
     expect(main.reapedChildIdleWakeups).toBe(10);
     expect(usage.departed).toEqual([
-      { pid: 12, name: "proc-12", label: "workspace-host", chargedToPid: 10 },
+      {
+        pid: 12,
+        name: "proc-12",
+        label: "workspace-host",
+        chargedToPid: 10,
+        chargedThroughDeparted: false,
+      },
     ]);
     expect(usage.totalCpuNs).toBe(treeTotal(end, 10) - treeTotal(start, 10));
     expect(usage.unattributedNs).toBe(0);
@@ -222,8 +234,12 @@ describe("computeTreeUsage", () => {
       proc(13, 12, { selfNs: 20 * MS })
     );
     const end = snap(1_000_000, proc(10, 1, { childNs: 45 * MS }));
-    const usage = computeTreeUsage({ start, end, rootPid: 10, labels: NO_LABELS });
-    expect(usage.departed.map((d) => d.chargedToPid)).toEqual([10, 10]);
+    const usage = computeTreeUsage({ start, end, rootPid: 10, labels: both() });
+    expect(usage.departed.map((d) => [d.chargedToPid, d.chargedThroughDeparted])).toEqual([
+      [10, false],
+      [10, true],
+    ]);
+    expect(usage.uncertainNs).toBe(20 * MS);
     expect(usage.totalCpuNs).toBe(15 * MS);
     expect(usage.totalCpuNs).toBe(treeTotal(end, 10) - treeTotal(start, 10));
   });
@@ -235,7 +251,7 @@ describe("computeTreeUsage", () => {
       proc(10, 1, { childNs: 600 * MS }),
       proc(11, 10, { startUs: 2, selfNs: 5 * MS })
     );
-    const usage = computeTreeUsage({ start, end, rootPid: 10, labels: NO_LABELS });
+    const usage = computeTreeUsage({ start, end, rootPid: 10, labels: both() });
     const reborn = usage.processes.find((p) => p.pid === 11)!;
     expect(reborn.born).toBe(true);
     expect(reborn.cpuNs).toBe(5 * MS);
@@ -246,9 +262,76 @@ describe("computeTreeUsage", () => {
   it("keeps accounting for a process reparented out of the tree", () => {
     const start = snap(0, proc(10, 1), proc(11, 10, { selfNs: 10 * MS }));
     const end = snap(1_000_000, proc(10, 1), proc(11, 1, { selfNs: 40 * MS }));
-    const usage = computeTreeUsage({ start, end, rootPid: 10, labels: NO_LABELS });
+    const usage = computeTreeUsage({ start, end, rootPid: 10, labels: both() });
     expect(usage.processes.map((p) => p.pid).sort()).toEqual([10, 11]);
     expect(usage.totalCpuNs).toBe(30 * MS);
+  });
+
+  it("keeps accounting for what an escaped process spawned since", () => {
+    const start = snap(0, proc(10, 1), proc(11, 10, { selfNs: 10 * MS }));
+    const end = snap(
+      1_000_000,
+      proc(10, 1),
+      proc(11, 1, { selfNs: 20 * MS }),
+      proc(12, 11, { selfNs: 7 * MS })
+    );
+    const usage = computeTreeUsage({ start, end, rootPid: 10, labels: both() });
+    expect(usage.processes.map((p) => p.pid).sort()).toEqual([10, 11, 12]);
+    expect(usage.totalCpuNs).toBe(17 * MS);
+  });
+
+  it("labels each end by its own pid map, so a reused pid is not mislabelled", () => {
+    const start = snap(0, proc(10, 1), proc(11, 10, { startUs: 1 }));
+    const end = snap(1_000_000, proc(10, 1), proc(11, 10, { startUs: 2 }));
+    const usage = computeTreeUsage({
+      start,
+      end,
+      rootPid: 10,
+      labels: { start: new Map([[11, "workspace-host"]]), end: new Map([[10, "main"]]) },
+    });
+    expect(usage.departed[0]?.label).toBe("workspace-host");
+    expect(usage.processes.find((p) => p.pid === 11)?.label).toBe("main/child");
+  });
+
+  it("refuses an opening sample without the root rather than reading lifetimes", () => {
+    expect(() =>
+      computeTreeUsage({
+        start: snap(0),
+        end: snap(1, proc(10, 1, { selfNs: 9_000 * MS })),
+        rootPid: 10,
+        labels: both(),
+      })
+    ).toThrow(/missing from the opening sample/);
+  });
+
+  it("refuses a root that is a different process at each end", () => {
+    expect(() =>
+      computeTreeUsage({
+        start: snap(0, proc(10, 1, { startUs: 1 })),
+        end: snap(1, proc(10, 1, { startUs: 2 })),
+        rootPid: 10,
+        labels: both(),
+      })
+    ).toThrow(/different process/);
+  });
+
+  it("refuses samples with no elapsed time or a counter going backwards", () => {
+    expect(() =>
+      computeTreeUsage({
+        start: snap(5, proc(10, 1)),
+        end: snap(5, proc(10, 1)),
+        rootPid: 10,
+        labels: both(),
+      })
+    ).toThrow(/not later/);
+    expect(() =>
+      computeTreeUsage({
+        start: snap(0, proc(10, 1, { idleWakeups: 9 })),
+        end: snap(1, proc(10, 1, { idleWakeups: 3 })),
+        rootPid: 10,
+        labels: both(),
+      })
+    ).toThrow(/idleWakeups went backwards/);
   });
 
   it("refuses a closing sample without the root", () => {
@@ -257,7 +340,7 @@ describe("computeTreeUsage", () => {
         start: snap(0, proc(10, 1)),
         end: snap(1, proc(11, 1)),
         rootPid: 10,
-        labels: NO_LABELS,
+        labels: both(),
       })
     ).toThrow(/root pid 10/);
   });
@@ -345,6 +428,9 @@ describe("parseIdleHarnessConfig", () => {
     });
     expect(parse({ samplerPath: "" })).toHaveProperty("errors");
     expect(parse({ windowMs: -1 })).toHaveProperty("errors");
+    expect(parse({ windowMs: 0 })).toHaveProperty("errors");
+    expect(parse({ windowMs: 1_500 })).toHaveProperty("errors");
+    expect(parseIdleHarnessConfig("null")).toEqual({ errors: [expect.stringMatching(/object/)] });
   });
 });
 
@@ -357,6 +443,7 @@ function observation(over: Partial<CellObservation> = {}): CellObservation {
     ],
     liveTerminals: [7, 6, 6],
     inventoryDegraded: false,
+    windowCount: 1,
     windowVisible: true,
     windowMinimized: false,
     windowFocused: true,
@@ -402,18 +489,31 @@ describe("checkMaterialised", () => {
     ]);
   });
 
-  it("expects a blurred window and ignores an unanswered focus probe", () => {
+  it("expects a blurred window when the cell is blurred", () => {
     const config = { ...VALID_CONFIG, blurred: true };
     expect(
       checkMaterialised(
         config,
-        observation({ windowFocused: false, documentHasFocus: null }),
+        observation({ windowFocused: false, documentHasFocus: false }),
         "start"
       )
     ).toEqual([]);
     expect(checkMaterialised(config, observation({ windowFocused: true }), "start")).toContain(
       "window is focused at window start, the cell asks otherwise"
     );
+  });
+
+  it("treats missing focus evidence and a second window as failures", () => {
+    expect(
+      checkMaterialised(
+        VALID_CONFIG,
+        observation({ documentHasFocus: null, windowCount: 2 }),
+        "end"
+      )
+    ).toEqual([
+      "2 windows are open at window end; the fixture has one",
+      "active view did not answer document.hasFocus() at window end",
+    ]);
   });
 
   it("does not ask for an agent or a stream the cell does not have", () => {
@@ -447,6 +547,7 @@ describe("checkRendererContinuity", () => {
 
 describe("checkWindowEvents", () => {
   const quiet = {
+    windowStartMs: 40_000,
     windowEndMs: 100_000,
     terminalExits: 0,
     focusChanges: 0,
@@ -460,6 +561,7 @@ describe("checkWindowEvents", () => {
       checkWindowEvents({
         ...quiet,
         streamLastOutputAt: 99_500,
+        streamWorkloadCpuNs: 5 * MS,
         protectedLifecycle: [["freeze", 100_500]],
       })
     ).toEqual([]);
@@ -468,12 +570,13 @@ describe("checkWindowEvents", () => {
   it("names each event that invalidates the reading", () => {
     expect(
       checkWindowEvents({
-        windowEndMs: 100_000,
+        ...quiet,
         terminalExits: 2,
         focusChanges: 1,
         processesGone: 1,
         protectedAgentStates: ["waiting", "completed"],
         streamLastOutputAt: 90_000,
+        streamWorkloadCpuNs: 0,
         protectedLifecycle: [
           ["freeze", 50_000],
           ["resume", 51_000],
@@ -483,15 +586,87 @@ describe("checkWindowEvents", () => {
       "2 fixture terminal(s) exited inside the window",
       "window focus changed inside the window — someone used the machine",
       "a process crashed or was killed inside the window",
-      "protected agent changed state inside the window (waiting, completed)",
+      "protected agent left the active states inside the window (completed)",
       "streaming terminal had gone quiet by the end of the window",
+      "streaming workload used no CPU inside the window — it was blocked, not writing",
       "the protected view was frozen, so the freeze-exempt population was not measured",
     ]);
+  });
+
+  it("keeps an agent moving between active states", () => {
+    expect(checkWindowEvents({ ...quiet, protectedAgentStates: ["waiting", "working"] })).toEqual(
+      []
+    );
   });
 
   it("treats a protected view that did not answer as frozen", () => {
     expect(
       checkWindowEvents({ ...quiet, protectedLifecycle: "no answer — the view is frozen or gone" })
     ).toEqual(["the protected view was frozen, so the freeze-exempt population was not measured"]);
+  });
+});
+
+describe("frozenDuring", () => {
+  it("counts only frozen intervals that overlap the window", () => {
+    expect(
+      frozenDuring(
+        [
+          ["freeze", 1],
+          ["resume", 5],
+        ],
+        10,
+        20
+      )
+    ).toBe(false);
+    expect(frozenDuring([["freeze", 25]], 10, 20)).toBe(false);
+    expect(
+      frozenDuring(
+        [
+          ["freeze", 1],
+          ["resume", 12],
+        ],
+        10,
+        20
+      )
+    ).toBe(true);
+    expect(
+      frozenDuring(
+        [
+          ["freeze", 15],
+          ["resume", 16],
+        ],
+        10,
+        20
+      )
+    ).toBe(true);
+    expect(frozenDuring([["freeze", 1]], 10, 20)).toBe(true);
+    expect(
+      frozenDuring(
+        [
+          ["resume", 12],
+          ["freeze", 1],
+        ],
+        10,
+        20
+      )
+    ).toBe(true);
+  });
+});
+
+describe("checkWindowTiming", () => {
+  const nominal = { nominalStartMs: 10_000, nominalEndMs: 310_000 };
+
+  it("accepts sampling edges close to the nominal window", () => {
+    expect(
+      checkWindowTiming({ ...nominal, sampledStartMs: 10_040, sampledEndMs: 310_030 })
+    ).toEqual([]);
+  });
+
+  it("rejects an edge that stalled", () => {
+    expect(
+      checkWindowTiming({ ...nominal, sampledStartMs: 11_300, sampledEndMs: 310_000 })
+    ).toEqual([
+      "samples drifted from the window (start 1300ms, end 0ms, limit 1000ms) — the machine stalled at an edge",
+    ]);
   });
 });

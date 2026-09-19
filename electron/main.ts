@@ -358,6 +358,7 @@ if (!gotTheLock) {
   const lastActiveProjectId = readLastActiveProjectIdSync();
 
   let powerMonitorInitialized = false;
+  let idleHarnessStarted = false;
 
   async function createWindow(
     initialProjectPath?: string | null,
@@ -702,10 +703,16 @@ if (!gotTheLock) {
     // Idle harness (#12521). Started here rather than beside the freeze harness
     // in setupWindowServices: the agent-state cache the freeze-skip reads and
     // the window-focus throttle the blurred cells measure are wired just above.
-    // Loaded lazily so a normal boot never evaluates it.
-    if (isIdleHarness) {
-      void import("./services/idleHarness.js").then(({ runIdleHarnessAndExit }) =>
-        runIdleHarnessAndExit(win, pvm, appView)
+    // Loaded lazily so a normal boot never evaluates it. Once per process: a
+    // second window would build a second fixture on the same services.
+    if (isIdleHarness && !idleHarnessStarted) {
+      idleHarnessStarted = true;
+      void import("./services/idleHarness.js").then(
+        ({ runIdleHarnessAndExit }) => runIdleHarnessAndExit(win, pvm, appView),
+        (error: unknown) => {
+          console.error("[IDLE-HARNESS] FAILED — could not load the harness:", error);
+          app.exit(1);
+        }
       );
     }
 

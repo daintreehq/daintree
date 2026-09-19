@@ -9,12 +9,21 @@
  * Why native: `ps -S` is documented to fold exited children into their parent,
  * but on current macOS it does not (measured; Apple's `ps` source has the
  * addition under `#if FIXME`), so the `ps` forks the pty-host makes every few
- * milliseconds would be invisible. `proc_pid_rusage` exposes the reaped-child counters directly and
- * needs no privileges for the caller's own processes. `top` reads the same
- * wakeup counters but only for live processes, and costs far more per sample.
+ * milliseconds would be invisible. `proc_pid_rusage` exposes the reaped-child
+ * counters directly and needs no privileges for the caller's own processes.
+ * `top` reads the same wakeup counters but only for live processes, and costs
+ * far more per sample.
  *
  * `ri_*_time` is in Mach absolute-time units, which are nanoseconds on Intel
  * and 125/3 ns on Apple silicon; everything printed here is converted to ns.
+ *
+ * Zombies are listed: an exited child's counters reach its parent only when it
+ * is reaped, so dropping it until then would lose its CPU from both rows.
+ *
+ * The scan is not atomic. A process that exits and is reaped between its own
+ * row and its parent's can be counted twice or not at all; the error is
+ * bounded by that one process's lifetime CPU — milliseconds for the `ps` forks
+ * that make up nearly all churn in the tree.
  *
  * Output, tab separated:
  *   v1  <wall clock, epoch microseconds>
@@ -52,11 +61,17 @@ int main(void) {
 
   int estimate = proc_listallpids(NULL, 0);
   if (estimate <= 0) return 3;
-  int capacity = estimate + 256;
-  pid_t *pids = calloc((size_t)capacity, sizeof(pid_t));
-  if (pids == NULL) return 4;
-  int count = proc_listallpids(pids, capacity * (int)sizeof(pid_t));
-  if (count <= 0) return 5;
+  pid_t *pids = NULL;
+  int count = 0;
+  // A full buffer may have been truncated; grow until the list fits.
+  for (int capacity = estimate + 256;; capacity *= 2) {
+    free(pids);
+    pids = calloc((size_t)capacity, sizeof(pid_t));
+    if (pids == NULL) return 4;
+    count = proc_listallpids(pids, capacity * (int)sizeof(pid_t));
+    if (count <= 0) return 5;
+    if (count < capacity) break;
+  }
 
   struct timeval now;
   gettimeofday(&now, NULL);
@@ -66,8 +81,9 @@ int main(void) {
     pid_t pid = pids[i];
     if (pid <= 0) continue;
 
+    // arg 1: include zombies, which arg 0 skips.
     struct proc_bsdinfo bsd;
-    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, sizeof bsd) != (int)sizeof bsd) continue;
+    if (proc_pidinfo(pid, PROC_PIDTBSDINFO, 1, &bsd, sizeof bsd) != (int)sizeof bsd) continue;
 
     struct rusage_info_v4 usage;
     if (proc_pid_rusage(pid, RUSAGE_INFO_V4, (rusage_info_t *)&usage) != 0) continue;
