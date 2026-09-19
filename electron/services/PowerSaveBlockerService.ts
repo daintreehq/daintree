@@ -1,14 +1,45 @@
 import { powerSaveBlocker } from "electron";
 import { events } from "./events.js";
 import type { AgentState } from "../../shared/types/agent.js";
+import type { PtyClient } from "./PtyClient.js";
 
 const ACTIVE_STATES = new Set<AgentState>(["working"]);
 const SAFETY_TIMEOUT_MS = 4 * 60 * 60 * 1000; // 4 hours
+
+/**
+ * Checkpoints one acquisition may renew through before it is released
+ * regardless: three safety periods, twelve hours in all.
+ *
+ * Renewal exists because the tracked map cannot refill itself.
+ * `AgentStateService` suppresses a transition to the state a terminal is
+ * already in, so an agent that keeps working is silent after its first event,
+ * and clearing the map at four hours dropped a busy fleet's protection for the
+ * rest of the session (#12498). The cap exists because nothing observable here
+ * tells a busy agent from a wedged one — `agentState` reads `working` for both,
+ * and output timestamps count spinners and clocks as progress (#12428). So the
+ * bound is the guarantee: a leak ends at twelve hours, and a fleet still
+ * working past that is unprotected until one of its terminals transitions.
+ *
+ * Only an acquisition resets the count, and only a `working` event can
+ * acquire, so no checkpoint, prune or rebinding can extend the bound.
+ */
+const MAX_RENEWALS = 2;
+
+/**
+ * PtyClient's main-local spawn registry. `hasTerminal` turns false on exit,
+ * kill and failed spawn, and stays true across a shard-crash respawn, so a
+ * false answer means the PTY is gone — whether or not an exit event reached
+ * this service. It is synchronous, so pruning with it cannot race a
+ * transition the way a pty-host read would.
+ */
+export type TerminalRegistry = Pick<PtyClient, "hasTerminal">;
 
 export class PowerSaveBlockerService {
   private terminalStates = new Map<string, AgentState>();
   private blockerId: number | null = null;
   private safetyTimer: ReturnType<typeof setTimeout> | null = null;
+  private renewals = 0;
+  private terminalRegistry: TerminalRegistry | null = null;
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
@@ -63,14 +94,54 @@ export class PowerSaveBlockerService {
 
   private startBlocker(): void {
     this.blockerId = powerSaveBlocker.start("prevent-app-suspension");
+    this.renewals = 0;
     console.log(
       `[PowerSaveBlocker] Started blocker (id=${this.blockerId}), active terminals: ${this.getActiveCount()}`
     );
-    this.safetyTimer = setTimeout(() => {
-      console.warn("[PowerSaveBlocker] Safety timeout reached (4h), force-releasing blocker");
+    this.armSafetyTimer();
+  }
+
+  private armSafetyTimer(): void {
+    this.safetyTimer = setTimeout(() => this.onSafetyTimeout(), SAFETY_TIMEOUT_MS);
+  }
+
+  /**
+   * Without a registry there is no evidence beyond the map itself, and renewing
+   * on the map alone is the unbounded re-arm this timeout exists to prevent —
+   * so that path keeps the original four-hour release.
+   *
+   * The release clears the map rather than keeping it: a wedged `working` entry
+   * left behind would let any other terminal's event reacquire on its behalf.
+   */
+  private onSafetyTimeout(): void {
+    this.safetyTimer = null;
+    const registry = this.terminalRegistry;
+
+    if (registry === null || this.renewals >= MAX_RENEWALS) {
+      console.warn(
+        `[PowerSaveBlocker] Safety timeout reached after ${this.renewals} renewal(s), force-releasing blocker`
+      );
       this.stopBlocker();
       this.terminalStates.clear();
-    }, SAFETY_TIMEOUT_MS);
+      return;
+    }
+
+    // Armed before the registry is consulted, so a held assertion always has a
+    // checkpoint coming whatever the prune does.
+    this.renewals++;
+    this.armSafetyTimer();
+
+    for (const terminalId of this.terminalStates.keys()) {
+      if (!registry.hasTerminal(terminalId)) {
+        this.terminalStates.delete(terminalId);
+      }
+    }
+    this.recompute();
+    if (this.blockerId === null) return;
+
+    console.log(
+      `[PowerSaveBlocker] Safety checkpoint renewed blocker (${this.renewals}/${MAX_RENEWALS}), active terminals: ${this.getActiveCount()}`
+    );
   }
 
   private stopBlocker(): void {
@@ -85,6 +156,10 @@ export class PowerSaveBlockerService {
       console.log(`[PowerSaveBlocker] Stopped blocker (id=${this.blockerId})`);
       this.blockerId = null;
     }
+  }
+
+  setTerminalRegistry(registry: TerminalRegistry | null): void {
+    this.terminalRegistry = registry;
   }
 
   getActiveCount(): number {
@@ -106,6 +181,7 @@ export class PowerSaveBlockerService {
     }
     this.unsubscribers = [];
     this.terminalStates.clear();
+    this.terminalRegistry = null;
   }
 }
 
@@ -134,10 +210,19 @@ export function getPowerSaveBlockerService(): PowerSaveBlockerService {
  * The live instance is kept instead. It is a global service with no per-window
  * state: `shutdown.ts` disposes it once, and last-window-close deliberately
  * preserves globals.
+ *
+ * A supplied registry is bound to whichever instance that is, so an instance a
+ * getter created earlier still gets one; binding never touches the assertion
+ * or its renewal count.
  */
-export function initializePowerSaveBlockerService(): PowerSaveBlockerService {
+export function initializePowerSaveBlockerService(
+  terminalRegistry?: TerminalRegistry
+): PowerSaveBlockerService {
   if (!instance) {
     instance = new PowerSaveBlockerService();
+  }
+  if (terminalRegistry) {
+    instance.setTerminalRegistry(terminalRegistry);
   }
   return instance;
 }

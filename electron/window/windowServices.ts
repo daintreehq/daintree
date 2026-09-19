@@ -641,7 +641,7 @@ export async function setupWindowServices(
     }
 
     initializeAgentAvailabilityStore();
-    initializePowerSaveBlockerService();
+    initializePowerSaveBlockerService(pty);
     console.log("[MAIN] AgentAvailabilityStore and PowerSaveBlocker initialized");
 
     const processArgvCli = !getProcessArgvCliHandled()
