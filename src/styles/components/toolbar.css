@@ -354,7 +354,7 @@
  * 1. Precedence ladder. Each toolbar button renders at most one pip; the
  *    "ladder" is the conceptual ordering across surfaces, not a single
  *    arbitration site. Within ToolbarAssistantButton.tsx (describePip /
- *    describeAgentPip around line 129), the MCP health pip wins over the
+ *    describeAgentPip), the MCP health pip wins over the
  *    agent activity pip — `failed` and `starting` come from
  *    McpRuntimeSnapshot.state and surface as MCP health; `working`,
  *    `directing`, `waiting` come from AgentStateMachine and surface as the

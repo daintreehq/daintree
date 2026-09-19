@@ -83,7 +83,9 @@ export class AuditService {
   private auth401Count = 0;
   /**
    * Known {toolId, tier} combinations observed across the entire process
-   * lifetime. Seeded from hydrated records on the first `getSignals()` call.
+   * lifetime. Seeded once the ring first holds `ANOMALY_MIN_RECORDS` dispatch
+   * records — at hydrate when the persisted log already does — see
+   * `seedKnownCombinations()`.
    * Survives `clear()` — clearing the ring frees space but should not
    * re-trigger first-seen signals for combinations already observed.
    */
@@ -126,6 +128,7 @@ export class AuditService {
     }) as McpLogRecord[];
     this.records = backfilled.length > cap ? backfilled.slice(backfilled.length - cap) : backfilled;
     this.hydrated = true;
+    this.seedKnownCombinations();
   }
 
   normalizeMaxRecords(value: unknown): number {
@@ -337,6 +340,7 @@ export class AuditService {
 
   private enqueueAndTrim(record: McpLogRecord): void {
     this.records.push(record);
+    this.seedKnownCombinations();
     const cap = this.normalizeMaxRecords(this.readConfig().auditMaxRecords);
     if (this.records.length > cap) {
       const evicted = this.records.splice(0, this.records.length - cap);
@@ -387,6 +391,20 @@ export class AuditService {
   }
 
   /**
+   * Take the first-seen baseline the moment the ring can run detection, not on
+   * the first read. A read-time seed anchors the baseline to whenever someone
+   * first opens the audit log, silently absorbing every combo first used
+   * before then — nothing polls at startup to read early (#12509).
+   */
+  private seedKnownCombinations(): void {
+    if (this.knownCombinations.size > 0) return;
+    if (this.dispatchRecordCount() < ANOMALY_MIN_RECORDS) return;
+    for (const r of this.records) {
+      if (!isGrantRecord(r)) this.knownCombinations.add(`${r.toolId} ${r.tier}`);
+    }
+  }
+
+  /**
    * Compute the current anomaly signals across the dispatch ring buffer.
    *
    * `markSeen` (default `true`) governs the one stateful signal kind,
@@ -394,8 +412,9 @@ export class AuditService {
    * combo is recorded in `knownCombinations` so it fires exactly once. A passive
    * caller passes `false` to read the same signals without acknowledging them,
    * leaving the "fire once" acknowledgment to the user-facing audit log. The
-   * initial baseline seeding always runs regardless of `markSeen`, otherwise
-   * every pre-existing combo would read as first-seen on the first call. The
+   * baseline is taken when the ring reaches the detection floor, not here (see
+   * `seedKnownCombinations`),
+   * so no read — passive or not — decides what counts as pre-existing. The
    * other three kinds (latency drift, failure clustering, p95 z-score) are
    * stateless recomputations and are unaffected by `markSeen`.
    */
@@ -408,15 +427,6 @@ export class AuditService {
     if (records.length < ANOMALY_MIN_RECORDS) return [];
 
     const signals: McpAnomalySignal[] = [];
-
-    // Seed knownCombinations from all records on first call so existing
-    // combos don't fire first-seen signals retroactively.
-    const firstCall = this.knownCombinations.size === 0;
-    if (firstCall) {
-      for (const r of records) {
-        this.knownCombinations.add(`${r.toolId} ${r.tier}`);
-      }
-    }
 
     // 1. First-seen combinations — only for combos not yet in the set. A local
     // set dedupes within this call so a passive read (markSeen=false), which

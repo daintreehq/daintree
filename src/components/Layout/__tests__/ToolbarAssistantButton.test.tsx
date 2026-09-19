@@ -470,7 +470,7 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
 
   it("names the button without an Open/Close verb, whichever way the panel is toggled", () => {
     setHelpPanel({ isOpen: false, terminalId: null });
-    const { container, rerender } = render(<ToolbarAssistantButton />);
+    const { container } = render(<ToolbarAssistantButton />);
     expect(readLabels(container)).toEqual({
       tooltip: "Daintree Assistant",
       ariaLabel: "Daintree Assistant",
@@ -479,7 +479,6 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
     act(() => {
       setHelpPanel({ isOpen: true, terminalId: null });
     });
-    rerender(<ToolbarAssistantButton />);
     expect(readLabels(container)).toEqual({
       tooltip: "Daintree Assistant",
       ariaLabel: "Daintree Assistant",
@@ -491,7 +490,8 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
     mcpReadinessMock.mockReturnValue({ state: "failed", port: 0, lastError: "oops" } as never);
     setHelpPanel({ isOpen: true, terminalId: null });
 
-    const { container } = render(<ToolbarAssistantButton />);
+    const { container, queryByTestId } = render(<ToolbarAssistantButton />);
+    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("true");
     expect(readLabels(container)).toEqual({
       tooltip: "Daintree Assistant — oops",
       ariaLabel: "Daintree Assistant — oops",
@@ -502,7 +502,7 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
     setHelpPanel({ isOpen: false, terminalId: "t-tip" });
     setPanel("t-tip", "waiting");
 
-    const { container, rerender } = render(<ToolbarAssistantButton />);
+    const { container } = render(<ToolbarAssistantButton />);
     expect(readLabels(container)).toEqual({
       tooltip: "Daintree Assistant — Assistant is waiting",
       ariaLabel: "Daintree Assistant — Assistant is waiting",
@@ -512,7 +512,6 @@ describe("ToolbarAssistantButton — tooltip (#12509)", () => {
     act(() => {
       setHelpPanel({ isOpen: true, terminalId: "t-tip" });
     });
-    rerender(<ToolbarAssistantButton />);
     expect(readLabels(container)).toEqual({
       tooltip: "Daintree Assistant",
       ariaLabel: "Daintree Assistant",
