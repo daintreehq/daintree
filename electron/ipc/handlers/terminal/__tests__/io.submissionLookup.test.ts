@@ -63,10 +63,11 @@ const TERMINAL_OWNERS = new Map<string, string | null>([
 
 const getTerminalAsync = vi.fn();
 const getTerminalProjectId = vi.fn((id: string) => TERMINAL_OWNERS.get(id) ?? null);
+const getTerminalsForProjectAsync = vi.fn(async (_projectId: string): Promise<string[]> => []);
 
 function buildDeps(): HandlerDependencies {
   return {
-    ptyClient: { getTerminalAsync, getTerminalProjectId },
+    ptyClient: { getTerminalAsync, getTerminalProjectId, getTerminalsForProjectAsync },
     windowRegistry: { getByWindowId: () => undefined },
   } as unknown as HandlerDependencies;
 }
@@ -91,6 +92,7 @@ describe("terminal:get-submissions (#12337)", () => {
     markIpcSecurityReady();
     getProjectForWebContentsMock.mockImplementation((id) => VIEW_TO_PROJECT.get(id) ?? null);
     getTerminalProjectId.mockImplementation((id: string) => TERMINAL_OWNERS.get(id) ?? null);
+    getTerminalsForProjectAsync.mockResolvedValue([]);
     getTerminalAsync.mockImplementation(async (id: string, token?: string) => ({
       id,
       submission: token === undefined ? undefined : { token, phase: "pty_written", at: 7 },
@@ -124,6 +126,19 @@ describe("terminal:get-submissions (#12337)", () => {
     await expect(getSubmissions(SENDER_A, ["term-unowned"], "tok-1")).resolves.toEqual({
       "term-unowned": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
     });
+  });
+
+  it("reads a terminal main stopped tracking when the project's inventory still holds it", async () => {
+    // A natural exit drops main's spawn entry, so `getTerminalProjectId`
+    // answers null while the pane and its pty-host record live on. The
+    // project's own inventory places it rather than calling it foreign.
+    getTerminalProjectId.mockReturnValue(null);
+    getTerminalsForProjectAsync.mockResolvedValue(["term-exited"]);
+
+    await expect(getSubmissions(SENDER_A, ["term-exited"], "tok-1")).resolves.toEqual({
+      "term-exited": { status: "found", record: { token: "tok-1", phase: "pty_written", at: 7 } },
+    });
+    expect(getTerminalsForProjectAsync).toHaveBeenCalledWith("project-a");
   });
 
   it("reports a read terminal holding no record as absent, not unreadable", async () => {

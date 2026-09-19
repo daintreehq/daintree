@@ -577,6 +577,13 @@ describe("terminal.getStatus", () => {
     getSerializedStatesMock.mockResolvedValue(
       snapshotMap(Object.fromEntries(ids.map((id) => [id, linesFor(id).join("\n")])))
     );
+    // Activity rides the same call (#12495), so its bytes are part of what the
+    // tails have to fit around.
+    terminalClientMock.getOutputActivity.mockResolvedValue(
+      Object.fromEntries(
+        ids.map((id, i) => [id, { status: "read", lastOutputChangeAt: 1_700_000_000_000 + i }])
+      )
+    );
 
     const result = await callGetStatus(setupActions(), { includeOutput: { lines: 50 } });
 
@@ -584,13 +591,14 @@ describe("terminal.getStatus", () => {
       MCP_RESPONSE_TEXT_MAX_BYTES
     );
     expect(result.terminals.map((t) => t.terminalId)).toEqual(ids);
-    for (const entry of result.terminals) {
+    for (const [i, entry] of result.terminals.entries()) {
       const lines = linesFor(entry.terminalId);
       expect(entry.recentOutput).not.toBe("");
       const kept = (entry.recentOutput ?? "").split("\n");
       expect(kept).toEqual(lines.slice(-kept.length));
       expect(entry.recentOutputTruncated).toBe(true);
       expect(entry.agentState).toBe("working");
+      expect(entry.lastOutputChangeAt).toBe(1_700_000_000_000 + i);
     }
   });
 
@@ -1072,12 +1080,14 @@ describe("terminal.getStatus output activity (#12495)", () => {
     const result = await callGetStatus(setupActions(), { includeOutput: { lines: 5 } });
 
     expect(terminalClientMock.getOutputActivity).toHaveBeenCalledWith(["t1", "t2"]);
-    expect(result.terminals.map((t) => t.lastOutputChangeAt)).toEqual([5_000, 6_000]);
     for (const entry of result.terminals) expect(entry.error).toBeUndefined();
     expect(result.terminals[0]?.recentOutput).toBe("alpha");
+    // Read off the parsed result: dispatch parses against this schema, and a
+    // Zod object strips keys it does not declare.
+    const parsed = TerminalStatusResultSchema.parse(result);
+    expect(parsed.terminals.map((t) => t.lastOutputChangeAt)).toEqual([5_000, 6_000]);
     // Looked for on this call, so no longer a field the surface cannot see.
-    expect(result.unavailableFields).toEqual(["hasPty"]);
-    expect(() => TerminalStatusResultSchema.parse(result)).not.toThrow();
+    expect(parsed.unavailableFields).toEqual(["hasPty"]);
   });
 
   it("omits the key without an error when no change has been observed yet", async () => {
@@ -1114,10 +1124,25 @@ describe("terminal.getStatus output activity (#12495)", () => {
     expect(t3?.error).toBe("Output activity unavailable for this terminal");
     expect(t1).not.toHaveProperty("lastOutputChangeAt");
     expect(t3).not.toHaveProperty("lastOutputChangeAt");
-    // One bad read costs only its own row.
+    // One bad read costs only its own row, and says so there rather than
+    // taking the field away from the whole answer.
     expect(t2?.lastOutputChangeAt).toBe(42);
     expect(t2?.error).toBeUndefined();
     expect(t1?.recentOutput).toBe("a");
+    expect(result.unavailableFields).toEqual(["hasPty"]);
+  });
+
+  it("keeps the field available when every row of a completed read is unreadable", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    getSerializedStatesMock.mockResolvedValue(snapshotMap({ t1: "alpha" }));
+    terminalClientMock.getOutputActivity.mockResolvedValue({ t1: { status: "unreadable" } });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    // Per-row failures are row errors. Only a hop that failed outright makes
+    // the surface itself unable to look.
+    expect(result.terminals[0]?.error).toBe("Output activity unavailable for this terminal");
+    expect(result.unavailableFields).toEqual(["hasPty"]);
   });
 
   it("asks only about resolved PTY panels", async () => {
@@ -1152,21 +1177,32 @@ describe("terminal.getStatus output activity (#12495)", () => {
     expect(result.unavailableFields).toEqual(["hasPty"]);
   });
 
-  it("reads activity alongside serialization rather than after it", async () => {
+  it("issues the activity and output reads together rather than one after the other", async () => {
     panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
-    let release!: (value: unknown) => void;
+    // Both held open: a sequential implementation, in either order, leaves the
+    // second read unissued while the first is pending.
+    let releaseOutput!: (value: unknown) => void;
+    let releaseActivity!: (value: unknown) => void;
     getSerializedStatesMock.mockReturnValue(
       new Promise((resolve) => {
-        release = resolve;
+        releaseOutput = resolve;
+      })
+    );
+    terminalClientMock.getOutputActivity.mockReturnValue(
+      new Promise((resolve) => {
+        releaseActivity = resolve;
       })
     );
 
     const pending = callGetStatus(setupActions(), { includeOutput: {} });
     await Promise.resolve();
 
-    expect(terminalClientMock.getOutputActivity).toHaveBeenCalledWith(["t1"]);
-    release(snapshotMap({ t1: "alpha" }));
-    await expect(pending).resolves.toBeDefined();
+    expect(getSerializedStatesMock).toHaveBeenCalledTimes(1);
+    expect(terminalClientMock.getOutputActivity).toHaveBeenCalledTimes(1);
+    releaseOutput(snapshotMap({ t1: "alpha" }));
+    releaseActivity({ t1: { status: "read", lastOutputChangeAt: 3 } });
+    const result = await pending;
+    expect(result.terminals[0]).toMatchObject({ recentOutput: "alpha", lastOutputChangeAt: 3 });
   });
 
   it("keeps the tail when the activity read fails, and says the field went unobserved", async () => {
@@ -1180,6 +1216,22 @@ describe("terminal.getStatus output activity (#12495)", () => {
     expect(result.terminals[0]?.error).toContain("activity died");
     expect(result.terminals[0]).not.toHaveProperty("lastOutputChangeAt");
     expect(result.unavailableFields).toEqual(["hasPty", "lastOutputChangeAt"]);
+  });
+
+  it("contains a bridge that throws synchronously to its own field", async () => {
+    panels({ id: "t1", kind: "terminal", location: "grid", agentState: "working" });
+    getSerializedStatesMock.mockImplementation(() => {
+      throw new Error("bridge missing");
+    });
+    terminalClientMock.getOutputActivity.mockResolvedValue({
+      t1: { status: "read", lastOutputChangeAt: 8 },
+    });
+
+    const result = await callGetStatus(setupActions(), { includeOutput: {} });
+
+    expect(result.terminals[0]?.error).toBe("bridge missing");
+    expect(result.terminals[0]?.recentOutput).toBeNull();
+    expect(result.terminals[0]?.lastOutputChangeAt).toBe(8);
   });
 
   it("keeps the timestamp when only the output fetch failed", async () => {

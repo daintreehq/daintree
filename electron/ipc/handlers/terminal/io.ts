@@ -466,12 +466,16 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
    *
    * Ownership is settled before any terminal-keyed RPC is issued, mirroring the
    * viewless status reader: routing a foreign id would confirm it exists by its
-   * latency even when the payload says nothing.
+   * latency even when the payload says nothing. It uses the same two oracles
+   * too. `getTerminalProjectId` is a free main-side read, but it answers `null`
+   * for a terminal main has stopped tracking — a natural exit drops the spawn
+   * entry while the pane and its pty-host record live on — so for a
+   * project-bound sender those fall through to the project's own inventory.
    */
-  const resolveOwnedLookupIds = (
+  const resolveOwnedLookupIds = async (
     ctx: IpcContext,
     terminalIds: string[]
-  ): { uniqueIds: string[]; owned: string[] } => {
+  ): Promise<{ uniqueIds: string[]; owned: string[] }> => {
     if (!Array.isArray(terminalIds)) {
       throw new AppError({ code: "VALIDATION", message: "terminalIds must be an array" });
     }
@@ -491,8 +495,20 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     // above: an unbound window (the project picker) sits on a null project and
     // its own terminals carry no owner either, so null must match null or those
     // windows can never read back their own terminals.
-    const owned = uniqueIds.filter((id) => ptyClient.getTerminalProjectId(id) === ctx.projectId);
-    return { uniqueIds, owned };
+    const placed = new Set<string>();
+    const untracked: string[] = [];
+    for (const id of uniqueIds) {
+      const owner = ptyClient.getTerminalProjectId(id);
+      if (owner === ctx.projectId) placed.add(id);
+      // A non-null foreign owner is settled here and never routed.
+      else if (owner === null) untracked.push(id);
+    }
+    if (untracked.length > 0 && ctx.projectId !== null) {
+      // A failed inventory folds to `[]`, leaving those ids `unreadable`.
+      const inventory = new Set(await ptyClient.getTerminalsForProjectAsync(ctx.projectId));
+      for (const id of untracked) if (inventory.has(id)) placed.add(id);
+    }
+    return { uniqueIds, owned: uniqueIds.filter((id) => placed.has(id)) };
   };
 
   /**
@@ -528,7 +544,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
         message: `submissionToken must be a non-empty string of at most ${MAX_SUBMISSION_TOKEN_LENGTH} characters`,
       });
     }
-    const { uniqueIds, owned } = resolveOwnedLookupIds(ctx, terminalIds);
+    const { uniqueIds, owned } = await resolveOwnedLookupIds(ctx, terminalIds);
     const records = await Promise.all(
       owned.map((id) => ptyClient.getTerminalAsync(id, submissionToken))
     );
@@ -561,7 +577,7 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ctx: IpcContext,
     terminalIds: string[]
   ): Promise<Record<string, TerminalOutputActivityLookup>> => {
-    const { uniqueIds, owned } = resolveOwnedLookupIds(ctx, terminalIds);
+    const { uniqueIds, owned } = await resolveOwnedLookupIds(ctx, terminalIds);
     const records = await Promise.all(owned.map((id) => ptyClient.getTerminalAsync(id)));
     const out: Record<string, TerminalOutputActivityLookup> = {};
     for (const id of uniqueIds) out[id] = { status: "unreadable" };

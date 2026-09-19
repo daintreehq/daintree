@@ -355,7 +355,7 @@ export function registerTerminalQueryActions(
           })
           .optional()
           .describe(
-            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` to each entry. Off by default to keep responses small."
+            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` when observed. Off by default to keep responses small."
           ),
       })
       .optional(),
@@ -435,16 +435,18 @@ export function registerTerminalQueryActions(
         const activityIds = resolved
           .filter((r) => r.terminal !== undefined && isPtyPanel(r.terminal))
           .map((r) => r.id);
+        // Async wrappers so a bridge that throws synchronously settles as a
+        // rejection like any other failure, rather than escaping the call.
+        const readOutputs = async (): Promise<Record<string, SerializedTerminalSnapshot | null>> =>
+          idsToFetch.length > 0 ? window.electron.terminal.getSerializedStates(idsToFetch) : {};
+        const readActivity = async (): Promise<Record<string, TerminalOutputActivityLookup>> =>
+          activityIds.length > 0 ? terminalClient.getOutputActivity(activityIds) : {};
         // Independent reads, run side by side so the activity hop adds no
         // latency on top of serialization, and settled separately so either
         // can fail without costing the caller the other.
         const [outputRead, activityRead] = await Promise.allSettled([
-          idsToFetch.length > 0
-            ? window.electron.terminal.getSerializedStates(idsToFetch)
-            : Promise.resolve<Record<string, SerializedTerminalSnapshot | null>>({}),
-          activityIds.length > 0
-            ? terminalClient.getOutputActivity(activityIds)
-            : Promise.resolve<Record<string, TerminalOutputActivityLookup>>({}),
+          readOutputs(),
+          readActivity(),
         ]);
         if (outputRead.status === "fulfilled") {
           outputs = outputRead.value;

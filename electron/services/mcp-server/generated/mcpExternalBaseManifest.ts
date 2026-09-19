@@ -1482,7 +1482,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         includeOutput: {
           description:
-            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` to each entry. Off by default to keep responses small.",
+            "Opt-in. Adds `recentOutput` (last N scrollback lines) and `lastOutputChangeAt` when observed. Off by default to keep responses small.",
           type: "object",
           properties: {
             lines: {
@@ -2394,7 +2394,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot with `includeOutput` to poll without blocking; all three report `lastOutputChangeAt`, not a hang verdict. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState`.",
+      "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot with `includeOutput` to poll without blocking; all three can report `lastOutputChangeAt`, not a hang verdict. Timing out is normal and means still working. A closed terminal also reads as idle, so check `trackingState`.",
     enabled: true,
     id: "terminal.waitUntilIdle",
     inputSchema: {
@@ -2513,7 +2513,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.",
+      "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both can report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.",
     enabled: true,
     id: "terminal.waitUntilIdleBatch",
     inputSchema: {

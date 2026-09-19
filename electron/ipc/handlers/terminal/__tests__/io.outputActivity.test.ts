@@ -62,10 +62,11 @@ const TERMINAL_OWNERS = new Map<string, string | null>([
 
 const getTerminalAsync = vi.fn();
 const getTerminalProjectId = vi.fn((id: string) => TERMINAL_OWNERS.get(id) ?? null);
+const getTerminalsForProjectAsync = vi.fn(async (_projectId: string): Promise<string[]> => []);
 
 function buildDeps(): HandlerDependencies {
   return {
-    ptyClient: { getTerminalAsync, getTerminalProjectId },
+    ptyClient: { getTerminalAsync, getTerminalProjectId, getTerminalsForProjectAsync },
     windowRegistry: { getByWindowId: () => undefined },
   } as unknown as HandlerDependencies;
 }
@@ -86,6 +87,7 @@ describe("terminal:get-output-activity (#12495)", () => {
     markIpcSecurityReady();
     getProjectForWebContentsMock.mockImplementation((id) => VIEW_TO_PROJECT.get(id) ?? null);
     getTerminalProjectId.mockImplementation((id: string) => TERMINAL_OWNERS.get(id) ?? null);
+    getTerminalsForProjectAsync.mockResolvedValue([]);
     getTerminalAsync.mockImplementation(async (id: string) => ({
       id,
       lastOutputChangeAt: 5_000,
@@ -144,6 +146,36 @@ describe("terminal:get-output-activity (#12495)", () => {
     expect(getTerminalAsync).not.toHaveBeenCalled();
   });
 
+  it("reads a terminal main stopped tracking when the project's inventory still holds it", async () => {
+    // An agent that exited on its own leaves its pane and pty-host record, but
+    // main drops the spawn entry, so `getTerminalProjectId` answers null. Its
+    // screen timestamp is still there to read.
+    getTerminalProjectId.mockImplementation((id: string) =>
+      id === "term-b" ? "project-b" : id === "term-a" ? "project-a" : null
+    );
+    getTerminalsForProjectAsync.mockResolvedValue(["term-exited", "term-b"]);
+
+    const result = await getOutputActivity(SENDER_A, ["term-a", "term-exited", "term-b", "term-x"]);
+
+    expect(result).toEqual({
+      "term-a": { status: "read", lastOutputChangeAt: 5_000 },
+      "term-exited": { status: "read", lastOutputChangeAt: 5_000 },
+      // A known foreign owner is settled before the inventory is consulted,
+      // whatever the inventory says.
+      "term-b": { status: "unreadable" },
+      "term-x": { status: "unreadable" },
+    });
+    expect(getTerminalsForProjectAsync).toHaveBeenCalledTimes(1);
+    expect(getTerminalsForProjectAsync).toHaveBeenCalledWith("project-a");
+    expect(getTerminalAsync.mock.calls.map(([id]) => id)).toEqual(["term-a", "term-exited"]);
+  });
+
+  it("skips the inventory when every id is already placed", async () => {
+    await getOutputActivity(SENDER_A, ["term-a", "term-b"]);
+
+    expect(getTerminalsForProjectAsync).not.toHaveBeenCalled();
+  });
+
   it("gives an unknown id the same answer a foreign one gets", async () => {
     const foreign = await getOutputActivity(SENDER_A, ["term-b"]);
     const unknown = await getOutputActivity(SENDER_A, ["term-never-existed"]);
@@ -163,12 +195,15 @@ describe("terminal:get-output-activity (#12495)", () => {
     // …and an unbound window reads its own projectless terminal but not a
     // project-owned one.
     getProjectForWebContentsMock.mockReturnValue(null);
+    getTerminalsForProjectAsync.mockClear();
     await expect(getOutputActivity(SENDER_A, ["term-unowned", "term-a"])).resolves.toEqual({
       "term-unowned": { status: "read", lastOutputChangeAt: 5_000 },
       "term-a": { status: "unreadable" },
     });
     expect(getTerminalAsync).toHaveBeenCalledTimes(1);
     expect(getTerminalAsync).toHaveBeenCalledWith("term-unowned");
+    // An unbound sender has no project inventory to consult.
+    expect(getTerminalsForProjectAsync).not.toHaveBeenCalled();
   });
 
   it("serves each project its own terminal in the same session", async () => {
