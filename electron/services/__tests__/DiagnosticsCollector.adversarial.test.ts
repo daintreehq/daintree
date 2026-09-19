@@ -115,11 +115,22 @@ vi.mock("../HibernationService.js", () => ({
   getHibernationService: () => ({ getSnapshot: () => renderer.hibernationSnapshot }),
 }));
 
+// The published McpServerService ref. Tests install a facade over a real,
+// seeded AuditService so the section is exercised against real audit data.
+const mcp = vi.hoisted(() => ({
+  service: null as null | {
+    isEnabled: () => boolean;
+    isRunning: boolean;
+    getAuditDiagnostics: () => unknown;
+  },
+}));
+
 vi.mock("../../window/serviceRefs.js", () => ({
   getResourceProfileService: () =>
     renderer.resourceProfileSnapshot === null
       ? null
       : { getSnapshot: () => renderer.resourceProfileSnapshot },
+  getMcpServerServiceRef: () => mcp.service,
 }));
 
 type DiagnosticsCollectorModule = typeof import("../DiagnosticsCollector.js");
@@ -175,6 +186,7 @@ describe("DiagnosticsCollector adversarial", () => {
       speedLimit: 100,
       lagPressureActive: false,
     };
+    mcp.service = null;
     setDefaultExecFile();
     diagnostics = await import("../DiagnosticsCollector.js");
   });
@@ -880,5 +892,160 @@ describe("DiagnosticsCollector adversarial", () => {
     expect(msg).not.toContain("BEGIN RSA PRIVATE KEY");
     expect(msg).not.toContain("MIIEpAIBAAKCAQEA");
     expect(msg).toContain("[REDACTED]");
+  });
+
+  describe("mcpAudit section (#12508)", () => {
+    type AuditServiceInstance = InstanceType<
+      (typeof import("../mcp-server/auditLog.js"))["AuditService"]
+    >;
+
+    async function createAuditService(): Promise<AuditServiceInstance> {
+      const { AuditService } = await import("../mcp-server/auditLog.js");
+      const config: Record<string, unknown> = { auditEnabled: true, auditMaxRecords: 500 };
+      let persisted: unknown[] = [];
+      return new AuditService(
+        (patch) => Object.assign(config, patch),
+        () => config,
+        {
+          read: () => persisted,
+          write: (records) => {
+            persisted = records;
+          },
+        }
+      );
+    }
+
+    function append(
+      audit: AuditServiceInstance,
+      toolId: string,
+      opts: { tier?: "action" | "external"; failed?: boolean } = {}
+    ) {
+      audit.appendRecord({
+        toolId,
+        sessionId: "SESSION_SENTINEL",
+        tier: opts.tier ?? "action",
+        args: { prompt: "ARGS_SENTINEL" },
+        durationMs: 10,
+        outcome: opts.failed
+          ? {
+              kind: "result",
+              value: { ok: false, error: { code: "EXECUTION_ERROR", message: "boom" } },
+            }
+          : { kind: "result", value: { ok: true, result: null } },
+        argsSummary: '{"prompt":"ARGS_SENTINEL"}',
+        resultSummary: "terminal output RESULT_SENTINEL",
+      });
+    }
+
+    function installService(audit: AuditServiceInstance, running = true) {
+      mcp.service = {
+        isEnabled: () => true,
+        isRunning: running,
+        getAuditDiagnostics: () => audit.getDiagnosticsSnapshot(),
+      };
+    }
+
+    it("MCP_AUDIT_SECTION_POPULATED_FROM_AUDIT_RING", async () => {
+      const audit = await createAuditService();
+      for (let i = 0; i < 50; i++) append(audit, "files.search");
+      for (let i = 0; i < 3; i++) append(audit, "git.commit", { failed: true });
+      audit.recordAuth401();
+      installService(audit);
+
+      const { payload, sectionKeys } = await diagnostics.collectDiagnosticsWithKeys(createDeps());
+      expect(sectionKeys).toContain("mcpAudit");
+      expect(payload.mcpAudit).toMatchObject({
+        available: true,
+        serverEnabled: true,
+        serverRunning: true,
+        enabled: true,
+        dispatchRecordCount: 54,
+        anomalySuppressed: false,
+        auth401Count: 1,
+        perTool: [
+          { toolId: "files.search", callCount: 50, failureCount: 0 },
+          { toolId: "git.commit", callCount: 3, failureCount: 3 },
+          { toolId: "mcp.pre-auth", callCount: 1, failureCount: 1 },
+        ],
+      });
+      const signals = (payload.mcpAudit as { anomalySignals: Array<Record<string, unknown>> })
+        .anomalySignals;
+      expect(signals).toContainEqual(
+        expect.objectContaining({ kind: "failure-cluster", toolId: "git.commit", clusterSize: 3 })
+      );
+
+      const serialized = JSON.stringify(payload.mcpAudit);
+      expect(serialized).not.toContain("ARGS_SENTINEL");
+      expect(serialized).not.toContain("RESULT_SENTINEL");
+      expect(serialized).not.toContain("SESSION_SENTINEL");
+    });
+
+    it("MCP_AUDIT_SECTION_DOES_NOT_ACKNOWLEDGE_FIRST_SEEN_SIGNALS", async () => {
+      const audit = await createAuditService();
+      for (let i = 0; i < 50; i++) append(audit, "files.search");
+      audit.getAuditStats(); // seed the first-seen baseline
+      append(audit, "git.commit", { tier: "external" });
+      installService(audit);
+
+      await diagnostics.collectDiagnostics(createDeps());
+      await diagnostics.collectDiagnostics(createDeps());
+
+      const firstSeen = audit
+        .getAuditStats()
+        .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+      expect(firstSeen.map((s) => s.toolId)).toEqual(["git.commit"]);
+    });
+
+    it("MCP_AUDIT_SECTION_GOES_THROUGH_REDACTION", async () => {
+      const audit = await createAuditService();
+      for (let i = 0; i < 50; i++) append(audit, "files.search");
+      audit.getAuditStats(); // seed the first-seen baseline
+      // Grammar-valid ids still get the payload-wide scrub, in both the
+      // per-tool counts and the anomaly signals.
+      append(audit, "plugin.ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456");
+      // Client text outside the tool-name grammar never leaves at all.
+      append(audit, "/Users/alice/notes please summarise");
+      installService(audit);
+
+      const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+        mcpAudit: {
+          perTool: Array<{ toolId: string }>;
+          anomalySignals: Array<{ kind: string; toolId: string }>;
+        };
+      };
+      const firstSeen = payload.mcpAudit.anomalySignals.filter(
+        (s) => s.kind === "first-seen-combination"
+      );
+      expect(firstSeen).toHaveLength(2);
+      expect(payload.mcpAudit.perTool).toHaveLength(3);
+      const serialized = JSON.stringify(payload.mcpAudit);
+      expect(serialized).not.toContain("ghp_");
+      expect(serialized).not.toContain("alice");
+      expect(serialized).not.toContain("summarise");
+    });
+
+    it("MCP_AUDIT_SECTION_REPORTS_UNINITIALIZED_SERVICE", async () => {
+      const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+        mcpAudit: unknown;
+      };
+      expect(payload.mcpAudit).toEqual({ available: false, reason: "not-initialized" });
+    });
+
+    it("MCP_AUDIT_SECTION_FAILURE_CONTAINED", async () => {
+      mcp.service = {
+        isEnabled: () => true,
+        isRunning: false,
+        getAuditDiagnostics: () => {
+          throw new Error("ARGS_SENTINEL leaked through the error");
+        },
+      };
+
+      const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
+        mcpAudit: unknown;
+        metadata: unknown;
+      };
+      expect(payload.mcpAudit).toEqual({ error: "Failed to get MCP audit snapshot" });
+      expect(payload.metadata).toBeDefined();
+    });
   });
 });

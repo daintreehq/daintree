@@ -31,7 +31,7 @@ import { principalOwnerKey } from "./mcp-server/resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
 import { isTierPermitted } from "./mcp-server/tierAuth.js";
 import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
-import { AuditService } from "./mcp-server/auditLog.js";
+import { AuditService, type McpAuditDiagnosticsSnapshot } from "./mcp-server/auditLog.js";
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
 import { handleWaitUntilIdle, handleWaitUntilIdleBatch } from "./mcp-server/waitUntilIdle.js";
@@ -835,6 +835,10 @@ export class McpServerService {
 
   getAuditStats(markSeen = true): McpAuditStats {
     return this.auditService.getAuditStats(markSeen);
+  }
+
+  getAuditDiagnostics(): McpAuditDiagnosticsSnapshot {
+    return this.auditService.getDiagnosticsSnapshot();
   }
 
   clearAuditLog(): void {

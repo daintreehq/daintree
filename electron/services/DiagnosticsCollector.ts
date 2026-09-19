@@ -478,6 +478,30 @@ async function collectLifecycleLedger() {
   }
 }
 
+/**
+ * MCP audit summary: anomaly signals, the dispatch count against the
+ * suppression floor, 401s, and per-tool call/failure counts. Read through the
+ * published ref rather than importing the service, so exporting diagnostics
+ * never constructs the MCP graph and its subscriptions. The toolbar anomaly
+ * poll loads it in any session with a window, so an absent ref means MCP
+ * genuinely never loaded — not that the persisted ring is empty.
+ */
+async function collectMcpAudit() {
+  try {
+    const { getMcpServerServiceRef } = await import("../window/serviceRefs.js");
+    const svc = getMcpServerServiceRef();
+    if (!svc) return { available: false, reason: "not-initialized" };
+    return {
+      available: true,
+      serverEnabled: svc.isEnabled(),
+      serverRunning: svc.isRunning,
+      ...svc.getAuditDiagnostics(),
+    };
+  } catch {
+    return { error: "Failed to get MCP audit snapshot" };
+  }
+}
+
 async function collectLogs() {
   try {
     const entries = logBuffer.getAll();
@@ -877,6 +901,7 @@ export async function collectDiagnosticsWithKeys(
     { key: "terminals", fn: () => collectTerminals(deps.ptyClient) },
     { key: "flowControl", fn: () => collectFlowControl(deps.ptyClient) },
     { key: "lifecycleLedger", fn: collectLifecycleLedger },
+    { key: "mcpAudit", fn: collectMcpAudit },
     { key: "projectViews", fn: () => collectProjectViews(deps) },
     { key: "rendererMemory", fn: collectRendererMemory },
     { key: "memoryTrends", fn: collectMemoryTrends },

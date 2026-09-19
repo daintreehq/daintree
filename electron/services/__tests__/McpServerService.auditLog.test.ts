@@ -502,6 +502,42 @@ describe("McpServerService", () => {
       expect(turnSpy).toHaveBeenCalledWith(0);
     });
 
+    it("getAuditDiagnostics reads the owned ring passively, before the server starts (#12508)", () => {
+      const audit = service._auditService;
+      const append = (toolId: string, tier: "action" | "external") =>
+        audit.appendRecord({
+          toolId,
+          sessionId: "sess-1",
+          tier,
+          args: {},
+          durationMs: 10,
+          outcome: { kind: "result", value: { ok: true, result: null } },
+          argsSummary: "{}",
+        });
+      for (let i = 0; i < 50; i++) append("tool.a", "action");
+      service.getAuditStats(); // seed the first-seen baseline
+      append("tool.new", "external");
+
+      expect(service.isRunning).toBe(false);
+      const snapshot = service.getAuditDiagnostics();
+      expect(snapshot.dispatchRecordCount).toBe(51);
+      expect(snapshot.perTool).toEqual([
+        { toolId: "tool.a", callCount: 50, failureCount: 0 },
+        { toolId: "tool.new", callCount: 1, failureCount: 0 },
+      ]);
+      expect(snapshot.anomalySignals.map((s) => s.kind)).toContain("first-seen-combination");
+
+      // The diagnostics read left the signal for the user-facing audit log.
+      const firstSeen = service
+        .getAuditStats()
+        .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+      expect(firstSeen.map((s) => s.toolId)).toEqual(["tool.new"]);
+
+      // The server never started, so afterEach won't stop it: settle the
+      // pending debounce flush here instead of letting it land in a later test.
+      audit.flushNow();
+    });
+
     it("records a successful dispatch with redacted args and a non-empty session id", async () => {
       const dispatchMock = vi.fn((): ActionDispatchResult => ({
         ok: true,
