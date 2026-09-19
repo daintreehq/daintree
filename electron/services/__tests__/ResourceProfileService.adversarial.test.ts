@@ -1209,6 +1209,9 @@ describe("ResourceProfileService adversarial", () => {
       });
       const service = new ResourceProfileService(deps);
       service.start();
+      // start() arms the pty host with the starting profile (#12513) — that push
+      // is not a transition, so it is not part of what this test counts.
+      pty.setResourceProfile.mockClear();
 
       // High memory (+2) + speed limit 0 (+2) = 4 => efficiency, held there.
       mockGetAppMetrics.mockReturnValue([makeMetric(1300)]);
