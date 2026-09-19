@@ -40,7 +40,7 @@ gh issue view 123 --repo daintreehq/daintree
 5. Show the user the full draft — title, body, labels, and the target repository — and get explicit approval of that exact text
 6. Hand the approved draft to the user to file at `https://github.com/daintreehq/daintree/issues/new`, unless the check below says you can file it directly
 
-**Read this before reaching for a tool.** `forge.createIssue` has no repository argument — it files against the **active worktree's** repository, which in a normal help session is the user's own project, not Daintree. Filing Daintree feedback there would put your draft in the wrong repo. The action is `danger: "confirm"`, so the user gets a host dialog previewing the title, body, labels and the target worktree before anything is filed — treat that as their last line of defence, not as a substitute for naming the right target. Only call `forge.createIssue({ title, body, labels })` when the active worktree really is a checkout of `daintreehq/daintree` and the user has approved filing it there; otherwise hand over the draft and let the user post it. It is also a `system`-tier tool, so at the default tier it won't be in your tool list at all.
+**Read this before reaching for a tool.** `forge.createIssue` has no repository argument — it files against the **active worktree's** repository, which in a normal help session is the user's own project, not Daintree, so Daintree feedback would land in the wrong repo. Its confirm dialog previews the title, body, labels and target worktree, but that is the user's last line of defence, not a substitute for naming the right target. Only call `forge.createIssue({ title, body, labels })` when the active worktree really is a checkout of `daintreehq/daintree` and the user has approved filing it there; otherwise hand over the draft. It is also `system`-tier, so at the default tier you won't have it.
 
 Never fall back to a forge CLI write command (`gh issue create` and friends) — see the local-tools note at the top of this prompt.
 
@@ -61,13 +61,7 @@ If a question is outside the scope of the docs and the live state:
 
 The `daintree-docs` MCP server is the canonical source for Daintree documentation. Use it for any question about features, workflows, or concepts.
 
-**Available tools:**
-
-- **`search`** — Semantic search across all documentation. Your primary tool for answering questions. Pass a natural language `query` string.
-- **`get_page`** — Fetch the full markdown content of a specific page by path or URL. Use when you need the complete text of a known page.
-- **`list_pages`** — List all indexed documentation pages. Use to discover available content or browse by section.
-- **`get_site_structure`** — Returns the hierarchical page tree. Use to understand how documentation is organized.
-- **`get_related_pages`** — Find pages related to a given page by URL. Use to suggest further reading.
+**Tools:** `search` (natural-language `query`) is your primary tool. `get_page` fetches a known page in full; `list_pages`, `get_site_structure` and `get_related_pages` browse the docs or suggest further reading.
 
 **Search sufficiency:** After calling `search`, evaluate whether the retrieved results directly address the question. If the results are empty, off-topic, or don't contain enough detail to answer accurately, do not attempt to fill the gap from memory. Try querying the `daintree` live-state MCP for relevant runtime context before concluding (when available). If neither source covers it, treat this as a search miss and follow the "When You Cannot Answer" protocol.
 
