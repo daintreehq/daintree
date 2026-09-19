@@ -539,7 +539,12 @@ describe("a location the page got wrong", () => {
       })
     );
     await act(async () => host.select(0));
-    await screen.findByText("This file just changed — select again");
+    // The click is kept and asked for again once the page has caught up…
+    await screen.findByText("Waiting for the preview to update");
+    expect(text()).not.toContain("neighbour");
+    // …and is the user's to repeat only when the page still can't vouch for it.
+    await screen.findByText("This file just changed — select again", {}, { timeout: 4000 });
+    expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1);
     expect(text()).not.toContain("neighbour");
   });
 
@@ -1509,25 +1514,194 @@ describe("stale selections", () => {
     ).toBeNull();
   });
 
-  it("goes stale when main reports the selected file changed, and only that file", async () => {
+  const changed = (file: string) =>
+    host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
+      workspaceSessionId: "ws-1",
+      file,
+      revision: null,
+    });
+
+  /** Main mints a new selection per resolve, as the real one does. */
+  function freshSelections(): void {
+    let count = 0;
+    host.handlers.set(CHANNELS.selectionResolve, (args) => ({
+      status: "ok",
+      selection: makeSelection({
+        documentEpoch: args.documentEpoch as number,
+        selectionId: `sel-${++count}`,
+      }),
+    }));
+  }
+
+  it("proves the selection again after its file changes, and the draft follows it", async () => {
+    freshSelections();
     await mountSelected();
-    await act(async () =>
-      host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
-        workspaceSessionId: "ws-1",
-        file: "src/lib/Other.svelte",
-        revision: REVISION,
-      })
-    );
+    await act(async () => changed("src/lib/Other.svelte"));
     // A change to another file leaves this selection alone.
+    expect(host.sitePreview.reselect).not.toHaveBeenCalled();
+
+    fireEvent.change(screen.getByRole("textbox", { name: "Request for the agent" }), {
+      target: { value: "Make it green" },
+    });
+    const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send.disabled).toBe(false));
+
+    await act(async () => changed(FILE));
+    // Unproven, so it can't be sent — but nobody is told to click again yet.
+    expect(send.disabled).toBe(true);
     expect(screen.queryByText("Select again — the file changed")).toBeNull();
-    await act(async () =>
-      host.pushPlugin(PUSH_CHANNELS.sourceChanged, {
-        workspaceSessionId: "ws-1",
-        file: FILE,
-        revision: null,
+
+    // Proved again as a new selection, which the pinned draft moves to: it is
+    // sendable, and not offered its own subject as a different one.
+    await waitFor(() => expect(send.disabled).toBe(false), { timeout: 4000 });
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2);
+    expect(host.sitePreview.reselect).toHaveBeenCalledWith(
+      expect.objectContaining({
+        loc: { file: FILE, line: 6, column: 2 },
+        index: OBSERVATION.locIndex,
+        occurrence: OBSERVATION.runtimeOccurrenceId,
       })
     );
+    expect(screen.queryByRole("button", { name: "Use current selection" })).toBeNull();
+    expect(screen.queryByText("Select again — the file changed")).toBeNull();
+  });
+
+  it("refuses an element found by position when the copies at that position changed", async () => {
+    await mountSelected();
+    // A new node where the third of three cards was; now there are two.
+    host.sitePreview.reselect.mockImplementationOnce(async (request) => {
+      setTimeout(
+        () =>
+          host.select(
+            0,
+            [{ ...OBSERVATION, loc: request.loc, runtimeOccurrenceId: "occ-9", sameLocCount: 2 }],
+            "reselect"
+          ),
+        0
+      );
+      return true;
+    });
+    await act(async () => changed(FILE));
+    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
+  });
+
+  it("does not take the element for the component that was selected", async () => {
+    const site = { file: "src/lib/PricingCard.svelte", line: 3, column: 0 };
+    await mountBound();
+    await act(async () => host.select(0, [OBSERVATION], "user", { ...site, name: "PricingCard" }));
+    await screen.findByRole("region", { name: "Selected element" });
+    // The page no longer finds that invocation and answers with the element.
+    host.sitePreview.reselect.mockImplementationOnce(async (request) => {
+      setTimeout(() => host.select(0, [{ ...OBSERVATION, loc: request.loc }], "reselect"), 0);
+      return true;
+    });
+    await act(async () => changed(FILE));
+    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    expect(host.sitePreview.reselect).toHaveBeenCalledWith(
+      expect.objectContaining({ component: site })
+    );
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
+  });
+
+  it("gives the ask up when the page reloads under it", async () => {
+    await mountSelected();
+    await act(async () => changed(FILE));
+    await act(async () => host.documentReady(1));
+    await screen.findByText("Select again — the page reloaded");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1300)));
+    expect(host.sitePreview.reselect).not.toHaveBeenCalled();
+  });
+
+  it("says the file changed while browsing, and asks the page once selecting again", async () => {
+    await mountSelected();
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+    await waitFor(() => expect(host.sitePreview.setMode).toHaveBeenCalled());
+    await act(async () => changed(FILE));
+    // The page answers only in Select mode, so this one is the user's to see.
     await screen.findByText("Select again — the file changed");
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 1300)));
+    expect(host.sitePreview.reselect).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2), {
+      timeout: 4000,
+    });
+    await waitFor(() => expect(screen.queryByText("Select again — the file changed")).toBeNull());
+  });
+
+  it("stops asking, and says so, when the page never finds the element", async () => {
+    host.reselectFinds = false;
+    await mountSelected();
+    await act(async () => changed(FILE));
+    await screen.findByText("Select again — the file changed", {}, { timeout: 9000 });
+    // Bounded: one ask per settle window, then the selection is the user's.
+    expect(host.sitePreview.reselect).toHaveBeenCalledTimes(4);
+  }, 12_000);
+
+  it("goes stale, and says so, when the page answers with a different element", async () => {
+    await mountSelected();
+    host.sitePreview.reselect.mockImplementationOnce(async (request) => {
+      setTimeout(
+        () => host.select(0, [{ ...OBSERVATION, loc: request.loc, tagName: "SPAN" }], "reselect"),
+        0
+      );
+      return true;
+    });
+    await act(async () => changed(FILE));
+    await screen.findByText("Select again — the file changed", {}, { timeout: 4000 });
+    // Never resolved: what now sits at that location is not what was selected.
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
+    expect(host.sitePreview.clearSelection).toHaveBeenCalled();
+  });
+
+  it("asks for an element the page dropped before giving the selection up", async () => {
+    await mountSelected();
+    // A hot update replaces the node; the page reports its selection empty.
+    await act(async () => host.select(0, [], "document"));
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2), {
+      timeout: 4000,
+    });
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+  });
+
+  it("tells the page when the pointer has left it for the host, once per hover", async () => {
+    await mountSelected();
+    const hoverEvent = (node: typeof OBSERVATION | null) =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 2,
+        event: { type: "hoverChanged", node },
+      });
+    // Nothing hovered on the page: moving around the host is nobody's business.
+    fireEvent.pointerMove(document.body);
+    expect(host.sitePreview.clearHover).not.toHaveBeenCalled();
+
+    await act(async () => hoverEvent(OBSERVATION));
+    fireEvent.pointerMove(document.body);
+    fireEvent.pointerMove(document.body);
+    expect(host.sitePreview.clearHover).toHaveBeenCalledTimes(1);
+    expect(host.sitePreview.clearHover).toHaveBeenCalledWith({ sessionId: "session-1" });
+
+    // The page saw the pointer leave by itself: there is nothing left to tell it.
+    await act(async () => hoverEvent(OBSERVATION));
+    await act(async () => hoverEvent(null));
+    fireEvent.pointerMove(document.body);
+    expect(host.sitePreview.clearHover).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the selection, here and on the page, from the strip", async () => {
+    await mountSelected();
+    fireEvent.click(screen.getByRole("button", { name: "Deselect" }));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull()
+    );
+    expect(host.sitePreview.clearSelection).toHaveBeenCalledWith({ sessionId: "session-1" });
   });
 
   it("keys on the event's epoch when documentReady beats epoch-advanced", async () => {
@@ -1564,8 +1738,17 @@ describe("stale selections", () => {
       })
     );
     await act(async () => finish({ status: "ok", selection: makeSelection({ documentEpoch: 0 }) }));
-    await screen.findByText("Selection changed — select again");
+    // The answer paired old markup with new bytes, so it is thrown away — and
+    // the click asked for again rather than handed back.
+    await screen.findByText("Waiting for the preview to update");
     expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2), {
+      timeout: 4000,
+    });
+    await act(async () => finish({ status: "ok", selection: makeSelection({ documentEpoch: 0 }) }));
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull()
+    );
   });
 
   it("takes a newer epoch from a mode switch", async () => {
@@ -1584,7 +1767,7 @@ describe("stale selections", () => {
     await screen.findByText("Select again — the page reloaded");
   });
 
-  it("refuses to resolve a click on a file that changed moments ago, until HMR can land", async () => {
+  it("holds a click on a file that changed moments ago until HMR can land, then resolves it", async () => {
     await mountBound();
     const start = Date.now();
     const clock = vi.spyOn(Date, "now").mockReturnValue(start);
@@ -1597,12 +1780,12 @@ describe("stale selections", () => {
     );
     clock.mockReturnValue(start + 400);
     await act(async () => host.select(0));
-    await screen.findByText("This file just changed — select again");
+    await screen.findByText("Waiting for the preview to update");
     expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(0);
 
+    // No second click: the first is asked for again once the window has passed.
     clock.mockReturnValue(start + 1500);
-    await act(async () => host.select(0));
-    await screen.findByRole("textbox", { name: "Request for the agent" });
+    await screen.findByRole("textbox", { name: "Request for the agent" }, { timeout: 4000 });
     expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
   });
 

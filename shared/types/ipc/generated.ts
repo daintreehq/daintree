@@ -1651,6 +1651,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { panelId: string; adapterId: string; mode?: "browse" | "select" | undefined }];
     result: import("./sitePreview.js").SitePreviewBindingState;
   };
+  "site-preview:clear-hover": {
+    args: [payload: { sessionId: string }];
+    result: void;
+  };
   "site-preview:clear-selection": {
     args: [payload: { sessionId: string }];
     result: void;

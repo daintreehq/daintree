@@ -45,6 +45,7 @@ export function createSiteBuilderGuest(
       getMode: () => config.mode,
       reselect: () => false,
       clearSelection: () => {},
+      clearHover: () => {},
       refresh: () => {},
       dispose: () => {},
       getOverlayRoot: () => null,
@@ -748,6 +749,10 @@ export function createSiteBuilderGuest(
 
   const ACCENT = "56, 152, 236";
   const ACCENT_LIGHT = "125, 190, 255";
+  /** The label's height where the page can't be measured, and its gap from the element. */
+  const LABEL_HEIGHT = 20;
+  const LABEL_GAP = 4;
+  const LABEL_MAX_WIDTH = 320;
 
   function ensureOverlay(): void {
     if (overlayHost !== null && overlayHost.isConnected) return;
@@ -855,7 +860,10 @@ export function createSiteBuilderGuest(
     if (right <= left || bottom <= top) return;
     const box = document.createElement("div");
     const outline = kind === "selected" ? "2px" : "1px";
-    const alpha = kind === "selected" ? "0.14" : "0.08";
+    // A selection is an outline and nothing over the element: it stays up while
+    // an agent restyles what is inside it, and a tint would be mixed into the
+    // colour the user is there to judge.
+    const fill = kind === "selected" ? "transparent" : "rgba(" + ACCENT + ", 0.08)";
     style(box, [
       ["position", "fixed"],
       ["box-sizing", "border-box"],
@@ -865,7 +873,7 @@ export function createSiteBuilderGuest(
       ["width", (right - left) / transform.scale + "px"],
       ["height", (bottom - top) / transform.scale + "px"],
       ["outline", outline + " solid rgba(" + ACCENT + ", 0.9)"],
-      ["background", "rgba(" + ACCENT + ", " + alpha + ")"],
+      ["background", fill],
     ]);
     layer.appendChild(box);
   }
@@ -909,17 +917,11 @@ export function createSiteBuilderGuest(
     ]);
     label.appendChild(name);
     label.appendChild(detail);
-    // Above the element when there is room, inside its top edge when not, and
-    // never off the left or right of the viewport.
-    const above = rect.top >= 24;
-    const top = above ? finite(rect.top) - 4 : Math.max(0, finite(rect.top)) + 4;
-    const left = Math.min(Math.max(0, finite(rect.left)), Math.max(0, innerWidth - 320));
     style(label, [
       ["position", "fixed"],
       ["pointer-events", "none"],
-      ["transform", above ? "translateY(-100%)" : "none"],
-      ["left", (left - transform.originX) / transform.scale + "px"],
-      ["top", (top - transform.originY) / transform.scale + "px"],
+      ["left", "0"],
+      ["top", "0"],
       ["font", "500 11px/18px -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif"],
       ["color", "#fff"],
       ["background", "rgba(24, 24, 27, 0.94)"],
@@ -927,11 +929,32 @@ export function createSiteBuilderGuest(
       ["padding", "1px 7px"],
       ["border-radius", "5px"],
       ["white-space", "nowrap"],
-      ["max-width", "320px"],
+      ["max-width", LABEL_MAX_WIDTH + "px"],
       ["overflow", "hidden"],
       ["text-overflow", "ellipsis"],
     ]);
     layer.appendChild(label);
+    // Measured as drawn, in viewport pixels: a page that scales its body scales
+    // the label with it, and a fixed allowance put it over the element there.
+    const drawn = label.getBoundingClientRect();
+    const height = drawn.height > 0 ? finite(drawn.height) : LABEL_HEIGHT * transform.scale;
+    const width = drawn.width > 0 ? finite(drawn.width) : LABEL_MAX_WIDTH * transform.scale;
+    // Above the element when there is room, below it when not, and never off
+    // the left or right of the viewport. Inside its top edge is the last
+    // resort, for an element with no room either side: on anything smaller — a
+    // button in a header — the label covered the thing it named.
+    const room = height + LABEL_GAP;
+    const top =
+      rect.top >= room
+        ? finite(rect.top) - room
+        : innerHeight - rect.bottom >= room
+          ? finite(rect.bottom) + LABEL_GAP
+          : Math.max(0, finite(rect.top)) + LABEL_GAP;
+    const left = Math.min(Math.max(0, finite(rect.left)), Math.max(0, innerWidth - width));
+    style(label, [
+      ["left", (left - transform.originX) / transform.scale + "px"],
+      ["top", (top - transform.originY) / transform.scale + "px"],
+    ]);
   }
 
   function labelFor(node: Element): { name: string; detail: string } {
@@ -1038,21 +1061,25 @@ export function createSiteBuilderGuest(
     if (layer === null || host === null) return;
     layer.textContent = "";
     const transform = readTransform(host, overlayProbe);
-    if (hovered !== null && selection.every((entry) => entry.target !== hovered)) {
+    const hoveringSelection =
+      hovered !== null && selection.some((entry) => entry.target === hovered);
+    if (hovered !== null && !hoveringSelection) {
       drawBoxModel(layer, hovered, transform);
       drawElement(layer, hovered, "hover", transform);
-      drawLabel(layer, hovered, transform, labelFor(hovered));
     }
     for (const entry of selection) drawElement(layer, entry.target, "selected", transform);
-    const primary = selection[0];
-    if (primary !== undefined) {
-      const label = labelFor(primary.target);
+    // The label follows the pointer and leaves with it. It used to stay on the
+    // selection, where it sat over the element — or its neighbours — for as
+    // long as the selection lasted, which is the whole time an agent is
+    // changing it.
+    if (hovered !== null) {
+      const label = labelFor(hovered);
       const component = componentName(selectedFrame);
       drawLabel(
         layer,
-        primary.target,
+        hovered,
         transform,
-        selectionScope === "component" && component !== null
+        hoveringSelection && selectionScope === "component" && component !== null
           ? {
               name: component,
               detail: selection.length > 1 ? selection.length + " elements" : label.detail,
@@ -1168,8 +1195,22 @@ export function createSiteBuilderGuest(
   }
 
   function onPointerLeave(event: Event): void {
-    if (event.target !== document && event.target !== document.documentElement) return;
+    // Leaving the page, not moving within it: the root's own leave, or an
+    // `out` with nowhere it went to — which is all a page embedded in a host
+    // window is told when the pointer crosses into the host.
+    const root = event.target === document || event.target === document.documentElement;
+    const nowhere = event.type.endsWith("out") && (event as MouseEvent).relatedTarget === null;
+    if (!root && !nowhere) return;
     if (hovered === null && lastHit === null) return;
+    hovered = null;
+    hoveredMapping = null;
+    lastHit = null;
+    schedulePaint();
+    send({ type: "hoverChanged", node: null });
+  }
+
+  function clearHover(): void {
+    if (disposed || (hovered === null && lastHit === null)) return;
     hovered = null;
     hoveredMapping = null;
     lastHit = null;
@@ -1229,7 +1270,8 @@ export function createSiteBuilderGuest(
     target: Element,
     scopeNext: "element" | "component",
     frame: object | null,
-    cause: "user" | "reselect" = "user"
+    cause: "user" | "reselect" = "user",
+    reveal = true
   ): void {
     const previous = selection;
     const previousScope = selectionScope;
@@ -1246,7 +1288,7 @@ export function createSiteBuilderGuest(
       selectedFrame = previousFrame;
     }
     const first = selection[0];
-    if (first !== undefined && typeof first.target.scrollIntoView === "function") {
+    if (reveal && first !== undefined && typeof first.target.scrollIntoView === "function") {
       first.target.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
     schedulePaint();
@@ -1339,7 +1381,17 @@ export function createSiteBuilderGuest(
               identity.column === component.column
             );
           }) ?? null);
-    selectOnly(target, frame === null ? "element" : "component", frame, "reselect");
+    // A crumb widens the selection to something the user asked to see. The
+    // host asking again for what is already selected — after every hot update
+    // — must not pull the page back to an element the user scrolled away from.
+    const before = selectedFrame === null ? null : componentIdentity(selectedFrame);
+    const after = frame === null ? null : componentIdentity(frame);
+    const same =
+      (selectionScope === "component") === (frame !== null) &&
+      before?.file === after?.file &&
+      before?.line === after?.line &&
+      before?.column === after?.column;
+    selectOnly(target, frame === null ? "element" : "component", frame, "reselect", !same);
     return true;
   }
 
@@ -1472,7 +1524,9 @@ export function createSiteBuilderGuest(
     listen(window, "keydown", onKeyDown, capture, selectTeardown);
     const passiveCapture: AddEventListenerOptions = { capture: true, passive: true };
     listen(window, "pointermove", onPointerMove, passiveCapture, selectTeardown);
-    listen(document, "pointerleave", onPointerLeave, passiveCapture, selectTeardown);
+    for (const type of ["pointerleave", "mouseleave", "pointerout", "mouseout"]) {
+      listen(document, type, onPointerLeave, passiveCapture, selectTeardown);
+    }
     listen(window, "scroll", onGeometryChange, passiveCapture, selectTeardown);
     listen(window, "resize", onGeometryChange, { passive: true }, selectTeardown);
 
@@ -1775,6 +1829,7 @@ export function createSiteBuilderGuest(
     getMode: () => mode,
     reselect,
     clearSelection,
+    clearHover,
     getOverlayRoot: () => overlayRoot,
     refresh: () => {
       if (paintHandle !== 0) {

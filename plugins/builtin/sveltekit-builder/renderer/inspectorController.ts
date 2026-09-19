@@ -76,6 +76,7 @@ export interface SitePreviewApi {
   }): Promise<boolean>;
   /** Drop the page's selection without observing anything. */
   clearSelection(request: { sessionId: string }): Promise<void>;
+  clearHover(request: { sessionId: string }): Promise<void>;
   getState(request: { sessionId: string }): Promise<SitePreviewBindingState | null>;
   onEvent(callback: (payload: SitePreviewPushPayload) => void): () => void;
 }
@@ -160,6 +161,17 @@ export type SelectionState =
       /** Worktree-relative file that owns the primary node's markup, when known. */
       file: string | null;
       stale: StaleReason | null;
+      /**
+       * The page is being asked for this element again after a change, so the
+       * stale reading is provisional: a surface holds its "select again" until
+       * the answer is in.
+       */
+      reproving?: boolean;
+      /**
+       * The selections this one was proved again from, oldest first: the same
+       * element on newer bytes, which a draft pinned to one of them follows.
+       */
+      supersedes?: string[];
       /** A whole component invocation (its rendered roots) rather than one element. */
       scope: "element" | "component";
       /** For a component selection: the selected component's call site. */
@@ -174,8 +186,11 @@ export type SelectionState =
     }
   /** The document moved on before the resolve finished. */
   | { status: "lost" }
-  /** The owning file changed moments ago; the page may still show the old markup. */
-  | { status: "settling" }
+  /**
+   * The owning file changed moments ago; the page may still show the old
+   * markup. `retrying` while the click is being asked for again by itself.
+   */
+  | { status: "settling"; retrying?: boolean }
   | { status: "failed"; message: string };
 
 /**
@@ -190,7 +205,43 @@ interface Continuity {
   locIndex: number;
   /** What the page reported the element as; the reselect names it first. */
   occurrence: string;
+  /** The tag it was proved as, so an answer about a different element is refused. */
+  tagName: string;
+  /** How many copies shared its location, and the render chain above it. */
+  sameLocCount: number;
+  chain: string;
 }
+
+/** The render ancestry as one comparable value: what drew the element, from where. */
+function chainOf(node: SiteGuestNodeObservation): string {
+  return node.ancestry
+    .map((frame) => `${frame.type}@${frame.file}:${frame.line}:${frame.column}`)
+    .join(">");
+}
+
+/**
+ * A selection the page is being asked for again after a hot update. An agent's
+ * edit replaces the DOM nodes and changes the bytes the selection was proved
+ * against, so every request used to end with "select again" — for the element
+ * the user had just asked about. The identity is asked for once the page has
+ * had time to catch up, and the answer is proved against the new bytes like
+ * any pick.
+ */
+interface Reprove {
+  record: Continuity;
+  component: { file: string; line: number; column: number } | null;
+  /** The owning file changed, as opposed to the node simply leaving the page. */
+  sourceChanged: boolean;
+  attempts: number;
+  /** The page said it found it; its selection event is this reprove's answer. */
+  awaiting: boolean;
+}
+
+/** How far back a re-proved selection remembers what it replaced. */
+const SUPERSEDES_KEPT = 8;
+
+/** Asks per change before the selection is left stale for the user to redo. */
+const REPROVE_ATTEMPTS = 4;
 
 export interface InspectorIssue {
   severity: "warning" | "error";
@@ -356,6 +407,11 @@ export class InspectorController implements DevPreviewToolSession {
   private connectRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private connectAttempts = 0;
   private selectionRequest = 0;
+  private reprove: Reprove | null = null;
+  private pointerLeft: (() => void) | null = null;
+  private reproveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The reprove resolve that is out, while the state stays on the selection it is about. */
+  private quietResolve: number | null = null;
   private bufferedEvents: SitePreviewPushPayload[] = [];
   /** Files main reported changed while the current resolve was in flight. */
   private readonly changedDuringResolve = new Set<string>();
@@ -548,6 +604,7 @@ export class InspectorController implements DevPreviewToolSession {
   private closeWorkspace(): void {
     this.workspaceRequest++;
     this.continuity = null;
+    this.endReprove();
     const workspace = this.state.workspace;
     if (workspace.status === "ready") this.releaseWorkspace(workspace.workspaceSessionId);
     // Source identity belongs to the workspace that minted it.
@@ -572,6 +629,7 @@ export class InspectorController implements DevPreviewToolSession {
     if (this.recoveringWorkspace === workspaceSessionId) return;
     this.recoveringWorkspace = workspaceSessionId;
     this.selectionRequest++;
+    this.endReprove();
     this.patchState({ workspace: { status: "idle" }, selection: { status: "none" } });
     void this.openWorkspace();
   }
@@ -743,6 +801,7 @@ export class InspectorController implements DevPreviewToolSession {
       if (!this.isBoundTo(binding.sessionId)) return;
       this.noteEpoch(next.documentEpoch);
       this.patchState({ mode: next.mode, modePending: false });
+      this.resumeReprove();
     } catch (error) {
       if (!this.isBoundTo(binding.sessionId)) return;
       this.patchState({
@@ -753,6 +812,7 @@ export class InspectorController implements DevPreviewToolSession {
           message: formatErrorMessage(error, "Couldn't switch the preview mode"),
         },
       });
+      this.resumeReprove();
     }
   }
 
@@ -838,8 +898,9 @@ export class InspectorController implements DevPreviewToolSession {
     if (
       (selection.status === "ready" &&
         selection.selection.documentEpoch < epoch &&
-        selection.stale === null) ||
-      (selection.status === "observed" && selection.epoch < epoch)
+        (selection.stale === null || this.reprove !== null)) ||
+      (selection.status === "observed" && selection.epoch < epoch) ||
+      (selection.status === "settling" && this.reprove !== null)
     ) {
       Object.assign(patch, this.staleSelectionPatch("document-changed"));
     } else if (selection.status === "resolving" && selection.epoch < epoch) {
@@ -893,7 +954,8 @@ export class InspectorController implements DevPreviewToolSession {
           epoch,
           event.nodes,
           event.scope ?? "element",
-          event.component ?? null
+          event.component ?? null,
+          event.cause ?? "user"
         );
         return;
       case "runtimeIssue":
@@ -907,6 +969,7 @@ export class InspectorController implements DevPreviewToolSession {
         return;
       case "hoverChanged":
         if (event.node !== null) this.clearDisprovedMappingIssue([event.node]);
+        this.watchPointerLeaving(event.node !== null);
         return;
       case "mappingRevisionSeen":
         return;
@@ -982,15 +1045,87 @@ export class InspectorController implements DevPreviewToolSession {
     epoch: number,
     nodes: SiteGuestNodeObservation[],
     scope: "element" | "component" = "element",
-    component: PickedComponent | null = null
+    component: PickedComponent | null = null,
+    cause: "user" | "document" | "reselect" = "user"
   ): Promise<void> {
     const request = ++this.selectionRequest;
+    this.quietResolve = null;
     this.changedDuringResolve.clear();
+    // The page's answer to a reprove. It resolves behind the selection it is
+    // about, which stays on screen; only a proven answer replaces it.
+    // Only an answer that was asked for counts: a crumb pick answers through the
+    // same event, and must resolve as the user's choice it is.
+    const pending = cause === "reselect" && this.reprove?.awaiting ? this.reprove : null;
+    const reproving = pending !== null;
+    if (pending !== null) pending.awaiting = false;
     if (nodes.length === 0) {
-      // The page has nothing selected — the user cleared it (Escape, a click on
-      // nothing), or the node it was showing left the document.
+      // A node the page was showing left the document. After a hot update that
+      // is the same element drawn again, so it is asked for before it is
+      // given up.
+      if (cause === "document" && this.beginReprove(false)) return;
+      // A click being held for the page to catch up named a node the update
+      // has now replaced; that is the update it was waiting for.
+      const held = this.state.selection;
+      if (cause === "document" && held.status === "settling" && held.retrying && this.reprove) {
+        this.scheduleReprove();
+        return;
+      }
+      // The user cleared it (Escape), or there is nothing to ask for.
+      this.endReprove();
       this.continuity = null;
       this.patchState({ selection: { status: "none" } });
+      return;
+    }
+    // A pick of the user's own outranks one being asked for on their behalf.
+    if (!reproving) this.endReprove();
+    const primary = nodes[0]!;
+    /** Where a pick that can't be proved ends: said, or for a reprove, retried. */
+    const refuse = (next: SelectionState, retry: boolean): void => {
+      if (!reproving) {
+        this.patchState({ selection: next });
+        return;
+      }
+      this.quietResolve = null;
+      if (retry) this.scheduleReprove();
+      else this.failReprove();
+    };
+    /**
+     * The page hasn't caught up with a change to the file. The click is kept
+     * and asked for again once it has, rather than handed back to the user.
+     */
+    const settle = (): void => {
+      if (reproving) {
+        refuse({ status: "settling" }, true);
+        return;
+      }
+      const retrying =
+        (nodes.length === 1 || scope === "component") &&
+        primary.loc !== null &&
+        primary.locIndex !== undefined &&
+        this.startReprove({
+          record: {
+            loc: { ...primary.loc },
+            locIndex: primary.locIndex,
+            occurrence: primary.runtimeOccurrenceId,
+            tagName: primary.tagName,
+            sameLocCount: primary.sameLocCount,
+            chain: chainOf(primary),
+          },
+          component:
+            scope === "component" && component !== null
+              ? { file: component.file, line: component.line, column: component.column }
+              : null,
+          sourceChanged: true,
+          attempts: 0,
+          awaiting: false,
+        });
+      this.patchState({ selection: { status: "settling", retrying } });
+    };
+    if (pending !== null && !this.answersReprove(pending, primary, scope, component)) {
+      // Something else now sits where the element was written, or the page
+      // can no longer tell. A selection is not re-pointed at what took its
+      // place, and the page stops outlining the stand-in.
+      this.failReprove(true);
       return;
     }
     const workspace = this.state.workspace;
@@ -1000,15 +1135,11 @@ export class InspectorController implements DevPreviewToolSession {
     // an agent: the verdict is about which compiler proved the range, not about
     // what the drawer offers.
     if (workspace.status !== "ready" || binding.status !== "bound") {
-      this.patchState({
-        selection: { status: "observed", epoch, node: nodes[0]!, nodeCount: nodes.length },
-      });
+      refuse({ status: "observed", epoch, node: primary, nodeCount: nodes.length }, false);
       return;
     }
     if (!page || page.epoch !== epoch) {
-      this.patchState({
-        selection: { status: "failed", message: "The page is still loading — select again" },
-      });
+      refuse({ status: "failed", message: "The page is still loading — select again" }, true);
       return;
     }
 
@@ -1021,11 +1152,12 @@ export class InspectorController implements DevPreviewToolSession {
         : []
     );
     if (clickedFiles.some((file) => file !== null && this.changedRecently(file))) {
-      this.patchState({ selection: { status: "settling" } });
+      settle();
       return;
     }
 
-    this.patchState({ selection: { status: "resolving", epoch, requestId: request } });
+    if (reproving) this.quietResolve = request;
+    else this.patchState({ selection: { status: "resolving", epoch, requestId: request } });
     let raw: unknown;
     try {
       raw = await this.deps.invoke(CHANNELS.selectionResolve, {
@@ -1038,25 +1170,25 @@ export class InspectorController implements DevPreviewToolSession {
         nodes,
       });
     } catch (error) {
-      if (!this.isCurrentResolve(request)) return;
+      if (!this.isCurrentResolve(request, reproving)) return;
       if (isWorkspaceClosed(error)) {
+        this.endReprove();
         this.recoverClosedWorkspace(workspace.workspaceSessionId);
         return;
       }
-      this.patchState({
-        selection: {
+      refuse(
+        {
           status: "failed",
           message: formatErrorMessage(error, "Couldn't find the source for this element"),
         },
-      });
+        false
+      );
       return;
     }
-    if (!this.isCurrentResolve(request)) return;
+    if (!this.isCurrentResolve(request, reproving)) return;
     const parsed = SelectionResolveResultSchema.safeParse(raw);
     if (!parsed.success) {
-      this.patchState({
-        selection: { status: "failed", message: "Couldn't find the source for this element" },
-      });
+      refuse({ status: "failed", message: "Couldn't find the source for this element" }, false);
       return;
     }
     const result = parsed.data;
@@ -1071,17 +1203,14 @@ export class InspectorController implements DevPreviewToolSession {
         this.context.worktreePath,
         result.mismatch.file
       );
-      if (changed !== null && this.changedDuringResolve.has(changed)) {
-        this.patchState({ selection: { status: "lost" } });
+      if (
+        changed !== null &&
+        (this.changedDuringResolve.has(changed) || this.changedRecently(changed))
+      ) {
+        settle();
         return;
       }
-      if (changed !== null && this.changedRecently(changed)) {
-        this.patchState({ selection: { status: "settling" } });
-        return;
-      }
-      this.patchState({
-        selection: { status: "failed", message: mismatchMessage(result.mismatch) },
-      });
+      refuse({ status: "failed", message: mismatchMessage(result.mismatch) }, false);
       return;
     }
     if (
@@ -1090,32 +1219,38 @@ export class InspectorController implements DevPreviewToolSession {
       result.selection.documentEpoch !== epoch ||
       result.selection.workspaceSessionId !== workspace.workspaceSessionId
     ) {
-      this.patchState({ selection: { status: "lost" } });
+      refuse({ status: "lost" }, true);
       return;
     }
     const selection = result.selection;
     const file = ownerFile(selection, this.context.worktreePath);
     // The observation predates the change, but main resolved it against the
-    // newer bytes; the pairing can't be trusted, so the user selects again.
-    if (file !== null && this.changedDuringResolve.has(file)) {
-      this.patchState({ selection: { status: "lost" } });
-      return;
-    }
-    if (file !== null && this.changedRecently(file)) {
-      this.patchState({ selection: { status: "settling" } });
+    // newer bytes; the pairing can't be trusted, so it is asked for again once
+    // the page has caught up.
+    if (file !== null && (this.changedDuringResolve.has(file) || this.changedRecently(file))) {
+      settle();
       return;
     }
     const after = selection.nodes[0]?.definition ?? null;
     const location = after?.location ?? null;
-    const pickedOccurrence = nodes[0]?.locIndex;
+    const pickedOccurrence = primary.locIndex;
     this.continuity =
       location !== null && pickedOccurrence !== undefined
         ? {
             loc: { ...location },
             locIndex: pickedOccurrence,
-            occurrence: nodes[0]!.runtimeOccurrenceId,
+            occurrence: primary.runtimeOccurrenceId,
+            tagName: primary.tagName,
+            sameLocCount: primary.sameLocCount,
+            chain: chainOf(primary),
           }
         : null;
+    const before = this.state.selection;
+    const supersedes =
+      reproving && before.status === "ready"
+        ? [...(before.supersedes ?? []), before.selection.selectionId].slice(-SUPERSEDES_KEPT)
+        : undefined;
+    this.endReprove();
     this.patchState({
       selection: {
         status: "ready",
@@ -1126,10 +1261,247 @@ export class InspectorController implements DevPreviewToolSession {
         component,
         definitions: null,
         revisions: null,
+        ...(supersedes ? { supersedes } : {}),
       },
       selectionGeneration: this.state.selectionGeneration + 1,
     });
     void this.resolveDefinitions(selection, component);
+  }
+
+  /* ------------------------------------------------------------------------ */
+  /* Proving a selection again                                                */
+  /* ------------------------------------------------------------------------ */
+
+  /**
+   * Ask the page again for the ready selection, which a change has just put in
+   * doubt. It is marked stale either way — a request must not cite it until it
+   * is proved — but as provisional, so no surface asks the user to redo a click
+   * the page may be able to answer itself. False when there is nothing to ask
+   * for: no ready selection, or one the page could not place.
+   */
+  private beginReprove(sourceChanged: boolean): boolean {
+    const selection = this.state.selection;
+    const record = this.continuity;
+    if (selection.status !== "ready" || record === null) return false;
+    // A selection the preview dropped or the page reloaded past is not this
+    // page's to answer for.
+    if (selection.stale !== null && this.reprove === null) return false;
+    // The page is asked for one element, or one component's roots; a hand-built
+    // set of several would come back as its first.
+    if (selection.selection.nodes.length > 1 && selection.scope !== "component") return false;
+    const picked = selection.scope === "component" ? selection.component : null;
+    const started = this.startReprove({
+      record,
+      component: picked ? { file: picked.file, line: picked.line, column: picked.column } : null,
+      sourceChanged: sourceChanged || (this.reprove?.sourceChanged ?? false),
+      attempts: 0,
+      awaiting: false,
+    });
+    if (!started) return false;
+    this.patchState({
+      selection: {
+        ...selection,
+        stale: selection.stale ?? (sourceChanged ? "source-changed" : "document-changed"),
+        // In Browse the ask waits for the user, so the notice is theirs to see.
+        reproving: this.state.mode === "select",
+      },
+    });
+    return true;
+  }
+
+  /**
+   * Whether the page's answer is the element that was proved. The same node
+   * (its occurrence id) is; one found again by position is only when nothing
+   * about its position's meaning moved — same tag, same number of copies at
+   * that location, same render chain — and a component selection must come
+   * back as that component, not as the element it was reached through. What
+   * this cannot see is a same-tag element written into the exact line and
+   * column the original was pushed out of.
+   */
+  private answersReprove(
+    reprove: Reprove,
+    node: SiteGuestNodeObservation,
+    scope: "element" | "component",
+    component: PickedComponent | null
+  ): boolean {
+    const wanted = reprove.component;
+    if (wanted !== null) {
+      if (scope !== "component" || component === null) return false;
+      if (
+        component.file !== wanted.file ||
+        component.line !== wanted.line ||
+        component.column !== wanted.column
+      ) {
+        return false;
+      }
+    } else if (scope !== "element") {
+      return false;
+    }
+    if (node.tagName !== reprove.record.tagName) return false;
+    if (node.runtimeOccurrenceId === reprove.record.occurrence) return true;
+    return (
+      node.sameLocCount === reprove.record.sameLocCount && chainOf(node) === reprove.record.chain
+    );
+  }
+
+  /** Mode has settled: an ask parked in Browse goes out, one in Select shows as waiting again. */
+  private resumeReprove(): void {
+    if (this.reprove === null) return;
+    const selection = this.state.selection;
+    const asking = this.state.mode === "select";
+    if (selection.status === "ready" && selection.stale !== null) {
+      this.patchState({ selection: { ...selection, reproving: asking } });
+    }
+    if (asking) this.scheduleReprove();
+  }
+
+  private startReprove(reprove: Reprove): boolean {
+    if (this.disposed || this.state.binding.status !== "bound") return false;
+    this.reprove = reprove;
+    this.scheduleReprove();
+    return true;
+  }
+
+  /** One settle window from now; every further change pushes it back. */
+  private scheduleReprove(): void {
+    if (this.reproveTimer !== null) clearTimeout(this.reproveTimer);
+    this.reproveTimer = setTimeout(() => {
+      this.reproveTimer = null;
+      void this.attemptReprove();
+    }, HMR_SETTLE_MS);
+  }
+
+  private async attemptReprove(): Promise<void> {
+    const reprove = this.reprove;
+    const binding = this.state.binding;
+    if (this.disposed || reprove === null) return;
+    if (binding.status !== "bound") {
+      this.failReprove();
+      return;
+    }
+    // The page answers only in Select mode; the ask waits for it to come back.
+    if (this.state.mode !== "select" || this.state.modePending) return;
+    // An answer is still being resolved: this firing is only its deadline.
+    if (this.quietResolve !== null) {
+      this.scheduleReprove();
+      return;
+    }
+    if (reprove.attempts >= REPROVE_ATTEMPTS) {
+      this.failReprove();
+      return;
+    }
+    reprove.attempts += 1;
+    reprove.awaiting = true;
+    let found: boolean;
+    try {
+      found = await this.deps.sitePreview.reselect({
+        sessionId: binding.sessionId,
+        loc: reprove.record.loc,
+        index: reprove.record.locIndex,
+        occurrence: reprove.record.occurrence,
+        ...(reprove.component ? { component: reprove.component } : {}),
+      });
+    } catch {
+      found = false;
+    }
+    if (this.reprove !== reprove) return;
+    if (!found) reprove.awaiting = false;
+    // Found: the page reports it as a selection, which resolves as any pick
+    // does — and if that report never arrives, this is its deadline. Not
+    // found: the update may simply not have landed yet.
+    if (this.reproveTimer === null) this.scheduleReprove();
+  }
+
+  /**
+   * The page could not vouch for it: the selection stays stale, and now says
+   * so. `standIn` when the page answered with some other element, which it is
+   * then outlining.
+   */
+  private failReprove(standIn = false): void {
+    const reprove = this.reprove;
+    this.endReprove();
+    if (reprove === null) return;
+    const selection = this.state.selection;
+    const binding = this.state.binding;
+    if (standIn && binding.status === "bound") {
+      void this.deps.sitePreview
+        .clearSelection({ sessionId: binding.sessionId })
+        .catch(() => undefined);
+    }
+    if (selection.status === "settling") {
+      this.patchState({ selection: { status: "settling" } });
+      return;
+    }
+    if (selection.status !== "ready") return;
+    if (!reprove.sourceChanged) {
+      // Nothing was edited; the element just left the page.
+      this.continuity = null;
+      this.patchState({ selection: { status: "none" } });
+      return;
+    }
+    this.patchState({ selection: { ...selection, reproving: false } });
+  }
+
+  /**
+   * The page or the preview the ask was for is gone: a reload mints new
+   * occurrence ids, and a detached preview answers nothing.
+   */
+  private abandonReprove(): void {
+    if (this.reprove === null) return;
+    this.selectionRequest++;
+    this.endReprove();
+    const selection = this.state.selection;
+    if (selection.status === "settling") this.patchState({ selection: { status: "settling" } });
+  }
+
+  /**
+   * The page is not reliably told when the pointer crosses into the host — it
+   * can get no leave, out or move at all — so its hover label stayed up over
+   * the page for as long as the pointer was in the drawer. The host does know:
+   * a pointer event in this document is a pointer that is not over the
+   * preview. One listener while the page is hovering something, one call.
+   */
+  private watchPointerLeaving(hovering: boolean): void {
+    if (typeof document === "undefined") return;
+    if (!hovering || this.disposed) {
+      if (this.pointerLeft !== null) {
+        document.removeEventListener("pointermove", this.pointerLeft, true);
+      }
+      this.pointerLeft = null;
+      return;
+    }
+    if (this.pointerLeft !== null) return;
+    const left = (): void => {
+      document.removeEventListener("pointermove", left, true);
+      if (this.pointerLeft === left) this.pointerLeft = null;
+      const binding = this.state.binding;
+      if (binding.status !== "bound") return;
+      void this.deps.sitePreview
+        .clearHover({ sessionId: binding.sessionId })
+        .catch(() => undefined);
+    };
+    this.pointerLeft = left;
+    document.addEventListener("pointermove", left, true);
+  }
+
+  private endReprove(): void {
+    if (this.reproveTimer !== null) clearTimeout(this.reproveTimer);
+    this.reproveTimer = null;
+    this.reprove = null;
+    this.quietResolve = null;
+  }
+
+  /** Drop the selection, here and on the page. */
+  async clearSelection(): Promise<void> {
+    this.selectionRequest++;
+    this.endReprove();
+    this.continuity = null;
+    this.patchState({ selection: { status: "none" } });
+    const binding = this.state.binding;
+    if (binding.status !== "bound") return;
+    await this.deps.sitePreview
+      .clearSelection({ sessionId: binding.sessionId })
+      .catch(() => undefined);
   }
 
   private async resolveDefinitions(
@@ -1273,23 +1645,24 @@ export class InspectorController implements DevPreviewToolSession {
     this.recentChanges.set(file, this.deps.now());
     // A resolve that is out when a change lands must be invalidated here,
     // however long it then takes.
-    if (this.state.selection.status === "resolving") this.changedDuringResolve.add(file);
+    if (this.state.selection.status === "resolving" || this.quietResolve !== null) {
+      this.changedDuringResolve.add(file);
+    }
   }
 
-  private isCurrentResolve(request: number): boolean {
+  private isCurrentResolve(request: number, quiet = false): boolean {
+    if (request !== this.selectionRequest) return false;
+    if (quiet) return this.quietResolve === request && this.reprove !== null;
     const selection = this.state.selection;
-    return (
-      request === this.selectionRequest &&
-      selection.status === "resolving" &&
-      selection.requestId === request
-    );
+    return selection.status === "resolving" && selection.requestId === request;
   }
 
   private staleSelectionPatch(reason: StaleReason): Partial<InspectorState> {
+    if (reason !== "source-changed") this.abandonReprove();
     const selection = this.state.selection;
     const patch: Partial<InspectorState> = {};
-    if (selection.status === "ready" && selection.stale === null) {
-      patch.selection = { ...selection, stale: reason };
+    if (selection.status === "ready" && (selection.stale === null || selection.reproving)) {
+      patch.selection = { ...selection, stale: reason, reproving: false };
     } else if (selection.status === "resolving") {
       this.selectionRequest++;
       patch.selection = { status: "lost" };
@@ -1310,7 +1683,10 @@ export class InspectorController implements DevPreviewToolSession {
     this.noteChanged(push.file);
     const selection = this.state.selection;
     if (selection.status === "ready" && selection.file === push.file) {
-      this.patchState(this.staleSelectionPatch("source-changed"));
+      if (!this.beginReprove(true)) this.patchState(this.staleSelectionPatch("source-changed"));
+    } else if (this.reprove !== null && this.reproveTimer !== null) {
+      // Still being written: wait out this change too.
+      this.scheduleReprove();
     }
   }
 
@@ -1429,6 +1805,8 @@ export class InspectorController implements DevPreviewToolSession {
     forgetComposerMemories(this.panelId);
     this.clearReattach();
     this.clearConnectRetry();
+    this.endReprove();
+    this.watchPointerLeaving(false);
     this.bindRequest++;
     const binding = this.state.binding;
     if (binding.status === "bound") {

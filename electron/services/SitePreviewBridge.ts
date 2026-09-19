@@ -48,6 +48,7 @@ import {
   buildDisposeSource,
   buildGuestRuntimeSource,
   buildModeUpdateSource,
+  buildClearHoverSource,
   buildClearSelectionSource,
   buildReselectSource,
 } from "./sitePreview/guestRuntime.js";
@@ -566,6 +567,24 @@ export class SitePreviewBridge {
     if (!wc) return;
     await this.send(wc, "Runtime.evaluate", {
       expression: buildClearSelectionSource(),
+      timeout: GUEST_EVALUATE_TIMEOUT_MS,
+    });
+  }
+
+  /** The pointer left the preview for the host; the guest stops drawing what it hovered. */
+  async clearHover(projectId: string, sessionId: string): Promise<void> {
+    const binding = this.bindings.get(sessionId);
+    if (!binding || binding.projectId !== projectId) {
+      throw new AppError({
+        code: "NOT_FOUND",
+        message: "No site preview binding for that session",
+        context: { sessionId },
+      });
+    }
+    const wc = this.deps.getWebContents(binding.webContentsId);
+    if (!wc) return;
+    await this.send(wc, "Runtime.evaluate", {
+      expression: buildClearHoverSource(),
       timeout: GUEST_EVALUATE_TIMEOUT_MS,
     });
   }

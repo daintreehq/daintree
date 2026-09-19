@@ -162,6 +162,7 @@ export function createFakeHost() {
       }
     ),
     clearSelection: vi.fn(async (_request: { sessionId: string }) => undefined),
+    clearHover: vi.fn(async (_request: { sessionId: string }) => undefined),
     getState: vi.fn(async (_request: { sessionId: string }) => null),
     onEvent: vi.fn((callback: (payload: SitePreviewPushPayload) => void) => {
       previewListeners.add(callback);

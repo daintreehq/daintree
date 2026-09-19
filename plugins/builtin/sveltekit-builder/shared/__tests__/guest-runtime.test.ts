@@ -670,6 +670,129 @@ describe("overlay", () => {
     expect(document.body.querySelector("#hero")!.nextElementSibling).toBe(host);
   });
 
+  function labels(): HTMLElement[] {
+    const root = handle!.getOverlayRoot()!;
+    return Array.from(root.querySelectorAll<HTMLElement>("div")).filter(
+      (node) => node.firstElementChild?.tagName === "SPAN"
+    );
+  }
+
+  /** Boxes drawn as a selection: the heavier outline, and nothing laid over the element. */
+  function selectedBoxes(): HTMLElement[] {
+    const root = handle!.getOverlayRoot()!;
+    return Array.from(root.querySelectorAll<HTMLElement>("div")).filter((node) =>
+      node.style.outline.startsWith("2px")
+    );
+  }
+
+  function hover(node: Element): void {
+    node.dispatchEvent(new MouseEvent("pointermove", { bubbles: true, composed: true }));
+    handle!.refresh();
+  }
+
+  it("labels what the pointer is on, and nothing once it has left", () => {
+    document.body.innerHTML = '<a id="dl">Download</a><p id="other">text</p>';
+    const button = document.body.querySelector("#dl")!;
+    const other = document.body.querySelector("#other")!;
+    setMeta(button, loc(12));
+    setMeta(other, loc(13));
+    button.getBoundingClientRect = () => new DOMRect(130, 60, 111, 32);
+    install("select");
+
+    hover(button);
+    click(button);
+    handle!.refresh();
+    expect(labels().map((label) => label.textContent)).toEqual([expect.stringContaining("a#dl")]);
+
+    // The selection stays outlined; its label does not stay sat on the page.
+    hover(other);
+    expect(labels().map((label) => label.textContent)).toEqual([
+      expect.stringContaining("p#other"),
+    ]);
+    document.dispatchEvent(new MouseEvent("pointerleave"));
+    handle!.refresh();
+    expect(labels()).toEqual([]);
+    expect(selectedBoxes()).toHaveLength(1);
+    expect(selectedBoxes()[0]!.style.background).toBe("transparent");
+  });
+
+  it("drops the label when the pointer crosses into the host window", () => {
+    document.body.innerHTML = '<a id="dl">Download</a><p id="other">text</p>';
+    const button = document.body.querySelector("#dl")!;
+    setMeta(button, loc(12));
+    setMeta(document.body.querySelector("#other")!, loc(13));
+    install("select");
+    hover(button);
+    expect(labels()).toHaveLength(1);
+
+    // Moving between two elements of the page is not leaving it.
+    button.dispatchEvent(
+      new MouseEvent("pointerout", {
+        bubbles: true,
+        relatedTarget: document.body.querySelector("#other"),
+      })
+    );
+    handle!.refresh();
+    expect(labels()).toHaveLength(1);
+
+    // An embedded page gets no leave on its root, only an `out` to nowhere.
+    button.dispatchEvent(new MouseEvent("pointerout", { bubbles: true, relatedTarget: null }));
+    handle!.refresh();
+    expect(labels()).toEqual([]);
+  });
+
+  it("drops the label when the host says the pointer has left, and says so once", () => {
+    document.body.innerHTML = '<a id="dl">Download</a>';
+    const button = document.body.querySelector("#dl")!;
+    setMeta(button, loc(12));
+    const runtime = install("select");
+    hover(button);
+    expect(labels()).toHaveLength(1);
+
+    runtime.clearHover();
+    runtime.clearHover();
+    runtime.refresh();
+    expect(labels()).toEqual([]);
+    const hovers = events("hoverChanged");
+    expect(
+      hovers.map((event) => (event.type === "hoverChanged" ? event.node === null : null))
+    ).toEqual([false, true]);
+    // The same element is reported again when the pointer comes back to it.
+    hover(button);
+    expect(labels()).toHaveLength(1);
+  });
+
+  it("puts the label under an element with no room above it, never over it", () => {
+    document.body.innerHTML = '<a id="dl">Download</a>';
+    const button = document.body.querySelector("#dl")!;
+    setMeta(button, loc(12));
+    // A button in a header: 8px from the top of the viewport, 32px tall.
+    button.getBoundingClientRect = () => new DOMRect(130, 8, 111, 32);
+    install("select");
+    hover(button);
+
+    const [label] = labels();
+    expect(parseFloat(label!.style.top)).toBeGreaterThanOrEqual(40);
+  });
+
+  it("measures the label as the page drew it, so a scaled page still clears the element", () => {
+    document.body.innerHTML = '<a id="dl">Download</a>';
+    const button = document.body.querySelector("#dl")!;
+    setMeta(button, loc(12));
+    // Room above for the label as designed, but not as this page draws it:
+    // twice the height. (The probe reads the same rect: 100 wide is unscaled.)
+    button.getBoundingClientRect = () => new DOMRect(130, 30, 111, 32);
+    const measure = vi
+      .spyOn(HTMLDivElement.prototype, "getBoundingClientRect")
+      .mockReturnValue(new DOMRect(0, 0, 100, 40));
+    install("select");
+    hover(button);
+    measure.mockRestore();
+
+    const [label] = labels();
+    expect(parseFloat(label!.style.top)).toBeGreaterThanOrEqual(62);
+  });
+
   it("goes away with the mode and with dispose", () => {
     const host = paintedOverlay();
     handle!.setMode("browse");
@@ -998,6 +1121,25 @@ describe("keyboard traversal and component selection", () => {
     // A call site the element isn't inside is not a component to keep.
     runtime.reselect(loc(5, 0, "src/lib/Card.svelte"), 1, { ...callSite, line: 99 });
     expect(lastScope()).toBeUndefined();
+  });
+
+  it("brings a crumb's component into view, but not a selection it is only asked for again", () => {
+    renderCards();
+    const runtime = install("select");
+    const reveal = vi.fn();
+    Element.prototype.scrollIntoView = reveal;
+    try {
+      const callSite = { file: "src/routes/+page.svelte", line: 6, column: 6 };
+      const card = loc(5, 0, "src/lib/Card.svelte");
+      // From nothing to a component: a pick, which the user asked to see.
+      expect(runtime.reselect(card, 1, callSite)).toBe(true);
+      expect(reveal).toHaveBeenCalledTimes(1);
+      // The same component again, as after a hot update: the page stays put.
+      expect(runtime.reselect(card, 1, callSite)).toBe(true);
+      expect(reveal).toHaveBeenCalledTimes(1);
+    } finally {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView;
+    }
   });
 
   it("widens to the invocation that drew the element, not every card from that line", () => {
