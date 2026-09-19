@@ -63,12 +63,18 @@ describe("buildAgentLaunchContext (#12486)", () => {
     expect(context.activeWorktreeIsMain).toBeUndefined();
   });
 
-  it("keeps the live worktree's id when the spawn names none", () => {
+  it("carries no worktree identity when the spawn names none", () => {
+    // A pane filed to no worktree must fall back to the view's live selection
+    // per dispatch, not replay whichever worktree happened to be selected when
+    // it launched — a worktree it has no relationship with.
     const context = buildAgentLaunchContext({ launchAgentId: "claude", terminalId: "pane-1" })!;
 
-    expect(context.activeWorktreeId).toBe("wt-selected");
-    expect(context.focusedWorktreeId).toBe("wt-selected");
+    expect("activeWorktreeId" in context).toBe(false);
+    expect("focusedWorktreeId" in context).toBe(false);
+    expect(context.activeWorktreeName).toBeUndefined();
     expect(context.activeWorktreePath).toBeUndefined();
+    expect(context.activeWorktreeBranch).toBeUndefined();
+    expect(context.activeWorktreeIsMain).toBeUndefined();
   });
 
   it("makes the pane itself the focused terminal", () => {

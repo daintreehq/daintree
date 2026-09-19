@@ -44,10 +44,15 @@ export function buildAgentLaunchContext(input: {
     activeWorktreePath: _activeWorktreePath,
     activeWorktreeBranch: _activeWorktreeBranch,
     activeWorktreeIsMain: _activeWorktreeIsMain,
+    activeWorktreeId: _activeWorktreeId,
+    focusedWorktreeId: _focusedWorktreeId,
     ...live
   } = getActionContext();
   return {
     ...live,
+    // A pane filed to no worktree carries no worktree identity at all: keeping
+    // the live ids would replay whatever was selected at launch for its life,
+    // instead of falling back to the view's current selection.
     ...(input.worktreeId !== undefined
       ? { activeWorktreeId: input.worktreeId, focusedWorktreeId: input.worktreeId }
       : {}),
