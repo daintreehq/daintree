@@ -1637,3 +1637,130 @@ describe("reselect by occurrence", () => {
     expect(lastSelection()[0]?.label).toContain("h1");
   });
 });
+
+describe("a hostile page", () => {
+  const PAGE = { type: "component", file: "root.svelte", line: 1, column: 0, componentTag: "Page" };
+
+  it("starts its counters over rather than trust a resume state the page seeded", () => {
+    // The carrier is a page-writable global. A string counter there would grow
+    // every occurrence id past the host's 128-character limit, and every
+    // observation built on one would be dropped without a word.
+    scope[HANDLE + ".state"] = { documentEpoch: 3, sequence: 0, occurrence: "A".repeat(200) };
+    document.body.innerHTML = "<b></b>";
+    const b = document.body.querySelector("b")!;
+    setMeta(b, loc(12), PAGE);
+    install("select");
+
+    click(b);
+
+    const id = lastSelection()[0]!.runtimeOccurrenceId;
+    expect(id).toBe("occ-1");
+    expect(id.length).toBeLessThanOrEqual(128);
+  });
+
+  it("carries a well-formed resume state, and drops one from another document", () => {
+    scope[HANDLE + ".state"] = { documentEpoch: 3, sequence: 0, occurrence: 41 };
+    document.body.innerHTML = "<b></b>";
+    setMeta(document.body.querySelector("b")!, loc(12), PAGE);
+    install("select");
+    click(document.body.querySelector("b")!);
+    expect(lastSelection()[0]!.runtimeOccurrenceId).toBe("occ-42");
+
+    handle?.dispose();
+    handle = null;
+    envelopes = [];
+    // The epoch the guest was booted with is 3, so a carry claiming 2 is a
+    // different document's and starts over.
+    scope[HANDLE + ".state"] = { documentEpoch: 2, sequence: 0, occurrence: 41 };
+    install("select");
+    click(document.body.querySelector("b")!);
+    expect(lastSelection()[0]!.runtimeOccurrenceId).toBe("occ-1");
+  });
+
+  it("reads through a throwing `__svelte_meta` getter on the element it is asked about", () => {
+    document.body.innerHTML = '<div id="host"><span id="hostile">x</span></div>';
+    setMeta(document.body.querySelector("#host")!, loc(9), PAGE);
+    const hostile = document.body.querySelector("#hostile")!;
+    Object.defineProperty(hostile, "__svelte_meta", {
+      configurable: true,
+      get() {
+        throw new Error("denied");
+      },
+    });
+    install("select");
+
+    expect(() => click(hostile)).not.toThrow();
+    // Unreadable is unstamped: the hit carries no location of its own, and is
+    // placed against the nearest ancestor whose stamp does read.
+    expect(lastSelection()[0]?.loc).toBe(null);
+    expect(lastSelection()[0]?.structure?.file).toBe(loc(9).file);
+  });
+
+  it("reads through a stamp whose own fields throw", () => {
+    document.body.innerHTML = "<b></b>";
+    const b = document.body.querySelector("b")!;
+    (b as unknown as { __svelte_meta: unknown }).__svelte_meta = {
+      get loc() {
+        throw new Error("denied");
+      },
+      get parent() {
+        throw new Error("denied");
+      },
+    };
+    install("select");
+
+    expect(() => click(b)).not.toThrow();
+    expect(lastSelection()[0]?.loc).toBe(null);
+    expect(lastSelection()[0]?.ancestry).toEqual([]);
+  });
+
+  it("sweeps the document once for a location, however many elements are asked about", () => {
+    document.body.innerHTML = ['<ul><li id="a">1</li><li id="b">2</li><li id="c">3</li></ul>'].join(
+      ""
+    );
+    for (const id of ["a", "b", "c"]) setMeta(document.body.querySelector("#" + id)!, loc(7), PAGE);
+    install("select");
+
+    const sweeps = vi.spyOn(document, "getElementsByTagName");
+    try {
+      click(document.body.querySelector("#a")!);
+      click(document.body.querySelector("#b")!);
+      click(document.body.querySelector("#c")!);
+
+      expect(sweeps.mock.calls.filter((call) => call[0] === "*")).toHaveLength(1);
+    } finally {
+      sweeps.mockRestore();
+    }
+    // The count and each element's place in it come off that one sweep.
+    expect(lastSelection()[0]?.sameLocCount).toBe(3);
+    expect(lastSelection()[0]?.locIndex).toBe(2);
+  });
+
+  it("stops sweeping the document once the audit and the probe have both answered", () => {
+    vi.useFakeTimers();
+    try {
+      document.body.innerHTML = "<main><p>plain</p></main>";
+      Object.defineProperty(document, "readyState", { value: "complete", configurable: true });
+      const runtime = install("select");
+      vi.advanceTimersByTime(3_000);
+      expect(events("runtimeIssue")).toEqual([expect.objectContaining({ code: "not-dev-build" })]);
+
+      // The first look after the verdict spends the probe's one-shot; on a
+      // production build in Select mode every later one used to sweep the whole
+      // document again, for every mutation batch, forever.
+      runtime.setMode("browse");
+      runtime.setMode("select");
+
+      const sweeps = vi.spyOn(document, "getElementsByTagName");
+      try {
+        runtime.setMode("browse");
+        runtime.setMode("select");
+        expect(sweeps).not.toHaveBeenCalled();
+      } finally {
+        sweeps.mockRestore();
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

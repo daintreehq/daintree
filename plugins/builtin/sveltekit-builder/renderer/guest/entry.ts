@@ -17,7 +17,7 @@
 
 import { GUEST_HANDLE_NAME } from "./names.js";
 import { createSiteBuilderGuest } from "./runtime.js";
-import type { GuestMode, GuestRuntimeHandle, GuestSourceLoc } from "./types.js";
+import type { GuestMode, GuestSourceLoc } from "./types.js";
 
 /** The half of the prelude's `api` this asset reads or replaces. */
 interface GuestHostApi {
@@ -36,7 +36,7 @@ interface GuestHostApi {
   clearSelection(): void;
   clearHover(): void;
   dispose: (() => void) | null;
-  guest?: GuestRuntimeHandle;
+  guest?: { getMode(): GuestMode };
 }
 
 declare const api: GuestHostApi;
@@ -67,4 +67,9 @@ api.reselect = (loc, index, component, occurrence) =>
 api.clearSelection = () => guest.clearSelection();
 api.clearHover = () => guest.clearHover();
 api.dispose = () => guest.dispose();
-api.guest = guest;
+// Not the handle itself. `api` is reachable from the page, and the handle
+// carries `getOverlayRoot()` — the closed shadow root the overlay lives in,
+// which the page has no other way to reach and which `runtime.ts` states it
+// cannot. Only the mode goes out, which the page can already see from whether
+// its own clicks are being intercepted.
+api.guest = { getMode: () => guest.getMode() };

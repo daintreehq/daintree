@@ -82,8 +82,10 @@ export function createSiteBuilderGuest(
   /** Levels a structural path may run, and siblings a level may be counted over. */
   const MAX_STRUCTURE_DEPTH = 64;
   const MAX_STRUCTURE_SIBLINGS = 5_000;
-  /** Occurrence entries kept before dead ones are swept. */
+  /** Occurrence entries kept before dead ones are swept and the oldest evicted. */
   const MAX_OCCURRENCE_ENTRIES = 2_000;
+  /** Distinct locations the same-location scan caches before it starts over. */
+  const MAX_LOC_ENTRIES = 1_000;
   /** Side of the transform probe, in the page's own fixed-position pixels. */
   const PROBE_SIZE = 100;
 
@@ -92,15 +94,36 @@ export function createSiteBuilderGuest(
    * Sequence and occurrence ids are document-scoped, and the host validates the
    * sequence against the epoch — so a re-injection into the *same* document has
    * to carry on counting rather than replay numbers the host already saw.
+   *
+   * The carrier is a global the page can write, so it is treated like every
+   * other page input: a shape that is not two counters and this document's
+   * epoch starts over. Left unchecked, a seeded string counter would grow every
+   * occurrence id past the host's 128-character limit and every observation
+   * built on it would be dropped without a word.
    */
   const stateKey = config.handleName + ".state";
-  const carried = scope[stateKey] as
-    { documentEpoch: number; sequence: number; occurrence: number } | undefined;
-  const resumed =
-    carried !== undefined && carried.documentEpoch === config.documentEpoch
-      ? carried
-      : { documentEpoch: config.documentEpoch, sequence: 0, occurrence: 0 };
+  const resumed = resumeState() ?? {
+    documentEpoch: config.documentEpoch,
+    sequence: 0,
+    occurrence: 0,
+  };
   scope[stateKey] = resumed;
+
+  function resumeState(): { documentEpoch: number; sequence: number; occurrence: number } | null {
+    let carried: unknown;
+    try {
+      carried = scope[stateKey];
+    } catch {
+      return null;
+    }
+    if (carried === null || typeof carried !== "object") return null;
+    const epoch = nonNegativeInt(field(carried, "documentEpoch"));
+    const sequence = nonNegativeInt(field(carried, "sequence"));
+    const occurrence = nonNegativeInt(field(carried, "occurrence"));
+    if (epoch === null || sequence === null || occurrence === null) return null;
+    if (epoch !== config.documentEpoch) return null;
+    return { documentEpoch: epoch, sequence, occurrence };
+  }
 
   let mode: GuestMode = config.mode;
   let sequence = resumed.sequence;
@@ -145,7 +168,17 @@ export function createSiteBuilderGuest(
    * element and is not returned.
    */
   const elementsByOccurrence = new Map<string, WeakRef<Element>>();
-  const locCounts = new Map<string, { count: number; partial: boolean }>();
+  /**
+   * One sweep per location, answering both questions the observation asks of
+   * it: how many elements share the location, and which of them a given element
+   * is. Separately they cost a full document scan each, per hovered element.
+   */
+  interface LocScan {
+    count: number;
+    partial: boolean;
+    order: WeakMap<Element, number>;
+  }
+  const locCounts = new Map<string, LocScan>();
   const teardown: Array<() => void> = [];
   const selectTeardown: Array<() => void> = [];
 
@@ -175,20 +208,49 @@ export function createSiteBuilderGuest(
     return typeof value === "string" && value.length > 0 ? clamp(value, max) : null;
   }
 
+  /**
+   * One property of a page-owned object — every read below `__svelte_meta`, and
+   * the resume state the page could equally have written. The stamp and its
+   * whole frame chain belong to the page, so any of them can be a throwing
+   * getter, and they are read from rAF, observer and event callbacks where an
+   * uncaught throw would take the inspector out once per frame.
+   */
+  function field(source: unknown, key: string): unknown {
+    if (source === null || typeof source !== "object") return undefined;
+    try {
+      return (source as Record<string, unknown>)[key];
+    } catch {
+      return undefined;
+    }
+  }
+
   function readMeta(node: Element): SvelteMeta | null {
-    const meta = (node as unknown as { __svelte_meta?: unknown }).__svelte_meta;
+    let meta: unknown;
+    try {
+      meta = (node as unknown as { __svelte_meta?: unknown }).__svelte_meta;
+    } catch {
+      return null;
+    }
     return meta !== null && typeof meta === "object" ? (meta as SvelteMeta) : null;
+  }
+
+  /** The frame a stamp or another frame names, never the raw property read. */
+  function parentFrame(source: unknown): unknown {
+    return field(source, "parent") ?? null;
   }
 
   function readLoc(node: Element): SourceLoc | null {
     const meta = readMeta(node);
-    if (meta === null || meta.loc === null || typeof meta.loc !== "object") return null;
-    const raw = meta.loc as SvelteMetaFrame;
+    if (meta === null) return null;
+    const loc = field(meta, "loc");
+    if (loc === null || typeof loc !== "object") return null;
+    const raw = loc as SvelteMetaFrame;
     // A source path is identity, not display text: a clamped one would name a
     // different file. Report it whole or not at all.
-    const file = typeof raw.file === "string" && raw.file.length > 0 ? raw.file : null;
-    const line = positiveInt(raw.line);
-    const column = nonNegativeInt(raw.column);
+    const rawFile = field(raw, "file");
+    const file = typeof rawFile === "string" && rawFile.length > 0 ? rawFile : null;
+    const line = positiveInt(field(raw, "line"));
+    const column = nonNegativeInt(field(raw, "column"));
     if (file === null || line === null || column === null) return null;
     return { file, line, column };
   }
@@ -223,24 +285,22 @@ export function createSiteBuilderGuest(
     // An unstamped element placed by shape belongs to its nearest stamped
     // ancestor's template, and so to its invocations.
     const meta = readMeta(node) ?? readMeta(nearestMapped(node) ?? node);
-    let current: unknown = meta === null ? null : meta.parent;
+    let current: unknown = meta === null ? null : parentFrame(meta);
     const seen = new Set<object>();
     let visited = 0;
     while (current !== null && typeof current === "object" && visited < MAX_ANCESTRY_LINKS) {
       if (seen.has(current)) break;
       seen.add(current);
       visited += 1;
-      const raw = current as SvelteMetaFrame;
-      if (raw.type === "component") frames.push(current);
-      current = raw.parent;
+      if (field(current, "type") === "component") frames.push(current);
+      current = parentFrame(current);
     }
     return frames;
   }
 
   function componentName(frame: object | null): string | null {
     if (frame === null) return null;
-    const raw = frame as SvelteMetaFrame;
-    const tag = nonEmptyString(raw.componentTag, MAX_COMPONENT_TAG);
+    const tag = nonEmptyString(field(frame, "componentTag"), MAX_COMPONENT_TAG);
     if (tag !== null) return tag;
     return null;
   }
@@ -258,10 +318,9 @@ export function createSiteBuilderGuest(
   function componentIdentity(
     frame: object
   ): { file: string; line: number; column: number; name: string } | null {
-    const raw = frame as SvelteMetaFrame;
-    const file = validFile(raw.file);
-    const line = positiveInt(raw.line);
-    const column = nonNegativeInt(raw.column);
+    const file = validFile(field(frame, "file"));
+    const line = positiveInt(field(frame, "line"));
+    const column = nonNegativeInt(field(frame, "column"));
     const name = componentName(frame);
     if (file === null || line === null || column === null || name === null) return null;
     return { file, line, column, name };
@@ -337,7 +396,7 @@ export function createSiteBuilderGuest(
     const frames: AncestryFrame[] = [];
     const seen = new Set<object>();
     const meta = readMeta(node);
-    let current: unknown = meta === null ? null : meta.parent;
+    let current: unknown = meta === null ? null : parentFrame(meta);
     let truncated = false;
     // Links walked, not frames kept: a chain of malformed entries would
     // otherwise cost an unbounded walk for an empty result.
@@ -350,23 +409,19 @@ export function createSiteBuilderGuest(
         truncated = true;
         break;
       }
-      const raw = current as SvelteMetaFrame;
-      const type = nonEmptyString(raw.type, MAX_TYPE);
-      const file =
-        typeof raw.file === "string" && raw.file.length > 0 && raw.file.length <= MAX_FILE
-          ? raw.file
-          : null;
-      const line = positiveInt(raw.line);
-      const column = nonNegativeInt(raw.column);
+      const type = nonEmptyString(field(current, "type"), MAX_TYPE);
+      const file = validFile(field(current, "file"));
+      const line = positiveInt(field(current, "line"));
+      const column = nonNegativeInt(field(current, "column"));
       if (type !== null && file !== null && line !== null && column !== null) {
-        const componentTag = nonEmptyString(raw.componentTag, MAX_COMPONENT_TAG);
+        const componentTag = nonEmptyString(field(current, "componentTag"), MAX_COMPONENT_TAG);
         frames.push(
           componentTag === null
             ? { type, file, line, column }
             : { type, file, line, column, componentTag }
         );
       }
-      current = raw.parent;
+      current = parentFrame(current);
     }
     return { frames, truncated };
   }
@@ -377,15 +432,16 @@ export function createSiteBuilderGuest(
    */
   function sameLocOf(loc: SourceLoc | null): { sameLocCount: number; sameLocCountPartial?: true } {
     if (loc === null) return { sameLocCount: 1 };
-    const { count, partial } = countSameLoc(loc);
+    const { count, partial } = scanLoc(loc);
     return partial ? { sameLocCount: count, sameLocCountPartial: true } : { sameLocCount: count };
   }
 
-  function countSameLoc(loc: SourceLoc): { count: number; partial: boolean } {
+  function scanLoc(loc: SourceLoc): LocScan {
     const key = locKey(loc);
     const cached = locCounts.get(key);
     if (cached !== undefined) return cached;
     let count = 0;
+    const order = new WeakMap<Element, number>();
     const all = document.getElementsByTagName("*");
     // Bounded like every other sweep. Past the bound the count is a floor, and
     // says so: one copy counted is not proof the markup is unique.
@@ -400,13 +456,18 @@ export function createSiteBuilderGuest(
         other.line === loc.line &&
         other.column === loc.column
       ) {
+        order.set(element, count);
         count += 1;
       }
     }
-    const result = {
+    const result: LocScan = {
       count: Math.min(Math.max(count, 1), MAX_SAME_LOC),
       partial: all.length > AUDIT_SCAN_LIMIT,
+      order,
     };
+    // A document with an unusual number of distinct locations must not turn the
+    // cache into the leak it exists to prevent; the next hover rebuilds it.
+    if (locCounts.size >= MAX_LOC_ENTRIES) locCounts.clear();
     locCounts.set(key, result);
     return result;
   }
@@ -424,6 +485,15 @@ export function createSiteBuilderGuest(
         for (const [key, ref] of elementsByOccurrence) {
           const held = ref.deref();
           if (held === undefined || !held.isConnected) elementsByOccurrence.delete(key);
+        }
+        // A long-lived document hovers over more connected elements than the
+        // cap, and dead refs alone would then free nothing: past the cap the
+        // oldest ids go. The host only ever asks about what it was just told,
+        // and an id it no longer finds falls back to resolution by location.
+        while (elementsByOccurrence.size >= MAX_OCCURRENCE_ENTRIES) {
+          const oldest = elementsByOccurrence.keys().next();
+          if (oldest.done === true) break;
+          elementsByOccurrence.delete(oldest.value);
         }
       }
       elementsByOccurrence.set(id, new WeakRef(node));
@@ -539,20 +609,21 @@ export function createSiteBuilderGuest(
     for (let hops = 0; hops < MAX_ANCESTRY_LINKS; hops += 1) {
       if (current === ancestor) return rendered ? "render" : component ? "component" : "blocks";
       if (current === null || current === undefined || typeof current !== "object") return "none";
-      const raw = current as SvelteMetaFrame;
+      const type = field(current, "type");
       // The sibling's own frame counts when it is a rendered snippet's: that
       // element was rendered inline here, and the walk went through it. Its
       // own component frame does not: a child component's root is expected.
-      if (raw.type === "render" || raw.type === "snippet") rendered = true;
-      else if (hops > 0 && raw.type === "component") component = true;
-      current = raw.parent;
+      if (type === "render" || type === "snippet") rendered = true;
+      else if (hops > 0 && type === "component") component = true;
+      current = parentFrame(current);
     }
     return "none";
   }
 
   function structureOf(target: Element): GuestNodeObservation["structure"] | undefined {
-    // A page can put a throwing getter on `__svelte_meta`; the shape is an
-    // extra, and a click must not die for it.
+    // Every `__svelte_meta` read is guarded on its own, but the walk also reads
+    // the page's DOM, where an upgraded custom element can throw from a
+    // property of its own. The shape is an extra, and a click must not die for it.
     try {
       return structurePath(target);
     } catch {
@@ -572,13 +643,13 @@ export function createSiteBuilderGuest(
     const meta = readMeta(anchor);
     if (anchorLoc === null || meta === null) return undefined;
     if (anchorLoc.file.length > MAX_FILE) return undefined;
-    const frame = meta.parent ?? null;
+    const frame = parentFrame(meta);
     const frameOf = (
       node: Element
     ): { stamped: boolean; same: boolean; foreign: boolean; rendered: boolean } => {
       const other = readMeta(node);
       if (other === null) return { stamped: false, same: false, foreign: false, rendered: false };
-      const theirs = other.parent ?? null;
+      const theirs = parentFrame(other);
       const between = theirs === frame ? "blocks" : framesBetween(theirs, frame);
       return {
         stamped: true,
@@ -683,7 +754,7 @@ export function createSiteBuilderGuest(
           // its frame is above the anchor's. A container whose frame is not —
           // a descendant component's element — holds markup that only
           // inherited the anchor's stamp, such as raw HTML the walk went into.
-          const container = (readMeta(parent)?.parent ?? null) as unknown;
+          const container = parentFrame(readMeta(parent));
           if (framesBetween(frame, container) === "none") return undefined;
           reachedRoot = true;
           break;
@@ -1326,20 +1397,10 @@ export function createSiteBuilderGuest(
    * location, and "the fourth card" is what the user selected, not "a card".
    */
   function indexAmongSameLoc(target: Element, loc: SourceLoc): number | undefined {
-    const key = locKey(loc);
-    const all = document.getElementsByTagName("*");
-    const limit = Math.min(all.length, AUDIT_SCAN_LIMIT);
-    let index = 0;
-    for (let cursor = 0; cursor < limit; cursor += 1) {
-      const element = all[cursor];
-      if (element === undefined) continue;
-      if (element === target) return index;
-      const other = readLoc(element);
-      if (other !== null && locKey(other) === key) index += 1;
-    }
-    // Past the sweep: no occurrence is claimed, so no reselect can land on the
-    // first copy in its place. The host treats a missing index as unknown.
-    return undefined;
+    // Read off the same cached sweep the count comes from. Past the sweep the
+    // element is not in it: no occurrence is claimed, so no reselect can land
+    // on the first copy in its place, and the host treats it as unknown.
+    return scanLoc(loc).order.get(target);
   }
 
   /**
@@ -1632,7 +1693,14 @@ export function createSiteBuilderGuest(
       }
       if (locations && ancestry) break;
     }
-    if (stamped === 0) return;
+    if (stamped === 0) {
+      // Nothing to answer with. Once the audit has reached its verdict that is
+      // final: repeating this sweep for every mutation batch would cost a full
+      // document scan forever on a production build, which is exactly the page
+      // the verdict was reached on.
+      if (auditDone) metadataProbed = true;
+      return;
+    }
     stampsSeen = true;
     metadataProbed = true;
     send({ type: "metadataProbed", locations, ancestry });
@@ -1699,22 +1767,30 @@ export function createSiteBuilderGuest(
    */
   function auditMapping(): void {
     if (disposed) return;
-    // Capability discovery outlives the missing-mapping verdict: a page that
-    // hydrates after the deadline still gets its handshake on the next look.
-    probeMetadata();
-    if (auditDone) return;
-    const scan = scanForSvelteMeta();
-    if (scan.found) {
-      auditDone = true;
-      clearAuditTimer();
-      return;
+    // Both sweeps are full-document, and this runs on every mutation batch, so
+    // it has to stop once there is nothing left to answer.
+    if (auditDone && metadataProbed) return;
+    if (!auditDone) {
+      const scan = scanForSvelteMeta();
+      if (scan.found) {
+        auditDone = true;
+        clearAuditTimer();
+      } else if (
+        // A page that has not finished loading, or a document too big to
+        // sweep, is not evidence of a production build. Stay silent and look
+        // again.
+        scan.complete &&
+        document.readyState === "complete" &&
+        auditTimer === null
+      ) {
+        if (auditStartedAt === 0) auditStartedAt = Date.now();
+        auditTimer = setTimeout(confirmMissingMapping, AUDIT_SETTLE_MS);
+      }
     }
-    // A page that has not finished loading, or a document too big to sweep,
-    // is not evidence of a production build. Stay silent and look again.
-    if (!scan.complete || document.readyState !== "complete") return;
-    if (auditTimer !== null) return;
-    if (auditStartedAt === 0) auditStartedAt = Date.now();
-    auditTimer = setTimeout(confirmMissingMapping, AUDIT_SETTLE_MS);
+    // Capability discovery outlives the missing-mapping verdict: a page that
+    // hydrates before the deadline still gets its handshake on this look. It is
+    // asked after the audit so that a verdict reached just now settles it.
+    probeMetadata();
   }
 
   function confirmMissingMapping(): void {
