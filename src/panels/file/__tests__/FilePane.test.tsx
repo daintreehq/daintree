@@ -76,6 +76,24 @@ vi.mock("@/lib/viewCacheState", () => ({
   },
   // The real module's own safe default — the un-demoted answer.
   isProjectViewCached: () => false,
+  // Never cached here, so observability is visibility alone — which also means
+  // a lifecycle emit can never flip it, exactly as with the real module.
+  isProjectViewObservable: () => !document.hidden,
+  subscribeProjectViewObservability: (listener: (observable: boolean) => void) => {
+    let last = !document.hidden;
+    const check = () => {
+      const next = !document.hidden;
+      if (next === last) return;
+      last = next;
+      listener(next);
+    };
+    lifecycleListeners.add(check);
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      lifecycleListeners.delete(check);
+      document.removeEventListener("visibilitychange", check);
+    };
+  },
   __resetProjectViewCacheStateForTests: () => {
     lifecycleListeners.clear();
   },

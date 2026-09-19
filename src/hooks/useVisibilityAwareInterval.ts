@@ -1,12 +1,13 @@
 import { useEffect, useRef } from "react";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 
 /**
- * Per-component 1Hz-style interval that pauses while the document is hidden
- * and snaps to wall-clock time on restore. Replaces the global-singleton
- * `useGlobalSecondTicker` for consumers that genuinely need per-second
- * fidelity (live countdowns, elapsed timers) — the interval only runs while
- * the owning component is mounted and `enabled`, instead of waking every
- * relative-time label in the app.
+ * Per-component 1Hz-style interval that pauses while nobody can observe the
+ * view (hidden window or cached project view) and snaps to wall-clock time on
+ * restore. Replaces the global-singleton `useGlobalSecondTicker` for consumers
+ * that genuinely need per-second fidelity (live countdowns, elapsed timers) —
+ * the interval only runs while the owning component is mounted and `enabled`,
+ * instead of waking every relative-time label in the app.
  */
 export function useVisibilityAwareInterval(
   callback: () => void,
@@ -34,21 +35,19 @@ export function useVisibilityAwareInterval(
         id = null;
       }
     };
-    const handleVisibility = () => {
-      if (document.hidden) {
-        stop();
-      } else {
+    const unsubscribe = subscribeProjectViewObservability((observable) => {
+      if (observable) {
         tick();
         start();
+      } else {
+        stop();
       }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibility);
-    if (!document.hidden) start();
+    });
+    if (isProjectViewObservable()) start();
 
     return () => {
       stop();
-      document.removeEventListener("visibilitychange", handleVisibility);
+      unsubscribe();
     };
   }, [intervalMs, enabled]);
 }

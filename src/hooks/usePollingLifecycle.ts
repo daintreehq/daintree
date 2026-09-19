@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef } from "react";
 import { projectClient } from "@/clients";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import type { Project } from "@shared/types";
 
 /**
@@ -74,17 +75,21 @@ interface Subscriber {
   onVisibilityHidden: () => void;
   onSidebarRefresh: () => void;
   onProjectSwitch: (project?: Project) => void;
+  onViewCached: () => void;
+  onViewActivated: () => void;
 }
 
 // Module-level singleton: every consumer of `usePollingLifecycle` shares one
-// `visibilitychange`, one `daintree:refresh-sidebar`, and one
-// `projectClient.onSwitch` registration. Mirrors `useGlobalMinuteTicker`'s
-// refcounted listener Set so a tab resume fans out to all consumers without
-// each hook independently re-registering the same DOM/IPC listener.
+// `visibilitychange`, one `daintree:refresh-sidebar`, one
+// `projectClient.onSwitch`, and one project-view lifecycle registration.
+// Mirrors `useGlobalMinuteTicker`'s refcounted listener Set so a tab resume
+// fans out to all consumers without each hook independently re-registering
+// the same DOM/IPC listener.
 const subscribers = new Set<Subscriber>();
 let visibilityHandler: (() => void) | null = null;
 let sidebarHandler: (() => void) | null = null;
 let projectSwitchCleanup: (() => void) | null = null;
+let viewLifecycleCleanup: (() => void) | null = null;
 
 function fanOut(method: Exclude<keyof Subscriber, "onProjectSwitch">) {
   // Snapshot to a copy so subscribers can register/unregister inside their
@@ -142,6 +147,13 @@ function ensureGlobalListenersInstalled() {
   sidebarHandler = () => fanOut("onSidebarRefresh");
   window.addEventListener("daintree:refresh-sidebar", sidebarHandler);
 
+  // `revealed` is deliberately ignored: it follows `active` on a completed
+  // switch, and `active` alone is what a superseded switch ever delivers.
+  viewLifecycleCleanup = subscribeProjectViewLifecycle((phase) => {
+    if (phase === "cached") fanOut("onViewCached");
+    else if (phase === "active") fanOut("onViewActivated");
+  });
+
   projectSwitchCleanup = cleanup;
 }
 
@@ -158,6 +170,10 @@ function teardownGlobalListenersIfEmpty() {
   if (projectSwitchCleanup !== null) {
     projectSwitchCleanup();
     projectSwitchCleanup = null;
+  }
+  if (viewLifecycleCleanup !== null) {
+    viewLifecycleCleanup();
+    viewLifecycleCleanup = null;
   }
 }
 
@@ -185,6 +201,10 @@ export function _resetPollingLifecycleForTests(): void {
     }
     projectSwitchCleanup = null;
   }
+  if (viewLifecycleCleanup !== null) {
+    viewLifecycleCleanup();
+    viewLifecycleCleanup = null;
+  }
 }
 
 /**
@@ -200,6 +220,10 @@ export function _resetPollingLifecycleForTests(): void {
  */
 export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLifecycleControl {
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // When the armed poll is due, and the due time a cache paused. Reactivation
+  // resumes that deadline instead of restarting the interval from zero.
+  const pollDueAtRef = useRef<number | null>(null);
+  const pausedDueAtRef = useRef<number | null>(null);
   const isVisibleRef = useRef(!document.hidden);
   const inFlightRef = useRef(false);
   const queuedFetchRef = useRef<{
@@ -273,7 +297,7 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
   }, []);
 
   const scheduleNextPoll = useCallback(
-    function scheduleNextPollImpl(): void {
+    function scheduleNextPollImpl(delayMs?: number): void {
       if (!aliveRef.current) return;
       // Disabled lifecycles never arm the timer — this also covers the
       // `refresh()` tail, so an explicit on-demand fetch can't resurrect
@@ -281,11 +305,20 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
       if (configRef.current.enabled === false) return;
       if (pollTimerRef.current) {
         clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = null;
       }
-      const interval = configRef.current.calculateNextInterval({
-        isVisible: isVisibleRef.current,
-      });
+      pollDueAtRef.current = null;
+      // A cached view polls nothing — this also covers every fetch's
+      // reschedule tail. `onViewActivated` re-arms on warm reactivation.
+      if (isProjectViewCached()) return;
+      const interval =
+        delayMs ??
+        configRef.current.calculateNextInterval({
+          isVisible: isVisibleRef.current,
+        });
+      pollDueAtRef.current = Date.now() + interval;
       pollTimerRef.current = setTimeout(() => {
+        pollDueAtRef.current = null;
         void callFetchFn(false, "scheduled").then(() => {
           if (aliveRef.current) scheduleNextPollImpl();
         });
@@ -332,6 +365,8 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
     const subscriber: Subscriber = {
       onVisibilityVisible: () => {
         isVisibleRef.current = true;
+        // Restoring a minimized window must not wake a cached view's poll.
+        if (isProjectViewCached()) return;
         if (pollTimerRef.current) {
           clearTimeout(pollTimerRef.current);
           pollTimerRef.current = null;
@@ -360,6 +395,28 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
         void callFetchFn(false, "reactivate").then(() => {
           if (aliveRef.current) scheduleNextPoll();
         });
+      },
+      onViewCached: () => {
+        if (pollTimerRef.current) {
+          clearTimeout(pollTimerRef.current);
+          pollTimerRef.current = null;
+        }
+        pausedDueAtRef.current = pollDueAtRef.current;
+        pollDueAtRef.current = null;
+      },
+      // Re-arm without fetching: a warm reactivation also delivers a targeted
+      // project switch, whose `onProjectSwitch` clears this timer and does the
+      // one "reactivate" fetch itself — fetching here too would bring back the
+      // double fetch per switch (#10765/#10767), and no grace delay can rule
+      // that out because the switch waits on a paint gate of up to 6s. The
+      // paused deadline is resumed rather than restarted, so a view that was
+      // cached only briefly — a failed switch rolling back to it, with no
+      // project switch behind it — keeps the cadence it had.
+      onViewActivated: () => {
+        const pausedDueAt = pausedDueAtRef.current;
+        pausedDueAtRef.current = null;
+        const remaining = pausedDueAt === null ? undefined : pausedDueAt - Date.now();
+        scheduleNextPoll(remaining !== undefined && remaining > 0 ? remaining : undefined);
       },
     };
 

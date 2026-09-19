@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { isProjectViewObservable, subscribeProjectViewObservability } from "@/lib/viewCacheState";
 import { logError } from "@/utils/logger";
 
 /**
@@ -17,14 +18,15 @@ import { logError } from "@/utils/logger";
  * coalesce", without changing the polled model or any pane's change latency.
  *
  * Pausing and the fire-on-reveal edge match `useVisibilityAwareInterval`: a
- * hidden document polls nothing, and becoming visible samples immediately
- * rather than waiting out a full interval.
+ * view nobody can observe — hidden window or cached project view — polls
+ * nothing, and becoming observable again samples immediately rather than
+ * waiting out a full interval.
  */
 
 interface SharedTicker {
   readonly subscribers: Set<() => void>;
   intervalId: ReturnType<typeof setInterval> | null;
-  readonly onVisibilityChange: () => void;
+  readonly unsubscribeObservability: () => void;
 }
 
 /** Interval in ms → the single ticker driving every subscriber at that rate. */
@@ -54,8 +56,8 @@ function acquire(intervalMs: number, subscriber: () => void): () => void {
     const created: SharedTicker = {
       subscribers: new Set(),
       intervalId: null,
-      onVisibilityChange: () => {
-        if (document.hidden) {
+      unsubscribeObservability: subscribeProjectViewObservability((observable) => {
+        if (!observable) {
           stopInterval(created);
           return;
         }
@@ -68,16 +70,15 @@ function acquire(intervalMs: number, subscriber: () => void): () => void {
         // nothing wrong.
         if (tickers.get(intervalMs) !== created || created.subscribers.size === 0) return;
         startInterval(created, intervalMs);
-      },
+      }),
     };
-    document.addEventListener("visibilitychange", created.onVisibilityChange);
     ticker = created;
     tickers.set(intervalMs, created);
   }
 
   const owner = ticker;
   owner.subscribers.add(subscriber);
-  if (!document.hidden) startInterval(owner, intervalMs);
+  if (isProjectViewObservable()) startInterval(owner, intervalMs);
 
   let released = false;
   return () => {
@@ -86,7 +87,7 @@ function acquire(intervalMs: number, subscriber: () => void): () => void {
     owner.subscribers.delete(subscriber);
     if (owner.subscribers.size > 0) return;
     stopInterval(owner);
-    document.removeEventListener("visibilitychange", owner.onVisibilityChange);
+    owner.unsubscribeObservability();
     // Only drop the entry if it is still the live one for this interval.
     if (tickers.get(intervalMs) === owner) tickers.delete(intervalMs);
   };

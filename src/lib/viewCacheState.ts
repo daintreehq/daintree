@@ -134,6 +134,48 @@ export function subscribeProjectViewLifecycle(
   };
 }
 
+function isDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.hidden;
+}
+
+/**
+ * Whether anyone can see this view: the window is not hidden AND main has not
+ * cached the view. The single predicate for periodic work that should stop
+ * when nobody is looking — each of the two halves misses what the other
+ * catches (see the module comment).
+ */
+export function isProjectViewObservable(): boolean {
+  return !isDocumentHidden() && !isProjectViewCached();
+}
+
+/**
+ * Subscribe to {@link isProjectViewObservable} edges. Fires only when the
+ * combined answer flips, so a `revealed` right after `active`, or a
+ * `visibilitychange` that leaves a cached view cached, notifies nobody —
+ * consumers can treat every call as a real transition and resume exactly once.
+ */
+export function subscribeProjectViewObservability(
+  listener: (observable: boolean) => void
+): () => void {
+  let last = isProjectViewObservable();
+  const check = () => {
+    const next = isProjectViewObservable();
+    if (next === last) return;
+    last = next;
+    listener(next);
+  };
+  const offLifecycle = subscribeProjectViewLifecycle(check);
+  if (typeof document !== "undefined") {
+    document.addEventListener("visibilitychange", check);
+  }
+  return () => {
+    offLifecycle();
+    if (typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", check);
+    }
+  };
+}
+
 export function __resetProjectViewCacheStateForTests(): void {
   disarm?.();
   disarm = undefined;

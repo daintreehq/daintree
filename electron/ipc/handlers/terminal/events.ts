@@ -29,9 +29,16 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // PTY data/exit/error events. `terminal:data` stays on its dedicated channel
   // (high-frequency binary — keeping it off the event bus avoids envelope overhead
-  // and JSON/base64 churn; see lessons #4899/#4862/#4639).
+  // and JSON/base64 churn; see lessons #4899/#4862/#4639). Project-scoped: only
+  // the owning project's views host a panel for the terminal, and its cached
+  // views must still get every byte, since there is no resync on reactivation.
   const handlePtyData = (id: string, data: string | Uint8Array) => {
-    broadcastToRenderer(CHANNELS.TERMINAL_DATA, id, data);
+    broadcastToProjectRenderers(
+      ptyClient.getTerminalProjectId(id),
+      CHANNELS.TERMINAL_DATA,
+      id,
+      data
+    );
   };
   ptyClient.on("data", handlePtyData);
   handlers.push(() => ptyClient.off("data", handlePtyData));

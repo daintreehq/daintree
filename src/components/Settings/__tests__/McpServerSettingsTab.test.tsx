@@ -1292,6 +1292,13 @@ describe("McpServerSettingsTab", () => {
     expect(banner?.getAttribute("data-anomaly-severity")).toBe("info");
   });
 
+  function hideDocument(hidden: boolean): void {
+    Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+  }
+
   it("expires a signal while Settings stays open, without refetching", async () => {
     const t0 = new Date("2026-09-19T10:00:00Z").getTime();
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -1348,11 +1355,11 @@ describe("McpServerSettingsTab", () => {
       const fetches = getAuditStats.mock.calls.length;
 
       // The shared minute ticker emits on visibility restore; that re-derives the
-      // viewer's `now` past the cluster's expiry.
+      // viewer's `now` past the cluster's expiry. A restore is a hidden →
+      // visible flip — the ticker resumes on that edge, not on a bare event.
       vi.setSystemTime(t0 + 61_000);
-      act(() => {
-        document.dispatchEvent(new Event("visibilitychange"));
-      });
+      hideDocument(true);
+      hideDocument(false);
 
       await waitForContent(container, "1 anomaly signal (1 first-seen-combination)");
       expect(
@@ -1361,6 +1368,7 @@ describe("McpServerSettingsTab", () => {
       expect(container.querySelectorAll('[aria-label="Anomaly (error)"]')).toHaveLength(0);
       expect(getAuditStats.mock.calls.length).toBe(fetches);
     } finally {
+      Reflect.deleteProperty(document, "hidden");
       vi.useRealTimers();
     }
   });

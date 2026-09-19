@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   __resetProjectViewCacheStateForTests,
   isProjectViewCached,
+  isProjectViewObservable,
   subscribeProjectViewLifecycle,
+  subscribeProjectViewObservability,
   type ProjectViewLifecyclePhase,
 } from "../viewCacheState";
 
@@ -255,5 +257,75 @@ describe("viewCacheState", () => {
     expect(stub.offSpies.cached).toHaveBeenCalledTimes(1);
     expect(stub.offSpies.warmActivated).toHaveBeenCalledTimes(1);
     expect(stub.offSpies.revealed).toHaveBeenCalledTimes(1);
+  });
+
+  describe("observability", () => {
+    let hidden = false;
+
+    beforeEach(() => {
+      hidden = false;
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+    });
+
+    afterEach(() => {
+      Reflect.deleteProperty(document, "hidden");
+    });
+
+    const setHidden = (next: boolean) => {
+      hidden = next;
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+
+    it("is observable only when the window is shown and the view is not cached", () => {
+      expect(isProjectViewObservable()).toBe(true);
+
+      stub.emit.cached();
+      expect(isProjectViewObservable()).toBe(false);
+
+      stub.emit.warmActivated();
+      expect(isProjectViewObservable()).toBe(true);
+
+      setHidden(true);
+      expect(isProjectViewObservable()).toBe(false);
+    });
+
+    it("fires once per flip across both signals", () => {
+      const listener = vi.fn();
+      subscribeProjectViewObservability(listener);
+
+      stub.emit.cached();
+      // Still cached — a visibility flip underneath changes nothing observable.
+      setHidden(true);
+      setHidden(false);
+      stub.emit.warmActivated();
+      // `revealed` after `active` is the same answer, not a second resume.
+      stub.emit.revealed();
+
+      expect(listener.mock.calls).toEqual([[false], [true]]);
+    });
+
+    it("stays unobservable when a hidden window's view is reactivated", () => {
+      const listener = vi.fn();
+      subscribeProjectViewObservability(listener);
+
+      setHidden(true);
+      stub.emit.cached();
+      stub.emit.warmActivated();
+      expect(listener.mock.calls).toEqual([[false]]);
+
+      setHidden(false);
+      expect(listener.mock.calls).toEqual([[false], [true]]);
+    });
+
+    it("stops notifying after unsubscribe", () => {
+      const listener = vi.fn();
+      const off = subscribeProjectViewObservability(listener);
+      off();
+
+      stub.emit.cached();
+      setHidden(true);
+
+      expect(listener).not.toHaveBeenCalled();
+    });
   });
 });

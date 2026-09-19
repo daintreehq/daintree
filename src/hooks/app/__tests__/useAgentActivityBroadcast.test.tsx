@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { renderHook, act } from "@testing-library/react";
 import type { AgentState } from "@shared/types/agent";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 interface StubPanel {
   id: string;
@@ -51,6 +52,18 @@ function setPanels(
 
 const requestMock = vi.fn(() => Promise.resolve({ ok: true as const }));
 let readyCallback: (() => void) | null = null;
+// Project-view lifecycle channels, driven through the real `viewCacheState`.
+const viewHandlers = {
+  cached: new Set<() => void>(),
+  warm: new Set<() => void>(),
+  revealed: new Set<() => void>(),
+};
+
+function emitView(set: Set<() => void>): void {
+  act(() => {
+    set.forEach((handler) => handler());
+  });
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -58,6 +71,9 @@ beforeEach(() => {
   readyCallback = null;
   storeState = { panelIdsByWorktreeId: {}, panelsById: {} };
   storeListeners.clear();
+  viewHandlers.cached.clear();
+  viewHandlers.warm.clear();
+  viewHandlers.revealed.clear();
   (globalThis as unknown as { window: Window }).window.electron = {
     worktreePort: {
       request: requestMock,
@@ -68,10 +84,28 @@ beforeEach(() => {
         };
       },
     },
+    app: {
+      onViewCached: (cb: () => void) => {
+        viewHandlers.cached.add(cb);
+        return () => viewHandlers.cached.delete(cb);
+      },
+      onViewWarmActivated: (cb: () => void) => {
+        viewHandlers.warm.add(cb);
+        return () => viewHandlers.warm.delete(cb);
+      },
+      onViewRevealed: (cb: () => void) => {
+        viewHandlers.revealed.add(cb);
+        return () => viewHandlers.revealed.delete(cb);
+      },
+      isViewCached: () => false,
+    },
   } as unknown as Window["electron"];
+  // The singleton stays armed for the module's life; re-arm on this bridge.
+  __resetProjectViewCacheStateForTests();
 });
 
 afterEach(() => {
+  __resetProjectViewCacheStateForTests();
   vi.useRealTimers();
 });
 
@@ -346,6 +380,179 @@ describe("useAgentActivityBroadcast", () => {
     expect(requestMock).toHaveBeenCalledTimes(2);
     expect(requestMock).toHaveBeenLastCalledWith("set-agent-activity", {
       worktreeIds: ["/wt/a"],
+    });
+  });
+  describe("cached project view (#12514)", () => {
+    it("cancels a pending send when the view is cached", async () => {
+      renderHook(() => useAgentActivityBroadcast());
+
+      act(() => {
+        setPanels([{ worktreeId: "/wt/a", agentState: "working" }]);
+      });
+      emitView(viewHandlers.cached);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(requestMock).not.toHaveBeenCalled();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("drops a pending retry when the view is cached", async () => {
+      // Main closes a cached view's worktree port, so a retry could only fail
+      // and re-arm itself every settle window for as long as the view stays
+      // cached.
+      requestMock.mockRejectedValueOnce(new Error("port closed"));
+      renderHook(() => useAgentActivityBroadcast());
+
+      act(() => {
+        setPanels([{ worktreeId: "/wt/a", agentState: "working" }]);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(requestMock).toHaveBeenCalledTimes(1);
+
+      emitView(viewHandlers.cached);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("stops retrying once a send in flight fails after the view is cached", async () => {
+      let rejectInFlight: (error: Error) => void = () => {};
+      requestMock.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectInFlight = reject;
+          })
+      );
+      renderHook(() => useAgentActivityBroadcast());
+
+      act(() => {
+        setPanels([{ worktreeId: "/wt/a", agentState: "working" }]);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(requestMock).toHaveBeenCalledTimes(1);
+
+      emitView(viewHandlers.cached);
+      await act(async () => {
+        rejectInFlight(new Error("port closed"));
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(requestMock).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("ignores store churn while cached and never announces an empty set", async () => {
+      renderHook(() => useAgentActivityBroadcast());
+
+      act(() => {
+        setPanels([{ worktreeId: "/wt/a", agentState: "working" }]);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(requestMock).toHaveBeenCalledTimes(1);
+
+      emitView(viewHandlers.cached);
+      act(() => {
+        setPanels([{ worktreeId: "/wt/a", agentState: "completed" }]);
+      });
+      act(() => {
+        setPanels([{ worktreeId: "/wt/b", agentState: "working" }]);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+
+      expect(requestMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-evaluates on warm activation and sends what changed while cached", async () => {
+      renderHook(() => useAgentActivityBroadcast());
+
+      act(() => {
+        setPanels([{ worktreeId: "/wt/a", agentState: "working" }]);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(requestMock).toHaveBeenCalledTimes(1);
+
+      emitView(viewHandlers.cached);
+      act(() => {
+        setPanels([
+          { worktreeId: "/wt/a", agentState: "working" },
+          { worktreeId: "/wt/b", agentState: "working" },
+        ]);
+      });
+
+      emitView(viewHandlers.warm);
+      emitView(viewHandlers.revealed);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      expect(requestMock).toHaveBeenLastCalledWith("set-agent-activity", {
+        worktreeIds: ["/wt/a", "/wt/b"],
+      });
+    });
+
+    it("resends a set whose send failed while cached once the view is activated", async () => {
+      let rejectInFlight: (error: Error) => void = () => {};
+      requestMock.mockImplementationOnce(
+        () =>
+          new Promise((_, reject) => {
+            rejectInFlight = reject;
+          })
+      );
+      renderHook(() => useAgentActivityBroadcast());
+
+      act(() => {
+        setPanels([{ worktreeId: "/wt/a", agentState: "working" }]);
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      emitView(viewHandlers.cached);
+      await act(async () => {
+        rejectInFlight(new Error("port closed"));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+
+      emitView(viewHandlers.warm);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+
+      expect(requestMock).toHaveBeenCalledTimes(2);
+      expect(requestMock).toHaveBeenLastCalledWith("set-agent-activity", {
+        worktreeIds: ["/wt/a"],
+      });
+    });
+
+    it("unsubscribes from the view lifecycle on unmount", async () => {
+      const { unmount } = renderHook(() => useAgentActivityBroadcast());
+      emitView(viewHandlers.cached);
+      act(() => {
+        setPanels([{ worktreeId: "/wt/a", agentState: "working" }]);
+      });
+      unmount();
+
+      emitView(viewHandlers.warm);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+
+      expect(requestMock).not.toHaveBeenCalled();
     });
   });
 });
