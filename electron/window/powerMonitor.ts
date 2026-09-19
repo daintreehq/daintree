@@ -29,12 +29,19 @@ import { getPowerPolicy, subscribePowerPolicy, updatePowerObservations } from ".
 import { publishPowerPolicy } from "./powerPolicyDelivery.js";
 
 let resumeTimeout: NodeJS.Timeout | null = null;
+// One workspace refresh per wake, whichever of resume, unlock or focus lands
+// first. While the delayed resume handler has yet to decide, it owns the
+// refresh; if it finds nobody watching, the refresh is owed to whoever comes
+// back rather than run into a locked screen and then again on unlock.
+let wakeRecoveryPending = false;
+let wakeRefreshOwed = false;
 
 export function clearResumeTimeout(): void {
   if (resumeTimeout) {
     clearTimeout(resumeTimeout);
     resumeTimeout = null;
   }
+  wakeRecoveryPending = false;
 }
 
 /** Fire-and-forget token-health re-probe across every registered forge provider. */
@@ -133,6 +140,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
 
   powerMonitor.on("resume", () => {
     clearResumeTimeout();
+    wakeRecoveryPending = true;
     resumeTimeout = setTimeout(async () => {
       resumeTimeout = null;
       // Capture and clear suspendTime up front so a mid-handler exception
@@ -154,16 +162,23 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         }
         if (workspaceClient) {
           await workspaceClient.waitForReady();
-          // Only re-enable polling if someone can see a window. If the app is
-          // still blurred or the screen is still locked (the usual state right
-          // after a laptop wakes), leave polling paused — the power policy
-          // re-enables it once when the user comes back.
+          // Only re-enable polling and refresh if someone can see a window. If
+          // the app is still blurred or the screen is still locked (the usual
+          // state right after a laptop wakes), leave polling paused and owe the
+          // refresh — the power policy pays it once when the user comes back.
           evaluateWindowObservations();
-          if (getPowerPolicy().canObserve) {
+          const observable = getPowerPolicy().canObserve;
+          wakeRecoveryPending = false;
+          if (observable) {
             workspaceClient.setPollingEnabled(true);
           }
           workspaceClient.resumeHealthCheck();
-          await workspaceClient.refreshOnWake();
+          if (observable) {
+            wakeRefreshOwed = false;
+            await workspaceClient.refreshOnWake();
+          } else {
+            wakeRefreshOwed = true;
+          }
         }
         // Force an immediate token-health probe on wake — a credential that
         // expired during a long laptop sleep would otherwise sit undetected
@@ -171,6 +186,8 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         refreshForgeTokenHealth({ force: true });
       } catch (error) {
         console.error("[MAIN] Error during resume:", error);
+      } finally {
+        wakeRecoveryPending = false;
       }
       // Announced whether or not the recovery above succeeded. A failed or
       // partial recovery is exactly when a listener most needs to know the
@@ -280,7 +297,12 @@ function applyPollingPolicy(snapshot: PowerPolicySnapshot): void {
       workspaceClient.setPRPollCadence(canObserve);
     }
     if (regainedObserver) {
-      void workspaceClient.refresh();
+      if (wakeRefreshOwed) {
+        wakeRefreshOwed = false;
+        void workspaceClient.refreshOnWake();
+      } else if (!wakeRecoveryPending) {
+        void workspaceClient.refresh();
+      }
     }
   }
 
@@ -382,13 +404,18 @@ export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {
     }, BLUR_DEBOUNCE_MS);
   });
 
+  // The focus event is itself the observation: a window that just took focus
+  // is on screen. Reading getFocusedWindow() here could lag the event, and a
+  // window can focus before it is registered (a macOS reopen shows the window
+  // during setup), either of which would strand the policy throttled.
   app.on("browser-window-focus", () => {
     clearBlurTimeout();
-    evaluateWindowObservations();
+    updatePowerObservations({ anyWindowFocused: true, anyWindowVisible: true });
   });
 }
 
 export function registerWindowForFocusThrottle(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
   trackedWindows.add(win);
   const evaluate = () => evaluateWindowObservations();
   win.on("minimize", evaluate);
@@ -399,4 +426,9 @@ export function registerWindowForFocusThrottle(win: BrowserWindow): void {
     trackedWindows.delete(win);
     evaluateWindowObservations();
   });
+  // Registration runs after async window setup, by which point the window may
+  // already be showing — reconcile, or a policy that went deep when the last
+  // window closed would sit there until the next window event. A window not
+  // yet shown is left to its own `show` event.
+  if (isWindowVisible(win)) evaluateWindowObservations();
 }

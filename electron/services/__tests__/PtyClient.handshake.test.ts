@@ -463,6 +463,19 @@ describe("PtyClient Handshake Protocol", () => {
       });
     });
 
+    it("sends a saving level on the default host's first ready", async () => {
+      // The default host's first ready gets no config replay, and on a battery
+      // launch the policy is already saving before the host is up.
+      const { updatePowerObservations } = await import("../../window/powerPolicy.js");
+      updatePowerObservations({ onBattery: true });
+
+      createClient();
+
+      expect(powerPolicyCalls(mockChild)).toEqual([
+        [{ type: "set-power-policy", level: "saving" }],
+      ]);
+    });
+
     it("replays main's current saving level to a restarted host", async () => {
       const { updatePowerObservations } = await import("../../window/powerPolicy.js");
       createClient();

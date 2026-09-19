@@ -140,12 +140,49 @@ describe("ActivityMonitor power policy", () => {
   });
 
   it("stops listening for level changes once disposed", () => {
+    const onChange = vi.spyOn(
+      ActivityMonitor.prototype as unknown as { onPowerLevelChange: () => void },
+      "onPowerLevelChange"
+    );
     const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
     monitor.dispose();
-    const setIntervalSpy = vi.spyOn(global, "setInterval");
 
     setPtyPowerLevel("deep");
 
-    expect(setIntervalSpy).not.toHaveBeenCalled();
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // Counted in callbacks actually run, not timer arguments: the levels have to
+  // cost fewer wakeups, not merely name different intervals.
+  it("runs fewer polls and watchdog probes for a settled agent as the level deepens", () => {
+    const polls = vi.spyOn(
+      ActivityMonitor.prototype as unknown as { runPollingCycle: () => void },
+      "runPollingCycle"
+    );
+    const probes = vi.spyOn(
+      ActivityMonitor.prototype as unknown as { runWaitingWatchdogCheck: (now: number) => void },
+      "runWaitingWatchdogCheck"
+    );
+    const minuteOfWork = (level: "active" | "saving" | "deep") => {
+      setPtyPowerLevel(level);
+      const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
+      monitor.startPolling();
+      vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+      polls.mockClear();
+      probes.mockClear();
+      vi.advanceTimersByTime(60_000);
+      monitor.dispose();
+      resetPtyPowerLevelForTesting();
+      return { polls: polls.mock.calls.length, probes: probes.mock.calls.length };
+    };
+
+    const active = minuteOfWork("active");
+    const saving = minuteOfWork("saving");
+    const deep = minuteOfWork("deep");
+
+    expect(saving.polls).toBeLessThan(active.polls);
+    expect(deep.polls).toBeLessThan(saving.polls);
+    expect(saving.probes).toBeLessThan(active.probes);
+    expect(deep.probes).toBeLessThan(saving.probes);
   });
 });

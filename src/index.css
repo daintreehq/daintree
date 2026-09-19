@@ -2382,7 +2382,9 @@ body[data-power-saving="true"] .animate-spin-slow,
 body[data-power-saving="true"] .animate-activity-pulse,
 body[data-power-saving="true"] .animate-breathe,
 body[data-power-saving="true"] .animate-pulse,
-body[data-power-saving="true"] .status-working {
+body[data-power-saving="true"] .motion-safe\:animate-pulse,
+body[data-power-saving="true"] .status-working,
+body[data-power-saving="true"] .forge-status-error {
   animation: none;
   will-change: auto;
 }

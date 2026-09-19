@@ -56,8 +56,12 @@ function createMockDeps() {
   const workspaceClient = {
     updateMonitorConfig: vi.fn(),
     refresh: vi.fn().mockResolvedValue(undefined),
+    refreshOnWake: vi.fn().mockResolvedValue(undefined),
     setPollingEnabled: vi.fn(),
     setPRPollCadence: vi.fn(),
+    waitForReady: vi.fn().mockResolvedValue(undefined),
+    pauseHealthCheck: vi.fn(),
+    resumeHealthCheck: vi.fn(),
   } as unknown as WorkspaceClient;
 
   const statsService = {
@@ -90,6 +94,7 @@ function clearServiceMocks(mocks: Deps): void {
   vi.mocked(mocks.workspaceClient.setPollingEnabled).mockClear();
   vi.mocked(mocks.workspaceClient.setPRPollCadence).mockClear();
   vi.mocked(mocks.workspaceClient.refresh).mockClear();
+  vi.mocked(mocks.workspaceClient.refreshOnWake).mockClear();
   vi.mocked(mocks.statsService.updatePollInterval).mockClear();
   vi.mocked(mocks.statsService.refresh).mockClear();
   vi.mocked(mocks.ptyClient.setProcessTreePollInterval).mockClear();
@@ -170,7 +175,7 @@ describe("WindowFocusThrottle", () => {
     powerMonitorModule.setupWindowFocusThrottle(mocks.deps);
     powerMonitorModule.setupPowerMonitor({
       getPtyClient: () => null,
-      getWorkspaceClient: () => null,
+      getWorkspaceClient: () => mocks.workspaceClient,
     });
     const main = createFakeWindow();
     powerMonitorModule.registerWindowForFocusThrottle(main.win);
@@ -425,6 +430,97 @@ describe("WindowFocusThrottle", () => {
       name: "system:power-policy-changed",
       payload: expect.objectContaining({ level: "saving" }),
     });
+  });
+
+  it("owes the wake refresh to whoever comes back when resume finds the screen locked", async () => {
+    const { mocks } = setup();
+    powerHandlers.get("lock-screen")!();
+    powerHandlers.get("suspend")!();
+    clearServiceMocks(mocks);
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.refreshOnWake).not.toHaveBeenCalled();
+
+    powerHandlers.get("unlock-screen")!();
+
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
+  });
+
+  it("refreshes once when the user unlocks during the resume delay", async () => {
+    const { mocks } = setup();
+    powerHandlers.get("lock-screen")!();
+    powerHandlers.get("suspend")!();
+    clearServiceMocks(mocks);
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(1000);
+    powerHandlers.get("unlock-screen")!();
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(mocks.workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
+  });
+
+  it("returns to an ordinary refresh once the wake has been paid", async () => {
+    const { mocks, main } = setup();
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(mocks.workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    clearServiceMocks(mocks);
+
+    blur(main);
+    focus(main);
+
+    expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.refreshOnWake).not.toHaveBeenCalled();
+  });
+
+  it("reconciles a window that is already showing when it registers", () => {
+    const { mocks, main } = setup();
+    main.focused = false;
+    windows = [];
+    main.handlers.get("closed")!();
+    expect(powerPolicyModule.getPowerPolicy().level).toBe("deep");
+    clearServiceMocks(mocks);
+
+    // A macOS reopen: the new window shows and focuses during async setup,
+    // before it registers — and before the focus listener could see it tracked.
+    const reopened = createFakeWindow({ focused: true });
+    powerMonitorModule.registerWindowForFocusThrottle(reopened.win);
+
+    expect(powerPolicyModule.getPowerPolicy().level).toBe("active");
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes a focus event as proof a window is on screen", () => {
+    const { main } = setup();
+    main.focused = false;
+    windows = [];
+    main.handlers.get("closed")!();
+    expect(powerPolicyModule.getPowerPolicy().level).toBe("deep");
+
+    // Focus lands before the reopened window is registered.
+    appHandlers.get("browser-window-focus")!();
+
+    expect(powerPolicyModule.getPowerPolicy()).toMatchObject({ level: "active", canObserve: true });
+  });
+
+  it("does not reconcile a window registered before it is shown", () => {
+    const { mocks, main } = setup();
+    blur(main);
+    clearServiceMocks(mocks);
+
+    const pending = createFakeWindow({ focused: false, visible: false });
+    powerMonitorModule.registerWindowForFocusThrottle(pending.win);
+
+    expect(mocks.workspaceClient.updateMonitorConfig).not.toHaveBeenCalled();
+    expect(powerPolicyModule.getPowerPolicy().level).toBe("saving");
   });
 
   it("goes deep when the last window closes", () => {

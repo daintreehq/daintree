@@ -28,6 +28,12 @@ export function shouldSuspendDecorativeMotion(signals: DecorativeMotionSignals):
   );
 }
 
+// Latest level from main, kept at module scope (one view per V8 context). The
+// preload replays a pre-subscriber push to the first subscriber only, so an
+// effect torn down and re-run (StrictMode, a remount) must not fall back to
+// `active` and lose it.
+let latestPowerLevel: PowerPolicyLevel = "active";
+
 /**
  * Mirrors {@link shouldSuspendDecorativeMotion} onto `body[data-power-saving]`,
  * which the scoped loop list in `src/index.css` keys off. Deliberately separate
@@ -36,11 +42,9 @@ export function shouldSuspendDecorativeMotion(signals: DecorativeMotionSignals):
  */
 export function usePowerSavingMotion(): void {
   useEffect(() => {
-    let powerLevel: PowerPolicyLevel = "active";
-
     const apply = () => {
       const suspend = shouldSuspendDecorativeMotion({
-        powerLevel,
+        powerLevel: latestPowerLevel,
         profile: useResourceProfileStore.getState().profile,
         viewCached: isProjectViewCached(),
         documentHidden: document.visibilityState === "hidden",
@@ -53,7 +57,7 @@ export function usePowerSavingMotion(): void {
     };
 
     const offPolicy = window.electron?.events?.on("system:power-policy-changed", (snapshot) => {
-      powerLevel = snapshot.level;
+      latestPowerLevel = snapshot.level;
       apply();
     });
     const offLifecycle = subscribeProjectViewLifecycle(apply);
@@ -71,4 +75,8 @@ export function usePowerSavingMotion(): void {
       delete document.body.dataset.powerSaving;
     };
   }, []);
+}
+
+export function resetPowerSavingMotionForTests(): void {
+  latestPowerLevel = "active";
 }

@@ -10,7 +10,42 @@ function fakeHistogram(values: { count: number; p99Ms: number; maxMs: number }):
   } as unknown as IntervalHistogram;
 }
 
+/** A histogram over explicit samples (ms), ranked the way HdrHistogram_c does. */
+function sampledHistogram(samplesMs: number[]): IntervalHistogram {
+  const sorted = [...samplesMs].sort((a, b) => a - b);
+  return {
+    count: sorted.length,
+    percentile: (p: number) => {
+      const rank = Math.max(1, Math.trunc((Math.min(p, 100) / 100) * sorted.length + 0.5));
+      return sorted[rank - 1] * 1_000_000;
+    },
+    max: sorted[sorted.length - 1] * 1_000_000,
+  } as unknown as IntervalHistogram;
+}
+
 describe("readExcessEventLoopDelay", () => {
+  it("keeps one isolated pause out of p99 even when it starves the window of samples", () => {
+    // A 3.6s block inside a 5s window leaves ~27 samples at 50ms; a plain p99
+    // would rank the pause itself.
+    const reading = readExcessEventLoopDelay(sampledHistogram([...Array(27).fill(52), 3650]), 50);
+    expect(reading.p99Ms).toBeCloseTo(2);
+    expect(reading.maxMs).toBe(3600);
+  });
+
+  it("lets two stalls in one window reach p99", () => {
+    const reading = readExcessEventLoopDelay(
+      sampledHistogram([...Array(40).fill(51), 450, 460]),
+      50
+    );
+    expect(reading.p99Ms).toBe(400);
+  });
+
+  it("uses a true p99 once the window is large", () => {
+    const samples = [...Array(494).fill(51), 300, 310, 320, 330, 340, 350];
+    // round(0.99 × 500) = 495 → the sixth-worst sample, as before this change.
+    expect(readExcessEventLoopDelay(sampledHistogram(samples), 50).p99Ms).toBe(250);
+  });
+
   it("subtracts the sampling period so an idle loop reads as no delay", () => {
     const reading = readExcessEventLoopDelay(
       fakeHistogram({ count: 90, p99Ms: 52, maxMs: 58 }),

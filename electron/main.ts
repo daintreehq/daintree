@@ -88,7 +88,6 @@ import {
   setupWindowFocusThrottle,
   registerWindowForFocusThrottle,
 } from "./window/powerMonitor.js";
-import { deliverPowerPolicy } from "./window/powerPolicyDelivery.js";
 import {
   getProjectStatsService,
   getFleetSnapshotService,
@@ -523,7 +522,6 @@ if (!gotTheLock) {
           }
         }
         deliverOpenSystemMemoryPressure(win, wc);
-        deliverPowerPolicy(wc);
         // Refresh workspace direct port (preload context is reset on reload)
         getWorkspaceClientRef()?.attachDirectPort(win.id, wc);
 

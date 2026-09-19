@@ -360,9 +360,10 @@ describe("setupPowerMonitor", () => {
 
     expect(workspaceClient.waitForReady).toHaveBeenCalledTimes(1);
     expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
-    // The rest of the resume sequence still runs.
     expect(workspaceClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
-    expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    // The wake refresh is owed to the next focus rather than run unseen — the
+    // power policy pays it once when the user comes back.
+    expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
   });
 
   it("does not re-enable polling on resume while the screen is still locked", async () => {
@@ -379,7 +380,7 @@ describe("setupPowerMonitor", () => {
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
-    expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
   });
 
   it("records battery, AC, lock and unlock as power observations", async () => {
