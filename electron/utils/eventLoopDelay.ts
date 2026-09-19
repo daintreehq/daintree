@@ -9,6 +9,10 @@ import type { IntervalHistogram } from "node:perf_hooks";
  */
 export const EVENT_LOOP_HISTOGRAM_RESOLUTION_MS = 50;
 
+// Unblocked time below which a window counts as saturated rather than as
+// holding one isolated pause — see readExcessEventLoopDelay.
+const SATURATED_WINDOW_UNBLOCKED_MS = 500;
+
 export interface EventLoopDelayReading {
   /** p99 delay beyond the sampling period, ms. */
   p99Ms: number;
@@ -23,12 +27,15 @@ export interface EventLoopDelayReading {
  * resolution the histogram was built with. An empty histogram, or a read that
  * yields a non-finite value, reads as no measured delay.
  *
- * The tail is p99, but never the single worst sample. HdrHistogram ranks p99
- * at round(0.99 × count), which is the maximum itself once a window holds
- * fewer than ~100 samples — and one long pause both is the maximum and eats
- * the window's samples (a 3.6s block leaves ~28 at 50ms). Capping the rank at
- * count − 1 keeps an isolated pause in `maxMs` and out of `p99Ms`, as it was
- * at 10ms where windows held hundreds of samples.
+ * The tail is p99 read as a 10ms histogram would have read it. HdrHistogram
+ * ranks p99 at round(0.99 × count), which is the maximum itself once a window
+ * holds 50 samples or fewer. At 10ms that took a window blocked for all but
+ * ~500ms — saturation, and the maximum rightly stood. At 50ms a single 3.6s
+ * pause already starves the window to ~28 samples, so the rank is capped at
+ * count − 1 (keeping an isolated pause in `maxMs`, out of `p99Ms`) unless the
+ * samples cover no more than SATURATED_WINDOW_UNBLOCKED_MS: a window that was
+ * all but one block still reads as saturated. At 10ms the cap never changes the
+ * rank.
  */
 export function readExcessEventLoopDelay(
   histogram: IntervalHistogram,
@@ -40,7 +47,8 @@ export function readExcessEventLoopDelay(
   };
   const count = histogram.count;
   if (count === 0) return { p99Ms: 0, maxMs: 0 };
-  const tailPercentile = count > 1 ? Math.min(99, ((count - 1) / count) * 100) : 100;
+  const saturated = count * resolutionMs <= SATURATED_WINDOW_UNBLOCKED_MS;
+  const tailPercentile = saturated ? 99 : Math.min(99, ((count - 1) / count) * 100);
   return {
     p99Ms: excess(histogram.percentile(tailPercentile)),
     maxMs: excess(histogram.max),

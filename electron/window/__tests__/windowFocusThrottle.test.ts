@@ -466,6 +466,58 @@ describe("WindowFocusThrottle", () => {
     expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
   });
 
+  it("settles an earlier wake's debt in the next recovery, not twice", async () => {
+    const { mocks } = setup();
+    powerHandlers.get("lock-screen")!();
+    powerHandlers.get("suspend")!();
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000); // woke to a locked screen: debt owed
+    powerHandlers.get("suspend")!();
+    clearServiceMocks(mocks);
+
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(1000);
+    powerHandlers.get("unlock-screen")!(); // lands inside the second delay
+    await vi.advanceTimersByTimeAsync(1000);
+
+    expect(mocks.workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
+  });
+
+  it("drops a recovery the machine slept through before it finished", async () => {
+    const { mocks } = setup();
+    let releaseReady: () => void = () => {};
+    vi.mocked(mocks.workspaceClient.waitForReady).mockImplementationOnce(
+      () => new Promise<void>((resolve) => (releaseReady = resolve))
+    );
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000); // handler now awaits the host
+    powerHandlers.get("suspend")!();
+    clearServiceMocks(mocks);
+
+    releaseReady();
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.refreshOnWake).not.toHaveBeenCalled();
+  });
+
+  it("keeps the wake refresh owed when recovery fails before deciding", async () => {
+    const { mocks, main } = setup();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(mocks.workspaceClient.waitForReady).mockRejectedValueOnce(new Error("not ready"));
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+    clearServiceMocks(mocks);
+
+    blur(main);
+    focus(main);
+
+    expect(mocks.workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
   it("returns to an ordinary refresh once the wake has been paid", async () => {
     const { mocks, main } = setup();
     powerHandlers.get("resume")!();

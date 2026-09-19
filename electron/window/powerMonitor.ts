@@ -35,6 +35,10 @@ let resumeTimeout: NodeJS.Timeout | null = null;
 // back rather than run into a locked screen and then again on unlock.
 let wakeRecoveryPending = false;
 let wakeRefreshOwed = false;
+// Bumped by every suspend and resume. A recovery handler still awaiting the
+// workspace host when the machine sleeps again, or wakes again, is superseded:
+// it must not re-enable polling, refresh, or touch the flags above.
+let wakeGeneration = 0;
 
 export function clearResumeTimeout(): void {
   if (resumeTimeout) {
@@ -118,6 +122,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
 
   powerMonitor.on("suspend", () => {
     clearResumeTimeout();
+    wakeGeneration += 1;
     const ptyClient = deps.getPtyClient();
     const workspaceClient = deps.getWorkspaceClient();
     const watchdog = deps.getMainProcessWatchdogClient?.() ?? null;
@@ -141,8 +146,11 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
   powerMonitor.on("resume", () => {
     clearResumeTimeout();
     wakeRecoveryPending = true;
+    const generation = ++wakeGeneration;
+    const superseded = () => generation !== wakeGeneration;
     resumeTimeout = setTimeout(async () => {
       resumeTimeout = null;
+      let refreshDecided = false;
       // Capture and clear suspendTime up front so a mid-handler exception
       // can't leak it into the next wake cycle's sleepDuration calculation.
       const sleepDuration = suspendTime ? Date.now() - suspendTime : 0;
@@ -162,6 +170,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         }
         if (workspaceClient) {
           await workspaceClient.waitForReady();
+          if (superseded()) return;
           // Only re-enable polling and refresh if someone can see a window. If
           // the app is still blurred or the screen is still locked (the usual
           // state right after a laptop wakes), leave polling paused and owe the
@@ -169,6 +178,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
           evaluateWindowObservations();
           const observable = getPowerPolicy().canObserve;
           wakeRecoveryPending = false;
+          refreshDecided = true;
           if (observable) {
             workspaceClient.setPollingEnabled(true);
           }
@@ -176,6 +186,7 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
           if (observable) {
             wakeRefreshOwed = false;
             await workspaceClient.refreshOnWake();
+            if (superseded()) return;
           } else {
             wakeRefreshOwed = true;
           }
@@ -186,8 +197,11 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         refreshForgeTokenHealth({ force: true });
       } catch (error) {
         console.error("[MAIN] Error during resume:", error);
+        // Recovery failed before deciding: keep the refresh owed rather than
+        // dropping it along with any focus that returned meanwhile.
+        if (!refreshDecided && !superseded()) wakeRefreshOwed = true;
       } finally {
-        wakeRecoveryPending = false;
+        if (!superseded()) wakeRecoveryPending = false;
       }
       // Announced whether or not the recovery above succeeded. A failed or
       // partial recovery is exactly when a listener most needs to know the
@@ -296,11 +310,13 @@ function applyPollingPolicy(snapshot: PowerPolicySnapshot): void {
       workspaceClient.setPollingEnabled(canObserve);
       workspaceClient.setPRPollCadence(canObserve);
     }
-    if (regainedObserver) {
+    // A pending wake recovery refreshes on its own, settling any refresh an
+    // earlier wake left owed; otherwise pay that debt, or refresh plainly.
+    if (regainedObserver && !wakeRecoveryPending) {
       if (wakeRefreshOwed) {
         wakeRefreshOwed = false;
         void workspaceClient.refreshOnWake();
-      } else if (!wakeRecoveryPending) {
+      } else {
         void workspaceClient.refresh();
       }
     }

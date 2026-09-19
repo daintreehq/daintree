@@ -32,6 +32,22 @@ describe("readExcessEventLoopDelay", () => {
     expect(reading.maxMs).toBe(3600);
   });
 
+  it("reads a window blocked almost throughout as saturated", () => {
+    // The loop ran for ~50ms of a 5s window: that is saturation, not an
+    // isolated pause, and a 10ms histogram's p99 would have been this block.
+    const reading = readExcessEventLoopDelay(sampledHistogram([52, 4950]), 50);
+    expect(reading.p99Ms).toBe(4900);
+  });
+
+  it("matches the plain p99 rank at 10ms, where the cap never applies", () => {
+    for (const count of [2, 30, 50, 51, 99, 100, 101, 250]) {
+      const samples = [...Array(count - 1).fill(11), 900];
+      const histogram = sampledHistogram(samples);
+      const plain = Math.max(0, histogram.percentile(99) / 1_000_000 - 10);
+      expect(readExcessEventLoopDelay(histogram, 10).p99Ms).toBe(plain);
+    }
+  });
+
   it("lets two stalls in one window reach p99", () => {
     const reading = readExcessEventLoopDelay(
       sampledHistogram([...Array(40).fill(51), 450, 460]),
