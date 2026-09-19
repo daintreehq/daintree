@@ -41,6 +41,10 @@ const serviceMock = vi.hoisted(() => ({
   filterOrchestratorPanes: vi.fn((panes: Array<{ paneId: string }>) =>
     panes.map((pane) => pane.paneId)
   ),
+  isPaneWakeEnabled: vi.fn(() => false),
+  setPaneWakeEnabled: vi.fn((enabled: boolean) => enabled),
+  getPaneWatchState: vi.fn(() => null),
+  stopPaneWatches: vi.fn(),
 }));
 
 const paneConfigMock = vi.hoisted(() => ({
@@ -173,6 +177,33 @@ describe("mcpServer IPC adversarial", () => {
       /boolean/
     );
     expect(serviceMock.setAuditEnabled).not.toHaveBeenCalled();
+  });
+
+  it("setPaneWakeEnabled rejects non-boolean values (#12491)", async () => {
+    for (const value of ["true", 1, null]) {
+      await expect(
+        getHandler(CHANNELS.MCP_SERVER_SET_PANE_WAKE_ENABLED)(fakeEvent(), value)
+      ).rejects.toThrow(/boolean/);
+    }
+    expect(serviceMock.setPaneWakeEnabled).not.toHaveBeenCalled();
+    await expect(
+      getHandler(CHANNELS.MCP_SERVER_SET_PANE_WAKE_ENABLED)(fakeEvent(), true)
+    ).resolves.toBe(true);
+  });
+
+  it.each([
+    ["getPaneWatchState", CHANNELS.MCP_SERVER_GET_PANE_WATCH_STATE],
+    ["stopPaneWatches", CHANNELS.MCP_SERVER_STOP_PANE_WATCHES],
+  ] as const)("%s rejects an empty or non-string terminal id (#12491)", async (method, channel) => {
+    for (const terminalId of ["", 42, null, undefined]) {
+      await expect(getHandler(channel)(fakeEvent(), terminalId)).rejects.toThrow(/terminalId/);
+    }
+    expect(serviceMock[method]).not.toHaveBeenCalled();
+  });
+
+  it("stopPaneWatches forwards the pane to the service (#12491)", async () => {
+    await getHandler(CHANNELS.MCP_SERVER_STOP_PANE_WATCHES)(fakeEvent(), "pane-1");
+    expect(serviceMock.stopPaneWatches).toHaveBeenCalledWith("pane-1");
   });
 
   it("setAuditMaxRecords rejects non-integer or out-of-range values", async () => {
@@ -393,10 +424,11 @@ describe("mcpServer IPC adversarial", () => {
     });
   });
 
-  it("cleanup removes all thirty registered handlers", () => {
+  it("cleanup removes all thirty-four registered handlers", () => {
     // 24 baseline + issueNativeGrant + revokeNativeGrant (#10648) + the four
-    // terminal hand-over operations (#12490).
-    expect(ipcHandlers.size).toBe(30);
+    // terminal hand-over operations (#12490) + the pane wake setting's get/set
+    // and a pane's watch state/stop (#12491).
+    expect(ipcHandlers.size).toBe(34);
     cleanup();
     expect(ipcHandlers.size).toBe(0);
   });
