@@ -87,8 +87,10 @@ function evidenceExpiry(timestamps: readonly number[], minCount: number): number
 const DIAGNOSTICS_MAX_SIGNALS = 200;
 // A rejected CallTool is audited under whatever `params.name` the client sent,
 // so `toolId` can be arbitrary client text. Only names in the MCP tool-name
-// grammar (which every action and plugin id satisfies) leave the machine.
-const DIAGNOSTICS_TOOL_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
+// character set (which every action and plugin id satisfies) leave the
+// machine. The length allows project plugin ids, whose
+// `project__{projectId}__{publisher}.{name}.{action}` form runs past 200.
+const DIAGNOSTICS_TOOL_ID_PATTERN = /^[A-Za-z0-9_.-]{1,256}$/;
 const DIAGNOSTICS_UNRECOGNIZED_TOOL_ID = "<unrecognized>";
 
 function diagnosticsToolId(toolId: string): string {

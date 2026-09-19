@@ -1779,9 +1779,11 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
 
   it("counts every 401 while coalesced pre-auth rows count once per record", () => {
     const { service } = makeFixture();
-    service.recordAuth401();
-    service.recordAuth401();
-    service.recordAuth401();
+    withSequentialClock(() => {
+      service.recordAuth401();
+      service.recordAuth401();
+      service.recordAuth401();
+    });
 
     const snapshot = service.getDiagnosticsSnapshot();
     expect(snapshot.auth401Count).toBe(3);
@@ -1966,7 +1968,7 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     service.getAuditStats(); // seed the baseline
     const prose = "please summarise the quarterly numbers for ACME";
     append(service, { toolId: prose, outcome: { kind: "unauthorized" } });
-    append(service, { toolId: `x${"y".repeat(128)}`, outcome: { kind: "unauthorized" } });
+    append(service, { toolId: `x${"y".repeat(256)}`, outcome: { kind: "unauthorized" } });
 
     const snapshot = service.getDiagnosticsSnapshot();
     const serialized = JSON.stringify(snapshot);
@@ -1978,6 +1980,18 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     const firstSeen = snapshot.anomalySignals.filter((s) => s.kind === "first-seen-combination");
     expect(firstSeen).toHaveLength(2);
     expect(new Set(firstSeen.map((s) => s.toolId))).toEqual(new Set([unrecognized[0]!.toolId]));
+  });
+
+  it("keeps attribution for maximum-length project plugin ids", () => {
+    const { service } = makeFixture();
+    // project__{64-hex projectId}__{64-char publisher.name}.{64-char command}
+    const manifestId = `${"p".repeat(31)}.${"n".repeat(32)}`;
+    const projectPluginToolId = `project__${"a".repeat(64)}__${manifestId}.${"c".repeat(64)}`;
+    append(service, { toolId: projectPluginToolId });
+
+    expect(service.getDiagnosticsSnapshot().perTool).toEqual([
+      { toolId: projectPluginToolId, callCount: 1, failureCount: 0 },
+    ]);
   });
 
   it("caps exported signals to the newest 200 while reporting the full counts", () => {
