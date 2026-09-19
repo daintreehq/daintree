@@ -85,6 +85,13 @@ interface Subscriber {
 // Mirrors `useGlobalMinuteTicker`'s refcounted listener Set so a tab resume
 // fans out to all consumers without each hook independently re-registering
 // the same DOM/IPC listener.
+/**
+ * How long a warm reactivation waits for its targeted project switch before
+ * fetching on its own. Main sends the switch after the warm paint gate, whose
+ * hard timeout is ~1.5s, so this covers a slow gate with margin.
+ */
+const REACTIVATION_SWITCH_GRACE_MS = 3_000;
+
 const subscribers = new Set<Subscriber>();
 let visibilityHandler: (() => void) | null = null;
 let sidebarHandler: (() => void) | null = null;
@@ -393,12 +400,23 @@ export function usePollingLifecycle(config: PollingLifecycleConfig): PollingLife
           pollTimerRef.current = null;
         }
       },
-      // Re-arm only. A warm reactivation also delivers a targeted project
-      // switch, whose `onProjectSwitch` already fetches with "reactivate" —
-      // fetching here too would bring back the double fetch per switch
-      // (#10765/#10767).
+      // Not an immediate fetch: a warm reactivation also delivers a targeted
+      // project switch once the paint gate releases, and its `onProjectSwitch`
+      // clears this timer and does the one "reactivate" fetch itself — fetching
+      // here too would bring back the double fetch per switch (#10765/#10767).
+      // A reactivation with no switch behind it (a failed switch rolling back
+      // to this view) still catches up when the grace lapses, rather than
+      // waiting out a whole interval armed from zero.
       onViewActivated: () => {
-        scheduleNextPoll();
+        if (!aliveRef.current || configRef.current.enabled === false) return;
+        if (isProjectViewCached()) return;
+        if (pollTimerRef.current) clearTimeout(pollTimerRef.current);
+        pollTimerRef.current = setTimeout(() => {
+          pollTimerRef.current = null;
+          void callFetchFn(false, "reactivate").then(() => {
+            if (aliveRef.current) scheduleNextPoll();
+          });
+        }, REACTIVATION_SWITCH_GRACE_MS);
       },
     };
 

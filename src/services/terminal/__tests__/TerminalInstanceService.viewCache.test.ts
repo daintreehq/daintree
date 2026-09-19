@@ -59,7 +59,14 @@ vi.mock("@xterm/addon-webgl", () => ({
 
 type ViewCacheTestService = {
   instances: Map<string, ManagedTerminal>;
-  rendererPolicy: { applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void };
+  rendererPolicy: {
+    applyRendererPolicy: (id: string, tier: TerminalRefreshTier) => void;
+    resendBackendTier: (id: string) => void;
+    deps: {
+      onTierApplied?: (id: string, tier: TerminalRefreshTier, managed: ManagedTerminal) => void;
+    };
+  };
+  scheduleWhySlowReport: () => void;
   webGLManager: {
     releaseContext: (id: string) => void;
     pinFocus: (id: string, managed: ManagedTerminal) => void;
@@ -134,6 +141,45 @@ describe("TerminalInstanceService project-view cache lifecycle (#12514)", () => 
     expect(renderSuspension.suspendXtermRender).toHaveBeenCalledWith(opened.terminal);
     expect(applyPolicy).toHaveBeenCalledWith("a", TerminalRefreshTier.BACKGROUND);
     expect(applyPolicy).toHaveBeenCalledWith("b", TerminalRefreshTier.BACKGROUND);
+  });
+
+  it("re-asserts the background cadence for a pane that was already background", () => {
+    // Another window showing this project may have raised the host cadence
+    // since this view last sent it; the policy alone would send nothing.
+    const resend = vi
+      .spyOn(service.rendererPolicy, "resendBackendTier")
+      .mockImplementation(() => {});
+    service.instances.set(
+      "hidden",
+      makeManaged({ lastAppliedTier: TerminalRefreshTier.BACKGROUND })
+    );
+    service.instances.set("shown", makeManaged({ lastAppliedTier: TerminalRefreshTier.VISIBLE }));
+
+    emit("cached");
+
+    expect(resend.mock.calls).toEqual([["hidden"]]);
+    expect(applyPolicy.mock.calls).toEqual([["shown", TerminalRefreshTier.BACKGROUND]]);
+  });
+
+  it("keeps measured sizes through a cache-driven demotion but not an ordinary one", () => {
+    // Background window resizes scale a cached view's panes from lastWidth /
+    // lastHeight; zeroing them on the cache demotion would skip every pane.
+    vi.spyOn(service, "scheduleWhySlowReport").mockImplementation(() => {});
+    const onTierApplied = service.rendererPolicy.deps.onTierApplied;
+    const managed = makeManaged({
+      isVisible: true,
+      lastWidth: 800,
+      lastHeight: 600,
+      terminal: { options: {} } as ManagedTerminal["terminal"],
+    });
+
+    viewCache.cached = true;
+    onTierApplied?.("a", TerminalRefreshTier.BACKGROUND, managed);
+    expect([managed.lastWidth, managed.lastHeight]).toEqual([800, 600]);
+
+    viewCache.cached = false;
+    onTierApplied?.("a", TerminalRefreshTier.BACKGROUND, managed);
+    expect([managed.lastWidth, managed.lastHeight]).toEqual([0, 0]);
   });
 
   it("keeps WebGL contexts through the dwell and releases them once it lapses", () => {

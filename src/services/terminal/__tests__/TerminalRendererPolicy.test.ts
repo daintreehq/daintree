@@ -516,6 +516,23 @@ describe("TerminalRendererPolicy", () => {
       expect(onResumeFlush).toHaveBeenCalledWith("test-id");
     });
 
+    it("re-sends the recorded backend tier on request, even when unchanged", async () => {
+      const { terminalClient } = await import("@/clients");
+      mockDeps.isViewCached = () => true;
+      const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");
+      policy = new TerminalRendererPolicy(mockDeps);
+      mockManagedTerminal.lastAppliedTier = TerminalRefreshTier.FOCUSED;
+      policy.applyRendererPolicy("test-id", TerminalRefreshTier.FOCUSED);
+      vi.mocked(terminalClient.setActivityTier).mockClear();
+
+      policy.resendBackendTier("test-id");
+      policy.resendBackendTier("unknown-id");
+
+      expect(vi.mocked(terminalClient.setActivityTier).mock.calls).toEqual([
+        ["test-id", "background", 500],
+      ]);
+    });
+
     it("keeps downgrade hysteresis for a view that is not cached", async () => {
       mockDeps.isViewCached = () => false;
       const { TerminalRendererPolicy } = await import("../TerminalRendererPolicy");

@@ -281,8 +281,15 @@ class TerminalInstanceService {
           // a container that resized while hidden (e.g. window resize during
           // bulk worktree activity) can dedup-suppress the corrective resize
           // that re-syncs xterm and the PTY on wake (issue #7741).
-          managed.lastWidth = 0;
-          managed.lastHeight = 0;
+          //
+          // Not for a cache-driven demotion (#12514): background window
+          // resizes scale a cached view's panes from these measurements
+          // (`applyBackgroundWindowResize`), and its reveal reconciles
+          // geometry dedup-exempt anyway.
+          if (!isProjectViewCached()) {
+            managed.lastWidth = 0;
+            managed.lastHeight = 0;
+          }
         } else {
           // Tier upgrade path: clear the reduce cooldown so restoreScrollback
           // is unconditional and the next BACKGROUND drop isn't artificially
@@ -400,7 +407,16 @@ class TerminalInstanceService {
   private handleViewCached(): void {
     for (const [id, managed] of this.instances) {
       if (managed.isOpened) suspendXtermRender(managed.terminal);
-      this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      if (managed.lastAppliedTier === TerminalRefreshTier.BACKGROUND) {
+        // Already background here, so the policy would send nothing — but the
+        // host keeps one cadence per terminal, and a sibling window showing
+        // this project may have raised it since (its cached-view demotions
+        // are dropped while it is visible). Now that this view is cached too,
+        // say so again.
+        this.rendererPolicy.resendBackendTier(id);
+      } else {
+        this.rendererPolicy.applyRendererPolicy(id, TerminalRefreshTier.BACKGROUND);
+      }
     }
     this.clearCachedWebGLReleaseTimer();
     this.cachedWebGLReleaseTimer = setTimeout(() => {

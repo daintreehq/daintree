@@ -65,6 +65,17 @@ export class TerminalRendererPolicy {
     terminalClient.setActivityTier(id, tier, pollingIntervalMs);
   }
 
+  /**
+   * Send the recorded backend tier again even though it has not changed. The
+   * pty-host keeps one cadence per terminal and the last writer wins, so this
+   * view's record can be stale against what another window last asserted.
+   */
+  resendBackendTier(id: string): void {
+    const tier = this.lastBackendTier.get(id);
+    if (tier === undefined) return;
+    terminalClient.setActivityTier(id, tier, this.lastBackendPollingMs.get(id));
+  }
+
   applyRendererPolicy(id: string, requestedTier: TerminalRefreshTier): void {
     this.knownTerminalIds.add(id);
     const managed = this.deps.getInstance(id);

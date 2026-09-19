@@ -825,24 +825,29 @@ describe("usePollingLifecycle", () => {
       expect(calculateNextInterval).toHaveBeenCalledTimes(1);
     });
 
-    it("re-arms on warm activation without fetching, and reveal adds nothing", async () => {
+    it("catches up once after the switch grace when no project switch follows", async () => {
+      // A failed switch rolling back to this view sends warm-activated with no
+      // PROJECT_ON_SWITCH behind it; the poll must not restart from zero.
       const { fetchFn, calculateNextInterval } = mount();
       await advance(0);
       await emit(handlers.cached);
       await advance(INTERVAL * 3);
 
       await emit(handlers.warm);
-      // The targeted PROJECT_ON_SWITCH owns the reactivation fetch.
-      expect(fetchFn).toHaveBeenCalledTimes(1);
-      expect(calculateNextInterval).toHaveBeenCalledTimes(2);
-
       await emit(handlers.revealed);
+      // Nothing yet — a targeted switch would own the fetch if it arrived.
       expect(fetchFn).toHaveBeenCalledTimes(1);
-      expect(calculateNextInterval).toHaveBeenCalledTimes(2);
 
-      await advance(INTERVAL);
+      await advance(3_000);
       expect(fetchFn).toHaveBeenCalledTimes(2);
-      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("scheduled");
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("reactivate");
+
+      // Then the ordinary cadence, from one armed timer.
+      const armed = calculateNextInterval.mock.calls.length;
+      await advance(INTERVAL);
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+      expect(fetchFn.mock.calls[2]?.[0]?.reason).toBe("scheduled");
+      expect(calculateNextInterval).toHaveBeenCalledTimes(armed + 1);
     });
 
     it("fetches once per warm reactivation when the targeted project switch follows", async () => {
@@ -862,6 +867,8 @@ describe("usePollingLifecycle", () => {
         await vi.advanceTimersByTimeAsync(0);
       });
       await emit(handlers.revealed);
+      // The switch cleared the grace timer, so it never adds a second fetch.
+      await advance(3_000);
 
       expect(fetchFn).toHaveBeenCalledTimes(2);
       expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("reactivate");
@@ -885,10 +892,14 @@ describe("usePollingLifecycle", () => {
       await advance(INTERVAL * 5);
       expect(fetchFn).toHaveBeenCalledTimes(1);
 
+      // Background-restored views get their first PROJECT_ON_SWITCH on
+      // activation too; without one, the grace catch-up arms the cadence.
       await emit(handlers.warm);
+      await advance(3_000);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
       expect(calculateNextInterval).toHaveBeenCalledTimes(1);
       await advance(INTERVAL);
-      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(fetchFn).toHaveBeenCalledTimes(3);
     });
 
     it("does not wake a cached view's poll when the window is restored", async () => {
@@ -905,6 +916,7 @@ describe("usePollingLifecycle", () => {
 
       // The restore was still recorded, so activation picks the visible tier.
       await emit(handlers.warm);
+      await advance(3_000);
       expect(calculateNextInterval).toHaveBeenLastCalledWith({ isVisible: true });
     });
 
@@ -930,14 +942,16 @@ describe("usePollingLifecycle", () => {
 
       const second = mount();
       await advance(0);
-      const armed = second.calculateNextInterval.mock.calls.length;
+      const firstFetches = first.fetchFn.mock.calls.length;
+      const secondFetches = second.fetchFn.mock.calls.length;
 
       await emit(handlers.cached);
       await emit(handlers.warm);
+      await advance(3_000);
 
-      // A leaked registration from the first mount would fan `active` out a
-      // second time.
-      expect(second.calculateNextInterval).toHaveBeenCalledTimes(armed + 1);
+      // Only the live hook catches up; the torn-down one is never reached.
+      expect(first.fetchFn).toHaveBeenCalledTimes(firstFetches);
+      expect(second.fetchFn).toHaveBeenCalledTimes(secondFetches + 1);
     });
   });
 });

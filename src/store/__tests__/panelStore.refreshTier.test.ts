@@ -332,7 +332,12 @@ describe("getTerminalRefreshTier - cached project view (#12514)", () => {
       detectedAgentId: "claude",
       agentState: "working",
     });
+    viewCache.cached = true;
+    expect(getTerminalRefreshTier(workingAgent, true)).toBe(TerminalRefreshTier.BACKGROUND);
+
+    viewCache.cached = false;
 
     expect(getTerminalRefreshTier(workingAgent, true)).toBe(TerminalRefreshTier.FOCUSED);
+    expect(getTerminalRefreshTier(workingAgent, false)).toBe(TerminalRefreshTier.FOCUSED);
   });
 });
