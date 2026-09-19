@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 import { McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import type { ActionErrorCode } from "../../../shared/types/actions.js";
 import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { TerminalSubmitGuard } from "../../../shared/types/pty-host.js";
@@ -125,6 +126,24 @@ export const WATCH_NOT_ELIGIBLE = "WATCH_NOT_ELIGIBLE";
 export const WATCH_TARGET_UNAVAILABLE = "WATCH_TARGET_UNAVAILABLE";
 export const WATCH_LIMIT_REACHED = "WATCH_LIMIT_REACHED";
 export const WATCH_VALIDATION_ERROR = "VALIDATION_ERROR";
+
+/**
+ * The action-error code a watch refusal is audited under. The tool error the
+ * caller receives keeps the precise code; `ActionErrorCode` is a public
+ * contract and is not widened for one feature's refusals.
+ */
+export function auditCodeForWatchRefusal(code: string): ActionErrorCode {
+  switch (code) {
+    case WATCH_WAKE_DISABLED:
+      return "DISABLED";
+    case WATCH_NOT_ELIGIBLE:
+      return "RESTRICTED";
+    case WATCH_TARGET_UNAVAILABLE:
+      return "NOT_FOUND";
+    default:
+      return "VALIDATION_ERROR";
+  }
+}
 
 /**
  * How long a wake's outcome is followed after it is queued. Each step reads

@@ -125,6 +125,7 @@ import {
   TERMINAL_WATCH_TOOLS,
   TerminalWatchError,
   WATCH_NOT_ELIGIBLE,
+  auditCodeForWatchRefusal,
   runTerminalWatchTool,
   type OwnPane,
   type TerminalWatchHandlers,
@@ -2174,7 +2175,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         if (TERMINAL_WATCH_TOOLS.has(actionId)) {
           emitToolCallStarted(false);
           const refuse = (code: string, message: string) => {
-            outcome = { kind: "result", value: { ok: false, error: { code, message } } };
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: auditCodeForWatchRefusal(code), message } },
+            };
             return buildToolError({ code, message });
           };
           // An api-key client has no pane of its own. The external allowlist

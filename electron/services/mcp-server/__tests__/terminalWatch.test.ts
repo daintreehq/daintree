@@ -6,6 +6,7 @@ import {
   WATCH_NOT_ELIGIBLE,
   WATCH_TARGET_UNAVAILABLE,
   WATCH_WAKE_DISABLED,
+  auditCodeForWatchRefusal,
   formatWakeLine,
   runTerminalWatchTool,
   type OwnPane,
@@ -821,6 +822,15 @@ describe("TerminalWatchService (#12491)", () => {
       expect(revisions.length).toBeGreaterThan(1);
       revisions.slice(1).forEach((revision, i) => expect(revision).toBeGreaterThan(revisions[i]!));
     });
+  });
+});
+
+describe("auditCodeForWatchRefusal", () => {
+  it("audits each refusal under an existing action-error code", () => {
+    expect(auditCodeForWatchRefusal(WATCH_WAKE_DISABLED)).toBe("DISABLED");
+    expect(auditCodeForWatchRefusal(WATCH_NOT_ELIGIBLE)).toBe("RESTRICTED");
+    expect(auditCodeForWatchRefusal(WATCH_TARGET_UNAVAILABLE)).toBe("NOT_FOUND");
+    expect(auditCodeForWatchRefusal(WATCH_LIMIT_REACHED)).toBe("VALIDATION_ERROR");
   });
 });
 
