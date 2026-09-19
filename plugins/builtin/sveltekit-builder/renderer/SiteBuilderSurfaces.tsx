@@ -501,7 +501,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
   const selection = state.selection;
   const workspaceNotice = workspaceNeedsAttention(state);
   const open =
-    composer.delivery !== null ||
+    composer.deliveries.length > 0 ||
     composer.draft.trim() !== "" ||
     selection.status !== "none" ||
     state.issue !== null ||
@@ -563,7 +563,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
         {state.workspace.status === "ready" &&
         (selection.status === "ready" ||
           composer.draft.trim() !== "" ||
-          composer.delivery !== null) ? (
+          composer.deliveries.length > 0) ? (
           <AgentComposer
             memoryKey={memoryKey}
             controller={controller}

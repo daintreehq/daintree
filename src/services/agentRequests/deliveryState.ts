@@ -7,8 +7,11 @@ export type DeliveryState =
   | { status: "starting" }
   /** The session is asking its user something (trust, approval) before it can take the request. */
   | { status: "needs-you" }
-  /** No sign yet whether the agent can take typed input; the user may send anyway. */
-  | { status: "unknown-readiness" }
+  /**
+   * Waiting its turn: behind an earlier request from the same owner, or for an
+   * agent that isn't at its prompt yet. It goes in by itself when both clear.
+   */
+  | { status: "queued" }
   | { status: "sent" }
   | { status: "unconfirmed" }
   /** `partial` when typing had started: some of the prompt may be in the agent's input. */

@@ -9,7 +9,21 @@ const DELIVERY_TIMEOUT_MS = 10_000;
 const LAUNCH_POLL_MS = 500;
 /** A first launch can sit behind a login or an update; give it a real chance. */
 const LAUNCH_READY_TIMEOUT_MS = 3 * 60_000;
-const UNKNOWN_READINESS_MS = 5_000;
+const QUEUE_POLL_MS = 250;
+/** How long a request waits for its owner's subject to settle before it is judged as it stands. */
+const SUBJECT_SETTLE_TIMEOUT_MS = 30_000;
+/**
+ * How long after one request went in the next may follow it without the agent
+ * having been seen busy. A detector reads "waiting" for a beat after a prompt
+ * is typed, and two requests typed back to back arrive as one.
+ */
+const AFTER_SEND_SETTLE_MS = 5_000;
+/** How long a request's own preparation — its checks, its prompt, a launch — may take. */
+const PREPARE_TIMEOUT_MS = 30_000;
+/** How long a new session shows as starting before it is a request that is simply waiting. */
+const STARTING_SHOWN_MS = 15_000;
+/** How long a terminal's last send is remembered; well past any use of it. */
+const LAST_SENT_KEPT_MS = 60_000;
 
 export type AgentRequestDestination =
   | { kind: "terminal"; terminalId: string; title: string }
@@ -17,6 +31,8 @@ export type AgentRequestDestination =
 
 /** Everything the host can say about one request, published on every change. */
 export interface AgentRequestDelivery {
+  /** This request, among the several an owner may have waiting. */
+  id: string;
   state: DeliveryState;
   /** The destination's own name, as the surface offered it. */
   title: string;
@@ -38,8 +54,9 @@ export interface AgentRequestOptions {
   /**
    * A second `deliverAgentRequest` with a key already in flight joins that run
    * instead of starting another — a retried call or a remounted surface must not
-   * submit twice. Freed as soon as the run settles, is cancelled or is
-   * superseded, so a later send of the same words is a run of its own. The key
+   * submit twice. Held while the request waits its turn, and freed as soon as
+   * the run settles or is cancelled, so a later send of the same words is a run
+   * of its own. The key
    * must cover everything the caller knows the prompt is built from: two calls
    * that would produce different prompts are different requests. It cannot
    * cover context the run fetches for itself, so a joined call gets the fetch
@@ -49,14 +66,31 @@ export interface AgentRequestOptions {
    */
   idempotencyKey?: string;
   destination: AgentRequestDestination;
+  /**
+   * Where the request goes, asked again when its turn comes. A request queued
+   * behind one that is starting a new session means that session, not a second
+   * one — which only the owner can know.
+   */
+  resolveDestination?: () => AgentRequestDestination;
+  /**
+   * Whether what the request is about has settled. An earlier request's edit
+   * can leave the owner re-establishing its subject; `verify` is held off until
+   * it has, for a bounded wait, rather than failing a request for being early.
+   */
+  settled?: () => boolean;
   worktreeId: string | null;
   /** Whether the request may still go out at all: checked before every step. */
   stillOwned: () => boolean;
   /** Where delivery state goes. Called with the whole record, newest last. */
   onState: (delivery: AgentRequestDelivery) => void;
   buildPrompt: () => Promise<string>;
-  /** A reason the request may no longer go out, checked before building and before submitting. */
-  verify?: () => Promise<string | null>;
+  /**
+   * A reason the request may no longer go out. Asked before the prompt is built
+   * and again after, the second time with `"built"`: that one is about the
+   * prompt that now exists, so an owner that resolves its subject late can
+   * refuse a prompt built from something it no longer stands behind.
+   */
+  verify?: (after?: "built") => Promise<string | null>;
   /** A launch resolved to this terminal — the owner may want to point at it. */
   onDestination?: (terminalId: string) => void;
 }
@@ -72,28 +106,101 @@ interface Run extends AgentRequestDelivery {
   releaseKey?: () => void;
 }
 
-/** Newest request per owner; an older one still running stops reporting. */
-const latestRun = new Map<string, Run>();
+/**
+ * Each owner's requests, oldest first. They go out one at a time, in order: a
+ * second request sent while the agent is still working on the first waits for
+ * it rather than replacing it.
+ */
+const queues = new Map<string, Run[]>();
 const inFlight = new Map<string, Promise<void>>();
+/** When a request last went into a terminal, and whether the agent has been seen busy since. */
+const lastSent = new Map<string, { at: number; busySeen: boolean }>();
+/**
+ * The one request allowed past the last look and into a terminal at a time.
+ * The queue orders an owner's requests; two owners — two previews — can still
+ * aim at one agent, and both would otherwise read "waiting" and type.
+ */
+const writing = new Map<string, Run>();
+let nextRunId = 0;
 
 const IN_FLIGHT_STATES = new Set<DeliveryState["status"]>([
+  "queued",
   "sending",
   "starting",
   "needs-you",
-  "unknown-readiness",
 ]);
+
+/** States an agent is observed in while it is doing something, as opposed to unreadable. */
+const BUSY_AGENT_STATES = new Set<string>(["working", "directing"]);
+
+function isQueued(run: Run): boolean {
+  return queues.get(run.ownerKey)?.includes(run) ?? false;
+}
+
+function dequeue(run: Run): void {
+  const queue = queues.get(run.ownerKey);
+  if (!queue) return;
+  const at = queue.indexOf(run);
+  if (at >= 0) queue.splice(at, 1);
+  if (queue.length === 0) queues.delete(run.ownerKey);
+}
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** "Send anyway": deliver the owner's pending request without a readiness signal. */
-export function forceAgentRequest(ownerKey: string): void {
-  const run = latestRun.get(ownerKey);
-  if (run) run.forced = true;
+/**
+ * "Send now": deliver the owner's next request without a readiness signal. Only
+ * the request at the head of the queue can be pushed on; naming one further
+ * back does nothing, since order is what the queue is for.
+ */
+export function forceAgentRequest(ownerKey: string, id?: string): void {
+  const head = queues.get(ownerKey)?.[0];
+  if (head && (id === undefined || head.id === id)) head.forced = true;
+}
+
+/**
+ * Take one waiting request out of its owner's queue, and say which it was:
+ * `removed` before anything was typed; `submitted` when it was already going in
+ * — cancelled all the same, with a record that says what can't be taken back;
+ * `absent` when no such request is waiting here.
+ */
+export function cancelAgentRequest(
+  ownerKey: string,
+  id: string
+): "removed" | "submitted" | "absent" {
+  const run = queues.get(ownerKey)?.find((candidate) => candidate.id === id);
+  if (!run) return "absent";
+  const outcome = run.submitted ? "submitted" : "removed";
+  cancelRun(run);
+  return outcome;
+}
+
+/**
+ * Part of `run` may be sitting in the agent's input. Anything typed after it
+ * would be appended to that, so what is queued behind it stops here, with its
+ * words kept, rather than going in on top.
+ */
+function stopFollowers(run: Run): void {
+  const following = (queues.get(run.ownerKey) ?? []).filter((next) => next !== run);
+  for (const next of following) {
+    dequeue(next);
+    next.releaseKey?.();
+  }
+  // Told only once every one of them is out: a sink that throws must not leave
+  // the rest queued to go in.
+  for (const next of following) {
+    emit(next, {
+      status: "failed",
+      message: "Not sent — the request before it may not have gone in cleanly",
+    });
+  }
 }
 
 /** Stop one request and say truthfully where it got to. */
 function cancelRun(run: Run): void {
-  latestRun.delete(run.ownerKey);
+  // Cancelling cannot take back what was typed, and the requests behind this
+  // one must not find out by being typed after it.
+  if (run.submitted && IN_FLIGHT_STATES.has(run.state.status)) stopFollowers(run);
+  dequeue(run);
   // A cancelled run is nobody's answer any more: holding its key would make the
   // next send of the same words join a run that will never submit.
   run.releaseKey?.();
@@ -112,7 +219,7 @@ function cancelRun(run: Run): void {
  * that becomes ready afterwards must not receive a request nobody is watching.
  */
 export function cancelAgentRequests(ownerKeyPrefix: string): void {
-  for (const run of [...latestRun.values()]) {
+  for (const run of [...queues.values()].flat()) {
     if (run.ownerKey.startsWith(ownerKeyPrefix)) cancelRun(run);
   }
 }
@@ -120,11 +227,33 @@ export function cancelAgentRequests(ownerKeyPrefix: string): void {
 function emit(run: Run, state: DeliveryState, terminalId?: string | null): void {
   run.state = state;
   if (terminalId !== undefined) run.terminalId = terminalId;
-  run.onState({
-    state: run.state,
-    title: run.title,
-    terminalId: run.terminalId,
-    ...(run.request === undefined ? {} : { request: run.request }),
+  try {
+    run.onState({
+      id: run.id,
+      state: run.state,
+      title: run.title,
+      terminalId: run.terminalId,
+      ...(run.request === undefined ? {} : { request: run.request }),
+    });
+  } catch {
+    // A surface that fails to draw a state must not decide what gets typed.
+  }
+}
+
+/** `work`, or a refusal when it takes longer than a request's preparation may. */
+function bounded<T>(work: Promise<T>, what: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${what} took too long`)), PREPARE_TIMEOUT_MS);
+    work.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
   });
 }
 
@@ -232,6 +361,7 @@ export function deliverAgentRequest(options: AgentRequestOptions): Promise<void>
     if (existing) return existing;
   }
   const run: Run = {
+    id: `request-${++nextRunId}`,
     ownerKey: options.ownerKey,
     onState: options.onState,
     state: { status: "sending" },
@@ -240,16 +370,9 @@ export function deliverAgentRequest(options: AgentRequestOptions): Promise<void>
     forced: false,
     submitted: false,
   };
-  const previous = latestRun.get(run.ownerKey);
-  if (previous) {
-    previous.forced = false;
-    // Superseded: it will notice at its next checkpoint and stop reporting, and
-    // it is nobody's answer in the meantime, so its key goes back now. Holding
-    // it would make a retry of that older request join a run that is already
-    // dead.
-    previous.releaseKey?.();
-  }
-  latestRun.set(run.ownerKey, run);
+  const queue = queues.get(run.ownerKey);
+  if (queue) queue.push(run);
+  else queues.set(run.ownerKey, [run]);
   if (idempotencyKey === undefined) return deliver(run, options);
   // Claimed before the run starts, not after: the run's own first steps can
   // call back into an owner that asks again, and a key registered afterwards
@@ -270,12 +393,13 @@ export function deliverAgentRequest(options: AgentRequestOptions): Promise<void>
 }
 
 async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
-  const { destination, worktreeId, stillOwned, verify, buildPrompt, onDestination } = options;
+  const { worktreeId, stillOwned, verify, buildPrompt, onDestination, settled } = options;
+  let destination = options.destination;
   const { title } = destination;
   // An owner that closed, moved or switched off stops the run here, whether or
   // not any surface is mounted to notice.
   const current = () => {
-    if (latestRun.get(run.ownerKey) !== run) return false;
+    if (!isQueued(run)) return false;
     if (stillOwned()) return true;
     cancelRun(run);
     return false;
@@ -287,7 +411,13 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
   try {
     await send();
   } finally {
-    if (latestRun.get(run.ownerKey) === run) latestRun.delete(run.ownerKey);
+    if (writing.get(run.terminalId ?? "") === run) writing.delete(run.terminalId ?? "");
+    const unclean =
+      isQueued(run) &&
+      (run.state.status === "unconfirmed" ||
+        (run.state.status === "failed" && run.state.partial === true));
+    if (unclean) stopFollowers(run);
+    dequeue(run);
     // Freed here rather than off the promise: a caller resuming from `await`
     // runs before a `.then` on the same promise would, and it must not be able
     // to rejoin the run it has just finished awaiting.
@@ -295,20 +425,26 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
   }
 
   async function send(): Promise<void> {
-    report({ status: "sending" }, destination.kind === "launch" ? null : destination.terminalId);
-    let prompt: string;
+    const fixedTerminal = () => (destination.kind === "launch" ? null : destination.terminalId);
+    const head = () => queues.get(run.ownerKey)?.[0] === run;
+    report({ status: head() ? "sending" : "queued" }, fixedTerminal());
+    while (!head()) {
+      await wait(QUEUE_POLL_MS);
+      if (!current()) return;
+    }
+    // Asked now rather than when it was queued: the request ahead of this one
+    // may have started the very session this one was meant for.
+    if (options.resolveDestination) destination = options.resolveDestination();
     try {
-      const problem = verify ? await verify() : null;
+      // A quick refusal for a request that can already be seen not to stand —
+      // unless its subject is still being re-established, which is not a
+      // verdict. The check that counts is the one before it is typed in.
+      const problem =
+        verify && (settled?.() ?? true) ? await bounded(verify(), "Checking the source") : null;
       if (problem) {
         report({ status: "failed", message: problem }, null);
         return;
       }
-      prompt = await buildPrompt();
-      run.request = prompt;
-      // Republished now, not at the next state change: a run cancelled
-      // mid-submit keeps its last record, and that record must carry what was
-      // typed.
-      report(run.state, destination.kind === "launch" ? null : destination.terminalId);
     } catch (error) {
       report(
         { status: "failed", message: formatErrorMessage(error, "Couldn't prepare the request") },
@@ -349,92 +485,152 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
       terminalId = destination.terminalId;
     }
 
-    // Every destination gets the same check, new session or old: a trust,
-    // approval or error prompt is also "waiting", and typed input would answer it.
-    const readyBy = Date.now() + LAUNCH_READY_TIMEOUT_MS;
-    const waitingSince = Date.now();
-    let ready = false;
+    /** A "ready" reading that may only be the prompt before this one not yet picked up. */
+    const justSentTo = (): boolean => {
+      const sent = lastSent.get(terminalId);
+      return sent !== undefined && !sent.busySeen && Date.now() - sent.at < AFTER_SEND_SETTLE_MS;
+    };
+    const launchedAt = Date.now();
+    let readyBy = Date.now() + LAUNCH_READY_TIMEOUT_MS;
     let firstCheck = true;
     let bound: DestinationIdentity | null = null;
-    while (!ready && Date.now() < readyBy) {
-      if (!firstCheck || destination.kind === "launch") await wait(LAUNCH_POLL_MS);
-      firstCheck = false;
-      if (!current()) return;
-      const entry = await observe(terminalId);
-      if (!current()) return;
-      if (entry?.error) {
-        report({ status: "failed", message: `${title} isn't running any more` }, terminalId);
-        return;
-      }
-      // No readable status is no evidence of readiness; neither is a terminal the
-      // detector hasn't classified. Both keep waiting — and after a few seconds
-      // the user may say "send anyway", because a detector can stay silent.
-      const readiness =
-        entry === undefined ? "not-yet" : launchReadiness(entry.agentState, entry.waitingReason);
-      if (readiness === "ready" || run.forced) {
-        // Bound from the same observation that proved readiness, so the two
-        // cannot disagree about which session they are about.
-        bound = identityOf(entry);
-        if (bound === null) {
-          report({ status: "failed", message: unbindable(title, entry) }, terminalId);
+    let prompt = "";
+    // Until it is typed, a request can always go back to waiting: an agent that
+    // picked something else up between the readiness that was proved and the
+    // last look is a reason to wait again, not to lose the request.
+    for (;;) {
+      // Every destination gets the same check, new session or old: a trust,
+      // approval or error prompt is also "waiting", and typed input would answer it.
+      let ready = false;
+      while (!ready && Date.now() < readyBy) {
+        if (!firstCheck || destination.kind === "launch") await wait(LAUNCH_POLL_MS);
+        firstCheck = false;
+        if (!current()) return;
+        const entry = await observe(terminalId);
+        if (!current()) return;
+        if (entry?.error) {
+          report({ status: "failed", message: `${title} isn't running any more` }, terminalId);
           return;
         }
-        ready = true;
-      } else if (readiness === "needs-you") report({ status: "needs-you" }, terminalId);
-      else if (Date.now() - waitingSince > UNKNOWN_READINESS_MS) {
-        report({ status: "unknown-readiness" }, terminalId);
+        // No readable status is no evidence of readiness; neither is a terminal
+        // the detector hasn't classified. Both keep waiting — and the user may
+        // say "send now", because a detector can stay silent.
+        let readiness =
+          entry === undefined ? "not-yet" : launchReadiness(entry.agentState, entry.waitingReason);
+        // Only an agent seen doing something counts as having picked the last
+        // request up. An unreadable status is not that, and neither is a question.
+        const busy =
+          entry !== undefined &&
+          typeof entry.agentState === "string" &&
+          BUSY_AGENT_STATES.has(entry.agentState);
+        const sent = lastSent.get(terminalId);
+        if (sent && busy) sent.busySeen = true;
+        if (readiness === "ready" && justSentTo()) readiness = "not-yet";
+        // An agent seen working is an agent that will be back at its prompt:
+        // the wait is the queue doing its job, however long the work takes.
+        // The clock runs while it is not — unreadable, finished, or asking.
+        if (busy) readyBy = Date.now() + LAUNCH_READY_TIMEOUT_MS;
+        if (readiness === "ready" || run.forced) {
+          // Bound from the same observation that proved readiness, so the two
+          // cannot disagree about which session they are about.
+          bound = identityOf(entry);
+          if (bound === null) {
+            report({ status: "failed", message: unbindable(title, entry) }, terminalId);
+            return;
+          }
+          ready = true;
+        } else if (readiness === "needs-you") report({ status: "needs-you" }, terminalId);
+        // A session that is slow to start is a request that is waiting, and a
+        // waiting request can be pushed on or taken out.
+        else if (run.state.status !== "starting" || Date.now() - launchedAt > STARTING_SHOWN_MS) {
+          report({ status: "queued" }, terminalId);
+        }
       }
-    }
-    if (!ready) {
-      report({ status: "failed", message: `${title} didn't reach its prompt` }, terminalId);
-      return;
-    }
+      if (!ready) {
+        report({ status: "failed", message: `${title} didn't reach its prompt` }, terminalId);
+        return;
+      }
 
-    const problem = verify ? await verify() : null;
-    // Checked after the last await, so nothing can move the agent in between.
-    if (!current()) return;
-    if (problem) {
-      report({ status: "failed", message: problem }, terminalId);
-      return;
+      while (writing.has(terminalId) && writing.get(terminalId) !== run) {
+        await wait(QUEUE_POLL_MS);
+        if (!current()) return;
+      }
+      writing.set(terminalId, run);
+
+      // The request ahead of this one has usually just edited what this one is
+      // about. The owner gets a bounded moment to re-establish that before the
+      // request is held to it.
+      const settleBy = Date.now() + SUBJECT_SETTLE_TIMEOUT_MS;
+      while (settled && !settled() && Date.now() < settleBy) {
+        await wait(QUEUE_POLL_MS);
+        if (!current()) return;
+      }
+
+      try {
+        let problem = verify ? await bounded(verify(), "Checking the source") : null;
+        if (!current()) return;
+        if (!problem) {
+          // Built now, not when it was queued: the locations it names are read
+          // from the source as it stands when the request goes in.
+          prompt = await bounded(buildPrompt(), "Preparing the request");
+          if (!current()) return;
+          run.request = prompt;
+          // And checked once more, because building is itself an await: what
+          // the prompt says must still be true of what it was built from.
+          problem = verify ? await bounded(verify("built"), "Checking the source") : null;
+          if (!current()) return;
+        }
+        if (problem) {
+          report({ status: "failed", message: problem }, terminalId);
+          return;
+        }
+      } catch (error) {
+        report(
+          { status: "failed", message: formatErrorMessage(error, "Couldn't prepare the request") },
+          terminalId
+        );
+        return;
+      }
+
+      // Everything above is an await, and the readiness proved before it is
+      // now history. One last observation, read for both things it can tell
+      // us: that this is still the session the run bound to, and that it is
+      // still at a prompt. "Send now" reaches here too — it waives a readiness
+      // *signal*, which is not permission to write into a different process.
+      const lastLook = await observe(terminalId);
+      if (!current()) return;
+      const identity = identityOf(lastLook);
+      if (bound === null || identity === null || !sameSession(bound, identity)) {
+        report({ status: "failed", message: sessionChanged(title, identity) }, terminalId);
+        return;
+      }
+      // Checked here, under the last await rather than over it: a destination
+      // moved to another worktree while the observation was in flight keeps
+      // both its identity and its readiness, and `terminal.sendCommand` does
+      // not enforce the worktree the request was prepared for.
+      if (!destinationStillEligible(terminalId, worktreeId)) {
+        report(
+          { status: "failed", message: `${title} left this worktree — the request wasn't sent` },
+          terminalId
+        );
+        return;
+      }
+      const lastReadiness = launchReadiness(lastLook?.agentState, lastLook?.waitingReason);
+      if (run.forced || (lastReadiness === "ready" && !justSentTo())) break;
+      // Not at its prompt after all, or another owner's request has only just
+      // gone in: back to waiting, with the terminal handed on.
+      writing.delete(terminalId);
+      report({ status: lastReadiness === "needs-you" ? "needs-you" : "queued" }, terminalId);
+      readyBy = Math.max(readyBy, Date.now() + LAUNCH_POLL_MS * 2);
     }
-    // `verify()` above is an await, and the readiness proved before it is now
-    // history. One last observation, read for both things it can tell us: that
-    // this is still the session the run bound to, and that it is still at a
-    // prompt. "Send anyway" reaches here too — it waives a readiness *signal*,
-    // which is not permission to write into a different process.
-    const settled = await observe(terminalId);
-    if (!current()) return;
-    const identity = identityOf(settled);
-    if (bound === null || identity === null || !sameSession(bound, identity)) {
-      report({ status: "failed", message: sessionChanged(title, identity) }, terminalId);
-      return;
-    }
-    // Checked here, under the last await rather than over it: a destination
-    // moved to another worktree while the observation was in flight keeps both
-    // its identity and its readiness, and `terminal.sendCommand` does not
-    // enforce the worktree the request was prepared for.
-    if (!destinationStillEligible(terminalId, worktreeId)) {
-      report(
-        { status: "failed", message: `${title} left this worktree — the request wasn't sent` },
-        terminalId
-      );
-      return;
-    }
-    const settledReadiness = launchReadiness(settled?.agentState, settled?.waitingReason);
-    if (settledReadiness !== "ready" && !run.forced) {
-      report(
-        {
-          status: "failed",
-          message:
-            settledReadiness === "needs-you"
-              ? `${title} is asking you something — the request wasn't sent`
-              : `${title} left its prompt — the request wasn't sent`,
-        },
-        terminalId
-      );
-      return;
-    }
+    // Published before the write: a run cancelled mid-submit keeps its last
+    // record, and that record must carry what was typed.
+    report({ status: "sending" }, terminalId);
     run.submitted = true;
+    for (const [id, sent] of lastSent) {
+      if (Date.now() - sent.at > LAST_SENT_KEPT_MS) lastSent.delete(id);
+    }
+    lastSent.set(terminalId, { at: Date.now(), busySeen: false });
     const result = await actionService.dispatch<{ submissionToken: string }>(
       "terminal.sendCommand",
       { terminalId, command: prompt },
@@ -459,12 +655,20 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
       if (!current()) return;
       const phase = status.ok ? (status.result.terminals[0]?.submission?.phase ?? null) : null;
       state = deliveryFromPhase(phase);
+      // The spacing is from when the prompt reached the terminal, not from when
+      // it was handed over: a long prompt takes a while to be written.
+      if (state?.status === "sent") {
+        const sent = lastSent.get(terminalId);
+        if (sent && !sent.busySeen) sent.at = Date.now();
+      }
     }
     report(state ?? { status: "unconfirmed" }, terminalId);
   }
 }
 
 export function __resetAgentRequestsForTests(): void {
-  latestRun.clear();
+  queues.clear();
+  lastSent.clear();
+  writing.clear();
   inFlight.clear();
 }

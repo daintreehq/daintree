@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ChevronRight, SquareTerminal } from "lucide-react";
 import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { getAgentConfig } from "@/config/agents";
@@ -26,6 +26,7 @@ import {
   MAX_INSTRUCTION_CHARS,
   buildAgentTaskPrompt,
   scopesFor,
+  matchScope,
   isAgentBusy,
   isUnresolvedScope,
   type AgentTarget,
@@ -36,13 +37,15 @@ import { InspectorNotice } from "./InspectorNotice.js";
 import { WaitingRow } from "./WaitingRow.js";
 import { useAgentTargets } from "./useAgentTargets.js";
 import {
+  isSettledDelivery,
   readComposerMemory,
+  removeComposerDelivery,
   updateComposerMemory,
   useComposerMemory,
   type ComposerMemory,
   type ComposerPin,
 } from "./composerMemory.js";
-import { deliverAgentRequest, forceAgentRequest } from "./agentRequest.js";
+import { deliverAgentRequest, forceAgentRequest, removeAgentRequest } from "./agentRequest.js";
 
 const STALE_SOURCE =
   "The source changed since you picked this — select it again in the page, then send";
@@ -151,7 +154,11 @@ function callSiteHint(site: { file: string; line: number; column: number }): str
 type Destination =
   { kind: "terminal"; target: AgentTarget } | { kind: "launch"; agentId: string; name: string };
 
-type DeliveryRecord = NonNullable<ComposerMemory["delivery"]>;
+type DeliveryRecord = ComposerMemory["deliveries"][number];
+
+/** Said when a request's turn came and the page still couldn't vouch for what it was about. */
+const SUBJECT_UNSETTLED =
+  "Couldn't confirm this element again after the last change — select it in the page, then send";
 
 /**
  * Hand the selection to an agent — one already running in this worktree, or a
@@ -177,8 +184,7 @@ export function AgentComposer({
   const availability = useCliAvailabilityStore((state) => state.availability);
   const availabilityKnown = useCliAvailabilityStore((state) => state.isInitialized);
   const memory = useComposerMemory(memoryKey);
-  const { draft, pinned, chosen, delivery } = memory;
-  const deliveryDismissed = memory.deliveryDismissed === true;
+  const { draft, pinned, chosen, deliveries } = memory;
   const setDraft = (next: string) => updateComposerMemory(memoryKey, { draft: next });
   const setPinned = (next: Pinned | null) => updateComposerMemory(memoryKey, { pinned: next });
   const setChosen = (next: string | null) => updateComposerMemory(memoryKey, { chosen: next });
@@ -267,23 +273,12 @@ export function AgentComposer({
   const supersedes = selection.status === "ready" ? selection.supersedes : undefined;
   useEffect(() => {
     if (!pinned || !current || !supersedes?.includes(pinned.selection.selectionId)) return;
-    const chosen = scopesFor(pinned.selection, pinned.picked, pinned.definitions).scopes[
-      pinned.scope
-    ];
-    const after = scopesFor(current.selection, current.picked, current.definitions).scopes;
-    // The chosen scope by what it is, not where it sat: a component added to
-    // the chain moves every index above it. One the new chain no longer names
-    // leaves the pin alone, and the user is offered the current selection.
-    const scope = after.findIndex((candidate) =>
-      chosen === undefined || candidate.kind !== chosen.kind
-        ? false
-        : candidate.kind === "element" ||
-          (chosen.kind === "component" &&
-            candidate.label === chosen.label &&
-            candidate.file === chosen.file &&
-            candidate.usedAt?.file === chosen.usedAt?.file &&
-            candidate.usedAt?.line === chosen.usedAt?.line &&
-            candidate.usedAt?.column === chosen.usedAt?.column)
+    // The chosen scope by what it is, not where it sat. One the new chain no
+    // longer names leaves the pin alone, and the user is offered the current
+    // selection.
+    const scope = matchScope(
+      scopesFor(pinned.selection, pinned.picked, pinned.definitions).scopes[pinned.scope],
+      scopesFor(current.selection, current.picked, current.definitions).scopes
     );
     if (scope < 0) return;
     setPinned({ ...current, scope });
@@ -301,21 +296,7 @@ export function AgentComposer({
 
   const busy =
     destination?.kind === "terminal" ? isAgentBusy(destination.target.agentState) : false;
-  const sending =
-    delivery?.state.status === "sending" ||
-    delivery?.state.status === "starting" ||
-    delivery?.state.status === "needs-you" ||
-    delivery?.state.status === "unknown-readiness";
   const needsScopeChoice = scopeUnproven && !scopePending;
-  // A delivery that failed part-way has already put some of the prompt into the
-  // agent's input, and the notice says to check the terminal before sending
-  // again. Leaving Enter armed contradicts that in the one state where sending
-  // twice is genuinely harmful, so the second send has to be asked for.
-  // An unconfirmed delivery is the same risk from the other side: the host
-  // couldn't prove the request went in, which is not proof that it didn't.
-  const blockedByPartial =
-    (delivery?.state.status === "failed" && delivery.state.partial === true) ||
-    delivery?.state.status === "unconfirmed";
   // A selection the page or its source has moved past can't vouch for the
   // locations a request would name.
   const subjectStale =
@@ -328,27 +309,31 @@ export function AgentComposer({
   // already says what was seen. Blocking on it made a wrong guess
   // unrecoverable: the advice was to check the terminal, but checking it
   // cannot clear a heuristic that is stuck, so a finished agent could strand a
-  // written request with no way to send it. The real safeguards below — a
-  // delivery still in flight, an unproven scope, a stale subject, a
-  // half-delivered request — are all things the host can prove.
-  const canSendAgain = Boolean(
+  // written request with no way to send it. Nor is a request already on its
+  // way: the next one queues behind it and goes in when the agent is back at
+  // its prompt. The real safeguards — an unproven scope, a stale subject — are
+  // things the host can prove.
+  // A request that failed part-way, or that the host couldn't confirm, may be
+  // sitting in the agent's input — and whatever is typed next is appended to
+  // it. Its notice says to check the terminal first; sending stays off until
+  // the user has answered that notice, by sending it again or dismissing it.
+  const uncertain = deliveries.some(
+    (delivery) =>
+      delivery.state.status === "unconfirmed" ||
+      (delivery.state.status === "failed" && delivery.state.partial === true)
+  );
+  const canSend = Boolean(
     subject &&
     activeScope &&
     destination &&
     draft.trim() &&
-    !sending &&
+    !uncertain &&
     !scopeUnproven &&
     !subjectStale &&
     revisions !== null
   );
-  const canSend = canSendAgain && !blockedByPartial;
 
   const onDraftChange = (next: string) => {
-    // Editing the request after a partial delivery is the acknowledgement: the
-    // user has been told to check the terminal and has come back to the words.
-    if (blockedByPartial && next !== draft) {
-      updateComposerMemory(memoryKey, { delivery: null, deliveryDismissed: false });
-    }
     setDraft(next);
     if (next.trim() && chosen === null && destination) setChosen(keyOf(destination));
     if (next.trim() && !pinned && subject) setPinned({ ...subject, definitions, revisions });
@@ -360,44 +345,76 @@ export function AgentComposer({
     requestAnimationFrame(() => textareaRef.current?.focus());
   };
 
-  /** `again`: the user looked at the terminal and chose to repeat an uncertain request. */
-  const send = (again = false) => {
-    if (!subject || !destination || !(again ? canSendAgain : canSend)) return;
-    const request = subject;
-    const scope = activeScope;
-    const cited = revisions;
-    const instruction = draft;
+  /**
+   * Put one request in the queue. What it is about is settled when its turn
+   * comes, not now: the request ahead of it has usually just edited the same
+   * file, and the page proves the selection again after that. The request
+   * follows that proof — same element, same scope, newer bytes — and is held to
+   * the selection it was made about only when nothing live stands for it.
+   */
+  const enqueue = (instruction: string, made: Pinned, target: Destination) => {
+    const madeScopes = scopesFor(made.selection, made.picked, made.definitions).scopes;
+    const resolve = (): { about: Pinned; scope: TaskScope | undefined } | "pending" => {
+      const followed = controller.followSelection(made.selection.selectionId);
+      if (followed === "pending") return "pending";
+      if (followed !== null) {
+        const scopes = scopesFor(followed.selection, followed.picked, followed.definitions).scopes;
+        const scope = matchScope(madeScopes[made.scope], scopes);
+        if (scope >= 0) return { about: { ...followed, scope }, scope: scopes[scope] };
+      }
+      return { about: made, scope: madeScopes[made.scope] };
+    };
+    let checked: { about: Pinned; scope: TaskScope | undefined } | null = null;
+    let builtFor: string | null = null;
     void deliverAgentRequest({
       memoryKey,
       worktreeId,
       sentDraft: instruction,
+      subject: made,
       // What the prompt is about, beside the words: the same sentence aimed at
       // another element, another scope, or bytes that have since changed builds
       // a different prompt, so it must not be folded into a run already going.
-      subjectKey: `${request.selection.selectionId}\n${subject.scope}\n${JSON.stringify(cited)}`,
+      subjectKey: `${made.selection.selectionId}\n${made.scope}\n${JSON.stringify(made.revisions)}`,
       destination:
-        destination.kind === "terminal"
-          ? {
-              kind: "terminal",
-              terminalId: destination.target.terminalId,
-              title: destination.target.title,
-            }
-          : { kind: "launch", agentId: destination.agentId, title: destination.name },
+        target.kind === "terminal"
+          ? { kind: "terminal", terminalId: target.target.terminalId, title: target.target.title }
+          : { kind: "launch", agentId: target.agentId, title: target.name },
+      settled: () => resolve() !== "pending",
       // Locations in the prompt are only true of the bytes they were read from,
-      // and an agent can take minutes to reach its prompt. Checked again right
-      // before the request goes in; the draft stays either way.
-      verify: async () =>
-        (await controller.sourcesUnchanged(request.selection, cited)) ? null : STALE_SOURCE,
-      buildPrompt: async () =>
-        buildAgentTaskPrompt({
+      // and an agent can take minutes to reach its prompt. Checked right before
+      // the request goes in; its words stay on its row either way.
+      // One subject per attempt: what the check vouched for is what the
+      // prompt is built from, and the check after building is about that same
+      // prompt. Resolving afresh each time let a selection proved again in
+      // between put one element's locations under another's revisions.
+      verify: async (after) => {
+        const now = resolve();
+        if (now === "pending") return SUBJECT_UNSETTLED;
+        if (after === "built" && builtFor !== now.about.selection.selectionId) return STALE_SOURCE;
+        if (!(await controller.sourcesUnchanged(now.about.selection, now.about.revisions))) {
+          return STALE_SOURCE;
+        }
+        if (after !== "built") checked = now;
+        return null;
+      },
+      buildPrompt: async () => {
+        const now = checked ?? { about: made, scope: madeScopes[made.scope] };
+        builtFor = now.about.selection.selectionId;
+        return buildAgentTaskPrompt({
           instruction,
-          selection: request.selection,
-          file: request.file,
+          selection: now.about.selection,
+          file: now.about.file,
           worktreePath,
-          place: await controller.pagePlace(request.selection),
-          scope,
-        }),
+          place: await controller.pagePlace(now.about.selection),
+          scope: now.scope,
+        });
+      },
     });
+  };
+
+  const send = () => {
+    if (!subject || !destination || !canSend) return;
+    enqueue(draft, { ...subject, definitions, revisions }, destination);
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -408,26 +425,23 @@ export function AgentComposer({
     }
   };
 
-  // "Send anyway" answers a run still waiting for readiness. "Send again"
-  // answers one that has finished uncertain: that run is over, so forcing it
-  // did nothing, and the only way to send again is a new run.
-  const sendAnyway = () => {
-    if (blockedByPartial) {
-      send(true);
-      return;
-    }
-    forceAgentRequest(memoryKey);
+  // A request that finished uncertain, or failed, is over: the only way to send
+  // it again is a new one, made about what it was about, which the user asks
+  // for by name after looking at the terminal.
+  // The words left the field when the request was accepted; a request that
+  // didn't go in hands them back, to be changed or aimed somewhere else.
+  const editAgain = (record: DeliveryRecord) => {
+    removeComposerDelivery(memoryKey, record.id);
+    setDraft(record.instruction);
+    requestAnimationFrame(() => textareaRef.current?.focus());
   };
-  // Dismiss hides the notice; it does not decide that the half-delivered request
-  // is safe to send again. Those were the same act, so closing the warning
-  // rearmed Enter on the unchanged draft — the guard's own escape hatch.
-  const dismissDelivery = () => {
-    if (blockedByPartial) {
-      updateComposerMemory(memoryKey, { deliveryDismissed: true });
-      return;
-    }
-    updateComposerMemory(memoryKey, { delivery: null });
-  };
+  const sendAgain = destination
+    ? (record: DeliveryRecord) => {
+        if (record.subject === null) return;
+        removeComposerDelivery(memoryKey, record.id);
+        enqueue(record.instruction, record.subject, destination);
+      }
+    : undefined;
   // What the agent actually changed is the worktree's diff, not its word.
   const reviewChanges = () =>
     void actionService.dispatch("worktree.openChanges", worktreeId ? { worktreeId } : undefined, {
@@ -447,23 +461,23 @@ export function AgentComposer({
     current !== null &&
     current.selection.selectionId !== pinned.selection.selectionId;
   const intents = activeScope?.kind === "component" ? COMPONENT_INTENTS : ELEMENT_INTENTS;
-  const liveTarget = delivery?.terminalId
-    ? targets.find((target) => target.terminalId === delivery.terminalId)
-    : undefined;
-
-  if (!subject) {
-    return delivery && !deliveryDismissed ? (
-      <DeliveryNotice
-        delivery={delivery}
-        liveTarget={liveTarget}
+  const queue =
+    deliveries.length > 0 ? (
+      <DeliveryQueue
+        deliveries={deliveries}
+        targets={targets}
         onOpenTerminal={openTerminal}
         onReviewChanges={reviewChanges}
-        // Nothing is selected to send again; only a waiting run can be pushed on.
-        onSendAnyway={blockedByPartial ? undefined : sendAnyway}
-        onDismiss={dismissDelivery}
+        onSendNow={(id) => forceAgentRequest(memoryKey, id)}
+        onRemove={(id) => removeAgentRequest(memoryKey, id)}
+        onSendAgain={sendAgain}
+        // Into an empty field only: it must never replace what is being written.
+        onEditAgain={draft.trim() ? undefined : editAgain}
+        onDismiss={(id) => removeComposerDelivery(memoryKey, id)}
       />
     ) : null;
-  }
+
+  if (!subject) return queue;
 
   return (
     // `role="group"` is what makes the label count: an `aria-label` on a bare
@@ -665,26 +679,15 @@ export function AgentComposer({
         </Button>
       </div>
 
-      {delivery && !deliveryDismissed ? (
-        <DeliveryNotice
-          delivery={delivery}
-          liveTarget={liveTarget}
-          onOpenTerminal={openTerminal}
-          onReviewChanges={reviewChanges}
-          // Offered only when it can actually send: a stale subject or an empty
-          // draft would make it a button that does nothing.
-          onSendAnyway={!blockedByPartial || canSendAgain ? sendAnyway : undefined}
-          onDismiss={dismissDelivery}
-        />
-      ) : null}
+      {queue}
 
       {/* Shown, not hidden behind an "Ideas" toggle. They are the starting
           points for the one thing this panel does, and a disclosure made the
           panel's primary affordance cost a click to discover. Below the footer,
           so revealing or spending them never moves Send under the pointer.
-          Not beside a delivery notice: suggestions under "Sent to claude" read
-          as a leftover. */}
-      {!draft.trim() && !(delivery && !deliveryDismissed) ? (
+          Not beside the queue: suggestions under "Sent to claude" read as a
+          leftover. */}
+      {!draft.trim() && deliveries.length === 0 ? (
         <div
           id={`${inputId}-ideas`}
           role="group"
@@ -721,12 +724,16 @@ export function AgentComposer({
           Install an agent CLI, such as Claude Code, Codex or Gemini, to send requests with your own
           account
         </p>
+      ) : uncertain && draft.trim() ? (
+        <p className="text-xs text-text-secondary">
+          Check the terminal, then dismiss the notice above to send this
+        </p>
       ) : busy && destination?.kind === "terminal" ? (
         // A heads-up, not a gate. Sending is still armed — this says what the
         // terminal looked like, and leaves the call to the person who can
         // actually look at it.
         <p className="text-xs text-text-secondary">
-          {`Activity in ${destination.target.title} — worth a look before you send`}
+          {`Activity in ${destination.target.title} — your request will wait its turn`}
         </p>
       ) : null}
     </div>
@@ -764,32 +771,175 @@ function DestinationLabel({ agentId, label }: { agentId: string | null; label: s
   );
 }
 
-function DeliveryNotice(props: {
-  delivery: DeliveryRecord;
-  liveTarget: AgentTarget | undefined;
-  onOpenTerminal: (terminalId: string) => void;
-  onReviewChanges: () => void;
-  onSendAnyway: (() => void) | undefined;
-  onDismiss: () => void;
-}) {
-  const { state, request } = props.delivery;
-  // The record sits beside the notice, not inside it: a status region is read
-  // out whole on every change, and nobody should hear a prompt recited.
-  const recorded =
-    state.status === "sent" ||
-    state.status === "unconfirmed" ||
-    (state.status === "failed" && state.partial === true);
+/**
+ * Every request this composer has made, oldest first: gone, going in, and
+ * waiting. Sending while the agent is busy used to be one notice that the next
+ * send replaced, and a warning that nothing could be seen of the agent. A
+ * request now joins the end and says it is queued — which is what is happening
+ * — and goes in by itself when the agent is back at its prompt.
+ *
+ * What needs the user keeps its notice: a prompt the agent is asking, a
+ * delivery the host couldn't confirm, a failure. The newest sent request keeps
+ * its notice too, with where to look next. Everything else is a row, opened to
+ * read what was — or will be — sent.
+ */
+function DeliveryQueue({
+  deliveries,
+  targets,
+  ...handlers
+}: {
+  deliveries: DeliveryRecord[];
+  targets: AgentTarget[];
+} & DeliveryHandlers) {
+  // Only the request at the head can be pushed on: order is what a queue is for.
+  const head = deliveries.find((delivery) => !isSettledDelivery(delivery))?.id;
+  const newestSent = deliveries.filter((delivery) => delivery.state.status === "sent").at(-1)?.id;
   return (
-    <>
-      <DeliveryStatus {...props} />
-      {recorded && request !== undefined ? <RequestRecord request={request} /> : null}
-    </>
+    <ul aria-label="Requests" className="flex flex-col gap-1.5">
+      {deliveries.map((delivery) => (
+        <DeliveryItem
+          key={delivery.id}
+          delivery={delivery}
+          isHead={delivery.id === head}
+          isNewestSent={delivery.id === newestSent}
+          liveTarget={
+            delivery.terminalId
+              ? targets.find((target) => target.terminalId === delivery.terminalId)
+              : undefined
+          }
+          {...handlers}
+        />
+      ))}
+    </ul>
   );
 }
 
-/** What the agent was actually told — the words, the files and the route, as typed in. */
-function RequestRecord({ request }: { request: string }) {
+interface DeliveryHandlers {
+  onOpenTerminal: (terminalId: string) => void;
+  onReviewChanges: () => void;
+  onSendNow: (id: string) => void;
+  onRemove: (id: string) => void;
+  onSendAgain: ((delivery: DeliveryRecord) => void) | undefined;
+  onEditAgain: ((delivery: DeliveryRecord) => void) | undefined;
+  onDismiss: (id: string) => void;
+}
+
+/**
+ * One request, for as long as it is on show. It is one component through every
+ * state it passes — queued, going in, sent — so that a row opened to read what
+ * is waiting stays open when that request's turn comes, rather than shutting
+ * because a different component took its place.
+ */
+function DeliveryItem({
+  delivery,
+  isHead,
+  isNewestSent,
+  liveTarget,
+  onOpenTerminal,
+  onReviewChanges,
+  onSendNow,
+  onRemove,
+  onSendAgain,
+  onEditAgain,
+  onDismiss,
+}: {
+  delivery: DeliveryRecord;
+  isHead: boolean;
+  isNewestSent: boolean;
+  liveTarget: AgentTarget | undefined;
+} & DeliveryHandlers) {
   const [open, setOpen] = useState(false);
+  const toggle = () => setOpen((value) => !value);
+  const { status } = delivery.state;
+  // What was typed into the agent once that exists; the user's words until then.
+  const text = delivery.request ?? delivery.instruction;
+  let body: ReactNode;
+  if (status === "queued") {
+    body = (
+      <RequestRow
+        label={`Queued for ${delivery.title}`}
+        words={delivery.instruction}
+        text={text}
+        open={open}
+        onToggle={toggle}
+        actions={
+          <>
+            {isHead ? (
+              <Button variant="subtle" size="xs" onClick={() => onSendNow(delivery.id)}>
+                Send now
+              </Button>
+            ) : null}
+            <Button variant="subtle" size="xs" onClick={() => onRemove(delivery.id)}>
+              Remove
+            </Button>
+          </>
+        }
+      >
+        {isHead
+          ? "Goes in when the agent is back at its prompt."
+          : "Goes in after the requests ahead of it."}
+      </RequestRow>
+    );
+  } else if (status === "sent" && !isNewestSent) {
+    body = (
+      <RequestRow
+        label={`Sent to ${delivery.title}`}
+        words={delivery.instruction}
+        text={text}
+        open={open}
+        onToggle={toggle}
+        actions={
+          <Button variant="subtle" size="xs" onClick={() => onDismiss(delivery.id)}>
+            Dismiss
+          </Button>
+        }
+      />
+    );
+  } else {
+    // The record sits beside the notice, not inside it: a status region is
+    // read out whole on every change, and nobody should hear a prompt recited.
+    const settled = status === "sent" || status === "unconfirmed" || status === "failed";
+    body = (
+      <>
+        <DeliveryStatus
+          delivery={delivery}
+          liveTarget={liveTarget}
+          onOpenTerminal={onOpenTerminal}
+          onReviewChanges={onReviewChanges}
+          onSendAgain={
+            onSendAgain && delivery.subject !== null ? () => onSendAgain(delivery) : undefined
+          }
+          onEditAgain={onEditAgain ? () => onEditAgain(delivery) : undefined}
+          onDismiss={() => onDismiss(delivery.id)}
+        />
+        {settled ? <RequestRecord text={text} open={open} onToggle={toggle} /> : null}
+      </>
+    );
+  }
+  return <li className="flex flex-col gap-1">{body}</li>;
+}
+
+/**
+ * One request as a line: what state it is in, and the user's own words. Opened,
+ * it shows the full text and what can be done about it.
+ */
+function RequestRow({
+  label,
+  words,
+  text,
+  open,
+  onToggle,
+  actions,
+  children,
+}: {
+  label: string;
+  words: string;
+  text: string;
+  open: boolean;
+  onToggle: () => void;
+  actions?: ReactNode;
+  children?: ReactNode;
+}) {
   const id = useId();
   return (
     <div className="flex flex-col gap-1">
@@ -797,7 +947,56 @@ function RequestRecord({ request }: { request: string }) {
         type="button"
         aria-expanded={open}
         aria-controls={id}
-        onClick={() => setOpen((value) => !value)}
+        onClick={onToggle}
+        className="-mx-1 flex min-w-0 items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-left text-xs text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary"
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            "h-3 w-3 shrink-0 transition-transform duration-150 ease-out",
+            open && "rotate-90"
+          )}
+        />
+        <span className="shrink-0">{label}</span>
+        <span className="min-w-0 truncate text-text-primary">{words}</span>
+      </button>
+      {open ? (
+        <div id={id} role="group" aria-label="Request text" className="flex flex-col gap-1.5">
+          <RequestText text={text} />
+          {children ? <p className="text-3xs text-text-secondary">{children}</p> : null}
+          {actions ? <div className="flex flex-wrap gap-1">{actions}</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RequestText({ text }: { text: string }) {
+  return (
+    <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-surface-inset px-2 py-1.5 font-mono text-3xs leading-relaxed text-text-secondary">
+      {text}
+    </pre>
+  );
+}
+
+/** What the agent was actually told — the words, the files and the route, as typed in. */
+function RequestRecord({
+  text,
+  open,
+  onToggle,
+}: {
+  text: string;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const id = useId();
+  return (
+    <div className="flex flex-col gap-1">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={id}
+        onClick={onToggle}
         className="-ml-1 flex w-fit items-center gap-1 rounded-[var(--radius-sm)] px-1 py-0.5 text-3xs text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
       >
         <ChevronRight
@@ -808,9 +1007,7 @@ function RequestRecord({ request }: { request: string }) {
       </button>
       {open ? (
         <div id={id} role="group" aria-label="Request text">
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border-subtle bg-surface-inset px-2 py-1.5 font-mono text-3xs leading-relaxed text-text-secondary">
-            {request}
-          </pre>
+          <RequestText text={text} />
         </div>
       ) : null}
     </div>
@@ -822,19 +1019,21 @@ function DeliveryStatus({
   liveTarget,
   onOpenTerminal,
   onReviewChanges,
-  onSendAnyway,
+  onSendAgain,
+  onEditAgain,
   onDismiss,
 }: {
   delivery: DeliveryRecord;
   liveTarget: AgentTarget | undefined;
   onOpenTerminal: (terminalId: string) => void;
   onReviewChanges: () => void;
-  onSendAnyway: (() => void) | undefined;
+  onSendAgain: (() => void) | undefined;
+  onEditAgain: (() => void) | undefined;
   onDismiss: () => void;
 }) {
   const { state, title, terminalId } = delivery;
-  const sendAgain = onSendAnyway ? (
-    <Button variant="subtle" size="xs" onClick={onSendAnyway}>
+  const sendAgain = onSendAgain ? (
+    <Button variant="subtle" size="xs" onClick={onSendAgain}>
       Send it again
     </Button>
   ) : null;
@@ -863,30 +1062,9 @@ function DeliveryStatus({
       return <WaitingRow label={`Sending to ${title}`} />;
     case "starting":
       return <WaitingRow label={`Starting ${title} — your request goes in when it's ready`} />;
-    case "unknown-readiness":
-      return (
-        <InspectorNotice
-          tone="warning"
-          role="status"
-          title={`No sign yet whether ${title} can take input`}
-          action={
-            <div className="flex flex-wrap gap-1">
-              {onSendAnyway ? (
-                <Button variant="subtle" size="xs" onClick={onSendAnyway}>
-                  Send anyway
-                </Button>
-              ) : null}
-              {terminalId ? (
-                <Button variant="subtle" size="xs" onClick={() => onOpenTerminal(terminalId)}>
-                  Open terminal
-                </Button>
-              ) : null}
-            </div>
-          }
-        >
-          Check that it's waiting at its prompt, not asking you something, then send.
-        </InspectorNotice>
-      );
+    // Drawn as a row by the queue; never reaches a notice.
+    case "queued":
+      return null;
     case "needs-you":
       return (
         <InspectorNotice
@@ -966,13 +1144,24 @@ function DeliveryStatus({
                 {sendAgain}
               </div>
             ) : (
-              open
+              <div className="flex flex-wrap gap-1">
+                {onEditAgain ? (
+                  <Button variant="subtle" size="xs" onClick={onEditAgain}>
+                    Edit request
+                  </Button>
+                ) : null}
+                {terminalId ? (
+                  <Button variant="subtle" size="xs" onClick={() => onOpenTerminal(terminalId)}>
+                    Open terminal
+                  </Button>
+                ) : null}
+              </div>
             )
           }
         >
           {state.partial
             ? `${state.message}. Part of the request may already be in the agent's input — check the terminal before sending again.`
-            : `${state.message}. Your request is still here.`}
+            : `${state.message}. Nothing was typed into the agent.`}
         </InspectorNotice>
       );
   }

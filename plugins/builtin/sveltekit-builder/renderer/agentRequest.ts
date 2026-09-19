@@ -1,4 +1,5 @@
 import {
+  cancelAgentRequest as cancelHostAgentRequest,
   cancelAgentRequests as cancelHostAgentRequests,
   deliverAgentRequest as deliverHostAgentRequest,
   forceAgentRequest as forceHostAgentRequest,
@@ -9,17 +10,36 @@ import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import { usePanelStore } from "@/store/panelStore";
 import { BUILDER_TOOL_ID } from "../shared/protocol.js";
 import {
+  putComposerDelivery,
   readComposerMemory,
+  removeComposerDelivery,
   updateComposerMemory,
   type ComposerDelivery,
+  type ComposerPin,
 } from "./composerMemory.js";
 
 export type RequestDestination = AgentRequestDestination;
 
-/** "Send anyway": deliver the composer's pending request without a readiness signal. */
-export function forceAgentRequest(memoryKey: string): void {
-  forceHostAgentRequest(memoryKey);
+/** "Send now": deliver the composer's next request without a readiness signal. */
+export function forceAgentRequest(memoryKey: string, id: string): void {
+  forceHostAgentRequest(memoryKey, id);
 }
+
+/**
+ * Take a waiting request out of the queue, and its row with it — when it really
+ * was still waiting. One that had already started going in is cancelled too,
+ * but its row stays: it now says the delivery is unconfirmed, which is the
+ * warning, and removing it would take the warning away with the request.
+ */
+export function removeAgentRequest(memoryKey: string, id: string): void {
+  if (cancelHostAgentRequest(memoryKey, id) !== "submitted") removeComposerDelivery(memoryKey, id);
+}
+
+/**
+ * The session a queued request's "new session" turned into. A second request
+ * made while the first is still starting Claude means that Claude, not another.
+ */
+const launchedSessions = new Map<string, { terminalId: string; at: number }>();
 
 /**
  * End every request still waiting for this preview's agent: the builder was
@@ -30,6 +50,9 @@ export function forceAgentRequest(memoryKey: string): void {
  */
 export function cancelAgentRequests(previewPanelId: string): void {
   cancelHostAgentRequests(`${previewPanelId}\n`);
+  for (const key of [...launchedSessions.keys()]) {
+    if (key.startsWith(`${previewPanelId}\n`)) launchedSessions.delete(key);
+  }
 }
 
 /** The request belongs to this preview, in this worktree, with the builder on. */
@@ -40,9 +63,9 @@ function stillOwned(previewPanelId: string, worktreeId: string | null): boolean 
   return useDevPreviewToolStore.getState().activeByPanel[previewPanelId] === BUILDER_TOOL_ID;
 }
 
-function sameDelivery(a: ComposerDelivery | null, b: ComposerDelivery): boolean {
+function sameDelivery(a: ComposerDelivery | undefined, b: AgentRequestDelivery): boolean {
   return (
-    a !== null &&
+    a !== undefined &&
     a.request === b.request &&
     a.title === b.title &&
     a.terminalId === b.terminalId &&
@@ -69,7 +92,9 @@ export function deliverAgentRequest({
   worktreeId,
   buildPrompt,
   verify,
+  settled,
   sentDraft,
+  subject,
   subjectKey,
 }: {
   memoryKey: string;
@@ -77,9 +102,13 @@ export function deliverAgentRequest({
   worktreeId: string | null;
   buildPrompt: () => Promise<string>;
   /** A reason the request may no longer go out, checked before building and before submitting. */
-  verify?: () => Promise<string | null>;
+  verify?: (after?: "built") => Promise<string | null>;
+  /** Whether the subject has settled after an earlier request's edit; see the host's option. */
+  settled?: () => boolean;
   /** The draft as sent; cleared only if nothing new was typed meanwhile. */
   sentDraft: string;
+  /** What the request is about, kept on its row so it can be sent again. */
+  subject?: ComposerPin;
   /**
    * Everything besides the words that decides what the prompt says — the
    * subject, the scope, the revisions it is held to. Part of the idempotency
@@ -91,20 +120,32 @@ export function deliverAgentRequest({
   subjectKey?: string;
 }): Promise<void> {
   const previewPanelId = memoryKey.slice(0, memoryKey.indexOf("\n"));
+  const launchKey = destination.kind === "launch" ? `${memoryKey}\n${destination.agentId}` : null;
+  const madeAt = Date.now();
+  let accepted = false;
   const onState = (delivery: AgentRequestDelivery) => {
-    // The dedupe keeps a waiting state from rewriting the record on every poll;
-    // it must not swallow the draft clear, which answers the state itself
-    // rather than the write.
-    if (!sameDelivery(readComposerMemory(memoryKey).delivery, delivery)) {
-      updateComposerMemory(memoryKey, { delivery });
+    // The dedupe keeps a waiting state from rewriting the record on every poll.
+    const known = readComposerMemory(memoryKey).deliveries.find((e) => e.id === delivery.id);
+    if (!sameDelivery(known, delivery)) {
+      putComposerDelivery(memoryKey, {
+        ...delivery,
+        instruction: sentDraft,
+        subject: subject ?? null,
+      });
     }
-    // Only the words that went out are cleared: anything typed while sending is
-    // a new request and keeps its pin.
-    if (delivery.state.status === "sent" && readComposerMemory(memoryKey).draft === sentDraft) {
-      updateComposerMemory(memoryKey, { draft: "", pinned: null });
+    // Accepted into the queue is what frees the composer for the next request:
+    // waiting for "sent" would hold the words hostage to an agent that is busy,
+    // which is exactly when the next request gets written. Only the words that
+    // were sent are cleared; anything typed since is a new request and keeps
+    // its pin. A request that fails keeps its words on its own row.
+    if (!accepted) {
+      accepted = true;
+      if (readComposerMemory(memoryKey).draft === sentDraft) {
+        updateComposerMemory(memoryKey, { draft: "", pinned: null });
+      }
     }
   };
-  return deliverHostAgentRequest({
+  const delivering = deliverHostAgentRequest({
     ownerKey: memoryKey,
     // The same words, about the same subject, to the same place, from the same
     // composer: a remount that sends again while the first run is in flight
@@ -117,6 +158,18 @@ export function deliverAgentRequest({
           idempotencyKey: `${memoryKey}\n${destinationKey(destination)}\n${subjectKey}\n${sentDraft}`,
         }),
     destination,
+    // A request queued behind one that is starting this agent goes to the
+    // session that one started, while it is still there to go to.
+    resolveDestination: () => {
+      const started = launchKey === null ? undefined : launchedSessions.get(launchKey);
+      // Only a session started since this request was made: asking for a new
+      // session after one exists is asking for another.
+      if (!started || started.at < madeAt) return destination;
+      const panel = usePanelStore.getState().panelsById[started.terminalId];
+      if (!panel || panel.location === "trash") return destination;
+      return { kind: "terminal", terminalId: started.terminalId, title: destination.title };
+    },
+    ...(settled ? { settled } : {}),
     worktreeId,
     stillOwned: () => stillOwned(previewPanelId, worktreeId),
     onState,
@@ -126,9 +179,17 @@ export function deliverAgentRequest({
     // picked something else while this one was starting.
     onDestination: (terminalId) => {
       if (destination.kind !== "launch") return;
+      if (launchKey !== null) launchedSessions.set(launchKey, { terminalId, at: Date.now() });
       if (readComposerMemory(memoryKey).chosen === `launch:${destination.agentId}`) {
         updateComposerMemory(memoryKey, { chosen: `terminal:${terminalId}` });
       }
     },
   });
+  // A call that joined a request already waiting gets no state of its own, and
+  // the words it was made with are that request's words: the field is freed
+  // for it all the same, or Send looks like it did nothing.
+  if (!accepted && readComposerMemory(memoryKey).draft === sentDraft) {
+    updateComposerMemory(memoryKey, { draft: "", pinned: null });
+  }
+  return delivering;
 }

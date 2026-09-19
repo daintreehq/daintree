@@ -267,12 +267,17 @@ export const FIXTURES = {
       await selectElement(host);
       updateComposerMemory(MEMORY_KEY, {
         draft: "",
-        delivery: {
-          state: { status: "sent" },
-          title: "claude · pricing polish",
-          terminalId: "term-1",
-          request: SAMPLE_REQUEST,
-        },
+        deliveries: [
+          {
+            id: "request-1",
+            instruction: "Make this button feel more premium",
+            subject: null,
+            state: { status: "sent" },
+            title: "claude · pricing polish",
+            terminalId: "term-1",
+            request: SAMPLE_REQUEST,
+          },
+        ],
       });
       await until("View request", () => button("View request") !== undefined);
       button("View request")!.click();
@@ -318,12 +323,17 @@ export const FIXTURES = {
       updateComposerMemory(MEMORY_KEY, {
         // Cleared, as `deliverAgentRequest` clears it once the send is proven.
         draft: "",
-        delivery: {
-          state: { status: "sent" },
-          title: "claude · pricing polish",
-          terminalId: "term-1",
-          request: SAMPLE_REQUEST,
-        },
+        deliveries: [
+          {
+            id: "request-1",
+            instruction: "Make this button feel more premium",
+            subject: null,
+            state: { status: "sent" },
+            title: "claude · pricing polish",
+            terminalId: "term-1",
+            request: SAMPLE_REQUEST,
+          },
+        ],
       });
       await tick(140);
     },
@@ -337,15 +347,20 @@ export const FIXTURES = {
       await selectElement(host);
       updateComposerMemory(MEMORY_KEY, {
         draft: "Make this button feel more premium — softer corners and a calmer hover.",
-        delivery: {
-          state: {
-            status: "failed",
-            message: "The terminal stopped accepting input",
-            partial: true,
+        deliveries: [
+          {
+            id: "request-1",
+            instruction: "Make this button feel more premium",
+            subject: null,
+            state: {
+              status: "failed",
+              message: "The terminal stopped accepting input",
+              partial: true,
+            },
+            title: "claude · pricing polish",
+            terminalId: "term-1",
           },
-          title: "claude · pricing polish",
-          terminalId: "term-1",
-        },
+        ],
       });
       await tick(140);
     },

@@ -6,6 +6,7 @@ vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 import { usePanelStore } from "@/store/panelStore";
 import {
   __resetAgentRequestsForTests,
+  cancelAgentRequest,
   cancelAgentRequests,
   deliverAgentRequest,
   forceAgentRequest,
@@ -54,7 +55,7 @@ function terminal(agentState: string | null = null) {
   return {
     sent,
     launches,
-    setState: (next: string) => (state = next),
+    setState: (next: string | null) => (state = next),
     // What a real demotion looks like: the agent process exits and leaves its
     // shell reading stdin. The pty never restarted, so `spawnedAt` holds, and
     // `agentId` falls back to what the terminal was launched as — so only
@@ -130,7 +131,7 @@ describe("deliverAgentRequest", () => {
       buildPrompt: async () => "Make it pop",
     });
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(last(states)?.state.status).toBe("sending");
+    expect(last(states)?.state.status).toBe("queued");
 
     // The plugin was disabled, or the surface switched off: nothing of it is
     // mounted to notice, so the run itself has to.
@@ -172,7 +173,7 @@ describe("deliverAgentRequest", () => {
   });
 
   it("refuses a demoted shell even when the user said send anyway", async () => {
-    // "Send anyway" waives waiting for a readiness signal. It cannot waive the
+    // "Send now" waives waiting for a readiness signal. It cannot waive the
     // destination: the agent has exited and its shell is what would read this.
     const agent = terminal("waiting");
     const { states, onState } = sink();
@@ -242,9 +243,10 @@ describe("deliverAgentRequest", () => {
     });
   });
 
-  it("does not send when readiness lapsed into a question during verification", async () => {
+  it("goes back to waiting, unsent, when readiness lapsed into a question during verification", async () => {
     // The audit's first reproduction: ready, then an approval prompt appears
     // while the source is being re-verified. Typing now answers the question.
+    // It is not a reason to lose the request either: it waits for the answer.
     const agent = terminal("waiting");
     const { states, onState } = sink();
     const run = deliverAgentRequest({
@@ -256,14 +258,104 @@ describe("deliverAgentRequest", () => {
       buildPrompt: async () => "Make it pop",
       verify: verifyThenChange(() => agent.setWaitingReason("approval")),
     });
-    await vi.advanceTimersByTimeAsync(2_000);
-    await run;
-
+    await vi.advanceTimersByTimeAsync(5_000);
     expect(agent.sent).toEqual([]);
-    expect(last(states)?.state).toEqual({
-      status: "failed",
-      message: "Claude is asking you something — the request wasn't sent",
+    expect(last(states)?.state).toEqual({ status: "needs-you" });
+
+    cancelAgentRequests("owner-1\n");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await run;
+    expect(agent.sent).toEqual([]);
+  });
+
+  it("stops what is queued behind a request cancelled after it was typed", async () => {
+    let release: () => void = () => {};
+    const agent = terminal("waiting");
+    const normal = dispatch.getMockImplementation()!;
+    dispatch.mockImplementation(async (id: string, args: Record<string, unknown>) => {
+      if (id !== "terminal.sendCommand") return normal(id, args);
+      await new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      return normal(id, args);
     });
+    const first = sink();
+    const second = sink();
+    const base = {
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal" as const, terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+    };
+    const typed = deliverAgentRequest({
+      ...base,
+      onState: first.onState,
+      buildPrompt: async () => "First",
+    });
+    const behind = deliverAgentRequest({
+      ...base,
+      onState: second.onState,
+      buildPrompt: async () => "Second",
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    // Removed while it is going in: that can't take back what was typed, and
+    // the one behind it must not be typed on top of it.
+    expect(cancelAgentRequest("owner-1\nwt-1", first.states[0]!.id)).toBe("submitted");
+    release();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.all([typed, behind]);
+    expect(last(first.states)?.state).toEqual({ status: "unconfirmed" });
+    expect(last(second.states)?.state).toMatchObject({ status: "failed" });
+    expect(agent.sent).toEqual(["First"]);
+  });
+
+  it("lets one request into a terminal at a time, whoever it belongs to", async () => {
+    const agent = terminal("waiting");
+    const make = (ownerKey: string, prompt: string) =>
+      deliverAgentRequest({
+        ownerKey,
+        destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+        worktreeId: "wt-1",
+        stillOwned: () => true,
+        onState: () => {},
+        buildPrompt: async () => prompt,
+      });
+    // Two previews, one agent: both are at the head of their own queue and both
+    // read "waiting" in the same poll.
+    const one = make("owner-1\nwt-1", "From the first preview");
+    const two = make("owner-2\nwt-1", "From the second preview");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(agent.sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await Promise.all([one, two]);
+    expect(agent.sent).toHaveLength(2);
+  });
+
+  it("takes an unreadable status for no evidence that the last request was picked up", async () => {
+    const agent = terminal("waiting");
+    const make = (prompt: string) =>
+      deliverAgentRequest({
+        ownerKey: "owner-1\nwt-1",
+        destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+        worktreeId: "wt-1",
+        stillOwned: () => true,
+        onState: () => {},
+        buildPrompt: async () => prompt,
+      });
+    const first = make("First");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await first;
+    const second = make("Second");
+    // The detector goes quiet for a poll and comes back reading "waiting", as
+    // it did before: nothing was seen to happen, so the spacing still stands.
+    agent.setState(null);
+    await vi.advanceTimersByTimeAsync(1_000);
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(agent.sent).toEqual(["First"]);
+    await vi.advanceTimersByTimeAsync(8_000);
+    await second;
+    expect(agent.sent).toEqual(["First", "Second"]);
   });
 
   it("lets send-anyway waive readiness but not the session it bound to", async () => {
@@ -375,7 +467,9 @@ describe("deliverAgentRequest", () => {
     // is the user's call, and nothing must block it forever.
     const third = sink();
     const again = deliverAgentRequest({ ...options, onState: third.onState });
-    await vi.advanceTimersByTimeAsync(2_000);
+    // Not straight in behind the first: the agent hasn't been seen to pick that
+    // one up, so "waiting" is given a moment to be a fresh reading.
+    await vi.advanceTimersByTimeAsync(7_000);
     await again;
     expect(agent.sent).toEqual(["Make it pop", "Make it pop"]);
   });
@@ -424,47 +518,87 @@ describe("deliverAgentRequest", () => {
     // Straight off the await: a key still held one microtask longer would hand
     // back the finished run and send nothing.
     const second = deliverAgentRequest(options);
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(7_000);
     await second;
     expect(agent.sent).toEqual(["Make it pop", "Make it pop"]);
   });
 
-  it("frees a superseded run's key, so retrying that request is a real run", async () => {
-    const agent = terminal();
+  it("queues a second request behind the first instead of replacing it", async () => {
+    const agent = terminal("working");
     const owner = "owner-1\nwt-1";
+    const first = sink();
+    const second = sink();
     const base = {
       ownerKey: owner,
       destination: { kind: "terminal" as const, terminalId: "t1", title: "Claude" },
       worktreeId: "wt-1",
       stillOwned: () => true,
-      onState: () => {},
     };
     const older = deliverAgentRequest({
       ...base,
+      onState: first.onState,
       idempotencyKey: `${owner}\nfirst`,
       buildPrompt: async () => "First",
     });
-    await vi.advanceTimersByTimeAsync(1_000);
-    // A second request for the same owner supersedes the first, which is now
-    // nobody's answer even though it is still awaiting its poll.
     const newer = deliverAgentRequest({
       ...base,
+      onState: second.onState,
       idempotencyKey: `${owner}\nsecond`,
       buildPrompt: async () => "Second",
     });
-    // The user goes back to the first request and asks for it again.
+    // Asking for the first again while it waits joins it: a queued request
+    // keeps its key, or a remount would put the same words in the queue twice.
     const retry = deliverAgentRequest({
       ...base,
+      onState: () => {},
       idempotencyKey: `${owner}\nfirst`,
       buildPrompt: async () => "First",
     });
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(last(first.states)?.state.status).toBe("queued");
+    expect(last(second.states)?.state.status).toBe("queued");
+    expect(first.states[0]?.id).not.toBe(second.states[0]?.id);
+
     agent.setState("waiting");
     await vi.advanceTimersByTimeAsync(2_000);
     await older;
-    await newer;
     await retry;
-    // The retry is the live run, so its words are what went out — once.
     expect(agent.sent).toEqual(["First"]);
+
+    agent.setState("working");
+    await vi.advanceTimersByTimeAsync(2_000);
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await newer;
+    expect(agent.sent).toEqual(["First", "Second"]);
+  });
+
+  it("builds the prompt when the request's turn comes, not when it was queued", async () => {
+    const agent = terminal("working");
+    let source = "as it was when queued";
+    let settled = false;
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState: () => {},
+      settled: () => settled,
+      verify: async () => (settled ? null : "judged too early"),
+      buildPrompt: async () => source,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    // The request ahead of it edits the file; the owner is still re-establishing
+    // what this one is about when the agent comes back to its prompt.
+    source = "as it is when sent";
+    agent.setState("waiting");
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(agent.sent).toEqual([]);
+
+    settled = true;
+    await vi.advanceTimersByTimeAsync(3_000);
+    await run;
+    expect(agent.sent).toEqual(["as it is when sent"]);
   });
 
   it("launches once, then types the request in when the new session is at its prompt", async () => {
@@ -508,7 +642,7 @@ describe("deliverAgentRequest", () => {
       buildPrompt: async () => "Make it pop",
     });
     await vi.advanceTimersByTimeAsync(6_000);
-    expect(last(states)?.state.status).toBe("unknown-readiness");
+    expect(last(states)?.state.status).toBe("queued");
     expect(agent.sent).toEqual([]);
 
     forceAgentRequest("owner-1\nwt-1");

@@ -11,7 +11,9 @@ export const SITE_AGENT_EDITED = "SITE_AGENT_EDITED";
  *
  * It understands two instructions — `Change the text to "…"` and
  * `Add the classes "…"` — and edits
- * only the line the prompt names. That is the point: the edit can only land if
+ * only the line the prompt names. `take N seconds` anywhere in the request
+ * makes it stay busy that long before it edits, which is what a request queued
+ * behind it needs in order to be queued at all. That is the point: the edit can only land if
  * the prompt carried a correct, worktree-relative source location, so a passing
  * run proves the context packet, not a lucky search.
  *
@@ -72,6 +74,24 @@ function handlePrompt(prompt) {
     process.stdout.write(OSC_IDLE);
     return;
   }
+  const slow = /take (\\d+) seconds/.exec(prompt);
+  if (slow) {
+    // Talking while it works, as an agent does: a terminal silent for long
+    // enough is read as one waiting at its prompt, whatever it last said.
+    const ticking = setInterval(() => {
+      process.stdout.write(OSC_WORKING);
+      console.log("SITE_AGENT_WORKING");
+    }, 1000);
+    setTimeout(() => {
+      clearInterval(ticking);
+      edit(source, text, classes);
+    }, Number(slow[1]) * 1000);
+    return;
+  }
+  edit(source, text, classes);
+}
+
+function edit(source, text, classes) {
   const [, tag, file, line] = source;
   const target = path.join(process.cwd(), file);
   const lines = fs.readFileSync(target, "utf8").split("\\n");
@@ -84,6 +104,9 @@ function handlePrompt(prompt) {
     lines[index] = lines[index].replace(pattern, (_m, open, value, close) => open + value + " " + classes[1] + close);
   }
   fs.writeFileSync(target, lines.join("\\n"));
+  // Beside the prompts, in arrival order: a prompt that turns up before the
+  // edit ahead of it has landed was not queued behind it.
+  fs.appendFileSync(INBOX, "EDITED " + file + ":" + line + "\\n----\\n");
   console.log(${JSON.stringify(SITE_AGENT_EDITED)} + " " + file + ":" + line);
   setTimeout(() => process.stdout.write(OSC_IDLE), 300);
 }

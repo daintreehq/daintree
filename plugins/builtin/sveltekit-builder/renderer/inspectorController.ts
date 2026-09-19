@@ -210,6 +210,12 @@ interface Continuity {
   /** How many copies shared its location, and the render chain above it. */
   sameLocCount: number;
   chain: string;
+  /**
+   * The document `occurrence` was minted in. The page numbers occurrences from
+   * one again in every new document, so after a reload the same id is some
+   * other element: it names this one only while the epoch still matches.
+   */
+  epoch: number;
 }
 
 /** The render ancestry as one comparable value: what drew the element, from where. */
@@ -232,16 +238,36 @@ interface Reprove {
   component: { file: string; line: number; column: number } | null;
   /** The owning file changed, as opposed to the node simply leaving the page. */
   sourceChanged: boolean;
+  /** The page reloaded under it: a failure is said as that, not as the element having gone. */
+  reloaded: boolean;
   attempts: number;
   /** The page said it found it; its selection event is this reprove's answer. */
   awaiting: boolean;
 }
 
-/** How far back a re-proved selection remembers what it replaced. */
-const SUPERSEDES_KEPT = 8;
+/**
+ * How far back a re-proved selection remembers what it replaced. A request can
+ * sit in the queue through every edit the one ahead of it makes, and each of
+ * those is a selection proved again; ids are short, and losing the thread
+ * fails a request that did nothing wrong.
+ */
+const SUPERSEDES_KEPT = 64;
 
-/** Asks per change before the selection is left stale for the user to redo. */
-const REPROVE_ATTEMPTS = 4;
+/**
+ * Asks per change before the selection is left stale for the user to redo. One
+ * a settle window: enough for a dev page to reload and hydrate, which is the
+ * slow case.
+ */
+const REPROVE_ATTEMPTS = 6;
+
+/** A selection a queued request can be rebuilt against: proved, with its citations known. */
+export interface FollowedSelection {
+  selection: SiteSelection;
+  file: string | null;
+  picked: PickedComponent | null;
+  definitions: NonNullable<ComponentDefinitions>;
+  revisions: NonNullable<SourceRevisions>;
+}
 
 export interface InspectorIssue {
   severity: "warning" | "error";
@@ -896,12 +922,26 @@ export class InspectorController implements DevPreviewToolSession {
     if (this.state.page && this.state.page.epoch < epoch) patch.page = null;
     const selection = this.state.selection;
     if (
-      (selection.status === "ready" &&
-        selection.selection.documentEpoch < epoch &&
-        (selection.stale === null || this.reprove !== null)) ||
-      (selection.status === "observed" && selection.epoch < epoch) ||
-      (selection.status === "settling" && this.reprove !== null)
+      selection.status === "ready" &&
+      selection.selection.documentEpoch < epoch &&
+      (selection.stale === null || this.reprove !== null)
     ) {
+      // A reload is what an edit does as often as a hot update — a Tailwind
+      // class the stylesheet has never held reloads the page — so it is not
+      // the end of the selection either. The new page is asked for the same
+      // element, by position, under the same checks; only if it can't vouch
+      // for it does the selection say the page reloaded.
+      if (this.state.issue) patch.issue = null;
+      this.patchState(patch);
+      // An answer still being resolved is about the old document.
+      this.selectionRequest++;
+      this.quietResolve = null;
+      if (!this.beginReprove(this.reprove?.sourceChanged ?? false, true)) {
+        this.patchState(this.staleSelectionPatch("document-changed"));
+      }
+      return;
+    }
+    if (selection.status === "observed" && selection.epoch < epoch) {
       Object.assign(patch, this.staleSelectionPatch("document-changed"));
     } else if (selection.status === "resolving" && selection.epoch < epoch) {
       patch.selection = { status: "lost" };
@@ -1110,18 +1150,20 @@ export class InspectorController implements DevPreviewToolSession {
             tagName: primary.tagName,
             sameLocCount: primary.sameLocCount,
             chain: chainOf(primary),
+            epoch,
           },
           component:
             scope === "component" && component !== null
               ? { file: component.file, line: component.line, column: component.column }
               : null,
           sourceChanged: true,
+          reloaded: false,
           attempts: 0,
           awaiting: false,
         });
       this.patchState({ selection: { status: "settling", retrying } });
     };
-    if (pending !== null && !this.answersReprove(pending, primary, scope, component)) {
+    if (pending !== null && !this.answersReprove(pending, primary, scope, component, epoch)) {
       // Something else now sits where the element was written, or the page
       // can no longer tell. A selection is not re-pointed at what took its
       // place, and the page stops outlining the stand-in.
@@ -1243,6 +1285,7 @@ export class InspectorController implements DevPreviewToolSession {
             tagName: primary.tagName,
             sameLocCount: primary.sameLocCount,
             chain: chainOf(primary),
+            epoch,
           }
         : null;
     const before = this.state.selection;
@@ -1279,7 +1322,7 @@ export class InspectorController implements DevPreviewToolSession {
    * the page may be able to answer itself. False when there is nothing to ask
    * for: no ready selection, or one the page could not place.
    */
-  private beginReprove(sourceChanged: boolean): boolean {
+  private beginReprove(sourceChanged: boolean, reloaded = false): boolean {
     const selection = this.state.selection;
     const record = this.continuity;
     if (selection.status !== "ready" || record === null) return false;
@@ -1294,6 +1337,7 @@ export class InspectorController implements DevPreviewToolSession {
       record,
       component: picked ? { file: picked.file, line: picked.line, column: picked.column } : null,
       sourceChanged: sourceChanged || (this.reprove?.sourceChanged ?? false),
+      reloaded: reloaded || (this.reprove?.reloaded ?? false),
       attempts: 0,
       awaiting: false,
     });
@@ -1301,7 +1345,9 @@ export class InspectorController implements DevPreviewToolSession {
     this.patchState({
       selection: {
         ...selection,
-        stale: selection.stale ?? (sourceChanged ? "source-changed" : "document-changed"),
+        stale: reloaded
+          ? "document-changed"
+          : (selection.stale ?? (sourceChanged ? "source-changed" : "document-changed")),
         // In Browse the ask waits for the user, so the notice is theirs to see.
         reproving: this.state.mode === "select",
       },
@@ -1322,7 +1368,8 @@ export class InspectorController implements DevPreviewToolSession {
     reprove: Reprove,
     node: SiteGuestNodeObservation,
     scope: "element" | "component",
-    component: PickedComponent | null
+    component: PickedComponent | null,
+    epoch: number
   ): boolean {
     const wanted = reprove.component;
     if (wanted !== null) {
@@ -1338,7 +1385,10 @@ export class InspectorController implements DevPreviewToolSession {
       return false;
     }
     if (node.tagName !== reprove.record.tagName) return false;
-    if (node.runtimeOccurrenceId === reprove.record.occurrence) return true;
+    // The same node, which only an id from the same document can say.
+    if (epoch === reprove.record.epoch && node.runtimeOccurrenceId === reprove.record.occurrence) {
+      return true;
+    }
     return (
       node.sameLocCount === reprove.record.sameLocCount && chainOf(node) === reprove.record.chain
     );
@@ -1398,7 +1448,10 @@ export class InspectorController implements DevPreviewToolSession {
         sessionId: binding.sessionId,
         loc: reprove.record.loc,
         index: reprove.record.locIndex,
-        occurrence: reprove.record.occurrence,
+        // Never an id from another document: there it is some other element.
+        ...(reprove.record.epoch === this.state.epoch
+          ? { occurrence: reprove.record.occurrence }
+          : {}),
         ...(reprove.component ? { component: reprove.component } : {}),
       });
     } catch {
@@ -1433,7 +1486,7 @@ export class InspectorController implements DevPreviewToolSession {
       return;
     }
     if (selection.status !== "ready") return;
-    if (!reprove.sourceChanged) {
+    if (!reprove.sourceChanged && !reprove.reloaded) {
       // Nothing was edited; the element just left the page.
       this.continuity = null;
       this.patchState({ selection: { status: "none" } });
@@ -1741,12 +1794,40 @@ export class InspectorController implements DevPreviewToolSession {
         sessionId: binding.sessionId,
         loc: record.loc,
         index: record.locIndex,
-        occurrence: record.occurrence,
+        ...(record.epoch === this.state.epoch ? { occurrence: record.occurrence } : {}),
         component: { file: usedAt.file, line: usedAt.line, column: usedAt.column },
       });
     } catch {
       return false;
     }
+  }
+
+  /**
+   * The live selection standing for `selectionId` — itself, or one proved again
+   * from it after an edit — for a request that was made about it and is only
+   * now going out. "pending" while that is still being established: the page
+   * is being asked, or main has not yet said where its components are written.
+   * Null when nothing live stands for it: the user selected something else, or
+   * the page could not vouch for it. The request is then held to the selection
+   * it was made about, and fails honestly if that has changed.
+   */
+  followSelection(selectionId: string): FollowedSelection | "pending" | null {
+    const state = this.state.selection;
+    if (state.status !== "ready") return null;
+    const stands =
+      state.selection.selectionId === selectionId ||
+      (state.supersedes?.includes(selectionId) ?? false);
+    if (!stands) return null;
+    if (this.reprove !== null) return "pending";
+    if (state.stale !== null) return null;
+    if (state.definitions === null || state.revisions === null) return "pending";
+    return {
+      selection: state.selection,
+      file: state.file,
+      picked: state.scope === "component" ? state.component : null,
+      definitions: state.definitions,
+      revisions: state.revisions,
+    };
   }
 
   dismissIssue(): void {

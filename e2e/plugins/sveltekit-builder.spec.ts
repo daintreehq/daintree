@@ -465,6 +465,62 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
     await window.screenshot({ path: test.info().outputPath("selection-kept.png") });
   });
 
+  test("a request sent while the agent is busy waits in the queue, then goes in by itself", async () => {
+    const { window } = ctx;
+    const panel = inspector(window);
+    const request = panel.getByRole("textbox", { name: "Request for the agent" });
+    const send = panel.getByRole("button", { name: "Send to agent" });
+    const queue = panel.getByRole("list", { name: "Requests" });
+    const card = () => readFileSync(path.join(projectDir, ...CARD_FILE.split("/")), "utf8");
+
+    // The first keeps the agent busy for a while. Accepted is what frees the
+    // composer: the words leave the field without waiting for the agent.
+    await request.fill('Add the classes "rounded-3xl" to it, and take 8 seconds');
+    await send.click();
+    await expect(request).toHaveValue("");
+
+    // The second is made while the agent works — and about a file the first is
+    // about to edit. It queues, quietly: no warning, nothing to decide.
+    await request.fill('Add the classes "shadow-xl" to it');
+    await expect(send).toBeEnabled({ timeout: PLUGIN_TIMEOUT });
+    await send.click();
+    await expect(request).toHaveValue("");
+    const waiting = queue.getByRole("button", { name: /^Queued for .*shadow-xl/ });
+    await expect(waiting).toBeVisible({ timeout: PLUGIN_TIMEOUT });
+    await expect(panel.getByRole("alert")).toHaveCount(0);
+    await expect(panel.getByText(/No sign yet/)).toHaveCount(0);
+    // A click shows what is going to be sent.
+    await waiting.click();
+    await expect(queue.getByRole("group", { name: "Request text" })).toContainText("shadow-xl");
+    expect(card()).not.toContain("shadow-xl");
+    await window.screenshot({ path: test.info().outputPath("queued.png") });
+
+    // The first lands, the page proves the selection again, and the second
+    // follows it in — held to the file as the first left it, not as it was
+    // when the second was written.
+    await expect.poll(card, { timeout: 90_000 }).toContain("rounded-3xl");
+    await expect.poll(card, { timeout: 90_000 }).toContain("shadow-xl");
+    const prompts = readFileSync(agentInbox, "utf8").split("\n----\n");
+    const first = prompts.findIndex((prompt) => prompt.includes("rounded-3xl"));
+    const second = prompts.findIndex((prompt) => prompt.includes("shadow-xl"));
+    expect(first).toBeGreaterThanOrEqual(0);
+    // In behind the first's edit, not merely behind its prompt: the agent
+    // takes anything typed at it, busy or not, so arrival order is the proof.
+    const edited = prompts.findIndex(
+      (entry, index) => index > first && entry.startsWith("EDITED ")
+    );
+    expect(edited).toBeGreaterThan(first);
+    expect(second).toBeGreaterThan(edited);
+    expect(prompts[second]).toContain(`Source: <article> at ${CARD_FILE}:5:1`);
+
+    await expect(queue.getByRole("button", { name: /^Queued for / })).toHaveCount(0, {
+      timeout: PLUGIN_TIMEOUT,
+    });
+    await expect(panel.getByText("Couldn't send to the agent")).toHaveCount(0);
+    await expect(panel.getByText(/select (it )?again/i)).toHaveCount(0);
+    await window.screenshot({ path: test.info().outputPath("queue-sent.png") });
+  });
+
   test("the label follows the pointer, and Deselect clears the selection", async () => {
     const { window, app } = ctx;
     const strip = window.getByRole("toolbar", { name: "Site Builder" });

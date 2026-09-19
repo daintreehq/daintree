@@ -17,6 +17,12 @@ export interface ComposerPin {
 }
 
 export interface ComposerDelivery {
+  /** The host's id for this request: what a row is keyed, pushed on and removed by. */
+  id: string;
+  /** The user's own words, which a row shows before — and beside — the full request. */
+  instruction: string;
+  /** What it was about when it was sent, so it can be sent again; null when that isn't known. */
+  subject: ComposerPin | null;
   state: DeliveryState;
   title: string;
   terminalId: string | null;
@@ -32,22 +38,60 @@ export interface ComposerMemory {
   pinned: ComposerPin | null;
   /** The destination the user committed to, by key; null until they write. */
   chosen: string | null;
-  delivery: ComposerDelivery | null;
   /**
-   * The notice about the last delivery has been closed, without deciding that a
-   * half-delivered request is safe to repeat. Kept apart from `delivery` because
-   * the partial-send guard reads that record: clearing it to hide the notice
-   * would rearm the send it exists to block.
+   * Every request this composer has made and not dismissed, oldest first:
+   * waiting, going in, and gone. A request sent while the agent is busy joins
+   * the end and goes in when its turn comes.
    */
-  deliveryDismissed?: boolean;
+  deliveries: ComposerDelivery[];
+}
+
+/** How many settled requests a composer keeps on show before the oldest drop off. */
+const KEPT_DELIVERIES = 8;
+
+const SETTLED = new Set<DeliveryState["status"]>(["sent", "unconfirmed", "failed"]);
+
+export function isSettledDelivery(delivery: ComposerDelivery): boolean {
+  return SETTLED.has(delivery.state.status);
+}
+
+/**
+ * Part of this request may be sitting in the agent's input. Its record is what
+ * holds sending off until the user has answered it, so it is never dropped to
+ * make room: only Dismiss or sending it again takes it away.
+ */
+export function isUncertainDelivery(delivery: ComposerDelivery): boolean {
+  return (
+    delivery.state.status === "unconfirmed" ||
+    (delivery.state.status === "failed" && delivery.state.partial === true)
+  );
+}
+
+/** Add or replace one request's record, by id, keeping the order they were made in. */
+export function putComposerDelivery(memoryKey: string, delivery: ComposerDelivery): void {
+  const before = readComposerMemory(memoryKey).deliveries;
+  const at = before.findIndex((entry) => entry.id === delivery.id);
+  let next = at < 0 ? [...before, delivery] : before.map((e, i) => (i === at ? delivery : e));
+  // Only what has settled and needs nothing from the user is ever dropped: a
+  // waiting request is a promise, and an uncertain one is a guard.
+  const droppable = (entry: ComposerDelivery) =>
+    isSettledDelivery(entry) && !isUncertainDelivery(entry) && entry.id !== delivery.id;
+  let excess = next.filter(droppable).length - KEPT_DELIVERIES;
+  if (excess > 0) next = next.filter((entry) => !(droppable(entry) && excess-- > 0));
+  updateComposerMemory(memoryKey, { deliveries: next });
+}
+
+export function removeComposerDelivery(memoryKey: string, id: string): void {
+  const before = readComposerMemory(memoryKey).deliveries;
+  const next = before.filter((entry) => entry.id !== id);
+  if (next.length !== before.length) updateComposerMemory(memoryKey, { deliveries: next });
 }
 
 const EMPTY: ComposerMemory = {
   draft: "",
   pinned: null,
   chosen: null,
-  delivery: null,
-  deliveryDismissed: false,
+  deliveries: [],
 };
 const memories = new Map<string, ComposerMemory>();
 const listeners = new Set<() => void>();

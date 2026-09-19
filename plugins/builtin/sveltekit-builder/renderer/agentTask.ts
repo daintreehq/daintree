@@ -44,6 +44,26 @@ export type TaskScope =
       usedAt: CallSite | null;
     };
 
+/**
+ * Where `chosen` sits in `scopes`, by what it is rather than where it sat: a
+ * component added to the chain moves every index above it, and two scopes can
+ * share a label. -1 when the chain no longer names it.
+ */
+export function matchScope(chosen: TaskScope | undefined, scopes: readonly TaskScope[]): number {
+  if (chosen === undefined) return -1;
+  return scopes.findIndex((candidate) =>
+    candidate.kind !== chosen.kind
+      ? false
+      : candidate.kind === "element" ||
+        (chosen.kind === "component" &&
+          candidate.label === chosen.label &&
+          candidate.file === chosen.file &&
+          candidate.usedAt?.file === chosen.usedAt?.file &&
+          candidate.usedAt?.line === chosen.usedAt?.line &&
+          candidate.usedAt?.column === chosen.usedAt?.column)
+  );
+}
+
 export interface CallSite {
   file: string;
   line: number;

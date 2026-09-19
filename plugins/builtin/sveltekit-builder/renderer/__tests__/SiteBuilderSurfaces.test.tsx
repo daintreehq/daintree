@@ -30,6 +30,7 @@ import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
 import {
   __resetComposerMemoryForTests,
   composerMemoryKey,
+  readComposerMemory,
   updateComposerMemory,
 } from "../composerMemory";
 import { usePanelStore } from "@/store/panelStore";
@@ -863,11 +864,13 @@ describe("an app inside a monorepo", () => {
 });
 
 describe("stale selections", () => {
-  it("goes stale when the document epoch advances", async () => {
+  it("goes stale when the page reloads and never answers for the selection", async () => {
+    host.reselectFinds = false;
     await mountSelected();
     await act(async () => host.epochAdvanced(1));
-    await screen.findByText("Select again — the page reloaded");
-  });
+    // Asked first, a bounded number of times; then it is the user's to redo.
+    await screen.findByText("Select again — the page reloaded", {}, { timeout: 12_000 });
+  }, 20_000);
 
   it("won't send a request about a selection the page has moved past, and keeps the draft", async () => {
     await mountSelected();
@@ -877,11 +880,10 @@ describe("stale selections", () => {
       screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
     expect(sendButton().disabled).toBe(false);
 
+    host.reselectFinds = false;
     await act(async () => host.epochAdvanced(1));
-    // The panel says so once, in the identity block, and blocks the send. It
-    // used to say it again inside the composer 300px below; the assertion is on
-    // the behaviour so removing the repeat is not a test change.
-    await screen.findByText("Select again — the page reloaded");
+    // Blocked from the moment the page moved, not from when the panel gives up
+    // asking the new page for it: unproven is unsendable either way.
     await waitFor(() => expect(sendButton().disabled).toBe(true));
     expect((request as HTMLTextAreaElement).value).toBe("Say Upgrade");
   });
@@ -947,11 +949,16 @@ describe("stale selections", () => {
     await mountSelected();
     updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
       draft: "",
-      delivery: {
-        state: { status: "sent" },
-        title: "claude · pricing polish",
-        terminalId: "term-busy",
-      },
+      deliveries: [
+        {
+          id: "request-1",
+          instruction: "Say Upgrade",
+          subject: null,
+          state: { status: "sent" },
+          title: "claude · pricing polish",
+          terminalId: "term-busy",
+        },
+      ],
     });
     const notice = await screen.findByRole("status");
     // The notice's headline is its first paragraph; the body follows it.
@@ -993,37 +1000,43 @@ describe("stale selections", () => {
     expect(screen.getByRole("group", { name: "Ask an agent" })).toBeTruthy();
   });
 
-  it("won't re-send a request that may already be half-way into the agent's input", async () => {
+  it("won't type a new request on top of one that may be half-way into the agent's input", async () => {
     // The rule: when a delivery failed AFTER typing had started, the panel tells
-    // the user to check the terminal first — so Enter must not still be armed.
-    // Sending twice is genuinely harmful here, and this is the one failure mode
-    // where the remedy and the affordance contradicted each other.
+    // the user to check the terminal first — so Send must not still be armed,
+    // for these words or any others: whatever goes in next is appended to what
+    // is already sitting there.
     await mountSelected();
     const request = screen.getByRole("textbox", { name: "Request for the agent" });
-    fireEvent.change(request, { target: { value: "Say Upgrade" } });
+    fireEvent.change(request, { target: { value: "Round the corners" } });
     const sendButton = () =>
       screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
     expect(sendButton().disabled).toBe(false);
 
     act(() => {
       updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
-        delivery: {
-          state: {
-            status: "failed",
-            message: "The terminal stopped accepting input",
-            partial: true,
+        deliveries: [
+          {
+            id: "request-1",
+            instruction: "Say Upgrade",
+            subject: null,
+            state: {
+              status: "failed",
+              message: "The terminal stopped accepting input",
+              partial: true,
+            },
+            title: "claude",
+            terminalId: "term-1",
           },
-          title: "claude",
-          terminalId: "term-1",
-        },
+        ],
       });
     });
 
     await waitFor(() => expect(sendButton().disabled).toBe(true));
-    // Editing the words is the acknowledgement: the user has been back to the
-    // terminal and is deciding again.
-    fireEvent.change(request, { target: { value: "Say Upgrade now" } });
+    // Answering the notice is the acknowledgement: the user has been told to
+    // check the terminal, and closing that is saying they have.
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     await waitFor(() => expect(sendButton().disabled).toBe(false));
+    expect((request as HTMLTextAreaElement).value).toBe("Round the corners");
   });
 
   it("won't re-send on Enter when delivery couldn't be confirmed, but sends when asked to", async () => {
@@ -1075,9 +1088,26 @@ describe("stale selections", () => {
       screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
     await waitFor(() => expect(sendButton().disabled).toBe(false));
 
+    // What the row was about travels with it, which is what lets it be sent
+    // again: the pin the composer made when the words were typed.
+    const key = composerMemoryKey("preview-1", "wt-1");
+    const subject = await waitFor(() => {
+      const pin = readComposerMemory(key).pinned;
+      if (pin === null || pin.revisions === null) throw new Error("not pinned yet");
+      return pin;
+    });
     act(() => {
-      updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
-        delivery: { state: { status: "unconfirmed" }, title: "claude", terminalId: "term-1" },
+      updateComposerMemory(key, {
+        deliveries: [
+          {
+            id: "request-1",
+            instruction: "Say Upgrade",
+            subject,
+            state: { status: "unconfirmed" },
+            title: "claude",
+            terminalId: "term-1",
+          },
+        ],
       });
     });
     await waitFor(() => expect(sendButton().disabled).toBe(true));
@@ -1100,7 +1130,16 @@ describe("stale selections", () => {
     await mountSelected();
     act(() => {
       updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
-        delivery: { state: { status: "unconfirmed" }, title: "claude", terminalId: "term-1" },
+        deliveries: [
+          {
+            id: "request-1",
+            instruction: "Say Upgrade",
+            subject: null,
+            state: { status: "unconfirmed" },
+            title: "claude",
+            terminalId: "term-1",
+          },
+        ],
       });
     });
     await screen.findByText("Delivery unconfirmed");
@@ -1108,34 +1147,106 @@ describe("stale selections", () => {
     expect(screen.queryByRole("button", { name: "Send it again" })).toBeNull();
   });
 
-  it("keeps the partial-delivery guard when the notice is dismissed", async () => {
-    // The guard reads the delivery record, and Dismiss used to clear it — so
-    // closing the warning rearmed Enter on the unchanged draft. Hiding the
-    // notice and deciding the request is safe to repeat are different acts.
+  it("hands a failed request's words back, and keeps a row open as its request moves on", async () => {
     await mountSelected();
-    const request = screen.getByRole("textbox", { name: "Request for the agent" });
-    fireEvent.change(request, { target: { value: "Say Upgrade" } });
-    const sendButton = () =>
-      screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    const key = composerMemoryKey("preview-1", "wt-1");
+    const record = (state: { status: "queued" } | { status: "failed"; message: string }) => ({
+      id: "request-1",
+      instruction: "Round the corners",
+      subject: null,
+      state,
+      title: "claude",
+      terminalId: "term-1",
+    });
+    act(() => updateComposerMemory(key, { deliveries: [record({ status: "queued" })] }));
+    fireEvent.click(await screen.findByRole("button", { name: /^Queued for claude/ }));
+    expect(screen.getByRole("group", { name: "Request text" }).textContent).toContain(
+      "Round the corners"
+    );
 
+    // Its turn came and it could not go: the same request, a different state.
+    act(() =>
+      updateComposerMemory(key, {
+        deliveries: [record({ status: "failed", message: "claude isn't running any more" })],
+      })
+    );
+    await screen.findByText(/Nothing was typed into the agent/);
+    // Still open: the words were on screen and stay there.
+    expect(screen.getByRole("group", { name: "Request text" }).textContent).toContain(
+      "Round the corners"
+    );
+
+    // They left the field when the request was accepted, so they come back.
+    const request = screen.getByRole("textbox", {
+      name: "Request for the agent",
+    }) as HTMLTextAreaElement;
+    expect(request.value).toBe("");
+    fireEvent.click(screen.getByRole("button", { name: "Edit request" }));
+    await waitFor(() => expect(request.value).toBe("Round the corners"));
+    expect(screen.queryByRole("list", { name: "Requests" })).toBeNull();
+  });
+
+  it("shows a request sent while the agent is busy as queued, with its words a click away", async () => {
+    await mountSelected();
     act(() => {
       updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
-        delivery: {
-          state: {
-            status: "failed",
-            message: "The terminal stopped accepting input",
-            partial: true,
+        deliveries: [
+          {
+            id: "request-1",
+            instruction: "Make it green",
+            subject: null,
+            state: { status: "sent" },
+            title: "claude",
+            terminalId: "term-1",
+            request: "Make it green\n\n---\n- Source: <button> at src/lib/PricingCard.svelte:6:2",
           },
-          title: "claude",
-          terminalId: "term-1",
-        },
+          {
+            id: "request-2",
+            instruction: "Round the corners",
+            subject: null,
+            state: { status: "queued" },
+            title: "claude",
+            terminalId: "term-1",
+          },
+          {
+            id: "request-3",
+            instruction: "Add a hover state",
+            subject: null,
+            state: { status: "queued" },
+            title: "claude",
+            terminalId: "term-1",
+          },
+        ],
       });
     });
-    await waitFor(() => expect(sendButton().disabled).toBe(true));
+    const queue = await screen.findByRole("list", { name: "Requests" });
+    expect(within(queue).getAllByRole("listitem")).toHaveLength(3);
+    // Waiting is not a warning: nothing here asks the user to do anything.
+    expect(within(queue).queryByRole("alert")).toBeNull();
+    expect(text()).not.toMatch(/No sign yet/);
+    // And it never blocks the next request.
+    fireEvent.change(screen.getByRole("textbox", { name: "Request for the agent" }), {
+      target: { value: "One more thing" },
+    });
+    const send = screen.getByRole("button", { name: "Send to agent" }) as HTMLButtonElement;
+    await waitFor(() => expect(send.disabled).toBe(false));
 
-    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
-    expect(screen.queryByText("Couldn't send to the agent")).toBeNull();
-    expect(sendButton().disabled).toBe(true);
+    // Only the request at the head can be pushed on; either can be taken out.
+    const rows = within(queue).getAllByRole("button", { name: /^Queued for claude/ });
+    expect(rows).toHaveLength(2);
+    fireEvent.click(rows[0]!);
+    expect(within(queue).getAllByRole("button", { name: "Send now" })).toHaveLength(1);
+    fireEvent.click(rows[1]!);
+    expect(within(queue).getAllByRole("button", { name: "Send now" })).toHaveLength(1);
+    const texts = within(queue).getAllByRole("group", { name: "Request text" });
+    expect(texts.map((node) => node.querySelector("pre")?.textContent)).toEqual([
+      "Round the corners",
+      "Add a hover state",
+    ]);
+
+    fireEvent.click(within(queue).getAllByRole("button", { name: "Remove" })[1]!);
+    await waitFor(() => expect(within(queue).getAllByRole("listitem")).toHaveLength(2));
+    expect(text()).not.toContain("Add a hover state");
   });
 
   it("names the selection as current in the trail, never an ancestor", async () => {
@@ -1328,11 +1439,16 @@ describe("stale selections", () => {
     fireEvent.change(request, { target: { value: "Say Upgrade" } });
     act(() => {
       updateComposerMemory(composerMemoryKey("preview-1", "wt-1"), {
-        delivery: {
-          state: { status: "failed", message: "The terminal was gone" },
-          title: "claude",
-          terminalId: "term-1",
-        },
+        deliveries: [
+          {
+            id: "request-1",
+            instruction: "Say Upgrade",
+            subject: null,
+            state: { status: "failed", message: "The terminal was gone" },
+            title: "claude",
+            terminalId: "term-1",
+          },
+        ],
       });
     });
     const sendButton = () =>
@@ -1604,13 +1720,50 @@ describe("stale selections", () => {
     expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
   });
 
-  it("gives the ask up when the page reloads under it", async () => {
+  it("asks the reloaded page for the selection, since an edit reloads as often as it hot-updates", async () => {
     await mountSelected();
     await act(async () => changed(FILE));
+    // A Tailwind class the stylesheet never held: the dev server reloads.
     await act(async () => host.documentReady(1));
-    await screen.findByText("Select again — the page reloaded");
-    await act(async () => new Promise((resolve) => setTimeout(resolve, 1300)));
-    expect(host.sitePreview.reselect).not.toHaveBeenCalled();
+    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2), {
+      timeout: 4000,
+    });
+    expect(host.calls(CHANNELS.selectionResolve)[1]).toMatchObject({ documentEpoch: 1 });
+    expect(screen.queryByText("Select again — the page reloaded")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+  });
+
+  it("doesn't take a recycled id for the same node after a reload", async () => {
+    await mountSelected();
+    // The new document numbers its elements from one again, so "occ-1" is now
+    // whatever it counted first — here a button among two, not three.
+    host.sitePreview.reselect.mockImplementation(async (request) => {
+      setTimeout(
+        () => host.select(1, [{ ...OBSERVATION, loc: request.loc, sameLocCount: 2 }], "reselect"),
+        0
+      );
+      return true;
+    });
+    await act(async () => host.documentReady(1));
+    await screen.findByText("Select again — the page reloaded", {}, { timeout: 4000 });
+    // And the page was not asked for it by that id in the first place.
+    expect(host.sitePreview.reselect.mock.calls[0]![0]).not.toHaveProperty("occurrence");
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
+  });
+
+  it("says the page reloaded when the new page can't vouch for the selection", async () => {
+    await mountSelected();
+    host.sitePreview.reselect.mockImplementation(async (request) => {
+      setTimeout(
+        () => host.select(1, [{ ...OBSERVATION, loc: request.loc, tagName: "SPAN" }], "reselect"),
+        0
+      );
+      return true;
+    });
+    await act(async () => host.documentReady(1));
+    await screen.findByText("Select again — the page reloaded", {}, { timeout: 4000 });
+    expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(1);
   });
 
   it("says the file changed while browsing, and asks the page once selecting again", async () => {
@@ -1634,10 +1787,10 @@ describe("stale selections", () => {
     host.reselectFinds = false;
     await mountSelected();
     await act(async () => changed(FILE));
-    await screen.findByText("Select again — the file changed", {}, { timeout: 9000 });
+    await screen.findByText("Select again — the file changed", {}, { timeout: 12_000 });
     // Bounded: one ask per settle window, then the selection is the user's.
-    expect(host.sitePreview.reselect).toHaveBeenCalledTimes(4);
-  }, 12_000);
+    expect(host.sitePreview.reselect).toHaveBeenCalledTimes(6);
+  }, 20_000);
 
   it("goes stale, and says so, when the page answers with a different element", async () => {
     await mountSelected();
@@ -1708,9 +1861,10 @@ describe("stale selections", () => {
     await mountSelected();
     // The reinstalled runtime reports the new document before the bridge's push.
     await act(async () => host.documentReady(1));
-    await screen.findByText("Select again — the page reloaded");
-    await act(async () => host.select(1));
-    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2));
+    // The new page is asked for the selection, and answers for its own epoch.
+    await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2), {
+      timeout: 4000,
+    });
     expect(host.calls(CHANNELS.selectionResolve)[1]).toMatchObject({ documentEpoch: 1 });
     await waitFor(() => expect(screen.queryByText("Selection changed — select again")).toBeNull());
     await waitFor(() => expect(screen.queryByText("Select again — the page reloaded")).toBeNull());
