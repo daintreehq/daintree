@@ -1721,7 +1721,9 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
   ): Record<string, unknown> {
     return {
       id: `p-${i}`,
-      timestamp: 1_000 + i,
+      // Recent enough to count as evidence for the statistical detectors, which
+      // only score records inside ANOMALY_RECENCY_WINDOW_MS (#12507).
+      timestamp: Date.now() - 60_000 + i,
       toolId,
       sessionId: "sess-1",
       tier: "action",
@@ -1731,8 +1733,10 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     };
   }
 
+  // Distinct, strictly increasing timestamps that are still inside the anomaly
+  // recency window when the snapshot is read back with the real clock.
   function withSequentialClock<T>(fn: () => T): T {
-    let now = 1_000_000;
+    let now = Date.now() - 5 * 60_000;
     const spy = vi.spyOn(Date, "now").mockImplementation(() => ++now);
     try {
       return fn();
@@ -1869,7 +1873,7 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
         .getDiagnosticsSnapshot()
         .anomalySignals.filter((s) => s.kind === "first-seen-combination");
       expect(firstSeen).toEqual([
-        expect.objectContaining({ toolId: "tool.new", tier: "external", severity: "danger" }),
+        expect.objectContaining({ toolId: "tool.new", tier: "external", severity: "info" }),
       ]);
     }
 
@@ -1883,15 +1887,17 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
   it("projects latency-drift and failure-cluster signals without ids or record content", () => {
     const { service } = makeFixture();
     withSequentialClock(() => {
+      // 10–18ms baseline: median 14, MAD 2, so 5000ms scores z ≥ 3. Drift needs
+      // LATENCY_DRIFT_MIN_OUTLIERS outliers in the tool's last ten calls.
       for (let i = 0; i < 60; i++) {
         append(service, {
-          durationMs: i % 2 === 0 ? 10 : 12,
+          durationMs: 10 + (i % 5) * 2,
           argsSummary: '{"prompt":"ARGS_SENTINEL"}',
           resultSummary: "RESULT_SENTINEL",
           sessionId: "SESSION_SENTINEL",
         });
       }
-      append(service, { durationMs: 5000 });
+      for (let i = 0; i < 3; i++) append(service, { durationMs: 5000 });
       for (let i = 0; i < 3; i++) append(service, { toolId: "tool.flaky", outcome: errorOutcome });
     });
 
@@ -1914,11 +1920,11 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
         kind: "latency-drift",
         toolId: "tool.a",
         tier: "action",
-        severity: "danger",
+        severity: "warning",
         timestamp: rawDrift[0]!.timestamp,
         zScore: rawDrift[0]!.zScore,
         durationMs: 5000,
-        baselineMedianMs: 12,
+        baselineMedianMs: 14,
       },
     ]);
     expect(snapshot.anomalySignals.filter((s) => s.kind === "failure-cluster")).toEqual([
@@ -1942,9 +1948,11 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
 
   it("projects p95 z-score signals with their p95", () => {
     // Five tools with steady, distinct latencies; one is far above the rest.
+    // Each needs P95_Z_SCORE_MIN_SAMPLES recent successes to get a p95 at all.
+    const SAMPLES = 25;
     const log = [10, 11, 12, 13, 1000].flatMap((durationMs, t) =>
-      Array.from({ length: 10 }, (_, i) =>
-        persisted(t * 10 + i, `tool.t${t}`, "success", durationMs)
+      Array.from({ length: SAMPLES }, (_, i) =>
+        persisted(t * SAMPLES + i, `tool.t${t}`, "success", durationMs)
       )
     );
     const { service } = makeFixture({}, log);
@@ -1957,7 +1965,7 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
       {
         kind: "p95-z-score",
         toolId: "tool.t4",
-        severity: "danger",
+        severity: "warning",
         timestamp: raw!.timestamp,
         zScore: raw!.zScore,
         p95Ms: 1000,
@@ -1999,22 +2007,23 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
 
   it("caps exported signals to the newest 200 while reporting the full counts", () => {
     const { service } = makeFixture({ auditMaxRecords: 1000 });
-    // 399 fast calls (median 12ms, MAD 2ms) plus 201 slow outliers: each slow
-    // call is its own latency-drift signal.
+    // A baseline of one tool, then 201 never-before-seen tools: one
+    // first-seen-combination signal each.
     withSequentialClock(() => {
-      for (let i = 0; i < 399; i++) append(service, { durationMs: i % 2 === 0 ? 10 : 12 });
-      for (let i = 0; i < 201; i++) append(service, { durationMs: 1000 });
+      for (let i = 0; i < 50; i++) append(service);
+      for (let i = 0; i < 201; i++) append(service, { toolId: `tool.t${i}` });
     });
 
     const snapshot = service.getDiagnosticsSnapshot();
-    const outlierTimestamps = service
+    const newToolTimestamps = service
       .getRecords()
-      .filter((r) => r.durationMs === 1000)
+      .filter((r) => r.toolId !== "tool.a")
       .map((r) => r.timestamp);
+    expect(newToolTimestamps).toHaveLength(201);
     expect(snapshot.anomalySignalCount).toBe(201);
-    expect(snapshot.anomalySignalCountsByKind).toEqual({ "latency-drift": 201 });
+    expect(snapshot.anomalySignalCountsByKind).toEqual({ "first-seen-combination": 201 });
     expect(snapshot.anomalySignals.map((s) => s.timestamp)).toEqual(
-      [...outlierTimestamps].sort((a, b) => b - a).slice(0, 200)
+      [...newToolTimestamps].sort((a, b) => b - a).slice(0, 200)
     );
   });
 });
