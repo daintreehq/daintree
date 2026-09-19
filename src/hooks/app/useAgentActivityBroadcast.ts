@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { NO_WORKTREE } from "@/store/slices/panelRegistry/worktreeIndex";
@@ -40,6 +41,11 @@ function computeBusyWorktreeIds(): string[] {
  *
  * Activations flush fast; deactivations settle so permission-prompt flaps
  * don't churn watchers. Re-sends after a host restart via `onReady`.
+ *
+ * Idle while the project view is cached: main closes the worktree port for a
+ * cached view, so every send would fail and the retry would re-arm forever.
+ * Warm reactivation re-evaluates; the re-brokered port's `onReady` covers the
+ * host-side reset.
  */
 export function useAgentActivityBroadcast(): void {
   useEffect(() => {
@@ -91,6 +97,8 @@ export function useAgentActivityBroadcast(): void {
         // comparison can't believe the host holds this state, and retry on
         // our own clock — a quiet store never re-evaluates otherwise.
         lastSentKey = `unsent:${key}`;
+        // A cached view's port is closed; `active` re-evaluates instead.
+        if (isProjectViewCached()) return;
         scheduleSend("deactivation", key);
       });
     };
@@ -115,6 +123,13 @@ export function useAgentActivityBroadcast(): void {
     };
 
     const evaluate = () => {
+      // Nothing can reach the host while cached. `lastSentKey` is left as-is
+      // so `active` diffs against what the host was last told — agents in a
+      // cached project keep working, so there is no idle set to announce.
+      if (isProjectViewCached()) {
+        clearTimer();
+        return;
+      }
       const ids = computeBusyWorktreeIds();
       const key = JSON.stringify(ids);
       if (key === lastSentKey) {
@@ -140,6 +155,10 @@ export function useAgentActivityBroadcast(): void {
       clearTimer();
       evaluate();
     });
+    const offLifecycle = subscribeProjectViewLifecycle((phase) => {
+      if (phase === "cached") clearTimer();
+      else if (phase === "active") evaluate();
+    });
     evaluate();
 
     return () => {
@@ -147,6 +166,7 @@ export function useAgentActivityBroadcast(): void {
       clearTimer();
       unsubscribe();
       offReady();
+      offLifecycle();
     };
   }, []);
 }

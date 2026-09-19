@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 
 const { onSwitchMock } = vi.hoisted(() => ({
   onSwitchMock: vi.fn<(cb: () => void) => () => void>(),
@@ -733,6 +734,210 @@ describe("usePollingLifecycle", () => {
         await Promise.resolve();
       });
       expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+  });
+  describe("cached project view (#12514)", () => {
+    // Drives the real `viewCacheState` singleton through its preload boundary.
+    // A cached view's document stays "visible", so the lifecycle IPC is the
+    // only thing that can keep its poll timer from firing.
+    let handlers: { cached: Set<() => void>; warm: Set<() => void>; revealed: Set<() => void> };
+    let latchedCached: boolean;
+    let hidden: boolean;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      hidden = false;
+      Object.defineProperty(document, "hidden", { configurable: true, get: () => hidden });
+      handlers = { cached: new Set(), warm: new Set(), revealed: new Set() };
+      latchedCached = false;
+      vi.stubGlobal("electron", {
+        app: {
+          onViewCached: (cb: () => void) => {
+            handlers.cached.add(cb);
+            return () => handlers.cached.delete(cb);
+          },
+          onViewWarmActivated: (cb: () => void) => {
+            handlers.warm.add(cb);
+            return () => handlers.warm.delete(cb);
+          },
+          onViewRevealed: (cb: () => void) => {
+            handlers.revealed.add(cb);
+            return () => handlers.revealed.delete(cb);
+          },
+          isViewCached: () => latchedCached,
+        },
+      });
+      __resetProjectViewCacheStateForTests();
+    });
+
+    afterEach(() => {
+      __resetProjectViewCacheStateForTests();
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+      Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    });
+
+    const INTERVAL = 30_000;
+
+    /** Advance fake time and drain the fetch → reschedule promise chains. */
+    async function advance(ms: number): Promise<void> {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+    }
+
+    async function emit(set: Set<() => void>): Promise<void> {
+      await act(async () => {
+        set.forEach((handler) => handler());
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    async function setHidden(next: boolean): Promise<void> {
+      hidden = next;
+      await act(async () => {
+        document.dispatchEvent(new Event("visibilitychange"));
+        await vi.advanceTimersByTimeAsync(0);
+      });
+    }
+
+    function mount() {
+      const fetchFn = vi
+        .fn<(ctx: TestFetchContext) => Promise<void>>()
+        .mockResolvedValue(undefined);
+      // Only called when the timer is about to be armed, so its call count is
+      // the number of times polling was (re)armed.
+      const calculateNextInterval = vi.fn<(ctx: { isVisible: boolean }) => number>(() => INTERVAL);
+      const { hook } = setupHook({ fetchFn, calculateNextInterval });
+      return { hook, fetchFn, calculateNextInterval };
+    }
+
+    it("stops the poll timer when the view is cached", async () => {
+      const { fetchFn, calculateNextInterval } = mount();
+      await advance(0);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calculateNextInterval).toHaveBeenCalledTimes(1);
+
+      await emit(handlers.cached);
+      await advance(INTERVAL * 10);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calculateNextInterval).toHaveBeenCalledTimes(1);
+    });
+
+    it("re-arms on warm activation without fetching, and reveal adds nothing", async () => {
+      const { fetchFn, calculateNextInterval } = mount();
+      await advance(0);
+      await emit(handlers.cached);
+      await advance(INTERVAL * 3);
+
+      await emit(handlers.warm);
+      // The targeted PROJECT_ON_SWITCH owns the reactivation fetch.
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calculateNextInterval).toHaveBeenCalledTimes(2);
+
+      await emit(handlers.revealed);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calculateNextInterval).toHaveBeenCalledTimes(2);
+
+      await advance(INTERVAL);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("scheduled");
+    });
+
+    it("fetches once per warm reactivation when the targeted project switch follows", async () => {
+      let switchCallback: (() => void) | undefined;
+      onSwitchMock.mockImplementation((cb) => {
+        switchCallback = cb;
+        return () => {};
+      });
+      const { fetchFn, calculateNextInterval } = mount();
+      await advance(0);
+      await emit(handlers.cached);
+
+      // Main's order on a warm switch: warm-activated, then PROJECT_ON_SWITCH.
+      await emit(handlers.warm);
+      await act(async () => {
+        switchCallback?.();
+        await vi.advanceTimersByTimeAsync(0);
+      });
+      await emit(handlers.revealed);
+
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(fetchFn.mock.calls[1]?.[0]?.reason).toBe("reactivate");
+
+      // And exactly one live timer came out of it.
+      const armed = calculateNextInterval.mock.calls.length;
+      await advance(INTERVAL);
+      expect(fetchFn).toHaveBeenCalledTimes(3);
+      expect(calculateNextInterval).toHaveBeenCalledTimes(armed + 1);
+    });
+
+    it("keeps the one-shot initial fetch when mounted cached but arms no timer", async () => {
+      latchedCached = true;
+      const { fetchFn, calculateNextInterval } = mount();
+      await advance(0);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(fetchFn.mock.calls[0]?.[0]?.reason).toBe("initial");
+      expect(calculateNextInterval).not.toHaveBeenCalled();
+
+      await advance(INTERVAL * 5);
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+
+      await emit(handlers.warm);
+      expect(calculateNextInterval).toHaveBeenCalledTimes(1);
+      await advance(INTERVAL);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    });
+
+    it("does not wake a cached view's poll when the window is restored", async () => {
+      const { fetchFn, calculateNextInterval } = mount();
+      await advance(0);
+      await emit(handlers.cached);
+
+      await setHidden(true);
+      await setHidden(false);
+      await advance(INTERVAL * 5);
+
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calculateNextInterval).toHaveBeenCalledTimes(1);
+
+      // The restore was still recorded, so activation picks the visible tier.
+      await emit(handlers.warm);
+      expect(calculateNextInterval).toHaveBeenLastCalledWith({ isVisible: true });
+    });
+
+    it("still fetches on an explicit refresh() while cached but arms no timer", async () => {
+      const { hook, fetchFn, calculateNextInterval } = mount();
+      await advance(0);
+      await emit(handlers.cached);
+
+      await act(async () => {
+        await hook.result.current.refresh({ force: true });
+      });
+
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+      expect(calculateNextInterval).toHaveBeenCalledTimes(1);
+      await advance(INTERVAL * 5);
+      expect(fetchFn).toHaveBeenCalledTimes(2);
+    });
+
+    it("drops the lifecycle registration with the last subscriber", async () => {
+      const first = mount();
+      await advance(0);
+      first.hook.unmount();
+
+      const second = mount();
+      await advance(0);
+      const armed = second.calculateNextInterval.mock.calls.length;
+
+      await emit(handlers.cached);
+      await emit(handlers.warm);
+
+      // A leaked registration from the first mount would fan `active` out a
+      // second time.
+      expect(second.calculateNextInterval).toHaveBeenCalledTimes(armed + 1);
     });
   });
 });
