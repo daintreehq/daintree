@@ -17,7 +17,11 @@ import { normalizeTerminalGridDimension } from "../../../../shared/types/termina
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
 import { isPanelTitleMode, type PanelTitleMode } from "../../../../shared/types/panel.js";
 import { events } from "../../../services/events.js";
-import { getProjectForWebContents } from "../../../window/webContentsRegistry.js";
+import {
+  getProjectForWebContents,
+  getWebContentsForProject,
+  isCachedViewWebContents,
+} from "../../../window/webContentsRegistry.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { isHandbackCode } from "../../../../shared/utils/handback.js";
@@ -210,8 +214,22 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
   ipcMain.on(CHANNELS.TERMINAL_RESIZE, handleTerminalResize);
   handlers.push(() => ipcMain.removeListener(CHANNELS.TERMINAL_RESIZE, handleTerminalResize));
 
+  /**
+   * The pty-host keeps one cadence per terminal and the last writer wins. The
+   * same project can be open in two windows, so a cached view demoting its
+   * terminals would slow the ones another window is still showing.
+   */
+  const isShadowedCachedViewDemotion = (senderId: number, terminalId: string): boolean => {
+    if (!isCachedViewWebContents(senderId)) return false;
+    const projectId = ptyClient.getTerminalProjectId(terminalId);
+    if (projectId === null) return false;
+    return getWebContentsForProject(projectId).some(
+      (wc) => wc.id !== senderId && !isCachedViewWebContents(wc.id)
+    );
+  };
+
   const handleTerminalSetActivityTier = (
-    _event: Electron.IpcMainEvent,
+    event: Electron.IpcMainEvent,
     payload: { id: string; tier: PtyHostActivityTier; pollingIntervalMs?: number }
   ) => {
     try {
@@ -221,6 +239,9 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       const { id, tier, pollingIntervalMs } = payload;
       if (typeof id !== "string" || !id) return;
       const effectiveTier: PtyHostActivityTier = tier === "background" ? "background" : "active";
+      if (effectiveTier === "background" && isShadowedCachedViewDemotion(event.sender.id, id)) {
+        return;
+      }
       // The renderer may send a cadence hint (issue #8596 — 200ms for VISIBLE-
       // unfocused). Guard against malformed values; the PTY host falls back to
       // the tier default when the field is missing or invalid.
