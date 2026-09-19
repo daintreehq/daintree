@@ -642,7 +642,7 @@ export const TerminalLastMessageResultSchema = z
       status: z.literal("ok"),
       provider: z.enum(["claude", "codex"]),
       message: AgentLastMessageSchema.nullable().describe(
-        "The last reply that had text. Null when only an unanswered tool call is on record."
+        "The selected reply with text. Null when only an unanswered tool call is on record."
       ),
       unansweredToolUses: z
         .array(

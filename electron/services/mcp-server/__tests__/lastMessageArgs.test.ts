@@ -40,6 +40,20 @@ describe("parseLastMessageReadArgs (#12496)", () => {
     }
   });
 
+  // Whatever id the transcript carried, a cursor the tool handed out has to
+  // pass the tool's own check when it comes back unchanged.
+  it("accepts every cursor the reader mints", () => {
+    const text = "y".repeat(8_000_000);
+    for (const id of [null, "msg_1", "漢".repeat(256), "\ud800".repeat(256)]) {
+      const cursor = encodeMessageCursor(id, text, text.length - 1);
+
+      expect(parseLastMessageReadArgs({ terminalId: "t-1", cursor })).toEqual({
+        ok: true,
+        options: { cursor },
+      });
+    }
+  });
+
   it("refuses a cursor it did not mint", () => {
     for (const cursor of ["", "garbage", 42]) {
       const parsed = parseLastMessageReadArgs({ terminalId: "t-1", cursor });

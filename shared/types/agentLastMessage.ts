@@ -27,8 +27,10 @@ export type AgentLastMessageUnavailableReason =
    */
   | "search-cap-reached"
   /**
-   * No reply at the requested index, or the message a cursor named has changed
-   * or is out of reach (#12496). Another message is never substituted for it.
+   * The whole transcript was read and holds no reply at the requested index,
+   * or none that still matches a cursor — the message it named changed or is
+   * gone (#12496). Another message is never substituted for it. A search the
+   * read's ceiling cut short is `search-cap-reached` instead.
    */
   | "message-not-found";
 
@@ -110,8 +112,8 @@ export const LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES = 48 * 1024;
 /** How far back `messageIndex` reaches; 0 is the latest reply with text. */
 export const LAST_MESSAGE_INDEX_MAX = 20;
 
-/** Longest cursor accepted — far past any this reader mints, whose id is capped at 256 characters. */
-export const LAST_MESSAGE_CURSOR_MAX_CHARS = 1024;
+/** Longest cursor accepted — well past the ~100 characters of every one the reader mints. */
+export const LAST_MESSAGE_CURSOR_MAX_CHARS = 256;
 
 /**
  * What a caller may ask of the read beyond the terminal, once main has

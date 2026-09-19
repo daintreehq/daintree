@@ -2039,7 +2039,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description: "A result's `message.nextCursor`, unchanged, for the text before that page.",
           type: "string",
           minLength: 1,
-          maxLength: 1024,
+          maxLength: 256,
         },
       },
       required: ["terminalId"],
@@ -2128,7 +2128,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 },
               ],
               description:
-                "The last reply that had text. Null when only an unanswered tool call is on record.",
+                "The selected reply with text. Null when only an unanswered tool call is on record.",
             },
             unansweredToolUses: {
               type: "array",

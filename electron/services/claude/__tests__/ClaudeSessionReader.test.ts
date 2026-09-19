@@ -591,54 +591,52 @@ describe("readClaudeLastMessage — reading from the end", () => {
   });
 });
 
-describe("readClaudeLastMessage — reading more of a message (#12496)", () => {
-  const escapedBytes = (value: string) => Buffer.byteLength(JSON.stringify(value)) - 2;
+const escapedBytes = (value: string) => Buffer.byteLength(JSON.stringify(value)) - 2;
 
-  // Pages back from where `first` starts until the cursor runs out, the way a
-  // caller would, and returns the results in the order they were read.
-  async function resultsFrom(
-    first: Parameters<typeof read>[0] = {}
-  ): Promise<AgentLastMessageOk[]> {
-    const results: AgentLastMessageOk[] = [];
-    let options = first;
-    for (let i = 0; i < 100; i++) {
-      const result = ok(await read(options));
-      const cursor = result.message?.nextCursor;
-      if (cursor === undefined) throw new Error("expected a message");
-      results.push(result);
-      if (cursor === null) return results;
-      options = { ...options, messageIndex: undefined, cursor };
-    }
-    throw new Error("the cursor never ran out");
+// Pages back from where `first` starts until the cursor runs out, the way a
+// caller would, and returns the results in the order they were read.
+async function resultsFrom(first: Parameters<typeof read>[0] = {}): Promise<AgentLastMessageOk[]> {
+  const results: AgentLastMessageOk[] = [];
+  let options = first;
+  for (let i = 0; i < 100; i++) {
+    const result = ok(await read(options));
+    const cursor = result.message?.nextCursor;
+    if (cursor === undefined) throw new Error("expected a message");
+    results.push(result);
+    if (cursor === null) return results;
+    options = { ...options, messageIndex: undefined, cursor };
   }
+  throw new Error("the cursor never ran out");
+}
 
-  const pagesFrom = async (first: Parameters<typeof read>[0] = {}): Promise<AgentLastMessage[]> =>
-    (await resultsFrom(first)).map((result) => result.message!);
+const pagesFrom = async (first: Parameters<typeof read>[0] = {}): Promise<AgentLastMessage[]> =>
+  (await resultsFrom(first)).map((result) => result.message!);
 
-  const rebuilt = (pages: AgentLastMessage[]) =>
-    pages
-      .map((page) => page.text)
-      .reverse()
-      .join("");
+const rebuilt = (pages: AgentLastMessage[]) =>
+  pages
+    .map((page) => page.text)
+    .reverse()
+    .join("");
 
-  // Everything that costs a different number of bytes once escaped, plus a
-  // pair and a lone surrogate, so a page boundary lands on each kind.
-  const mixed = (length: number) => {
-    const pieces = [
-      "plain ",
-      'q"uote ',
-      "back\\slash ",
-      "\u0001ctl ",
-      "tab\t",
-      "日本語 ",
-      "🚀",
-      "\ud800x ",
-    ];
-    let out = "";
-    for (let i = 0; out.length < length; i++) out += pieces[i % pieces.length];
-    return out;
-  };
+// Everything that costs a different number of bytes once escaped, plus a
+// pair and a lone surrogate, so a page boundary lands on each kind.
+const mixed = (length: number) => {
+  const pieces = [
+    "plain ",
+    'q"uote ',
+    "back\\slash ",
+    "\u0001ctl ",
+    "tab\t",
+    "日本語 ",
+    "🚀",
+    "\ud800x ",
+  ];
+  let out = "";
+  for (let i = 0; out.length < length; i++) out += pieces[i % pieces.length];
+  return out;
+};
 
+describe("readClaudeLastMessage — reading more of a message (#12496)", () => {
   it("returns more of a long message when asked, and still keeps the end", async () => {
     const body = "x".repeat(40 * 1024) + "THE END";
     await seed([assistant("msg_1", [text(body)])]);
@@ -839,18 +837,47 @@ describe("readClaudeLastMessage — an earlier message (#12496)", () => {
     expect(ok(await read({ messageIndex: 1 })).message?.text).toBe("Before compaction.");
   });
 
+  // The record that ends a message passed over is read again as the newest
+  // record of whatever came before it, so its own calls still count — and a
+  // prompt that carries a result still answers the call it names.
   it("returns the calls made in or after the earlier reply that nothing answered", async () => {
     await seed([
       assistant("msg_1", [text("Report.")]),
-      assistant("msg_1", [toolUse("toolu_old", "Bash")]),
-      assistant("msg_2", [toolUse("toolu_done", "Read")]),
-      toolResult("toolu_done"),
-      assistant("msg_3", [text("Later.")]),
+      assistant("msg_1", [toolUse("toolu_old", "Bash"), toolUse("toolu_asked", "Read")]),
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_asked", content: "ok" },
+            { type: "text", text: "and also this" },
+          ],
+        },
+        timestamp: STAMP,
+      }),
+      assistant("msg_2", [text("Middle.")]),
+      assistant("msg_3", [toolUse("toolu_pending", "Write")]),
+      assistant("msg_4", [text("Later.")]),
     ]);
 
-    expect(ok(await read({ messageIndex: 1 })).unansweredToolUses).toEqual([
+    const result = ok(await read({ messageIndex: 2 }));
+
+    expect(result.message?.text).toBe("Report.");
+    expect(result.unansweredToolUses).toEqual([
       { id: "toolu_old", name: "Bash" },
+      { id: "toolu_pending", name: "Write" },
     ]);
+  });
+
+  it("does not count sidechain or harness records as replies", async () => {
+    await seed([
+      assistant("msg_1", [text("Main reply.")]),
+      assistant("msg_side", [text("Subagent chatter.")], { isSidechain: true }),
+      assistant("msg_meta", [text("Injected.")], { isMeta: true }),
+      assistant("msg_2", [text("Latest.")]),
+    ]);
+
+    expect(ok(await read({ messageIndex: 1 })).message?.text).toBe("Main reply.");
   });
 
   it("reports an index past the first reply as not found", async () => {
@@ -883,7 +910,7 @@ describe("readClaudeLastMessage — an earlier message (#12496)", () => {
   });
 
   it("pages through an earlier reply by its cursor", async () => {
-    const report = "r".repeat(3000) + " END";
+    const report = mixed(6_000);
     await seed([
       prompt("report"),
       assistant("msg_1", [text(report)]),
@@ -891,12 +918,27 @@ describe("readClaudeLastMessage — an earlier message (#12496)", () => {
       assistant("msg_2", [text("Welcome.")]),
     ]);
 
-    const first = ok(await read({ messageIndex: 1, maxBytes: 1024 })).message!;
-    const second = ok(await read({ cursor: first.nextCursor!, maxBytes: 1024 })).message!;
+    const pages = await pagesFrom({ messageIndex: 1, maxBytes: 1024 });
 
-    expect(first.text.endsWith(" END")).toBe(true);
-    expect(second.id).toBe("msg_1");
-    expect(second.text + first.text).toBe(report.slice(-(second.text.length + first.text.length)));
+    expect(pages.length).toBeGreaterThan(3);
+    expect(pages.every((page) => page.id === "msg_1" && page.text.length > 0)).toBe(true);
+    expect(rebuilt(pages)).toBe(report.trim());
+  });
+
+  it("pages a reply that has no message id", async () => {
+    const reply = mixed(5_000);
+    await seed([
+      prompt("go"),
+      assistant(null, [text(reply)]),
+      prompt("next"),
+      assistant("msg_2", [text("Short.")]),
+    ]);
+
+    const pages = await pagesFrom({ messageIndex: 1, maxBytes: 1024 });
+
+    expect(pages.length).toBeGreaterThan(3);
+    expect(pages.every((page) => page.id === null)).toBe(true);
+    expect(rebuilt(pages)).toBe(reply.trim());
   });
 });
 
