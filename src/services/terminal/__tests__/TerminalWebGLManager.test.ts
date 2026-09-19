@@ -1914,12 +1914,12 @@ describe("TerminalWebGLManager", () => {
 
   describe("scroll hold (keeps a scrolled pane's context through a DOM flip — #10858, #12518)", () => {
     beforeEach(async () => {
+      const mod = await import("../TerminalWebGLManager");
+      mod.TerminalWebGLManager.setWebglThresholds(3, 2);
       vi.useFakeTimers();
       // vi.useFakeTimers() replaces requestAnimationFrame with its own queue;
       // reinstall the sync shim so attaches and releases drain inline.
       installRafShim();
-      const mod = await import("../TerminalWebGLManager");
-      mod.TerminalWebGLManager.setWebglThresholds(3, 2);
     });
 
     afterEach(() => {
