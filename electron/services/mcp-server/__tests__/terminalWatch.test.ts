@@ -200,6 +200,14 @@ describe("TerminalWatchService (#12491)", () => {
       );
     });
 
+    it("refuses a pane that was closed to the trash", async () => {
+      const h = setup();
+      h.client.terminals.set(OWN, { ...settledAtPrompt(0), isTrashed: true });
+      await expect(h.service.register(PANE, { terminalIds: ["t-a"] })).rejects.toMatchObject({
+        code: WATCH_NOT_ELIGIBLE,
+      });
+    });
+
     it("refuses when the caller's own terminal is not running", async () => {
       const h = setup();
       h.client.terminals.set(OWN, { ...settledAtPrompt(0), hasPty: false });
@@ -576,6 +584,66 @@ describe("TerminalWatchService (#12491)", () => {
       h.service.stopPane(OWN);
 
       expect(h.client.withdrawn).toEqual([{ id: OWN, token }]);
+    });
+
+    it("still takes back a queued wake after the pane has read its observations", async () => {
+      const h = setup();
+      h.client.submissionPhase = "queued";
+      await h.service.register(PANE, { terminalIds: ["t-a"] });
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+      const token = h.client.submitted[0]!.token!;
+
+      // The read acknowledges the wake but the host may still hold it.
+      h.service.readEvents(PANE, { clear: false });
+      h.service.stopPane(OWN);
+
+      expect(h.client.withdrawn).toEqual([{ id: OWN, token }]);
+    });
+
+    it("takes back a wake the host never finished with, rather than let it land late", async () => {
+      const h = setup();
+      h.client.submissionPhase = "queued";
+      await h.service.register(PANE, { terminalIds: ["t-a"] });
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+      const token = h.client.submitted[0]!.token!;
+
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      expect(h.client.withdrawn).toEqual([{ id: OWN, token }]);
+      expect(h.service.list(PANE).delivery.status).toBe("failed");
+    });
+
+    it("takes back a queued wake once every watch it names is cancelled", async () => {
+      const h = setup();
+      h.client.submissionPhase = "queued";
+      const a = await h.service.register(PANE, { terminalIds: ["t-a"] });
+      await h.service.register(PANE, { terminalIds: ["t-b"] });
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+      const token = h.client.submitted[0]!.token!;
+
+      h.service.cancel(PANE, a.watchId);
+
+      expect(h.client.withdrawn).toEqual([{ id: OWN, token }]);
+      expect(h.service.list(PANE).watches).toHaveLength(1);
+    });
+
+    it("keeps the interval across a trash and undo of the watching pane", async () => {
+      const h = setup();
+      await h.service.register(PANE, { terminalIds: ["t-a"] });
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+      expect(h.client.submitted).toHaveLength(1);
+
+      h.trash(OWN);
+      await h.service.register(PANE, { terminalIds: ["t-b"] });
+      h.stateChange({ terminalId: "t-b" });
+      await flushWake();
+
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.service.list(PANE).delivery).toMatchObject({ status: "held", reason: "interval" });
     });
 
     it("leaves a wake alone once it is confirmed written", async () => {

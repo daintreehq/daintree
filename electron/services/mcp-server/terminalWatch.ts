@@ -180,6 +180,12 @@ interface PaneOwner {
   droppedEvents: number;
   nextSeq: number;
   delivery: DeliveryState;
+  /**
+   * The wake the host may still hold, and the watches it names, until its
+   * outcome is known. Kept apart from `delivery`: a read acknowledges the wake
+   * but says nothing about whether the host has finished with it.
+   */
+  inHost?: { token: string; watchIds: ReadonlySet<string> };
   timer?: ReturnType<typeof setTimeout>;
   timerDueAt?: number;
   attempting: boolean;
@@ -274,6 +280,7 @@ export class TerminalWatchService {
     if (
       own === null ||
       own.hasPty === false ||
+      own.isTrashed === true ||
       own.projectId === undefined ||
       this.exitedSince(pane.terminalId, epochBefore)
     ) {
@@ -419,6 +426,11 @@ export class TerminalWatchService {
     owner.watches.delete(watchId);
     owner.events = owner.events.filter((held) => held.event.watchId !== watchId);
     this.reindexTargets(owner);
+    // A wake that names only cancelled watches points at nothing any more.
+    const inHost = owner.inHost;
+    if (inHost !== undefined && [...inHost.watchIds].every((id) => !owner.watches.has(id))) {
+      this.withdraw(owner);
+    }
     if (owner.watches.size === 0 && owner.events.length === 0) {
       this.disposeOwner(owner);
     } else {
@@ -460,7 +472,9 @@ export class TerminalWatchService {
   }
 
   private markTeardown(mark: string): void {
-    remember(this.teardownEpochs, mark, ++this.epoch);
+    // Never pruned under a registration still reading: evicting its pane's
+    // mark would let it bring the watches back.
+    remember(this.teardownEpochs, mark, ++this.epoch, this.pendingRegistrations === 0);
   }
 
   private torndownSince(pane: OwnPane, epoch: number): boolean {
@@ -468,6 +482,18 @@ export class TerminalWatchService {
     const byTerminal = this.teardownEpochs.get(`terminal\u0000${pane.terminalId}`);
     const byKey = this.teardownEpochs.get(`key\u0000${pane.key}`);
     return (byTerminal ?? 0) > epoch || (byKey ?? 0) > epoch;
+  }
+
+  /** Take back the wake the host may still hold, if any. */
+  private withdraw(owner: PaneOwner): void {
+    const inHost = owner.inHost;
+    if (inHost === undefined) return;
+    owner.inHost = undefined;
+    try {
+      this.deps.getPtyClient()?.withdrawGuardedSubmission(owner.terminalId, inHost.token);
+    } catch (err) {
+      console.error("[MCP] terminal watch: withdrawing a wake failed:", err);
+    }
   }
 
   private existingOwner(pane: OwnPane): PaneOwner | undefined {
@@ -513,14 +539,7 @@ export class TerminalWatchService {
     owner.disposed = true;
     // A wake still in the host's lane is taken back, so stopping or disabling
     // means nothing more is typed. One already written cannot be recalled.
-    const { status, token, confirmed } = owner.delivery;
-    if (status === "outstanding" && token !== undefined && confirmed !== true) {
-      try {
-        this.deps.getPtyClient()?.withdrawGuardedSubmission(owner.terminalId, token);
-      } catch (err) {
-        console.error("[MCP] terminal watch: withdrawing a wake failed:", err);
-      }
-    }
+    this.withdraw(owner);
     if (owner.timer !== undefined) clearTimeout(owner.timer);
     owner.timer = undefined;
     if (this.ownersByKey.get(owner.key) === owner) this.ownersByKey.delete(owner.key);
@@ -675,9 +694,10 @@ export class TerminalWatchService {
   }
 
   private handleExit(terminalId: string, kind: "exit" | "untracked", exitCode?: number): void {
-    remember(this.exitEpochs, terminalId, ++this.epoch);
-    // The pane itself is gone, so a new one under this id starts fresh.
-    this.lastWakeAt.delete(terminalId);
+    remember(this.exitEpochs, terminalId, ++this.epoch, this.pendingRegistrations === 0);
+    // Only a process that ended frees the id for a new pane. A pane closed to
+    // the trash can come back, still inside its interval.
+    if (kind === "exit") this.lastWakeAt.delete(terminalId);
 
     const own = this.ownersByTerminal.get(terminalId);
     if (own !== undefined) this.disposeOwner(own);
@@ -846,8 +866,11 @@ export class TerminalWatchService {
     }
     for (const held of owner.events) held.delivered = true;
 
+    // An earlier wake the host never finished with would land beside this one.
+    this.withdraw(owner);
     const token = randomUUID();
     const deliveredAt = this.now();
+    owner.inHost = { token, watchIds: new Set(watchIds) };
     remember(this.lastWakeAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
     // The host re-checks the gate when the line reaches the lane, and drops
@@ -857,37 +880,53 @@ export class TerminalWatchService {
     void this.confirmDelivery(owner, client, token);
   }
 
+  /**
+   * Follow a wake until the host is done with it. Keyed on the wake the host
+   * holds rather than on `delivery`, so a read that acknowledges the wake does
+   * not stop it being followed — or withdrawn.
+   */
   private async confirmDelivery(
     owner: PaneOwner,
     client: TerminalWatchPtyClient,
     token: string
   ): Promise<void> {
+    const stillHeld = () => !owner.disposed && owner.inHost?.token === token;
     let lastSeen: TerminalWatchDeliveryReason = "unknown";
     for (const delayMs of DELIVERY_CONFIRM_DELAYS_MS) {
       await new Promise((resolve) => setTimeout(resolve, delayMs));
-      if (owner.disposed || owner.delivery.token !== token) return;
+      if (!stillHeld()) return;
       let info: WatchTerminalInfo | null;
       try {
         info = await client.getTerminalAsync(owner.terminalId, token);
       } catch {
         info = null;
       }
-      if (owner.disposed || owner.delivery.token !== token) return;
+      if (!stillHeld()) return;
       const phase = info?.submission?.phase;
       if (phase === "pty_written") {
-        owner.delivery.confirmed = true;
-        if (owner.delivery.settledSinceDelivery === true) this.settleOutstanding(owner);
+        owner.inHost = undefined;
+        if (owner.delivery.token === token) {
+          owner.delivery.confirmed = true;
+          if (owner.delivery.settledSinceDelivery === true) this.settleOutstanding(owner);
+        }
         return;
       }
       if (phase === "failed" || phase === "cancelled" || phase === "unknown") {
+        owner.inHost = undefined;
         // Part of the line may be sitting in the composer, and a guard refusal
         // looks the same from here. Neither makes sending again safe.
-        this.failDelivery(owner, phase === "failed" ? "unknown" : phase);
+        if (owner.delivery.token === token) {
+          this.failDelivery(owner, phase === "failed" ? "unknown" : phase);
+        }
         return;
       }
       lastSeen = info === null ? "unreadable" : "unknown";
     }
-    if (!owner.disposed && owner.delivery.token === token) this.failDelivery(owner, lastSeen);
+    if (!stillHeld()) return;
+    // Still queued, or unreadable, after the whole window: take it back rather
+    // than let it land later under a delivery already reported as failed.
+    this.withdraw(owner);
+    if (owner.delivery.token === token) this.failDelivery(owner, lastSeen);
   }
 
   private failDelivery(owner: PaneOwner, reason: TerminalWatchDeliveryReason): void {
@@ -940,12 +979,13 @@ export class TerminalWatchService {
 }
 
 /** Insert as newest, dropping the oldest entry once the map holds too many. */
-function remember<V>(map: Map<string, V>, key: string, value: V): void {
+function remember<V>(map: Map<string, V>, key: string, value: V, prune = true): void {
   map.delete(key);
   map.set(key, value);
-  if (map.size > MAX_REMEMBERED_EXITS) {
+  while (prune && map.size > MAX_REMEMBERED_EXITS) {
     const oldest = map.keys().next().value;
-    if (oldest !== undefined) map.delete(oldest);
+    if (oldest === undefined) break;
+    map.delete(oldest);
   }
 }
 

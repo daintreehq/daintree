@@ -109,6 +109,7 @@ export function McpServerSettingsTab() {
   const [paneWakeEnabled, setPaneWakeEnabled] = useState(false);
   // Until main has answered, "off" would be a guess rather than the setting.
   const [paneWakeLoaded, setPaneWakeLoaded] = useState(false);
+  const [paneWakeLoadFailed, setPaneWakeLoadFailed] = useState(false);
   const [auditMaxRecords, setAuditMaxRecords] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS);
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
   const [auditLoading, setAuditLoading] = useState(true);
@@ -482,6 +483,7 @@ export function McpServerSettingsTab() {
         setPaneWakeLoaded(true);
       })
       .catch((err) => {
+        if (!cancelled) setPaneWakeLoadFailed(true);
         logError("Failed to load MCP pane wake setting", err);
       });
     return () => {
@@ -983,7 +985,11 @@ export function McpServerSettingsTab() {
               <SettingsSwitchCard
                 variant="compact"
                 title="Wake agents from terminal watches"
-                subtitle="A pane that may be woken shows a radar chip; use it to stop the watches"
+                subtitle={
+                  paneWakeLoadFailed
+                    ? "Couldn't read this setting. Reopen settings to try again."
+                    : "A pane that may be woken shows a radar chip; use it to stop the watches"
+                }
                 isEnabled={paneWakeEnabled}
                 onChange={handlePaneWakeToggle}
                 ariaLabel="Wake agents from terminal watches"
