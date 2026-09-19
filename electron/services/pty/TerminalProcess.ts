@@ -35,6 +35,7 @@ import { WriteQueue, type SubmitExecutionContext } from "./WriteQueue.js";
 import type { TerminalSubmissionRecord } from "../../../shared/types/terminalSubmission.js";
 import { AgentOutputForwarder } from "./AgentOutputForwarder.js";
 import { TerminalInputController } from "./TerminalInputController.js";
+import { HandbackTracker } from "./HandbackTracker.js";
 import { PtyDataPipeline } from "./PtyDataPipeline.js";
 import { PreservedSnapshotCapture } from "./PreservedSnapshotCapture.js";
 import { events } from "../events.js";
@@ -454,6 +455,9 @@ export class TerminalProcess {
         )
       : null;
     this.analysis = workerBackend ?? this.setupInThreadAnalysis(options);
+    if (options.handbackCode !== undefined) {
+      this.ensureHandbackTracker().registerDelivered(options.handbackCode);
+    }
 
     // NOTE: The headless responder is intentionally NOT installed for agent
     // terminals. It would forward query responses (CSI 6n cursor position,
@@ -1205,6 +1209,7 @@ export class TerminalProcess {
       exitCode: t.exitCode,
       exitSignal: t.exitSignal,
       lastCheckResult: t.lastCheckResult,
+      lastHandback: t.lastHandback,
       worktreeId: t.worktreeId,
       lastObservedTitle: t.lastObservedTitle,
       agentPresetId: t.agentPresetId,
@@ -1292,8 +1297,23 @@ export class TerminalProcess {
     this.inputController.write(data, traceId);
   }
 
-  submit(text: string, token?: string): void {
-    this.inputController.submit(text, token);
+  /**
+   * `handbackCode` is the code minted for a submission that asked for a
+   * handback (#12488); its instruction is already in `text`. A terminal that
+   * never asked keeps no tracker, so its submits pay one property read.
+   */
+  submit(text: string, token?: string, handbackCode?: string): void {
+    const tracker =
+      handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
+    const onPtyWritten = tracker?.noteSubmission(handbackCode, token);
+    this.inputController.submit(text, token, onPtyWritten);
+  }
+
+  private ensureHandbackTracker(): HandbackTracker {
+    this.terminalInfo.handbackTracker ??= new HandbackTracker((rows) =>
+      this.analysis.getViewportLines(rows)
+    );
+    return this.terminalInfo.handbackTracker;
   }
 
   /**

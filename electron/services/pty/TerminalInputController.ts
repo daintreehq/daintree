@@ -257,7 +257,7 @@ export class TerminalInputController {
     return true;
   }
 
-  submit(text: string, token?: string): void {
+  submit(text: string, token?: string, onPtyWritten?: () => void): void {
     if (this.isInputLocked || this.host.terminalInfo.isExited) {
       // Refused before the lane sees it, so `WriteQueue` never mints a record.
       // Answer the token here instead of leaving the caller to read `unknown`.
@@ -273,7 +273,7 @@ export class TerminalInputController {
       this.host.analysis.notifySubmission();
     }
 
-    this.host.writeQueue.submit(text, token);
+    this.host.writeQueue.submit(text, token, onPtyWritten);
   }
 
   /**

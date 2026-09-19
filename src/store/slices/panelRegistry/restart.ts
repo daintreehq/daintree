@@ -801,6 +801,8 @@ export const createRestartActions = (
           // Drop the prior session's parsed check result (#10682) — a fresh
           // run hasn't produced one yet, and a stale pass/fail would mislead.
           lastCheckResult: undefined,
+          // Same for its handback (#12488): the restarted session was never asked.
+          lastHandback: undefined,
           startedAt: Date.now(),
         };
         const newById = { ...state.panelsById, [id]: updated };
@@ -1390,6 +1392,8 @@ export const createRestartActions = (
           // Drop the prior session's parsed check result (#10682) — a fresh
           // run hasn't produced one yet, and a stale pass/fail would mislead.
           lastCheckResult: undefined,
+          // Same for its handback (#12488): the restarted session was never asked.
+          lastHandback: undefined,
           startedAt: Date.now(),
         };
         const newById = { ...state.panelsById, [id]: updated };

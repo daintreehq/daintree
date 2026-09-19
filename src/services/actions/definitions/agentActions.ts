@@ -22,7 +22,12 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { AGENT_REGISTRY, getAgentDisplayTitle, getMergedPresetIdentities } from "@/config/agents";
+import {
+  AGENT_REGISTRY,
+  getAgentDisplayTitle,
+  getMergedPresetIdentities,
+  isRegisteredAgent,
+} from "@/config/agents";
 import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import {
@@ -38,6 +43,7 @@ import {
   SYSTEM_PROMPT_MAX_LENGTH,
 } from "@shared/utils/agentSystemPrompt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
+import { appendHandbackInstruction, mintHandbackCode } from "@shared/utils/handback";
 import type { ActionContext, ActionId } from "@shared/types/actions";
 import type { AgentPreset } from "@shared/config/agentRegistry";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
@@ -317,6 +323,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     }
   };
 
+  /** Launch ids the launcher always turns into a panel, never an agent. */
+  const HANDBACK_PANEL_LAUNCH_IDS: ReadonlySet<string> = new Set(["browser", "dev-preview"]);
+
   actions.set("agent.launch", () => ({
     id: "agent.launch",
     title: "Launch Agent",
@@ -347,6 +356,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .optional()
         .describe(
           "Initial text submitted to the agent once it starts, as its first turn. Omit to leave the agent waiting for input."
+        ),
+      handback: z
+        .boolean()
+        .optional()
+        .describe(
+          "Ask the agent to end its reply to `prompt` with a Daintree marker, read back as `lastHandback`. Needs `prompt` and an agent."
         ),
       systemPrompt: z
         .string()
@@ -451,6 +466,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         cwd,
         worktreeId,
         prompt,
+        handback,
         systemPrompt,
         interactive,
         model,
@@ -471,6 +487,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         cwd?: string;
         worktreeId?: string;
         prompt?: string;
+        handback?: boolean;
         systemPrompt?: string;
         interactive?: boolean;
         model?: string;
@@ -510,11 +527,35 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           "agentLaunchFlags already sets this agent's system-prompt instruction. Pass it in systemPrompt or agentLaunchFlags, not both."
         );
       }
+      // The handback instruction rides the prompt, so there is nothing to attach
+      // it to without one — and a blank prompt is dropped by the launcher
+      // (#12488).
+      if (handback === true && (prompt === undefined || prompt.trim() === "")) {
+        throw new UnactionableTargetError(
+          "handback asks the agent to mark the end of its reply to `prompt`, so it needs a non-empty `prompt`. Pass one, or launch without handback."
+        );
+      }
+      // A plain shell, a non-terminal panel or an unknown id has no agent to
+      // answer it. The panel ids are checked by name: the launcher opens their
+      // panel even when a registry entry happens to share the id.
+      if (
+        handback === true &&
+        (HANDBACK_PANEL_LAUNCH_IDS.has(agentId) || !isRegisteredAgent(agentId))
+      ) {
+        throw new UnactionableTargetError(
+          "handback needs an agent to answer it, and this id is not a registered agent: a plain shell or panel never prints the marker. Launch a registered agent, or launch without handback."
+        );
+      }
+      const handbackCode = handback === true ? mintHandbackCode() : undefined;
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
         cwd,
         worktreeId,
-        prompt,
+        prompt:
+          handbackCode !== undefined && prompt !== undefined
+            ? appendHandbackInstruction(prompt, handbackCode)
+            : prompt,
+        ...(handbackCode !== undefined ? { handbackCode } : {}),
         systemPromptArgs: systemPromptArgs.args.length > 0 ? systemPromptArgs.args : undefined,
         interactive,
         modelId: model,

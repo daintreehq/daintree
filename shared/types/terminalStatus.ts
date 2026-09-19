@@ -1,5 +1,6 @@
 import type { AgentState, WaitingReason } from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
+import type { TerminalHandback } from "./handback.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
 
 /**
@@ -56,6 +57,12 @@ export interface TerminalStatusEntry {
   exitCode?: number | null;
   spawnedAt?: number;
   lastCheckResult?: TerminalCheckResult;
+  /**
+   * The handback marker the agent most recently printed for a submission that
+   * asked for one (#12488). Read on both surfaces: the renderer from its panel
+   * record, main from the pty-host record.
+   */
+  lastHandback?: TerminalHandback;
   recentOutput?: string | null;
   /**
    * `true` when older output was left out of `recentOutput`, by the requested

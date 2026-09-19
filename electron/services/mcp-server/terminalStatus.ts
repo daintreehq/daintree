@@ -256,6 +256,12 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
     entry.waitingReason = record.waitingReason;
   }
 
+  // Parsed on the pty-host and kept on its record, so unlike `lastCheckResult`
+  // this surface can observe it (#12488); absent means none was seen.
+  if (record.lastHandback !== undefined) {
+    entry.lastHandback = record.lastHandback;
+  }
+
   // The record was read, so an absent `submission` is evidence: this terminal
   // holds nothing for that token. Reported as `unknown` rather than omitted,
   // which a caller could not tell from "the field was never asked for".

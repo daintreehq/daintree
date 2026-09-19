@@ -134,6 +134,8 @@ const PTY_FIELD_CLASSIFICATION = {
   // Parsed check result (#10682) — live signal from agent:state-changed,
   // cleared on restart; intentionally not persisted by the PTY serializer.
   lastCheckResult: false,
+  // Handback marker (#12488) — same live-only lifecycle as lastCheckResult.
+  lastHandback: false,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not the PTY serializer.
   createdAt: false,

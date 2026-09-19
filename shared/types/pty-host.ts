@@ -17,6 +17,7 @@ import type { SemanticSearchMatch, TerminalInfoPayload } from "./ipc/terminal.js
 import type { WorkerResourceSnapshot } from "./workerGovernance.js";
 import type { SerializedTerminalSnapshot } from "./terminal.js";
 import type { TerminalSubmissionRecord } from "./terminalSubmission.js";
+import type { TerminalHandback } from "./handback.js";
 
 export type { TerminalFlowStatus };
 
@@ -118,6 +119,13 @@ export interface PtyHostSpawnOptions {
    * PTY (#11341).
    */
   postSpawnInput?: string;
+  /**
+   * Handback code minted for this launch's initial prompt (#12488), already
+   * appended to the prompt the command carries. Registered on the terminal as
+   * delivered at spawn — the prompt is an argument, so there is no submission
+   * to wait on. Absent for every launch that did not ask.
+   */
+  handbackCode?: string;
 }
 
 /** Per-project terminal-workload memory, deduplicated by PID. */
@@ -221,7 +229,14 @@ export type PtyHostRequest =
   | { type: "resize"; id: string; cols: number; rows: number }
   | { type: "write"; id: string; data: string; traceId?: string }
   | { type: "broadcast-write"; ids: string[]; data: string }
-  | { type: "submit"; id: string; text: string; submissionToken?: string }
+  | {
+      type: "submit";
+      id: string;
+      text: string;
+      submissionToken?: string;
+      /** Handback code minted for this submission (#12488); its instruction is already in `text`. */
+      handbackCode?: string;
+    }
   | { type: "stage"; id: string; text: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
@@ -590,6 +605,8 @@ export type PtyHostEvent =
       heatAdded?: number;
       /** Number of changed characters in the most recent sample. */
       changedChars?: number;
+      /** Handback marker first seen at this settle (#12488). */
+      lastHandback?: TerminalHandback;
     }
   | {
       type: "agent-state-transition-dropped";
@@ -953,6 +970,11 @@ export interface PtyHostTerminalInfo {
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
   detectedProcessId?: string;
+  /**
+   * The most recent handback marker observed for a request this terminal held
+   * (#12488). Read off the record so main can report it without a renderer.
+   */
+  lastHandback?: TerminalHandback;
 }
 
 /** Payload for agent:spawned event */

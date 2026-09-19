@@ -127,6 +127,44 @@ describe("bridgePtyEvent", () => {
     expect(payloads[0]).not.toHaveProperty("exitSignal");
   });
 
+  it("forwards the settle's handback onto the main bus, and only on that settle (#12488)", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    events.on("agent:state-changed", (payload) => {
+      payloads.push(payload as unknown as Record<string, unknown>);
+    });
+    const lastHandback = {
+      message: "fixed the flaky test",
+      observedAt: 1_700_000_000_000,
+      submissionToken: "tok-1",
+      truncated: false,
+    };
+
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "term-settled",
+      agentId: "claude",
+      state: "waiting",
+      previousState: "working",
+      timestamp: Date.now(),
+      trigger: "activity",
+      confidence: 1.0,
+      lastHandback,
+    });
+    bridgePtyEvent({
+      type: "agent-state",
+      id: "term-settled",
+      agentId: "claude",
+      state: "working",
+      previousState: "waiting",
+      timestamp: Date.now(),
+      trigger: "activity",
+      confidence: 1.0,
+    });
+
+    expect(payloads[0]?.lastHandback).toEqual(lastHandback);
+    expect(payloads[1]).not.toHaveProperty("lastHandback");
+  });
+
   it("routes terminal-status events to bus and callback", () => {
     const terminalStatusPayloads: Array<{ id: string; status: string }> = [];
     events.on("terminal:status", (payload) => {

@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { BUILT_IN_AGENT_IDS, BUILT_IN_TERMINAL_TYPES } from "@shared/config/agentIds";
 import { LAST_OUTPUT_CHANGE_AT_DESCRIPTION } from "@shared/types/terminalStatus";
+import { HANDBACK_MESSAGE_DESCRIPTION, LAST_HANDBACK_DESCRIPTION } from "@shared/types/handback";
 import {
   AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS,
   type AgentLastMessageResult,
@@ -505,6 +506,14 @@ export const TerminalSubmissionRecordSchema = z.object({
     ),
 });
 
+/** Wire shape of `TerminalHandback` (#12488). */
+const TerminalHandbackSchema = z.object({
+  message: z.string().nullable().describe(HANDBACK_MESSAGE_DESCRIPTION),
+  observedAt: z.number(),
+  submissionToken: z.string().optional(),
+  truncated: z.boolean(),
+});
+
 export const TerminalStatusEntrySchema = z.object({
   terminalId: z.string(),
   agentId: z.string().nullable(),
@@ -538,6 +547,7 @@ export const TerminalStatusEntrySchema = z.object({
     .describe(
       "A best-effort reading of the agent's most recent test, lint, or build summary, parsed from its output rather than from a process exit code — the check runs inside the terminal, so its real exit status is unobservable. Absence means no recognized summary was seen, which is not the same as no check running and not the same as passing. Check the run time for freshness before trusting it."
     ),
+  lastHandback: TerminalHandbackSchema.optional().describe(LAST_HANDBACK_DESCRIPTION),
   recentOutput: z.string().nullable().optional(),
   recentOutputTruncated: z
     .boolean()

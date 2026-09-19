@@ -1221,6 +1221,7 @@ export const createAddPanelActions = (
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,
+            handbackCode: options.handbackCode,
             // Launch-time context for the daintree-assistant pinned session
             // (#10647). Threaded straight through; the main-process handler only
             // consumes it for that agent and ignores it otherwise.

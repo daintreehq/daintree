@@ -377,6 +377,52 @@ describe("identity listener — completed-with-changes notification", () => {
     d.dispose();
   });
 
+  it("writes lastHandback from the payload onto the panel and keeps it on later settles (#12488)", () => {
+    setupPanel({ agentState: "working" });
+    const d = setupIdentityListeners();
+
+    const handback = {
+      message: "rebased onto develop",
+      observedAt: nextTimestamp(),
+      submissionToken: "tok-1",
+      truncated: false,
+    };
+    emitState(
+      makePayload({
+        state: "waiting",
+        previousState: "working",
+        timestamp: nextTimestamp(),
+        lastHandback: handback,
+      })
+    );
+    emitState(
+      makePayload({ state: "working", previousState: "waiting", timestamp: nextTimestamp() })
+    );
+
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      lastHandback: handback,
+    });
+
+    d.dispose();
+  });
+
+  it("drops lastHandback when the pane leaves exited for a new session (#12488)", () => {
+    setupPanel({
+      agentState: "exited",
+      lastHandback: { message: "old session", observedAt: 1, truncated: false },
+    });
+    const d = setupIdentityListeners();
+
+    emitState(makePayload({ state: "idle", previousState: "exited", timestamp: nextTimestamp() }));
+
+    expect(usePanelStore.getState().panelsById["term-1"]).toMatchObject({
+      agentState: "idle",
+      lastHandback: undefined,
+    });
+
+    d.dispose();
+  });
+
   it("dispatches worktree.openReviewHub when the action onClick fires", () => {
     setupPanel();
     const d = setupIdentityListeners();

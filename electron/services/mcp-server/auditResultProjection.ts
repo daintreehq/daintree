@@ -11,13 +11,15 @@ import {
  * successful result otherwise goes into it wholesale. The summarizer's
  * redaction is built for secrets — key names and token shapes — and has
  * nothing to say about an agent's prose or the questions it asked, so a tool
- * whose result is conversation has to be reduced to its shape first. Each
+ * whose result is conversation has to be reduced to its shape first. Such a
  * projection builds a fresh object from fields it names; nothing is spread,
  * and a result of an unexpected shape reduces to a marker rather than falling
  * back to the raw value.
+ *
+ * The status and wait tools are narrower: their results were always audited
+ * whole, and the one piece of agent prose they carry is a handback message
+ * (#12488), so only that is reduced.
  */
-
-type AuditResultProjection = (result: unknown) => Record<string, unknown>;
 
 const TOOL_NAME_MAX_CHARS = 256;
 const PROVIDERS: ReadonlySet<string> = new Set(["claude", "codex"]);
@@ -56,8 +58,53 @@ function projectLastMessage(result: unknown): Record<string, unknown> {
   };
 }
 
-const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, AuditResultProjection> = new Map([
+/**
+ * A handback reduced to its shape (#12488): the marker was seen, when, for which
+ * submission, and how long the message was — never the message, which is text
+ * the agent wrote.
+ */
+function reduceHandback(value: unknown): unknown {
+  const handback = asRecord(value);
+  if (handback === null) return null;
+  return {
+    messageChars: typeof handback.message === "string" ? handback.message.length : null,
+    observedAt: typeof handback.observedAt === "number" ? handback.observedAt : null,
+    submissionToken:
+      typeof handback.submissionToken === "string" ? handback.submissionToken : undefined,
+    truncated: handback.truncated === true,
+  };
+}
+
+function withReducedHandback(entry: unknown): unknown {
+  const record = asRecord(entry);
+  if (record === null || !Object.hasOwn(record, "lastHandback")) return entry;
+  return { ...record, lastHandback: reduceHandback(record.lastHandback) };
+}
+
+/**
+ * Status and wait results keep their shape — they are otherwise audited as is —
+ * with only each `lastHandback` reduced. They carry it on the result itself
+ * (the single wait) or on each row (`terminals` for status, `results` for the
+ * batched wait).
+ */
+function projectHandbackCarrier(result: unknown): unknown {
+  const record = asRecord(withReducedHandback(result));
+  if (record === null) return result;
+  const reduceRows = (key: string): Record<string, unknown> => {
+    const rows: unknown = record[key];
+    return Array.isArray(rows) ? { [key]: rows.map(withReducedHandback) } : {};
+  };
+  return { ...record, ...reduceRows("terminals"), ...reduceRows("results") };
+}
+
+const AUDIT_RESULT_PROJECTIONS: ReadonlyMap<string, (result: unknown) => unknown> = new Map<
+  string,
+  (result: unknown) => unknown
+>([
   ["terminal.readLastMessageOwned", projectLastMessage],
+  ["terminal.getStatus", projectHandbackCarrier],
+  ["terminal.waitUntilIdle", projectHandbackCarrier],
+  ["terminal.waitUntilIdleBatch", projectHandbackCarrier],
 ]);
 
 /** The value to summarize for `toolId`'s audit record: its projection when it has one, else the result as is. */

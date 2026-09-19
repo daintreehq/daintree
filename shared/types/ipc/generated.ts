@@ -1884,6 +1884,7 @@ export interface GeneratedIpcInvokeMap {
         agentPresetId?: string | undefined;
         agentPresetColor?: string | undefined;
         originalAgentPresetId?: string | undefined;
+        handbackCode?: string | undefined;
         actionContext?:
           | {
               projectId?: string | undefined;
@@ -1912,7 +1913,12 @@ export interface GeneratedIpcInvokeMap {
     result: string;
   };
   "terminal:submit": {
-    args: [id: string, text: string, submissionToken?: string | undefined];
+    args: [
+      id: string,
+      text: string,
+      submissionToken?: string | undefined,
+      handbackCode?: string | undefined,
+    ];
     result: void;
   };
   "terminal:trash": {

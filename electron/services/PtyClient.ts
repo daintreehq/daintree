@@ -121,6 +121,7 @@ import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
 import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
+import type { TerminalHandback } from "../../shared/types/handback.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -175,6 +176,8 @@ interface TerminalInfoResponse {
    * absent means either "not asked" or "this terminal holds no record".
    */
   submission?: TerminalSubmissionRecord;
+  /** Most recent handback marker observed for a request this terminal held (#12488). */
+  lastHandback?: TerminalHandback;
 }
 
 /**
@@ -928,6 +931,22 @@ export class PtyClient extends EventEmitter {
       options: withCurrentWindowsPath(options),
     });
     this.disarmStoredSessionAssignment(id);
+    this.disarmStoredHandback(id);
+  }
+
+  /**
+   * Drop a launch's handback code from the STORED spawn entry once it has been
+   * delivered (#12488). A replay after a host crash re-runs the launch, but the
+   * request it carried belonged to the host that died, and a code may be
+   * observed at most once — so the replayed launch holds no request, the same
+   * as any other request lost with its host. Same delivery point as
+   * {@link disarmStoredSessionAssignment}, for the same reason.
+   */
+  private disarmStoredHandback(id: string): void {
+    const stored = this.pendingSpawns.get(id);
+    if (stored?.handbackCode === undefined) return;
+    const { handbackCode: _delivered, ...rest } = stored;
+    this.pendingSpawns.set(id, rest);
   }
 
   /**
@@ -1645,8 +1664,8 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "write", id, data, traceId });
   }
 
-  submit(id: string, text: string, submissionToken?: string): void {
-    this.shardForTerminal(id).send({ type: "submit", id, text, submissionToken });
+  submit(id: string, text: string, submissionToken?: string, handbackCode?: string): void {
+    this.shardForTerminal(id).send({ type: "submit", id, text, submissionToken, handbackCode });
   }
 
   /**

@@ -3,11 +3,13 @@ import type { Terminal as HeadlessTerminal } from "@xterm/headless";
 import type { SerializeAddon } from "@xterm/addon-serialize";
 import type { AgentState, AgentId, WaitingReason } from "../../../shared/types/agent.js";
 import type { TerminalCheckResult } from "../../../shared/types/checkResult.js";
+import type { TerminalHandback } from "../../../shared/types/handback.js";
 import type { PanelKind, PanelTitleMode } from "../../../shared/types/panel.js";
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { PtyHostSpawnOptions, TerminalResizeResult } from "../../../shared/types/pty-host.js";
 import type { SerializedTerminalSnapshot } from "../../../shared/types/terminal.js";
 import type { ProcessDetector } from "../ProcessDetector.js";
+import type { HandbackTracker } from "./HandbackTracker.js";
 
 // Re-export PtyHostSpawnOptions as PtySpawnOptions for backward compatibility/internal usage
 export type PtySpawnOptions = PtyHostSpawnOptions;
@@ -106,6 +108,13 @@ export interface TerminalPublicState {
    * transitions; ephemeral (not persisted).
    */
   lastCheckResult?: TerminalCheckResult;
+  /**
+   * The most recent handback marker seen for a request this terminal held
+   * (#12488). Set in `AgentStateService` at a settle out of `working`; cleared
+   * on respawn; ephemeral (not persisted). An observation of printed text, not
+   * a completion verdict — see `TerminalHandback`.
+   */
+  lastHandback?: TerminalHandback;
   /** Worktree the terminal was spawned in; used when persisting agent session history */
   worktreeId?: string;
   /** Last non-useless title observed from xterm OSC updates (renderer-synced) */
@@ -165,6 +174,11 @@ export interface TerminalInfo extends TerminalPublicState {
    * See `AgentStateService` for the suppression policy.
    */
   hysteresisLockedUntil?: number;
+  /**
+   * Runtime-only handback requests (#12488), absent until something on this
+   * terminal asks for one. Not persisted, not crossed over IPC.
+   */
+  handbackTracker?: HandbackTracker;
   /**
    * Final serialized buffer captured when a preserved terminal exits and its
    * headless xterm is disposed to reclaim memory. Served by
@@ -286,6 +300,8 @@ export interface TerminalSnapshot {
 export const OUTPUT_BUFFER_SIZE = 2000;
 export const SEMANTIC_BUFFER_MAX_LINES = 50;
 export const SEMANTIC_BUFFER_MAX_LINE_LENGTH = 1000;
+/** Appended where a semantic-buffer line was cut; the text beyond it is gone. */
+export const SEMANTIC_BUFFER_TRUNCATION_MARKER = "... [truncated]";
 export const SEMANTIC_FLUSH_INTERVAL_MS = 100;
 
 // Scrollback configuration

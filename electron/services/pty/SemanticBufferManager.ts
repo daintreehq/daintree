@@ -2,6 +2,7 @@ import type { TerminalInfo } from "./types.js";
 import {
   SEMANTIC_BUFFER_MAX_LINES,
   SEMANTIC_BUFFER_MAX_LINE_LENGTH,
+  SEMANTIC_BUFFER_TRUNCATION_MARKER,
   SEMANTIC_FLUSH_INTERVAL_MS,
 } from "./types.js";
 
@@ -84,7 +85,9 @@ export class SemanticBufferManager {
       .filter((line) => line.length > 0 || terminal.semanticBuffer.length > 0)
       .map((line) => {
         if (line.length > SEMANTIC_BUFFER_MAX_LINE_LENGTH) {
-          return line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH) + "... [truncated]";
+          return (
+            line.substring(0, SEMANTIC_BUFFER_MAX_LINE_LENGTH) + SEMANTIC_BUFFER_TRUNCATION_MARKER
+          );
         }
         return line;
       });

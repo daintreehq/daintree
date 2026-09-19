@@ -130,6 +130,26 @@ export function setupIdentityListeners(): DisposableStore {
           });
         }
 
+        // Same for a handback marker (#12488): present only on the settle where
+        // the agent's marker for a request was first seen. Leaving `exited`
+        // starts another session in the same PTY, whose predecessor's handback
+        // no longer describes it — the pty-host drops its own copy on that
+        // respawn, so the panel does too.
+        const handback = data.lastHandback;
+        const leftExited = previousState === "exited" && state !== "exited";
+        if (handback || (leftExited && terminal.lastHandback)) {
+          usePanelStore.setState((s) => {
+            const panel = s.panelsById[terminalId];
+            if (!panel || !isPtyPanel(panel)) return s;
+            return {
+              panelsById: {
+                ...s.panelsById,
+                [terminalId]: { ...panel, lastHandback: handback },
+              },
+            };
+          });
+        }
+
         // Snapshot baseline `changedFileCount` the first time an agent enters
         // "working" in a session. Subsequent working↔waiting cycles keep the
         // initial baseline so the comparison at completion reflects the full

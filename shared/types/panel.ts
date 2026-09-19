@@ -1,5 +1,6 @@
 import type { AgentState, AgentStateChangeTrigger, AgentId, WaitingReason } from "./agent.js";
 import type { TerminalCheckResult } from "./checkResult.js";
+import type { TerminalHandback } from "./handback.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { BrowserHistory } from "./browser.js";
 import type { GitStatus, DiffChangeSetEntry } from "./git.js";
@@ -610,6 +611,12 @@ export interface PtyPanelData extends BasePanelData {
    * Live-only: set from `agent:state-changed`, never persisted.
    */
   lastCheckResult?: TerminalCheckResult;
+  /**
+   * The handback marker the agent most recently printed for a submission that
+   * asked for one (#12488). Surfaced over MCP via `terminal.getStatus`.
+   * Live-only: set from `agent:state-changed`, never persisted.
+   */
+  lastHandback?: TerminalHandback;
   /**
    * Live-only spawn lifecycle state. "spawning" from the moment the optimistic
    * placeholder lands in `panelsById` until the PTY IPC round-trip resolves;

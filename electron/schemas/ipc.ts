@@ -7,6 +7,7 @@ import { BUILT_IN_PANEL_KINDS, panelKindHasPty } from "../../shared/config/panel
 import { BUILT_IN_AGENT_IDS } from "../../shared/config/agentIds.js";
 import { TERMINAL_SPAWN_SOURCES } from "../../shared/types/panel.js";
 import { MAX_TERMINAL_GRID_DIMENSION } from "../../shared/types/terminal.js";
+import { HANDBACK_CODE_PATTERN } from "../../shared/types/handback.js";
 import { COPY_TREE_RUN_SOURCES } from "../../shared/types/ipc/copyTreeHistory.js";
 import {
   ASSISTANT_HOST_PROTOCOL_VERSION,
@@ -417,6 +418,9 @@ export const TerminalSpawnOptionsSchema = z.object({
   agentPresetId: z.string().optional(),
   agentPresetColor: z.string().optional(),
   originalAgentPresetId: z.string().optional(),
+  // Handback code for the initial prompt (#12488). Listed or zod strips it, and
+  // held to the marker grammar because the pty-host searches for it literally.
+  handbackCode: z.string().regex(HANDBACK_CODE_PATTERN).optional(),
   // Launch-time ActionContext snapshot, consumed only for the
   // `daintree-assistant` pinned-session path (#10647). Ignored for every other
   // agent. Optional so existing spawn callers are unaffected.

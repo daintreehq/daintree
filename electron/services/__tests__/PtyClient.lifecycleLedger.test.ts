@@ -202,6 +202,25 @@ describe("PtyClient lifecycle ledger", () => {
     expect(writeMessages(restartedChild)).toEqual([]);
   });
 
+  it("delivers a launch's handback code once, never on a crash respawn (#12488)", () => {
+    const client = createReadyClient();
+    client.spawn("t1", { ...baseOptions, handbackCode: "k7f3qa" });
+
+    expect(spawnMessages(mockChild)[0]!.options.handbackCode).toBe("k7f3qa");
+
+    const restartedChild = createMockChild();
+    shared.forkMock.mockReturnValue(restartedChild);
+    vi.spyOn(Math, "random").mockReturnValue(0);
+    mockChild.emit("exit", 1);
+    vi.advanceTimersByTime(200);
+    restartedChild.emit("message", { type: "ready" });
+
+    const replayed = spawnMessages(restartedChild);
+    expect(replayed).toHaveLength(1);
+    // The request died with its host, so the replayed launch carries none.
+    expect(replayed[0]!.options).not.toHaveProperty("handbackCode");
+  });
+
   it("replays wrapper args verbatim on crash respawn — a resume survives (#11339)", () => {
     const client = createReadyClient();
     // Wrapper-capable shells (zsh/bash/sh/pwsh/cmd) embed the launch command in
