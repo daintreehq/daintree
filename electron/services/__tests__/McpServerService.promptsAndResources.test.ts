@@ -1221,6 +1221,25 @@ describe("McpServerService", () => {
       const { events } = await import("../events.js");
       const { getAgentAvailabilityStore } = await import("../AgentAvailabilityStore.js");
       getAgentAvailabilityStore();
+      const transition = (
+        terminalId: string,
+        state: "waiting" | "completed",
+        timestamp: number,
+        extra: { waitingReason?: "question"; exitCode?: number } = {}
+      ) =>
+        events.emit("agent:state-changed", {
+          agentId: "agent-shared",
+          terminalId,
+          state,
+          previousState: "working",
+          trigger: state === "completed" ? "exit" : "output",
+          confidence: 1,
+          timestamp,
+          ...extra,
+        });
+      // The older terminal is the one heard from last, so every field has to
+      // come from it — including the spawn time the newer sibling overwrote
+      // when state was one slot per agent type.
       events.emit("agent:spawned", {
         agentId: "agent-shared",
         terminalId: "term-shared-a",
@@ -1231,42 +1250,49 @@ describe("McpServerService", () => {
         terminalId: "term-shared-b",
         timestamp: 2_000,
       });
-      events.emit("agent:state-changed", {
-        agentId: "agent-shared",
-        terminalId: "term-shared-a",
-        state: "waiting",
-        previousState: "working",
-        trigger: "output",
-        confidence: 1,
-        waitingReason: "question",
-        timestamp: 3_000,
-      });
-      events.emit("agent:state-changed", {
-        agentId: "agent-shared",
-        terminalId: "term-shared-b",
-        state: "completed",
-        previousState: "working",
-        trigger: "exit",
-        confidence: 1,
-        exitCode: 0,
-        timestamp: 4_000,
-      });
+      transition("term-shared-b", "completed", 3_000, { exitCode: 0 });
+      transition("term-shared-a", "waiting", 4_000, { waitingReason: "question" });
 
       const { window } = createMockWindow({ getManifest: manifestForResources });
       await service.start(window);
       const { client, transport } = await connectClient(service.currentPort!);
       transports.push(transport);
 
-      const result = await client.readResource({ uri: "daintree://agent/agent-shared/state" });
-      const content = result.contents[0] as { uri: string; mimeType: string; text: string };
-      expect(JSON.parse(content.text)).toEqual({
+      const read = async () => {
+        const result = await client.readResource({ uri: "daintree://agent/agent-shared/state" });
+        const content = result.contents[0] as { uri: string; mimeType: string; text: string };
+        return JSON.parse(content.text);
+      };
+
+      expect(await read()).toEqual({
+        agentId: "agent-shared",
+        terminalId: "term-shared-a",
+        state: "waiting",
+        waitingReason: "question",
+        spawnedAt: 1_000,
+        lastTransitionAt: 4_000,
+      });
+
+      events.emit("agent:killed", {
+        agentId: "agent-shared",
+        terminalId: "term-shared-a",
+        timestamp: Date.now(),
+      });
+      expect(await read()).toEqual({
         agentId: "agent-shared",
         terminalId: "term-shared-b",
         state: "completed",
         exitCode: 0,
         spawnedAt: 2_000,
-        lastTransitionAt: 4_000,
+        lastTransitionAt: 3_000,
       });
+
+      events.emit("agent:killed", {
+        agentId: "agent-shared",
+        terminalId: "term-shared-b",
+        timestamp: Date.now(),
+      });
+      expect(await read()).toEqual({ agentId: "agent-shared", state: null });
     });
 
     it("readResource on an unknown URI rejects as InvalidRequest", async () => {
@@ -1434,6 +1460,47 @@ describe("McpServerService", () => {
 
       await new Promise((r) => setTimeout(r, 50));
       expect(updated).toEqual(["daintree://agent/agent-7/state"]);
+    });
+
+    // Killing an already-idle agent emits no state change, but it still drops
+    // the terminal the read was reporting.
+    it("notifies agent-state subscribers when an agent of that type is killed or spawned", async () => {
+      const { events } = await import("../events.js");
+      const { window } = createMockWindow({ getManifest: manifestForResources });
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!);
+      transports.push(transport);
+
+      const updated: string[] = [];
+      const { ResourceUpdatedNotificationSchema } =
+        await import("@modelcontextprotocol/sdk/types.js");
+      client.setNotificationHandler(ResourceUpdatedNotificationSchema, async (notification) => {
+        updated.push(notification.params.uri);
+      });
+
+      await client.subscribeResource({ uri: "daintree://agent/agent-life/state" });
+
+      events.emit("agent:spawned", {
+        agentId: "agent-life",
+        terminalId: "term-life",
+        timestamp: Date.now(),
+      });
+      events.emit("agent:killed", {
+        agentId: "agent-life",
+        terminalId: "term-life",
+        timestamp: Date.now(),
+      });
+      events.emit("agent:killed", {
+        agentId: "different-agent",
+        terminalId: "term-other",
+        timestamp: Date.now(),
+      });
+
+      await new Promise((r) => setTimeout(r, 50));
+      expect(updated).toEqual([
+        "daintree://agent/agent-life/state",
+        "daintree://agent/agent-life/state",
+      ]);
     });
 
     it("unsubscribe stops further notifications and clears the per-session entry", async () => {

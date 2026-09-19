@@ -184,6 +184,35 @@ describe("AgentAvailabilityStore", () => {
       expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("exitSignal");
     });
 
+    it("does not carry exit metadata into a later session in the same terminal", () => {
+      spawn("claude", "term-1");
+      transition("claude", "term-1", "exited", { exitCode: 1, exitSignal: 9 });
+
+      // The in-PTY respawn path: exited -> idle -> working, then a
+      // pattern-detected completion that carries no exit code of its own.
+      transition("claude", "term-1", "idle");
+      transition("claude", "term-1", "working");
+      transition("claude", "term-1", "completed");
+
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("completed");
+      expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("exitCode");
+      expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("exitSignal");
+    });
+
+    it("does not give a different agent started in the same terminal the first one's spawn", () => {
+      spawn("claude", "term-1", 1_000);
+      transition("claude", "term-1", "exited", { exitCode: 0 });
+
+      transition("codex", "term-1", "working", { timestamp: 2_000 });
+
+      expect(store.getTerminalSnapshot("term-1")).toEqual({
+        terminalId: "term-1",
+        agentId: "codex",
+        state: "working",
+        lastStateChange: 2_000,
+      });
+    });
+
     it("keeps each same-type terminal's exit metadata its own", () => {
       spawn("claude", "term-a");
       spawn("claude", "term-b");
@@ -257,6 +286,49 @@ describe("AgentAvailabilityStore", () => {
 
       expect(store.getTerminalSnapshot("term-b")?.state).toBe("exited");
       expect(store.getTerminalSnapshot("term-b")?.exitCode).toBe(2);
+    });
+  });
+
+  describe("agent quitting back to its shell", () => {
+    const quitToShell = (agentType: string, terminalId: string) => {
+      transition(agentType, terminalId, "exited", { exitCode: 0 });
+      events.emit("agent:exited", {
+        terminalId,
+        agentType,
+        timestamp: Date.now(),
+        exitKind: "subcommand",
+      });
+    };
+
+    it("drops the record of an agent started by hand, which nothing else would release", () => {
+      transition("claude", "term-1", "working");
+
+      quitToShell("claude", "term-1");
+
+      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
+      // The shell is still open, so this is untracked, not closed.
+      expect(store.isTerminalClosed("term-1")).toBe(false);
+    });
+
+    it("keeps a launched terminal's record, whose kill still arrives later", () => {
+      spawn("claude", "term-1");
+
+      quitToShell("claude", "term-1");
+
+      expect(store.getTerminalSnapshot("term-1")).toMatchObject({ state: "exited", exitCode: 0 });
+    });
+
+    it("keeps the record when the PTY itself exits", () => {
+      transition("claude", "term-1", "working");
+
+      events.emit("agent:exited", {
+        terminalId: "term-1",
+        agentType: "claude",
+        timestamp: Date.now(),
+        exitKind: "terminal",
+      });
+
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
     });
   });
 
@@ -525,7 +597,9 @@ describe("AgentAvailabilityStore", () => {
       expect(store.getLatestSnapshotForAgent("claude")).toBeUndefined();
     });
 
-    it("does not revive a killed terminal from a transition that trails the kill", () => {
+    // A restarted pane comes back as a plain shell, so an agent the user then
+    // starts by hand reports state without ever announcing a spawn.
+    it("tracks a closed terminal again once it reports a live transition", () => {
       spawn("claude", "term-1");
       events.emit("agent:killed", {
         agentId: "claude",
@@ -533,18 +607,25 @@ describe("AgentAvailabilityStore", () => {
         timestamp: Date.now(),
       });
 
-      events.emit("agent:state-changed", {
+      transition("claude", "term-1", "working");
+
+      expect(store.isTerminalClosed("term-1")).toBe(false);
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
+      expect(store.getAgentsByAvailability().map((r) => r.terminalId)).toEqual(["term-1"]);
+    });
+
+    it("a respawn after trash and kill is counted again", () => {
+      spawn("claude", "term-1");
+      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
+      events.emit("agent:killed", {
         agentId: "claude",
         terminalId: "term-1",
-        state: "exited",
-        previousState: "idle",
         timestamp: Date.now(),
-        trigger: "exit",
-        confidence: 1,
       });
 
-      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
-      expect(store.isTerminalClosed("term-1")).toBe(true);
+      spawn("claude", "term-1");
+
+      expect(store.getAgentsByAvailability().map((r) => r.terminalId)).toEqual(["term-1"]);
     });
 
     it("ignores an agent:killed with no terminalId", () => {

@@ -3089,9 +3089,23 @@ function subscribeResource(
         ? () => {}
         : onWorkspaceResidencyChanged(boundWorkspaceId, fire);
   } else if (parsed.kind === "agentState") {
-    unsub = events.on("agent:state-changed", (payload) => {
-      if (payload.agentId === parsed.id) fire();
-    });
+    // A spawn resets a terminal and a kill drops it, and either can change
+    // which terminal the read reports without any state change — killing an
+    // already-idle agent emits none.
+    const offs = [
+      events.on("agent:state-changed", (payload) => {
+        if (payload.agentId === parsed.id) fire();
+      }),
+      events.on("agent:spawned", (payload) => {
+        if (payload.agentId === parsed.id) fire();
+      }),
+      events.on("agent:killed", (payload) => {
+        if (payload.agentId === parsed.id) fire();
+      }),
+    ];
+    unsub = () => {
+      for (const off of offs) off();
+    };
   } else {
     unsub = events.on("sys:worktree:update", (payload) => {
       if (payload.worktreeId === parsed.id) fire();

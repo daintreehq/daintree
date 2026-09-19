@@ -1,19 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getActiveAgentCount, showQuitWarning } from "../quitWarning.js";
-import { AgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
+import {
+  AgentAvailabilityStore,
+  type AgentAvailabilityInfo,
+} from "../../services/AgentAvailabilityStore.js";
 import { events } from "../../services/events.js";
+import type { AgentState } from "../../../shared/types/agent.js";
 
 function mockStore(agents: Array<{ agentId: string; state: string }>): AgentAvailabilityStore {
-  return {
-    getAgentsByAvailability: () =>
-      agents.map((a) => ({
-        agentId: a.agentId,
-        available: a.state === "idle" || a.state === "waiting",
-        state: a.state as import("../../../shared/types/agent.js").AgentState,
-        concurrentTasks: 0,
-        lastStateChange: 0,
-      })),
-  } as unknown as AgentAvailabilityStore;
+  const rows = (): AgentAvailabilityInfo[] =>
+    agents.map((a, index) => ({
+      terminalId: `term-${index}`,
+      agentId: a.agentId,
+      available: a.state === "idle" || a.state === "waiting",
+      // "running" is a retired state kept here on purpose, hence the cast.
+      state: a.state as AgentState,
+      lastStateChange: 0,
+    }));
+  return { getAgentsByAvailability: rows } as unknown as AgentAvailabilityStore;
 }
 
 describe("getActiveAgentCount", () => {

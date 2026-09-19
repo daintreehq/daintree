@@ -32,13 +32,16 @@ export interface TerminalAgentSnapshot {
   /** Present only while `state` is `waiting` and the reason was classified. */
   waitingReason?: WaitingReason;
   /**
-   * From the last `completed`/`exited` transition. `null` when the process
-   * died from a signal with no numeric code.
+   * Carried by the `completed`/`exited` transition that is the current state.
+   * `null` when the process died from a signal with no numeric code.
    */
   exitCode?: number | null;
-  /** Raw node-pty signal number from the last `completed`/`exited` transition. */
+  /** Raw node-pty signal number carried by the current `completed`/`exited` transition. */
   exitSignal?: number;
-  /** Absent when state arrived for a terminal whose spawn this store never saw. */
+  /**
+   * From `agent:spawned`. Absent for an agent the user started by hand in a
+   * plain shell, which is detected at runtime and never announces a spawn.
+   */
   spawnedAt?: number;
 }
 
@@ -83,13 +86,10 @@ export class AgentAvailabilityStore {
 
     this.unsubscribers.push(
       events.on("agent:spawned", (payload) => {
-        // A respawn under the same terminal id revives it, so drop any
-        // tombstone from the previous session rather than reporting the live
-        // terminal as closed forever.
-        this.closedTerminals.delete(payload.terminalId);
-        // A fresh spawn starts the terminal over at "working" so nothing from
-        // a prior session in it can outlive the respawn. Without this, a
-        // previous "waiting" persists and waitUntilIdle settles immediately as
+        // A respawn under the same terminal id revives it (`write` drops the
+        // tombstone) and starts it over at "working", so nothing from a prior
+        // session in it can outlive the respawn. Without this, a previous
+        // "waiting" persists and waitUntilIdle settles immediately as
         // already-idle, dropping its listener before the new session's crash
         // "exited" event arrives (issue #10816). Only this terminal is reset —
         // a sibling of the same type keeps its own state.
@@ -115,6 +115,22 @@ export class AgentAvailabilityStore {
       events.on("agent:killed", (payload) => {
         if (!payload.terminalId) return;
         this.releaseTerminal(payload.terminalId);
+      })
+    );
+
+    // An agent started by hand in a plain shell has no spawn, and once it quits
+    // back to the prompt the shell has no live agent, so closing the pane later
+    // emits no `agent:killed` either — nothing would ever release its record.
+    // Dropped here instead, which leaves the terminal as untracked as it was
+    // before the agent ran. A launched terminal keeps its record: its kill
+    // still arrives, and until then its final state is what a wait reports.
+    this.unsubscribers.push(
+      events.on("agent:exited", (payload) => {
+        if (payload.exitKind !== "subcommand") return;
+        const snapshot = this.terminals.get(payload.terminalId);
+        if (snapshot !== undefined && snapshot.spawnedAt === undefined) {
+          this.terminals.delete(payload.terminalId);
+        }
       })
     );
 
@@ -144,10 +160,6 @@ export class AgentAvailabilityStore {
     // and resolving one through the agent type is exactly the conflation this
     // store exists to avoid.
     if (!payload.agentId || !payload.terminalId) return;
-    // A kill emits its `idle` before `agent:killed`, but anything trailing the
-    // release must not recreate the record and report the terminal tracked
-    // again. Only a respawn revives a closed terminal.
-    if (this.closedTerminals.has(payload.terminalId)) return;
 
     const previous = this.terminals.get(payload.terminalId);
     const next: TerminalAgentSnapshot = {
@@ -159,27 +171,27 @@ export class AgentAvailabilityStore {
     if (payload.state === "waiting" && payload.waitingReason) {
       next.waitingReason = payload.waitingReason;
     }
-    // Cache exit metadata when the transition carries it (completed/exited from
-    // a PTY exit event). `exitCode` may legitimately be null (signal kill), so
-    // gate on the field being present rather than truthy. Otherwise keep what
-    // this terminal's session last reported; a spawn is what clears it.
-    const exitCode =
-      (payload.state === "completed" || payload.state === "exited") &&
-      payload.exitCode !== undefined
-        ? payload.exitCode
-        : previous?.exitCode;
-    if (exitCode !== undefined) next.exitCode = exitCode;
-    const exitSignal =
-      (payload.state === "completed" || payload.state === "exited") &&
-      payload.exitSignal !== undefined
-        ? payload.exitSignal
-        : previous?.exitSignal;
-    if (exitSignal !== undefined) next.exitSignal = exitSignal;
-    if (previous?.spawnedAt !== undefined) next.spawnedAt = previous.spawnedAt;
+    // Exit metadata belongs to the transition that carries it (completed/exited
+    // from a PTY exit event), never inherited: a pane can run a second agent by
+    // hand after the first exits, with no spawn in between, and a later
+    // pattern-detected `completed` must not report the earlier run's code.
+    // `exitCode` may legitimately be null (signal kill), so gate on the field
+    // being present rather than truthy.
+    if (payload.state === "completed" || payload.state === "exited") {
+      if (payload.exitCode !== undefined) next.exitCode = payload.exitCode;
+      if (payload.exitSignal !== undefined) next.exitSignal = payload.exitSignal;
+    }
+    if (previous?.spawnedAt !== undefined && previous.agentId === payload.agentId) {
+      next.spawnedAt = previous.spawnedAt;
+    }
     this.write(next);
   }
 
   private write(snapshot: TerminalAgentSnapshot): void {
+    // A kill emits nothing for its terminal after `agent:killed`, so a live
+    // observation means the id is in use again — e.g. a restarted pane whose
+    // agent was started by hand and so never announced a spawn.
+    this.closedTerminals.delete(snapshot.terminalId);
     this.terminals.delete(snapshot.terminalId);
     this.terminals.set(snapshot.terminalId, snapshot);
   }

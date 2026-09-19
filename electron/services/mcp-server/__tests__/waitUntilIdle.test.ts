@@ -376,8 +376,8 @@ describe("same-type sibling terminals", () => {
     transitionAt(agentId, b, "completed", 4_000, { exitCode: 0 });
 
     const signal = new AbortController().signal;
-    const resultA = await handleWaitUntilIdle({ terminalId: a }, signal);
-    const resultB = await handleWaitUntilIdle({ terminalId: b }, signal);
+    const resultA = await handleWaitUntilIdle({ terminalId: a, timeoutMs: 0 }, signal);
+    const resultB = await handleWaitUntilIdle({ terminalId: b, timeoutMs: 0 }, signal);
 
     expect(resultA).toMatchObject({ idleReason: "exited", exitCode: 1, lastTransitionAt: 3_000 });
     expect(resultB).toMatchObject({
@@ -439,9 +439,11 @@ describe("same-type sibling terminals", () => {
 
   it("batch rows are not settled by a same-type terminal outside the request", async () => {
     const { agentId, a, b, c } = siblings();
-    spawnAt(agentId, b, 1_000);
-    spawnAt(agentId, c, 2_000);
-    spawnAt(agentId, a, 3_000);
+    // c spawns last, so the most-recently-spawned guard this replaced pointed
+    // at c and read a's "waiting" as c's.
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    spawnAt(agentId, c, 3_000);
     transitionAt(agentId, a, "waiting", 4_000);
 
     const res = await handleWaitUntilIdleBatch(
@@ -451,6 +453,39 @@ describe("same-type sibling terminals", () => {
     );
     expect(res.timedOut).toBe(true);
     expect(res.settledTerminalIds).toEqual([]);
+  });
+
+  it("batch settles a killed row as closed without waiting on its live sibling", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+
+    const p = handleWaitUntilIdleBatch(
+      { terminalIds: [a, b], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(await pendingAfter(p)).toBe("pending");
+
+    // Killing an already-idle agent emits no transition, only the kill notice.
+    events.emit("agent:killed", { agentId, terminalId: a, timestamp: Date.now() });
+    expect(await pendingAfter(p)).toBe("pending");
+
+    transitionAt(agentId, b, "completed", 3_000, { exitCode: 0 });
+    const res = await p;
+    expect(res.timedOut).toBe(false);
+    expect(res.results.find((e) => e.terminalId === a)).toMatchObject({
+      settled: true,
+      busyState: "idle",
+      idleReason: "unknown",
+      trackingState: "closed",
+    });
+    expect(res.results.find((e) => e.terminalId === b)).toMatchObject({
+      settled: true,
+      idleReason: "completed",
+      exitCode: 0,
+      trackingState: "tracked",
+    });
   });
 
   it("batch settles an older terminal that was waiting before a sibling spawned", async () => {
