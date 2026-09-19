@@ -49,6 +49,7 @@ import type {
   AssistantPaneWebContentsResolver,
   AssistantPaneActionContextResolver,
   PaneWorkspaceBindingResolver,
+  PaneOwnershipPrincipalResolver,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -385,6 +386,18 @@ export class McpServerService {
 
   setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
     this.httpLifecycle.setPaneWorkspaceBindingResolver(resolver);
+  }
+
+  setPaneOwnershipPrincipalResolver(resolver: PaneOwnershipPrincipalResolver | null): void {
+    this.httpLifecycle.setPaneOwnershipPrincipalResolver(resolver);
+  }
+
+  /**
+   * Drop every ownership record a revoked pane bearer held (#12487). Called by
+   * `McpPaneConfigService` in the same step as the revocation itself.
+   */
+  revokeOwnershipPrincipal(principal: string): void {
+    this.sessionStore.resourceOwnership.revokePrincipal(principal);
   }
 
   private emitStatusChange(): void {

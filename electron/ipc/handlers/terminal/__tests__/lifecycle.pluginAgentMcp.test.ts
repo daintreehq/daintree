@@ -148,6 +148,8 @@ vi.mock("../../../../services/McpServerService.js", () => ({
     setAssistantPaneWebContentsResolver: vi.fn(),
     setAssistantPaneActionContextResolver: vi.fn(),
     setPaneWorkspaceBindingResolver: vi.fn(),
+    setPaneOwnershipPrincipalResolver: vi.fn(),
+    revokeOwnershipPrincipal: vi.fn(),
   },
 }));
 

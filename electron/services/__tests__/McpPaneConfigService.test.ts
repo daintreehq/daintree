@@ -460,6 +460,102 @@ describe("McpPaneConfigService", () => {
     });
   });
 
+  describe("resource-ownership principal (#12487)", () => {
+    it("resolves one stable principal per live token, and nothing for other tokens", async () => {
+      const a = await service.preparePaneConfig({ paneId: "pane-a", port: 45454, tier: "action" });
+      const b = await service.preparePaneConfig({ paneId: "pane-b", port: 45454, tier: "action" });
+
+      const principal = service.getOwnershipPrincipalForToken(a.token);
+      expect(principal).toEqual(expect.any(String));
+      expect(service.getOwnershipPrincipalForToken(a.token)).toBe(principal);
+      expect(service.getOwnershipPrincipalForToken(b.token)).not.toBe(principal);
+      expect(service.getOwnershipPrincipalForToken("not-a-pane-token")).toBeNull();
+      expect(service.getOwnershipPrincipalForToken("")).toBeNull();
+    });
+
+    it("tells the listener the principal in the same step the bearer is revoked", async () => {
+      const listener = vi.fn<(principal: string) => void>();
+      service.setOwnershipPrincipalRevokedListener(listener);
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-exit",
+        port: 45454,
+        tier: "action",
+      });
+      const principal = service.getOwnershipPrincipalForToken(token);
+
+      const revoking = service.revokePaneConfig("pane-exit");
+      // Before the file unlink is awaited: nothing may run between the bearer
+      // going and its authority going.
+      expect(service.isValidPaneToken(token)).toBe(false);
+      expect(listener).toHaveBeenCalledExactlyOnceWith(principal);
+      await revoking;
+
+      expect(service.getOwnershipPrincipalForToken(token)).toBeNull();
+    });
+
+    it("gives a relaunch a new principal and revokes the old one", async () => {
+      const listener = vi.fn<(principal: string) => void>();
+      service.setOwnershipPrincipalRevokedListener(listener);
+      const first = await service.preparePaneConfig({
+        paneId: "pane-restart",
+        port: 45454,
+        tier: "action",
+      });
+      const firstPrincipal = service.getOwnershipPrincipalForToken(first.token);
+
+      const second = await service.preparePaneConfig({
+        paneId: "pane-restart",
+        port: 45454,
+        tier: "action",
+      });
+
+      expect(listener).toHaveBeenCalledExactlyOnceWith(firstPrincipal);
+      expect(service.getOwnershipPrincipalForToken(second.token)).not.toBe(firstPrincipal);
+    });
+
+    it("revokes every pane's principal on revokeAll", async () => {
+      const listener = vi.fn<(principal: string) => void>();
+      service.setOwnershipPrincipalRevokedListener(listener);
+      const a = await service.preparePaneConfig({ paneId: "pane-a", port: 45454, tier: "action" });
+      const b = await service.preparePaneConfig({ paneId: "pane-b", port: 45454, tier: "system" });
+      const principals = [a.token, b.token].map((t) => service.getOwnershipPrincipalForToken(t));
+
+      await service.revokeAll();
+
+      expect(listener.mock.calls.map(([principal]) => principal).sort()).toEqual(
+        [...principals].sort()
+      );
+    });
+
+    it("does not notify for a pane that holds no bearer", async () => {
+      const listener = vi.fn<(principal: string) => void>();
+      service.setOwnershipPrincipalRevokedListener(listener);
+
+      await service.revokePaneConfig("pane-never-prepared");
+
+      expect(listener).not.toHaveBeenCalled();
+    });
+
+    it("finishes revoking when the listener throws", async () => {
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+      service.setOwnershipPrincipalRevokedListener(() => {
+        throw new Error("ledger unavailable");
+      });
+      const { token, configPath } = await service.preparePaneConfig({
+        paneId: "pane-throw",
+        port: 45454,
+        tier: "action",
+      });
+
+      await service.revokePaneConfig("pane-throw");
+
+      expect(service.isValidPaneToken(token)).toBe(false);
+      await expect(fs.stat(configPath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(errorSpy).toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+  });
+
   it("revokeAll clears all tokens and files", async () => {
     const a = await service.preparePaneConfig({
       paneId: "pane-a",

@@ -125,7 +125,8 @@ export class SessionStore {
    * `worktree.deleteOwned` check before they delegate. Co-located with the
    * other session-scoped state so one teardown tears it down too — see
    * {@link clearSessionBinding}, which revokes the authority without touching
-   * the resources themselves.
+   * the resources themselves. A per-pane bearer's records are held by its
+   * principal and outlive the session (#12487).
    */
   readonly resourceOwnership = new ResourceOwnershipLedger();
 
@@ -261,8 +262,10 @@ export class SessionStore {
    * Dropping the ownership records revokes *authority*, not the resources
    * (#11909). A disconnected client's terminals and worktrees stay exactly
    * where they are: the session ending is not a decision to destroy work the
-   * user can still see. `drain` clears the same ledger inline, alongside the
-   * maps it also clears without going through here.
+   * user can still see. A session a per-pane bearer authenticated only loses
+   * its binding here — its records belong to the bearer's principal and go
+   * when the bearer is revoked (#12487). `drain` clears the same ledger inline,
+   * alongside the maps it also clears without going through here.
    *
    * Callers must still revoke grants BEFORE calling this — the grant lifecycle
    * emitter resolves the pinned renderer to push `grant.revoked`, and that
@@ -889,7 +892,9 @@ export class SessionStore {
     // deliberately left alone (#11909). See `clearSessionBinding`, which drops
     // the same ledger per session; `drain` clears the session-scoped maps
     // inline rather than routing through it, so this line is not redundant.
-    this.resourceOwnership.clear();
+    // Pane-bearer principals keep their records: a server restart revokes no
+    // pane bearer, and a pane that reconnects must find them (#12487).
+    this.resourceOwnership.clearAllSessions();
     this.sessionHelpIdMap.clear();
     this.figureCounters.clear();
     this.sessionConnectedAtMs.clear();

@@ -34,6 +34,11 @@ interface PaneRecord {
 interface TokenRecord {
   paneId: string;
   tier: DaintreeMcpTier;
+  // The identity MCP resource ownership is held under for this bearer
+  // (#12487). Minted per token rather than derived from the pane id, so a
+  // relaunch's fresh bearer starts owning nothing even if a revocation were
+  // ever missed.
+  ownershipPrincipal: string;
   // Assistant-session pinning side-channel (#10647). Set only for
   // `daintree-assistant` pane tokens via `registerAssistantPaneBearer`, and
   // kept apart from `workspaceBinding` below because the assistant resolvers
@@ -163,6 +168,7 @@ export class McpPaneConfigService {
   // could finish its atomic write after a newer one published, leaving the
   // newer launch's file holding the older launch's (revoked) bearers.
   private prepareChains = new Map<string, Promise<unknown>>();
+  private ownershipPrincipalRevokedListener: ((principal: string) => void) | null = null;
 
   constructor(private readonly pluginGrants: PluginMcpGrantRegistry = pluginMcpGrantRegistry) {}
 
@@ -317,7 +323,7 @@ export class McpPaneConfigService {
 
     this.records.set(paneId, { configPath, token, tier });
     if (token !== null) {
-      this.tokens.set(token, { paneId, tier });
+      this.tokens.set(token, { paneId, tier, ownershipPrincipal: randomUUID() });
     }
 
     return { configPath, token, pluginServerKeys };
@@ -397,7 +403,14 @@ export class McpPaneConfigService {
 
     this.records.delete(paneId);
     if (record.token !== null) {
+      const tokenRecord = this.tokens.get(record.token);
       this.tokens.delete(record.token);
+      // Same step as the bearer, before any await: from here the token no
+      // longer authenticates, and nothing it created may still be driven
+      // through the ownership it earned (#12487).
+      if (tokenRecord !== undefined) {
+        this.notifyOwnershipPrincipalRevoked(tokenRecord.ownershipPrincipal);
+      }
     }
 
     try {
@@ -428,6 +441,36 @@ export class McpPaneConfigService {
   getTierForToken(token: string): DaintreeMcpTier | undefined {
     if (!token) return undefined;
     return this.tokens.get(token)?.tier;
+  }
+
+  /**
+   * Resolver consulted at MCP handshake for the principal a pane bearer's
+   * resource ownership is held under (#12487), so a session that replaces
+   * another with the same bearer keeps authority over what the pane launched.
+   * Null once the token is revoked. Covers every pane token, the assistant
+   * pane's included: all of them are minted and revoked here.
+   */
+  getOwnershipPrincipalForToken(token: string): string | null {
+    if (!token) return null;
+    return this.tokens.get(token)?.ownershipPrincipal ?? null;
+  }
+
+  /**
+   * Told the principal of every bearer {@link revokePaneConfig} revokes, in
+   * the same synchronous step, so the MCP server drops its ownership records
+   * before anything can be dispatched under them.
+   */
+  setOwnershipPrincipalRevokedListener(listener: ((principal: string) => void) | null): void {
+    this.ownershipPrincipalRevokedListener = listener;
+  }
+
+  private notifyOwnershipPrincipalRevoked(principal: string): void {
+    try {
+      this.ownershipPrincipalRevokedListener?.(principal);
+    } catch (err) {
+      // Revocation carries on regardless: the config file still has to go.
+      console.error("[MCP] Failed to revoke pane resource ownership:", err);
+    }
   }
 
   /**

@@ -989,6 +989,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Captured once so discovery, the tier gate and `mcp.surface` all describe
     // the same session (#12407).
     const rendererOwnedOrigin = sessionStore.isRendererOwnedOrigin(sessionId);
+    // Whose ownership records this call reads and writes (#12487): the
+    // bearer's principal for a pane session, else the session itself. Captured
+    // at admission so the ownership gate, an `owned` listing and the
+    // post-dispatch bookkeeping all consult one owner — and so a creation that
+    // completes after the transport dropped still lands with the principal the
+    // call was authorized under, where the pane's next session finds it.
+    const ownershipOwner = sessionStore.resourceOwnership.ownerOf(sessionId);
 
     const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
     const listPaging = actionId === ACTIONS_LIST_TOOL_ID ? readListPaging(args) : null;
@@ -1113,7 +1120,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         };
       }
       const revealWorkspaceId =
-        sessionStore.resourceOwnership.get(sessionId, entry.resourceKind, resourceId)
+        sessionStore.resourceOwnership.get(ownershipOwner, entry.resourceKind, resourceId)
           ?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
       // Omitted rather than guessed when neither is known: `pilot.openRun`
       // falls back to the executing view's own workspace, which is where the
@@ -1161,7 +1168,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           return;
         }
         sessionStore.resourceOwnership.release(
-          sessionId,
+          ownershipOwner,
           ownedResource.resourceKind,
           ownedResourceId
         );
@@ -1173,12 +1180,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // admitted before the session was revoked can land after
       // `clearSessionBinding` already dropped the ledger. Writing then would
       // resurrect a dead session's authority — and, worse, claim the id away
-      // from whoever legitimately records it next.
-      if (!sessionStore.sessions.has(sessionId) && !sessionStore.httpSessions.has(sessionId)) {
+      // from whoever legitimately records it next. A pane bearer's principal
+      // outlives its sessions, so its creation still lands after a disconnect;
+      // `record` itself refuses one whose bearer was revoked (#12487).
+      if (
+        !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
+        !sessionStore.sessions.has(sessionId) &&
+        !sessionStore.httpSessions.has(sessionId)
+      ) {
         return;
       }
       sessionStore.resourceOwnership.record(
-        sessionId,
+        ownershipOwner,
         drafts,
         envelope.dispatchedWorkspace?.workspaceId
       );
@@ -1732,7 +1745,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({ code: "VALIDATION_ERROR", message });
           }
           const record = sessionStore.resourceOwnership.get(
-            sessionId,
+            ownershipOwner,
             ownedResource.resourceKind,
             resourceId
           );
@@ -2321,7 +2334,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 )
               : ownedOnly
                 ? filterTerminalListToOwned(envelope.result, (terminalId) =>
-                    sessionStore.resourceOwnership.owns(sessionId, "terminal", terminalId)
+                    sessionStore.resourceOwnership.owns(ownershipOwner, "terminal", terminalId)
                   )
                 : envelope.result,
           };

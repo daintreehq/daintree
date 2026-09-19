@@ -142,13 +142,15 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
   return cachedMcpServerService;
 }
 
-// Wiring of the pane-token routing resolvers: the assistant pane's WebContents
-// pin (#10647) and an agent pane's launch-workspace binding (#12486).
-// Help-session resolvers are wired in globalServicesInit / HelpSessionService;
-// pane tokens have no such owner, so every spawn that registers one wires them
-// first — before the CLI's first handshake. Re-setting is three reference
-// writes, and doing it per registration keeps the wiring ahead of each one
-// rather than dependent on which kind of pane happened to launch first.
+// Wiring of the pane-token resolvers: the assistant pane's WebContents pin
+// (#10647), an agent pane's launch-workspace binding (#12486), and the principal
+// a pane bearer's resource ownership is held under, with the revocation that
+// drops it (#12487). Help-session resolvers are wired in globalServicesInit /
+// HelpSessionService; pane tokens have no such owner, so every spawn that
+// registers one wires them first — before the CLI's first handshake.
+// Re-setting is a handful of reference writes, and doing it per registration
+// keeps the wiring ahead of each one rather than dependent on which kind of
+// pane happened to launch first.
 function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
   mcpServerService.setAssistantPaneWebContentsResolver((token) =>
     mcpPaneConfigService.getWebContentsIdForToken(token)
@@ -158,6 +160,12 @@ function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
   );
   mcpServerService.setPaneWorkspaceBindingResolver((token) =>
     mcpPaneConfigService.getPaneWorkspaceBindingForToken(token)
+  );
+  mcpServerService.setPaneOwnershipPrincipalResolver((token) =>
+    mcpPaneConfigService.getOwnershipPrincipalForToken(token)
+  );
+  mcpPaneConfigService.setOwnershipPrincipalRevokedListener((principal) =>
+    mcpServerService.revokeOwnershipPrincipal(principal)
   );
 }
 
