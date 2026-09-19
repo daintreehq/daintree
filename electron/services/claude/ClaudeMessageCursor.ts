@@ -41,14 +41,17 @@ function digestOf(text: string): string {
 const isDigest = (value: unknown): value is string =>
   typeof value === "string" && value.length === DIGEST_CHARS && BASE64URL.test(value);
 
+function serialize(cursor: MessageCursor): string {
+  const payload = { v: VERSION, id: cursor.id, end: cursor.end, h: cursor.digest };
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
 export function encodeMessageCursor(id: string | null, text: string, end: number): string {
-  const payload = {
-    v: VERSION,
+  return serialize({
     id: id === null ? null : digestOf(id),
     end,
-    h: digestOf(text.slice(0, end)),
-  };
-  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+    digest: digestOf(text.slice(0, end)),
+  });
 }
 
 /** The cursor a caller passed back, or null when it is not one this reader could have minted. */
@@ -64,7 +67,10 @@ export function decodeMessageCursor(value: string): MessageCursor | null {
   const { v, id, end, h } = parsed as Record<string, unknown>;
   if (v !== VERSION || (id !== null && !isDigest(id)) || !isDigest(h)) return null;
   if (typeof end !== "number" || !Number.isSafeInteger(end) || end <= 0) return null;
-  return { id, end, digest: h };
+  const cursor = { id, end, digest: h };
+  // Only the exact string this reader would mint: trailing characters and
+  // extra fields decode to the same cursor but were never handed out.
+  return serialize(cursor) === value ? cursor : null;
 }
 
 /** Whether `text` is the message the cursor was minted from, as far as the cursor reaches. */

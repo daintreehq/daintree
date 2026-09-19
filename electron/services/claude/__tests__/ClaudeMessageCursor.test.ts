@@ -50,6 +50,8 @@ describe("ClaudeMessageCursor", () => {
     expect(cursorMatches(cursor, null, "a\ud800b")).toBe(true);
     expect(cursorMatches(cursor, null, "a\ud801b")).toBe(false);
     expect(cursorMatches(cursor, "msg_1", "a\ud800b")).toBe(false);
+    const named = decodeMessageCursor(encodeMessageCursor("msg_1", "a\ud800b", 3))!;
+    expect(cursorMatches(named, null, "a\ud800b")).toBe(false);
   });
 
   it("refuses anything it could not have minted", () => {
@@ -60,9 +62,13 @@ describe("ClaudeMessageCursor", () => {
       end: 1,
       digest: h,
     });
+    const minted = encodeMessageCursor("msg_1", "Opening. Middle.", 9);
     for (const value of [
       "",
       "not a cursor!",
+      `${minted}A`,
+      encoded({ v: 1, id, end: 1, h, extra: true }),
+      encoded({ id, v: 1, end: 1, h }),
       "x".repeat(LAST_MESSAGE_CURSOR_MAX_CHARS + 1),
       encoded([1, 2]),
       encoded({ v: 2, id, end: 1, h }),
