@@ -2061,6 +2061,23 @@ describe("TerminalWebGLManager", () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
+    it("refuses a hold once hardware is lost, even before the paced release lands", () => {
+      attachThree();
+      rafMode = "queued";
+
+      manager.setHardwareAvailable(false);
+      // Releases drain one per frame, so the context is still pooled here.
+      expect(manager.isActive("s")).toBe(true);
+
+      manager.holdForScroll("s", 1000);
+      expect(manager.isScrollHeld("s")).toBe(false);
+
+      while (flushRafFrame()) {
+        // drain the paced releases
+      }
+      expect(manager.isActive("s")).toBe(false);
+    });
+
     it("does not carry a hold over to a terminal recreated under the same id", () => {
       attachThree();
       manager.holdForScroll("s", 1000);

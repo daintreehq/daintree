@@ -478,7 +478,9 @@ export class TerminalWebGLManager {
   // through a DOM-mode flip for `durationMs`. Called per wheel/scroll event, so
   // renewal is a map write — the shared expiry timer is only armed when idle.
   holdForScroll(id: string, durationMs: number): void {
-    if (!this.pool.has(id)) return;
+    // After a breaker trip the remaining contexts drain one per frame; a hold
+    // landing in that window must not keep one alive past the trip.
+    if (!this.hardwareAvailable || !this.pool.has(id)) return;
     this.scrollHolds.set(id, Date.now() + durationMs);
     if (this.scrollHoldTimer === null) {
       this.scrollHoldTimer = setTimeout(this.expireScrollHolds, durationMs);
