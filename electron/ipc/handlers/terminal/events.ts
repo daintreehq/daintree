@@ -6,6 +6,7 @@ import { CHANNELS } from "../../channels.js";
 import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
+import { getMcpServerServiceRef } from "../../../window/serviceRefs.js";
 import {
   acceptCapturedAgentSession,
   releaseSupersededCapturedSession,
@@ -41,6 +42,10 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
       console.error("[MCP] Failed to revoke pane config on exit:", err);
     });
+    // A hand-over ends with the terminal that was handed over (#12490). The
+    // orchestrator's side ends with its bearer, which the revocation above
+    // covers. Unloaded means nothing was ever handed over.
+    getMcpServerServiceRef()?.releaseTerminalAdoption(id);
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: [id, exitCode],
@@ -73,6 +78,9 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
       // A confirmed relaunch may supersede a session a natural exit left on
       // the pane (#12433); a refused one leaves the running process's id alone.
       releaseSupersededCapturedSession(id, result.launchGeneration);
+      // A new process under a handed-over id is not the one the user handed
+      // over, so the hand-over does not follow it (#12490).
+      getMcpServerServiceRef()?.releaseTerminalAdoption(id);
     } else {
       // Async pty-host spawn rejection (PENDING_SPAWNS_CAPPED, bad shell path,
       // etc.) doesn't throw from ptyClient.spawn(). Revoke any minted pane

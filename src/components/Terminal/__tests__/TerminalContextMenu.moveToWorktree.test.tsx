@@ -190,6 +190,14 @@ vi.mock("@/store", () => {
   return { usePanelStore };
 });
 
+// Hand-over (#12490) is not what these suites are about, and its candidate
+// query needs a preload bridge they do not install.
+vi.mock("../TerminalHandOver", () => ({
+  useOrchestratorCandidates: () => ({ candidateIds: [], refresh: () => {} }),
+  TerminalHandOverMenuItems: () => null,
+  TerminalHandOverDialog: () => null,
+}));
+
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import { getWorktreeHeadline } from "@/lib/worktreeHeadline";
 import { useSidebarWorktreeOrder } from "@/hooks/useSidebarWorktreeOrder";

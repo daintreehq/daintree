@@ -197,6 +197,14 @@ type OwnedResourceTool = {
   resourceKind: OwnedResourceKind;
   idArg: string;
   releasesOwnership: boolean;
+  /**
+   * Whether a terminal the user handed to this pane (#12490) is enough, or
+   * only one the pane created will do. Declared on every entry rather than
+   * derived from `releasesOwnership`, so a new tool has to decide it: the
+   * cleanup tools say no, because handing over a conversation is not handing
+   * over the right to destroy it.
+   */
+  acceptsAdoption: boolean;
 } & (
   | {
       executor: "renderer";
@@ -265,6 +273,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     delegateTo: "terminal.close",
     idArg: "terminalId",
     releasesOwnership: true,
+    acceptsAdoption: false,
   },
   "worktree.deleteOwned": {
     resourceKind: "worktree",
@@ -272,6 +281,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     delegateTo: "worktree.delete",
     idArg: "worktreeId",
     releasesOwnership: true,
+    acceptsAdoption: false,
   },
   // The panel is still the session's after it has been revealed, so this is the
   // one entry that keeps its record. `pilot.openRun` spells the id `runId`, and
@@ -285,6 +295,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     idArg: "terminalId",
     delegateIdArg: "runId",
     releasesOwnership: false,
+    acceptsAdoption: true,
     reveals: true,
   },
   // Keeps its record for the same reason the reveal above does: interrupting a
@@ -299,6 +310,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     delegateTo: "terminal.interrupt",
     idArg: "terminalId",
     releasesOwnership: false,
+    acceptsAdoption: true,
   },
   // Terminal input, scoped to panels this session created (#12407). Neither
   // keeps nor drops anything beyond the record an interrupt keeps: submitting to
@@ -313,6 +325,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     idArg: "terminalId",
     forwardArgs: ["command", "handback"],
     releasesOwnership: false,
+    acceptsAdoption: true,
   },
   "terminal.injectOwned": {
     resourceKind: "terminal",
@@ -320,6 +333,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     delegateTo: "terminal.inject",
     idArg: "terminalId",
     releasesOwnership: false,
+    acceptsAdoption: true,
   },
   // The one entry that runs in main rather than delegating (#12479). What it
   // reads is a file the agent wrote, which the renderer cannot open, and the
@@ -333,6 +347,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     readOptions: parseLastMessageReadArgs,
     idArg: "terminalId",
     releasesOwnership: false,
+    acceptsAdoption: true,
   },
 };
 
@@ -1013,9 +1028,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const ownershipOwner = sessionStore.resourceOwnership.ownerOf(sessionId);
     const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
     /**
-     * The record that gives this call authority over a resource, or
-     * `undefined`. One predicate for the `*Owned` gate and an `owned` listing,
-     * so the listing reports exactly the terminals those tools accept (#12487).
+     * The record that gives this call authority over a resource it created,
+     * or `undefined`. Shared by the `*Owned` gate and an `owned` listing, so
+     * the listing reports exactly the terminals those tools accept (#12487) —
+     * together with {@link adoptedRecordFor} for the tools that also take a
+     * hand-over.
      *
      * The bound-workspace comparison is defence-in-depth only and fails OPEN
      * when either side is unknown: panel ids carry a UUID and worktree ids are
@@ -1035,6 +1052,42 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         record.workspaceId !== boundWorkspaceId;
       return workspaceMismatch ? undefined : record;
     };
+    /**
+     * The record a user's hand-over gives this call over a terminal it did not
+     * create (#12490), shaped like an ownership record so the gate and a
+     * reveal read one type. Matched on the same owner the ledger reads, which
+     * is a bearer principal for a pane session and never anything an api-key
+     * client can be. The workspace comparison fails open exactly as
+     * {@link ownedRecordFor}'s does.
+     */
+    const adoptedRecordFor = (
+      kind: OwnedResourceKind,
+      resourceId: string
+    ): OwnedResourceRecord | undefined => {
+      if (kind !== "terminal") return undefined;
+      const adoption = sessionStore.terminalAdoption.get(ownershipOwner, resourceId);
+      if (adoption === undefined) return undefined;
+      if (
+        adoption.workspaceId !== undefined &&
+        boundWorkspaceId !== undefined &&
+        adoption.workspaceId !== boundWorkspaceId
+      ) {
+        return undefined;
+      }
+      return {
+        kind,
+        id: resourceId,
+        ...(adoption.workspaceId !== undefined ? { workspaceId: adoption.workspaceId } : {}),
+      };
+    };
+    /**
+     * Whether this call may drive a terminal: one it created, or one the user
+     * handed it. What an `owned` listing reports, because that listing is how
+     * an orchestrator finds the terminals it was given.
+     */
+    const drivesTerminal = (terminalId: string): boolean =>
+      ownedRecordFor("terminal", terminalId) !== undefined ||
+      adoptedRecordFor("terminal", terminalId) !== undefined;
 
     const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
     const listPaging = actionId === ACTIONS_LIST_TOOL_ID ? readListPaging(args) : null;
@@ -1123,6 +1176,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // cleanup that completes after another session on the same bearer
     // recorded a new resource under the id cannot take the new one with it.
     let ownedResourceRecord: OwnedResourceRecord | undefined;
+    // Whether the gate admitted the call on a hand-over rather than a
+    // creation (#12490). Checked again just before dispatch, because the
+    // user can take the terminal back while the call waits on a manifest or a
+    // view.
+    let ownedResourceAdopted = false;
 
     /**
      * Dispatch the real action an `*Owned` tool stands in for, with arguments
@@ -1148,6 +1206,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       entry: RendererOwnedResourceTool,
       resourceId: string
     ): Promise<{ envelope: DispatchEnvelope; raised: boolean }> => {
+      if (ownedResourceAdopted && adoptedRecordFor(entry.resourceKind, resourceId) === undefined) {
+        return {
+          envelope: {
+            result: {
+              ok: false,
+              error: {
+                code: RESOURCE_NOT_OWNED_CODE,
+                message:
+                  `The user took ${entry.resourceKind} '${resourceId}' back from this pane before ` +
+                  `'${actionId}' reached it, so nothing was sent.`,
+              },
+            },
+          },
+          raised: true,
+        };
+      }
       const delegateArgs: Record<string, unknown> = {};
       if (entry.forwardArgs !== undefined && args !== null && typeof args === "object") {
         const callerArgs = args as Record<string, unknown>;
@@ -1163,8 +1237,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         };
       }
       const revealWorkspaceId =
-        sessionStore.resourceOwnership.get(ownershipOwner, entry.resourceKind, resourceId)
-          ?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
+        (
+          sessionStore.resourceOwnership.get(ownershipOwner, entry.resourceKind, resourceId) ??
+          adoptedRecordFor(entry.resourceKind, resourceId)
+        )?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
       // Omitted rather than guessed when neither is known: `pilot.openRun`
       // falls back to the executing view's own workspace, which is where the
       // panel is if the client never left it — the only honest default here.
@@ -1234,11 +1310,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       ) {
         return;
       }
-      sessionStore.resourceOwnership.record(
+      const recorded = sessionStore.resourceOwnership.record(
         ownershipOwner,
         drafts,
         envelope.dispatchedWorkspace?.workspaceId
       );
+      // A creation under an id that was handed over names a new terminal, and
+      // the hand-over was of the old one (#12490). Left in place, the id would
+      // have two drivers: its creator and the pane it was handed to.
+      for (const record of recorded) {
+        if (record.kind === "terminal") sessionStore.terminalAdoption.release(record.id);
+      }
     };
 
     // Layered authorization (#8442):
@@ -1788,15 +1870,28 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             };
             return buildToolError({ code: "VALIDATION_ERROR", message });
           }
-          const record = ownedRecordFor(ownedResource.resourceKind, resourceId);
+          // A hand-over is consulted only after the ownership ledger, and only
+          // by the tools that declare it enough (#12490). The cleanup tools
+          // never reach it, so an adopted terminal cannot be closed through
+          // one.
+          const createdRecord = ownedRecordFor(ownedResource.resourceKind, resourceId);
+          const record =
+            createdRecord ??
+            (ownedResource.acceptsAdoption
+              ? adoptedRecordFor(ownedResource.resourceKind, resourceId)
+              : undefined);
           // One message for "never existed", "another session's", and "the
           // user's" — see RESOURCE_NOT_OWNED_CODE for why the three must not be
           // distinguishable.
           if (record === undefined) {
-            const message =
-              `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
-              `'${actionId}' will not act on it. This tool only acts on resources this ` +
-              `connection created; ids from listings may belong to the user, another client, or a plugin.`;
+            const message = ownedResource.acceptsAdoption
+              ? `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session or ` +
+                `handed to it by the user, so '${actionId}' will not act on it. This tool only acts on ` +
+                `terminals this connection created or the user handed to this pane; ids from listings ` +
+                `may belong to the user, another client, or a plugin.`
+              : `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
+                `'${actionId}' will not act on it. This tool only acts on resources this ` +
+                `connection created; ids from listings may belong to the user, another client, or a plugin.`;
             outcome = {
               kind: "result",
               value: { ok: false, error: { code: RESOURCE_NOT_OWNED_CODE, message } },
@@ -1805,6 +1900,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           ownedResourceId = resourceId;
           ownedResourceRecord = record;
+          ownedResourceAdopted = createdRecord === undefined;
         }
 
         // A main-executed owned tool (#12479) runs straight after the gate
@@ -2375,10 +2471,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   introspectionSurface
                 )
               : ownedOnly
-                ? filterTerminalListToOwned(
-                    envelope.result,
-                    (terminalId) => ownedRecordFor("terminal", terminalId) !== undefined
-                  )
+                ? filterTerminalListToOwned(envelope.result, drivesTerminal)
                 : envelope.result,
           };
           // Ownership bookkeeping, from the envelope the action actually

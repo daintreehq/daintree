@@ -1409,6 +1409,9 @@ export interface IpcEventMap {
   };
   "terminal:status": TerminalStatusPayload;
   "terminal:submit-status": TerminalSubmitStatusPayload;
+  // Every terminal currently handed to an orchestrating pane (#12490). The
+  // whole list on each change: it is small and rarely changes.
+  "terminal:adoptions-changed": import("./mcpServer.js").TerminalAdoptionEntry[];
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:fd-leak-warning": FdLeakWarningPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
@@ -2205,6 +2208,8 @@ export type IpcEventBusMap = Pick<
   | "terminal:reliability-metric"
   | "terminal:status"
   | "terminal:submit-status"
+  // Terminals handed to an orchestrating pane (global broadcast)
+  | "terminal:adoptions-changed"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)

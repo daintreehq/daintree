@@ -41,6 +41,11 @@ import { closeAndAnnounce } from "@/lib/accessibility";
 import { terminalHasRunningAgentSession } from "@/utils/destructiveSessionConfirm";
 import { KILL_RUNNING_AGENT_DIALOG_COPY } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
 import {
+  TerminalHandOverDialog,
+  TerminalHandOverMenuItems,
+  useOrchestratorCandidates,
+} from "./TerminalHandOver";
+import {
   ArrowDownFromLine,
   Bell,
   BellOff,
@@ -164,12 +169,36 @@ export function TerminalContextMenu({
     pendingMovePickerRef.current = terminalId;
   }, [terminalId]);
 
-  const handleMenuOpenChange = useCallback((open: boolean) => {
-    // A menu reopened inside its exit animation never unmounts, so the close
-    // hook never runs for that close; drop the intent rather than let it open
-    // the picker on some later, unrelated close.
-    if (open) pendingMovePickerRef.current = null;
-  }, []);
+  const { candidateIds: orchestratorCandidateIds, refresh: refreshOrchestratorCandidates } =
+    useOrchestratorCandidates(terminalId);
+  // Which terminal the consent dialog is for, not only the pane it goes to: the
+  // dock hands this menu a new terminal when its active tab changes, and the
+  // dialog must keep naming the one the user picked.
+  const [handOverRequest, setHandOverRequest] = useState<{
+    terminalId: string;
+    orchestratorPaneId: string;
+  } | null>(null);
+  const handleRequestHandOver = useCallback(
+    (orchestratorPaneId: string) => setHandOverRequest({ terminalId, orchestratorPaneId }),
+    [terminalId]
+  );
+  const closeHandOverDialog = useCallback(() => setHandOverRequest(null), []);
+
+  const handleMenuOpenChange = useCallback(
+    (open: boolean) => {
+      // A menu reopened inside its exit animation never unmounts, so the close
+      // hook never runs for that close; drop the intent rather than let it open
+      // the picker on some later, unrelated close.
+      if (open) {
+        pendingMovePickerRef.current = null;
+        // Only a PTY can be handed over; the other kinds' menus never ask.
+        if (terminal !== undefined && panelKindHasPty(terminal.kind ?? "terminal")) {
+          refreshOrchestratorCandidates();
+        }
+      }
+    },
+    [refreshOrchestratorCandidates, terminal]
+  );
 
   const captureMovePickerAnchor = useCallback((event: React.MouseEvent<HTMLElement>) => {
     // The trigger wrapper is `display: contents` and has no box of its own.
@@ -1026,6 +1055,13 @@ export function TerminalContextMenu({
   return (
     <>
       {destructiveConfirmDialog}
+      {handOverRequest !== null && (
+        <TerminalHandOverDialog
+          terminalId={handOverRequest.terminalId}
+          orchestratorPaneId={handOverRequest.orchestratorPaneId}
+          onClose={closeHandOverDialog}
+        />
+      )}
       <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
           {(value) => {
@@ -1259,6 +1295,13 @@ export function TerminalContextMenu({
               {isWatched ? "Cancel watch" : "Watch terminal"}
               <ContextMenuShortcut>{mac ? "⌘⇧W" : "Ctrl+⇧W"}</ContextMenuShortcut>
             </ContextMenuItem>
+          )}
+          {hasPty && (
+            <TerminalHandOverMenuItems
+              terminalId={terminalId}
+              candidateIds={orchestratorCandidateIds}
+              onRequestHandOver={handleRequestHandOver}
+            />
           )}
           <ContextMenuSeparator />
           <ContextMenuItem onSelect={() => handleAction("duplicate")}>

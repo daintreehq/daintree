@@ -80,7 +80,12 @@ function resourceKey(kind: OwnedResourceKind, id: string): string {
 // spell a principal's owner key and read or write its records.
 const PRINCIPAL_OWNER_PREFIX = "principal\u0000";
 
-function principalOwnerKey(principalId: string): string {
+/**
+ * The owner key a principal's authority is held under. Exported so the
+ * terminal adoption record (#12490) matches callers by the same value
+ * {@link ResourceOwnershipLedger.ownerOf} resolves.
+ */
+export function principalOwnerKey(principalId: string): string {
   return `${PRINCIPAL_OWNER_PREFIX}${principalId}`;
 }
 
@@ -194,6 +199,15 @@ export class ResourceOwnershipLedger {
 
   owns(owner: string, kind: OwnedResourceKind, id: string): boolean {
     return this.get(owner, kind, id) !== undefined;
+  }
+
+  /**
+   * Whoever holds the record for a resource, if anyone. Read by the terminal
+   * hand-over (#12490), which refuses to give a second pane a terminal another
+   * one launched and can already drive.
+   */
+  creatorOf(kind: OwnedResourceKind, id: string): string | undefined {
+    return this.ownerByResource.get(resourceKey(kind, id));
   }
 
   /**

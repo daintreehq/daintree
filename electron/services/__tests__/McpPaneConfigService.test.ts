@@ -340,6 +340,54 @@ describe("McpPaneConfigService", () => {
     });
   });
 
+  describe("orchestrator panes for a terminal hand-over (#12490)", () => {
+    it("resolves a pane's bearer identity before it ever connects", async () => {
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-orch",
+        port: 45454,
+        tier: "action",
+      });
+      service.registerPaneWorkspaceBinding(token, { workspaceId: "p1" });
+
+      const identity = service.getOrchestratorPane("pane-orch");
+
+      expect(identity).toEqual({
+        principalId: service.getOwnershipPrincipalForToken(token),
+        tier: "action",
+        workspaceId: "p1",
+      });
+      expect(service.listOrchestratorPanes()).toEqual([{ paneId: "pane-orch", ...identity }]);
+    });
+
+    it("resolves nothing for an unknown pane, the assistant, or a revoked bearer", async () => {
+      expect(service.getOrchestratorPane("pane-never")).toBeNull();
+
+      const { token: assistantToken } = await service.preparePaneConfig({
+        paneId: "pane-assistant",
+        port: 45454,
+        tier: "action",
+      });
+      service.registerAssistantPaneBearer(assistantToken, 42);
+      expect(service.getOrchestratorPane("pane-assistant")).toBeNull();
+
+      await service.preparePaneConfig({ paneId: "pane-gone", port: 45454, tier: "action" });
+      await service.revokePaneConfig("pane-gone");
+      expect(service.getOrchestratorPane("pane-gone")).toBeNull();
+      expect(service.listOrchestratorPanes()).toEqual([]);
+    });
+
+    it("names a new principal after a relaunch, so nothing handed to the old one follows", async () => {
+      await service.preparePaneConfig({ paneId: "pane-orch", port: 45454, tier: "action" });
+      const before = service.getOrchestratorPane("pane-orch")?.principalId;
+
+      await service.preparePaneConfig({ paneId: "pane-orch", port: 45454, tier: "action" });
+
+      const after = service.getOrchestratorPane("pane-orch")?.principalId;
+      expect(after).toBeDefined();
+      expect(after).not.toBe(before);
+    });
+  });
+
   describe("agent-pane workspace binding (#12486)", () => {
     it("binds the token to its launch workspace, launch view, and context", async () => {
       const { token } = await service.preparePaneConfig({

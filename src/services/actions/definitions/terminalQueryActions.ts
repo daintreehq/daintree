@@ -101,7 +101,7 @@ export function registerTerminalQueryActions(
           .boolean()
           .optional()
           .describe(
-            "MCP only: true keeps just the terminals you created; false or omitted applies no ownership filter. An agent pane keeps them across reconnects."
+            "MCP only: true keeps just the terminals you created or the user handed you; false or omitted applies no ownership filter. An agent pane keeps them across reconnects."
           ),
         terminalId: z
           .string()
@@ -736,7 +736,7 @@ export function registerTerminalQueryActions(
     id: "terminal.readLastMessageOwned",
     title: "Read Owned Agent's Last Message",
     description:
-      "Read what the agent in a panel this connection created last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+      "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -749,7 +749,7 @@ export function registerTerminalQueryActions(
         .string()
         .min(1)
         .describe(
-          "The agent panel to read, as an `id` this session got when it created the panel. Required: there is no focus fallback."
+          "The agent panel to read, as an `id` this session created or the user handed it. Required: there is no focus fallback."
         ),
       maxBytes: z
         .number()
@@ -922,7 +922,7 @@ export function registerTerminalQueryActions(
     id: "terminal.sendCommandOwned",
     title: "Submit Text to Owned Terminal",
     description:
-      "Queue text as one submission to a terminal this connection created: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused, the user's own shells included. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
+      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -938,7 +938,7 @@ export function registerTerminalQueryActions(
         .min(1)
         .max(512)
         .describe(
-          "The terminal to submit to, as an `id` this session got when it created the panel."
+          "The terminal to submit to, as an `id` this session created or the user handed it."
         ),
       command: z
         .string()

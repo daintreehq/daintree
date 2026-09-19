@@ -102,7 +102,7 @@ export function registerTerminalInputActions(
     id: "terminal.injectOwned",
     title: "Inject Context to Owned Terminal",
     description:
-      "Write the active worktree's prepared context into a terminal this connection created, which is how an agent it launched is handed a large codebase context. Any other panel is refused, the user's own shells included. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created or was handed, which is how an agent it drives is given a large codebase context. Any other panel is refused. Target an idle terminal.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -115,7 +115,7 @@ export function registerTerminalInputActions(
         .string()
         .min(1)
         .describe(
-          "The terminal to inject into, as an `id` this session got when it created the panel. Required: there is no focus fallback."
+          "The terminal to inject into, as an `id` this session created or the user handed it. Required: there is no focus fallback."
         ),
     }),
     run: async () => {
@@ -259,7 +259,7 @@ export function registerTerminalInputActions(
     id: "terminal.interruptOwned",
     title: "Interrupt Owned Agent",
     description:
-      "Stop the turn an agent is running in a panel this connection created, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+      "Stop the turn an agent is running in a panel this connection created or was handed, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -272,7 +272,7 @@ export function registerTerminalInputActions(
         .string()
         .min(1)
         .describe(
-          "The agent panel to interrupt, as an `id` this session got when it created the panel. Required: there is no focus fallback."
+          "The agent panel to interrupt, as an `id` this session created or the user handed it. Required: there is no focus fallback."
         ),
     }),
     resultSchema: TerminalInterruptResultSchema,

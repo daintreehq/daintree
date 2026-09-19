@@ -98,6 +98,14 @@ vi.mock("@/store/worktreeFilterStore", () => ({
 
 import { primeRadix } from "@/components/ui/radix-loader";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+// Hand-over (#12490) is not what these suites are about, and its candidate
+// query needs a preload bridge they do not install.
+vi.mock("../TerminalHandOver", () => ({
+  useOrchestratorCandidates: () => ({ candidateIds: [], refresh: () => {} }),
+  TerminalHandOverMenuItems: () => null,
+  TerminalHandOverDialog: () => null,
+}));
+
 import { TerminalContextMenu } from "../TerminalContextMenu";
 
 // Radix schedules its focus return on a zero-delay timer after the content

@@ -27,6 +27,10 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   listActiveBearers: "mcp-server:list-active-bearers",
   listHelpSessionBearers: "mcp-server:list-help-session-bearers",
   disconnectBearer: "mcp-server:disconnect-bearer",
+  adoptTerminal: "mcp-server:adopt-terminal",
+  releaseTerminalAdoption: "mcp-server:release-terminal-adoption",
+  listTerminalAdoptions: "mcp-server:list-terminal-adoptions",
+  listOrchestratorPanes: "mcp-server:list-orchestrator-panes",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof MCP_SERVER_METHOD_CHANNELS;

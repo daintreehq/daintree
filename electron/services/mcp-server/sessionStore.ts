@@ -6,6 +6,7 @@ import { MCP_SSE_IDLE_TIMEOUT_MS, MCP_TIER_ELEVATION_TTL_MS } from "./shared.js"
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
 import { ResourceOwnershipLedger } from "./resourceOwnership.js";
+import { TerminalAdoptionLedger } from "./terminalAdoption.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
 
 export interface SessionStoreOptions {
@@ -129,6 +130,13 @@ export class SessionStore {
    * principal and outlive the session (#12487).
    */
   readonly resourceOwnership = new ResourceOwnershipLedger();
+  /**
+   * Terminals the user handed to an orchestrating pane (#12490) — a second,
+   * separately written source of authority the non-destructive `*Owned` tools
+   * consult. Held by bearer principals only, so no session teardown or drain
+   * touches it; a principal's adoptions go when its bearer is revoked.
+   */
+  readonly terminalAdoption = new TerminalAdoptionLedger();
 
   // Wall-clock timestamps recording when each session's idle timer was armed.
   // Used by recomputeIdleTimers() to calculate awake elapsed time across

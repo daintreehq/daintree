@@ -21,9 +21,16 @@ import type {
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpRuntimeState,
+  TerminalAdoptionEntry,
+  TerminalAdoptionRefusal,
+  TerminalAdoptionResult,
   TurnOutcomeClass,
 } from "../../shared/types/ipc/mcpServer.js";
 import { SessionStore } from "./mcp-server/sessionStore.js";
+import { principalOwnerKey } from "./mcp-server/resourceOwnership.js";
+import type { TerminalAdoptionRecord } from "./mcp-server/terminalAdoption.js";
+import { isTierPermitted } from "./mcp-server/tierAuth.js";
+import type { OrchestratorPaneIdentity } from "./McpPaneConfigService.js";
 import { AuditService } from "./mcp-server/auditLog.js";
 import { TurnOutcomeService } from "./mcp-server/turnOutcomeLog.js";
 import { createRendererBridge } from "./mcp-server/rendererBridge.js";
@@ -197,6 +204,9 @@ export class McpServerService {
 
     const offTrashed = events.on("terminal:trashed", (payload) => {
       this.turnOutcomeService.dropTerminal(payload.id);
+      // Trashing is the user putting the terminal away; restoring it later
+      // does not restore a hand-over they never repeated (#12490).
+      this.sessionStore.terminalAdoption.release(payload.id);
     });
     this.persistentListeners.push(offTrashed);
 
@@ -398,6 +408,96 @@ export class McpServerService {
    */
   revokeOwnershipPrincipal(principal: string): void {
     this.sessionStore.resourceOwnership.revokePrincipal(principal);
+    // A relaunched pane gets a new bearer, so a terminal handed to the old one
+    // is not silently handed to the new one (#12490).
+    this.sessionStore.terminalAdoption.revokePrincipal(principal);
+  }
+
+  /**
+   * Hand a running terminal to an orchestrating agent pane (#12490).
+   *
+   * Reached only over the renderer's IPC — never an action and never an MCP
+   * tool — so the only thing that can start one is the user, in the UI. An
+   * agent has no way to ask for a hand-over, and so no way to nag its way
+   * through one.
+   *
+   * `orchestrator` is the pane's live bearer identity, resolved by the caller
+   * from the pane config service with no await before this runs, or null when
+   * the pane holds none. `callerWorkspaceId` is the project of the view the
+   * user acted in, when main could resolve it.
+   */
+  adoptTerminal(request: {
+    terminalId: string;
+    orchestratorPaneId: string;
+    orchestrator: OrchestratorPaneIdentity | null;
+    callerWorkspaceId?: string;
+  }): TerminalAdoptionResult {
+    const { terminalId, orchestratorPaneId, orchestrator, callerWorkspaceId } = request;
+    const refuse = (reason: TerminalAdoptionRefusal): TerminalAdoptionResult => ({
+      status: "refused",
+      reason,
+    });
+    if (terminalId === orchestratorPaneId) return refuse("self");
+    if (orchestrator === null || !canDriveTerminals(orchestrator)) {
+      return refuse("not-orchestrator");
+    }
+    const ptyClient = getPtyClient();
+    if (!ptyClient?.hasTerminal(terminalId)) return refuse("terminal-gone");
+    // An orchestrator's calls land in the workspace its pane was launched in
+    // (#12486), so a terminal anywhere else would be handed over in name only.
+    const terminalWorkspaceId = ptyClient.getTerminalProjectId(terminalId) ?? undefined;
+    const workspaces = [terminalWorkspaceId, orchestrator.workspaceId, callerWorkspaceId].filter(
+      (id): id is string => id !== undefined
+    );
+    if (new Set(workspaces).size > 1) return refuse("other-project");
+    // One driver per terminal: whoever launched it can already type into it.
+    const creator = this.sessionStore.resourceOwnership.creatorOf("terminal", terminalId);
+    if (creator !== undefined) {
+      return refuse(
+        creator === principalOwnerKey(orchestrator.principalId)
+          ? "launched-by-orchestrator"
+          : "launched-by-another"
+      );
+    }
+    const workspaceId = workspaces[0];
+    const outcome = this.sessionStore.terminalAdoption.adopt({
+      terminalId,
+      orchestratorPaneId,
+      principalId: orchestrator.principalId,
+      ...(workspaceId !== undefined ? { workspaceId } : {}),
+    });
+    if (!outcome.ok) {
+      return { status: "refused", reason: "already-handed", heldByPaneId: outcome.heldByPaneId };
+    }
+    return { status: "handed-over", adoption: toTerminalAdoptionEntry(outcome.record) };
+  }
+
+  /**
+   * The panes the hand-over menu may offer: those whose bearer can submit
+   * input and whose PTY the host is still tracking.
+   */
+  filterOrchestratorPanes(
+    panes: ReadonlyArray<{ paneId: string } & OrchestratorPaneIdentity>
+  ): string[] {
+    const ptyClient = getPtyClient();
+    return panes
+      .filter((pane) => canDriveTerminals(pane) && ptyClient?.hasTerminal(pane.paneId) === true)
+      .map((pane) => pane.paneId);
+  }
+
+  /** Take a handed-over terminal back. Resolves false when it wasn't handed over. */
+  releaseTerminalAdoption(terminalId: string): boolean {
+    return this.sessionStore.terminalAdoption.release(terminalId);
+  }
+
+  listTerminalAdoptions(): TerminalAdoptionEntry[] {
+    return this.sessionStore.terminalAdoption.list().map(toTerminalAdoptionEntry);
+  }
+
+  onTerminalAdoptionsChange(listener: (adoptions: TerminalAdoptionEntry[]) => void): () => void {
+    return this.sessionStore.terminalAdoption.onChange(() => {
+      listener(this.listTerminalAdoptions());
+    });
   }
 
   private emitStatusChange(): void {
@@ -915,6 +1015,25 @@ export class McpServerService {
   get _viewLeases() {
     return this.viewLeases;
   }
+}
+
+/**
+ * Whether a pane's bearer could use a hand-over at all. Adoption widens which
+ * terminals a pane may act on, never which tools: a tier that cannot submit
+ * input would be handed a terminal it could only read.
+ */
+function canDriveTerminals(orchestrator: OrchestratorPaneIdentity): boolean {
+  return (
+    orchestrator.tier !== "off" && isTierPermitted(orchestrator.tier, "terminal.sendCommandOwned")
+  );
+}
+
+function toTerminalAdoptionEntry(record: TerminalAdoptionRecord): TerminalAdoptionEntry {
+  return {
+    terminalId: record.terminalId,
+    orchestratorPaneId: record.orchestratorPaneId,
+    adoptedAt: record.adoptedAt,
+  };
 }
 
 export const mcpServerService = new McpServerService();

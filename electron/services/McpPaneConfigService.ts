@@ -52,6 +52,14 @@ interface TokenRecord {
   workspaceBinding?: PaneWorkspaceBinding;
 }
 
+/** What the MCP server needs to know about a pane before handing it a terminal (#12490). */
+export interface OrchestratorPaneIdentity {
+  principalId: string;
+  tier: DaintreeMcpTier;
+  /** The workspace the pane's MCP calls land in, when its launch bound one (#12486). */
+  workspaceId?: string;
+}
+
 export interface PanePluginEndpoint {
   readonly pluginInstanceId: string;
   readonly endpointId: string;
@@ -453,6 +461,39 @@ export class McpPaneConfigService {
   getOwnershipPrincipalForToken(token: string): string | null {
     if (!token) return null;
     return this.tokens.get(token)?.ownershipPrincipal ?? null;
+  }
+
+  /**
+   * The bearer identity of a pane that could be handed a terminal (#12490): an
+   * ordinary agent pane holding a live Daintree bearer, minted before its first
+   * connection. Null for a pane with no bearer (a shell, an agent launched
+   * without Daintree MCP, a revoked token) and for the assistant, whose
+   * renderer-owned origin already reaches unscoped terminal input. The tier is
+   * reported rather than judged here: whether it can drive a terminal is the
+   * MCP server's allowlist to answer.
+   */
+  getOrchestratorPane(paneId: string): OrchestratorPaneIdentity | null {
+    const token = this.records.get(paneId)?.token;
+    if (!token) return null;
+    const record = this.tokens.get(token);
+    if (record === undefined || record.webContentsId !== undefined) return null;
+    return {
+      principalId: record.ownershipPrincipal,
+      tier: record.tier,
+      ...(record.workspaceBinding !== undefined
+        ? { workspaceId: record.workspaceBinding.workspaceId }
+        : {}),
+    };
+  }
+
+  /** Every pane {@link getOrchestratorPane} resolves, for the hand-over menu. */
+  listOrchestratorPanes(): Array<{ paneId: string } & OrchestratorPaneIdentity> {
+    const panes: Array<{ paneId: string } & OrchestratorPaneIdentity> = [];
+    for (const paneId of this.records.keys()) {
+      const identity = this.getOrchestratorPane(paneId);
+      if (identity !== null) panes.push({ paneId, ...identity });
+    }
+    return panes;
   }
 
   /**
