@@ -239,6 +239,27 @@ describe("WorkspaceService WSL eligibility refresh (#9924)", () => {
     }
   });
 
+  it("a first WSL enrichment landing while backgrounded arms the poll on resume", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.spyOn(os, "setPriority").mockImplementation(() => {});
+      getDefaultWslDistroMock.mockResolvedValue("Ubuntu");
+      service.pause();
+
+      // The enrichment's probe resolved after the pause.
+      service["startWslDistroPoller"]();
+      getDefaultWslDistroMock.mockClear();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(getDefaultWslDistroMock).not.toHaveBeenCalled();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(getDefaultWslDistroMock).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("an unload while backgrounded does not revive the distro poll on resume", async () => {
     vi.useFakeTimers();
     try {

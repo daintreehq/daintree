@@ -268,6 +268,11 @@ const FORGE_RESELECT_MAX_RETRIES = 3;
 // disabled or has silently degraded. A stat, not a subprocess.
 const FORGE_CONFIG_POLL_INTERVAL_MS = 5 * 60 * 1000;
 
+// How long a resume waits for the remotes to settle before restarting PR
+// polling anyway. A stat on a dead mount never returns, and polling stranded
+// behind it would be worse than one check against a possibly stale provider.
+const FORGE_RESUME_SETTLE_TIMEOUT_MS = 5_000;
+
 // FIFO cap on the acknowledged-mutation dedup set. Mutation ids are arbitrary
 // UUIDs (not path-keyed), so size-capping is the only viable pruning strategy;
 // a session sees well under 100 deletes, so 500 never evicts a live id.
@@ -512,15 +517,18 @@ export class WorkspaceService {
   private backgrounded = false;
   // The resume reprobe the PR poller waits on; see `resume()`.
   private pendingResumeSettle: Promise<void> | null = null;
+  private latestForgeReprobe: Promise<void> | null = null;
   // Stopped by `pause()` rather than by an unload, so `resume()` restarts it.
   private wslDistroPollerSuspended = false;
-  // The last credential change that reached this host while backgrounded,
-  // replayed by `resume()` — it would otherwise fetch every worktree and poll
-  // PRs in a host nothing is looking at.
-  private deferredCredentialUpdate: {
-    providerId: string;
-    credentials: import("../../shared/types/forge.js").Credentials | null;
-  } | null = null;
+  // Credential changes that reached this host while backgrounded, the latest
+  // per provider, replayed once PR work resumes — they would otherwise fetch
+  // every worktree and poll PRs in a host nothing is looking at. Per provider
+  // because a set and a clear have different effects, and one provider's
+  // must not swallow another's.
+  private readonly deferredCredentialUpdates = new Map<
+    string,
+    import("../../shared/types/forge.js").Credentials | null
+  >();
   private git: SimpleGit | null = null;
   /**
    * Whether the loaded folder is a git repository, as observed by `loadProject`.
@@ -1333,6 +1341,12 @@ export class WorkspaceService {
   private startWslDistroPoller(): void {
     if (process.platform !== "win32") return;
     if (this.wslDistroPoller) return;
+    // A first WSL enrichment can finish after the host was backgrounded; arm
+    // on the way back to the foreground instead.
+    if (this.backgrounded) {
+      this.wslDistroPollerSuspended = true;
+      return;
+    }
     this.wslDistroPoller = setInterval(() => {
       void this.pollWslDefaultDistro();
     }, WorkspaceService.WSL_DISTRO_POLL_INTERVAL_MS);
@@ -2313,7 +2327,28 @@ export class WorkspaceService {
    * `PullRequestService`'s no-match pause (#9997) meaningful, since the same
    * config file is written by `git push -u` on every first push.
    */
-  private async reprobeForgeRemoteAsync(): Promise<void> {
+  private reprobeForgeRemoteAsync(): Promise<void> {
+    const probe = this.runForgeRemoteReprobe();
+    this.latestForgeReprobe = probe;
+    return probe;
+  }
+
+  /**
+   * Resolve once the newest remote probe has finished. A probe superseded
+   * mid-read returns at its sequence check before its replacement has read
+   * anything, so waiting on the first one alone would release early.
+   */
+  private async settleForgeRemotes(): Promise<void> {
+    let probe = this.reprobeForgeRemoteAsync();
+    for (;;) {
+      await probe.catch(() => {});
+      const latest = this.latestForgeReprobe;
+      if (latest === null || latest === probe) return;
+      probe = latest;
+    }
+  }
+
+  private async runForgeRemoteReprobe(): Promise<void> {
     const cwd = this.forgeProbeCwd();
     if (!cwd) return;
     const seq = ++this.forgeRemoteProbeSeq;
@@ -5344,30 +5379,44 @@ ${lines.map((l) => "+" + l).join("\n")}`;
       this.wslDistroPollerSuspended = false;
       this.startWslDistroPoller();
     }
-    const deferredCredentials = this.deferredCredentialUpdate;
-    this.deferredCredentialUpdate = null;
-    if (deferredCredentials) {
-      this.updateForgeCredentials(deferredCredentials.providerId, deferredCredentials.credentials);
-    }
     if (wasBackgrounded && this.forgeRemoteDetectionActive) {
       this.armForgeConfigBackstop();
       // Settle the remotes before the PR poller restarts on the provider it
       // resolved before the pause: nothing watched `.git/config` meanwhile.
       // Stat-gated, so an unchanged config costs one stat and no git; a changed
       // one emits `sys:forge:remote-changed`, which drops that resolution first.
-      const settle = this.reprobeForgeRemoteAsync().catch(() => {});
+      const settle = new Promise<void>((resolve) => {
+        const deadline = setTimeout(resolve, FORGE_RESUME_SETTLE_TIMEOUT_MS);
+        deadline.unref?.();
+        void this.settleForgeRemotes().finally(() => {
+          clearTimeout(deadline);
+          resolve();
+        });
+      });
       this.pendingResumeSettle = settle;
       void settle.then(() => {
         // Superseded by a pause or an unload, each of which clears it.
         if (this.pendingResumeSettle !== settle) return;
         this.pendingResumeSettle = null;
-        this.prService.resume();
+        this.resumePRWork();
       });
       return;
     }
     // A switch-back foregrounds twice (the switch handler, then the pool's warm
     // re-attach); the second must not start the poller ahead of the settle.
     if (this.pendingResumeSettle) return;
+    this.resumePRWork();
+  }
+
+  /** The PR side of `resume()`, run once the remotes have settled. */
+  private resumePRWork(): void {
+    // A credential change held back while backgrounded refreshes PRs, so it
+    // waits for the same settle the poller does.
+    const deferred = [...this.deferredCredentialUpdates];
+    this.deferredCredentialUpdates.clear();
+    for (const [providerId, credentials] of deferred) {
+      this.updateForgeCredentials(providerId, credentials);
+    }
     this.prService.resume();
   }
 
@@ -5488,8 +5537,8 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     providerId: string,
     credentials: import("../../shared/types/forge.js").Credentials | null
   ): void {
-    if (this.backgrounded) {
-      this.deferredCredentialUpdate = { providerId, credentials };
+    if (this.backgrounded || this.pendingResumeSettle) {
+      this.deferredCredentialUpdates.set(providerId, credentials);
       return;
     }
     this.prService.updateForgeCredentials(
@@ -5567,7 +5616,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.stopWslDistroPoller();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
-    this.deferredCredentialUpdate = null;
+    this.deferredCredentialUpdates.clear();
 
     for (const id of this.monitors.keys()) {
       this.resourceActionExecutor.cleanupResourceActionState(id);
@@ -5717,7 +5766,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this.stopWslDistroPoller();
     this.topologyWatcher.clearQueue();
     this.prService.cleanup();
-    this.deferredCredentialUpdate = null;
+    this.deferredCredentialUpdates.clear();
     this.resourceActionExecutor.dispose();
     for (const monitor of this.monitors.values()) {
       monitor.stop();

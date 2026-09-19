@@ -2343,10 +2343,14 @@ describe("PullRequestService", () => {
       const getConfig = vi.fn().mockRejectedValue(new Error("git timed out"));
       mockForgeProviderUnresolved({ status: "no-match", getConfig });
       const bridge = lastMockBridge!;
-      const { pullRequestService } = await startedService();
+      const { pullRequestService, events } = await startedService();
       const callsAfterStart = bridge.resolveProvider.mock.calls.length;
 
       // The debounced poll path still honours it — no spin on a broken repo.
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-2", branch: "feature/other" })
+      );
       await vi.advanceTimersByTimeAsync(60_000);
       expect(bridge.resolveProvider.mock.calls.length).toBe(callsAfterStart);
 

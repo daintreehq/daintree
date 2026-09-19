@@ -806,6 +806,83 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
     });
 
+    it("waits for a watcher probe that supersedes the resume probe", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      const releases = holdConfigStats();
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      // A `.git/config` event lands while the resume probe is still out.
+      service["scheduleForgeRemoteReprobe"]({ observedConfigWrite: true });
+      await vi.advanceTimersByTimeAsync(300);
+
+      // The superseded resume probe bails at its sequence check...
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+      // ...and polling waits for the probe that replaced it.
+      releases[1]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("restarts PR polling after the deadline when the settle hangs", async () => {
+      // A stat on a dead mount never returns (the config stat is held forever).
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      holdConfigStats();
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(4_999);
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(mockPullRequestService.start).toHaveBeenCalledTimes(1);
+    });
+
+    it("replays every provider's deferred credential change, not just the last", async () => {
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      const fetchNow = vi.spyOn(main, "triggerFetchNow").mockResolvedValue(undefined);
+      service.pause();
+      mockPullRequestService.refresh.mockClear();
+      mockPullRequestService.reset.mockClear();
+
+      // Provider A's token was fixed, then provider B signed out.
+      service.updateForgeCredentials("acme.a", { kind: "bearer", value: "token" });
+      service.updateForgeCredentials("acme.b", null);
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(fetchNow).toHaveBeenCalledTimes(1);
+      expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+      expect(mockPullRequestService.reset).toHaveBeenCalled();
+    });
+
+    it("holds a credential change that arrives mid-settle until the settle lands", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      const releases = holdConfigStats();
+      mockPullRequestService.refresh.mockClear();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+      service.updateForgeCredentials(GITHUB_PROVIDER_ID, { kind: "bearer", value: "token" });
+      expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+
+      releases[0]();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
+    });
+
     it("an unload during the settle leaves PR polling to the next load", async () => {
       registerMonitor("/test/main", { isMainWorktree: true });
       await seedBaseline([]);
@@ -849,6 +926,9 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
       expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
 
       service.resume();
+      // Replayed with the PR poller, once the remotes have settled.
+      expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
       expect(fetchNow).toHaveBeenCalledTimes(1);
       expect(mockPullRequestService.refresh).toHaveBeenCalledTimes(1);
     });
