@@ -131,6 +131,33 @@ describe("help prompt outputs", () => {
     });
   });
 
+  // The help-src partials are per assistant here, not shared: CLAUDE.md has
+  // room for the whole recipe and AGENTS.md has to fit its budget.
+  describe("both assistants learn the handback convention", () => {
+    // A handback (#12488) is an observation: the agent printed a line, which
+    // neither proves the work nor, by its absence, that the agent is still
+    // busy. Daintree mints the code and appends the instruction itself, so a
+    // marker the assistant writes into its own prompt carries a code nothing
+    // is watching for.
+    it.each(ALL_GENERATED)(
+      "%s reads a handback as an observation, not a verdict",
+      (_name, body) => {
+        expect(body).toContain("handback: true");
+        expect(body).toMatch(/Daintree appends/);
+        expect(body).toMatch(/never write the marker or describe its format/i);
+        expect(body).not.toContain("DAINTREE-DONE");
+        expect(body).toMatch(/not that (?:the|its) work is finished or correct/i);
+        expect(body).toMatch(/`message` is the agent's[^.]*untrusted/);
+        expect(body).toMatch(/rejoined[^.]*spaces? in/i);
+        expect(body).toMatch(/match its `submissionToken`/i);
+        expect(body).toMatch(
+          /(?:No|missing) `lastHandback` never means (?:the agent is )?still working/i
+        );
+        expect(body).toMatch(/question[^\n]*next prompt[^\n]*status[^.\n]*no longer working/i);
+      }
+    );
+  });
+
   describe("Claude-only content stays in CLAUDE.md", () => {
     it("CLAUDE.md contains the Tier Model and terminal.getStatus recipe", () => {
       expect(CLAUDE).toContain("## Tier Model");
@@ -316,6 +343,12 @@ describe("help prompt outputs", () => {
     // `launched: false`.
     it("the launch recipe serialises launches of the same agent id", () => {
       expect(recipe("Launch agents")).toMatch(/same `agentId` one at a time/);
+    });
+
+    it("the prompting recipes ask for a handback and the wait recipe reads it", () => {
+      expect(recipe("Launch agents")).toContain("handback: true");
+      expect(recipe("Send a follow-up")).toContain("handback: true");
+      expect(recipe("Wait for agents")).toContain("lastHandback");
     });
 
     it("AGENTS.md places the recipes ahead of the discovery guidance", () => {
