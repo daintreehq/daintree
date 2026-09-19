@@ -1,4 +1,5 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "events";
 
 // Hand-over decisions (#12490) are made in the service from main-side facts
 // alone — the pane's bearer, the pty-host's spawn tracking and the ownership
@@ -41,6 +42,8 @@ import { setPtyClientRef } from "../../window/serviceRefs.js";
 import { events } from "../events.js";
 import type { PtyClient } from "../PtyClient.js";
 import type { OrchestratorPaneIdentity } from "../McpPaneConfigService.js";
+import { routeHostEvent, type PtyEventRouterDeps } from "../pty/PtyEventRouter.js";
+import type { PtyHostSpawnOptions } from "../../../shared/types/pty-host.js";
 
 const ORCHESTRATOR: OrchestratorPaneIdentity = {
   principalId: "principal-orch",
@@ -229,6 +232,69 @@ describe("McpServerService terminal hand-over (#12490)", () => {
     service.handleTerminalExit("terminal-1");
 
     expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  /**
+   * An exit is placed by what main still tracks under the id, which holds only
+   * because of how the pty event router treats `pendingSpawns` on the way out.
+   * These two cases drive the real router over the maps the fake PtyClient
+   * reads, so the difference between a process that ended on its own and one
+   * whose kill is still in flight is the router's, not this suite's.
+   */
+  function routerOver(state: {
+    pendingSpawns: Map<string, PtyHostSpawnOptions>;
+    pendingKillCount: Map<string, number>;
+  }): PtyEventRouterDeps {
+    const emitter = new EventEmitter();
+    emitter.on("exit", (id: string) => {
+      service.handleTerminalExit(id);
+    });
+    setPtyClientRef({
+      hasTerminal: (id: string) => state.pendingSpawns.has(id),
+      getTerminalProjectId: () => "project-a",
+      getLaunchGeneration: (id: string) => state.pendingSpawns.get(id)?.launchGeneration ?? null,
+    } as unknown as PtyClient);
+    return {
+      isDisposed: () => false,
+      broker: { resolve: () => true },
+      emitter,
+      state: { ...state, terminalPids: new Map() },
+      callbacks: {
+        onReady: () => {},
+        onPong: () => {},
+        onTerminalRemovedFromTrash: () => {},
+      },
+      logWarn: () => {},
+    };
+  }
+
+  const tracking = (launchGeneration: number) =>
+    new Map<string, PtyHostSpawnOptions>([
+      ["terminal-1", { id: "terminal-1", launchGeneration } as unknown as PtyHostSpawnOptions],
+    ]);
+
+  it("ends when the handed-over process exits on its own", () => {
+    const deps = routerOver({ pendingSpawns: tracking(3), pendingKillCount: new Map() });
+    adopt();
+
+    routeHostEvent({ type: "exit", id: "terminal-1", exitCode: 0 }, deps);
+
+    expect(service.listTerminalAdoptions()).toEqual([]);
+  });
+
+  it("outlives a predecessor's exit that the router routes as a queued kill", () => {
+    // kill() dropped generation 3 and the respawn registered 4 under the id
+    // before 3's exit landed, so the exit decrements the queued kill and
+    // leaves the successor — the handed-over process — tracked.
+    const deps = routerOver({
+      pendingSpawns: tracking(4),
+      pendingKillCount: new Map([["terminal-1", 1]]),
+    });
+    adopt();
+
+    routeHostEvent({ type: "exit", id: "terminal-1", exitCode: 0 }, deps);
+
+    expect(service.listTerminalAdoptions().map((a) => a.terminalId)).toEqual(["terminal-1"]);
   });
 
   it("outlives a killed predecessor's exit that lands after the successor was handed over", () => {

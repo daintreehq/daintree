@@ -490,9 +490,10 @@ export class McpServerService {
   /**
    * End a hand-over when the process the user handed over has exited (#12490).
    * The exit carries no launch generation, so it is placed by what main still
-   * tracks under the id: a kill followed by a respawn leaves the successor
-   * tracked, and a hand-over of that successor outlives its predecessor's
-   * late exit.
+   * tracks under the id. That works because `PtyEventRouter` drops the
+   * `pendingSpawns` entry of a process that ended on its own before the event
+   * fans out, and keeps it when a kill is queued — so a hand-over of a
+   * respawned successor outlives its predecessor's late exit.
    */
   handleTerminalExit(terminalId: string): void {
     const record = this.sessionStore.terminalAdoption.getForTerminal(terminalId);
