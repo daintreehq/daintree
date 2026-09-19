@@ -365,6 +365,29 @@ describe("WindowFocusThrottle", () => {
     expect(mocks.statsService.refresh).toHaveBeenCalledTimes(1);
   });
 
+  it("leaves deep on window focus when the unlock event never arrives", () => {
+    const { mocks, main } = setup();
+
+    powerHandlers.get("lock-screen")!();
+    expect(powerPolicyModule.getPowerPolicy().level).toBe("deep");
+    clearServiceMocks(mocks);
+
+    // Unbalanced lock: the OS never fires unlock-screen, so focus is the only
+    // evidence the screen came back. Without reconciliation here the policy
+    // would stay deep until the app restarts.
+    focus(main);
+
+    expect(powerPolicyModule.getPowerPolicy()).toMatchObject({
+      level: "active",
+      canObserve: true,
+    });
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+      pollIntervalActive: 2_000,
+      pollIntervalBackground: 10_000,
+    });
+  });
+
   it("re-reads the windows on unlock rather than assuming the prior focus", () => {
     const { mocks, main } = setup();
 

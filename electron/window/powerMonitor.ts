@@ -424,9 +424,17 @@ export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {
   // is on screen. Reading getFocusedWindow() here could lag the event, and a
   // window can focus before it is registered (a macOS reopen shows the window
   // during setup), either of which would strand the policy throttled.
+  // Focus also reconciles `screenLocked`, the one observation with no source to
+  // re-read: a window taking focus is proof somebody is looking at the screen,
+  // so a missed or unbalanced `unlock-screen` can no longer pin the policy at
+  // `deep` until the app restarts.
   app.on("browser-window-focus", () => {
     clearBlurTimeout();
-    updatePowerObservations({ anyWindowFocused: true, anyWindowVisible: true });
+    updatePowerObservations({
+      screenLocked: false,
+      anyWindowFocused: true,
+      anyWindowVisible: true,
+    });
   });
 }
 
