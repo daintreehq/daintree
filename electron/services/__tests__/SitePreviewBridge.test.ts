@@ -1322,3 +1322,166 @@ describe("SitePreviewBridge disable races a bind", () => {
     expect(harness.bridge.getState(PROJECT_ID, first.sessionId)).toBeNull();
   });
 });
+
+describe("SitePreviewBridge out-of-band ops", () => {
+  beforeEach(() => {
+    __resetCdpLeasesForTests();
+  });
+
+  afterEach(() => {
+    __resetCdpLeasesForTests();
+  });
+
+  /** Bind, then navigate somewhere the adapter's policy excludes. */
+  async function suspendedHarness() {
+    const harness = makeHarness();
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    announceContexts(harness.wc);
+    harness.wc.url = "https://accounts.example.com/login";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(harness.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(true);
+    });
+    return harness;
+  }
+
+  function evaluations(harness: ReturnType<typeof makeHarness>): string[] {
+    return harness.wc.debugger.commands
+      .filter((c) => c.method === "Runtime.evaluate")
+      .map((c) => String(c.params?.expression));
+  }
+
+  it("evaluates nothing in a document the origin policy excluded", async () => {
+    const harness = await suspendedHarness();
+    const before = evaluations(harness).length;
+
+    const state = await harness.bridge.setMode(PROJECT_ID, "session-1", "select");
+    const found = await harness.bridge.reselect(
+      PROJECT_ID,
+      "session-1",
+      { file: "src/routes/+page.svelte", line: 12, column: 4 },
+      0,
+      { file: "src/lib/Card.svelte", line: 1, column: 0 },
+      "occ-1"
+    );
+    await harness.bridge.clearSelection(PROJECT_ID, "session-1");
+    await harness.bridge.clearHover(PROJECT_ID, "session-1");
+
+    // The mode is still recorded — the next install bakes it in — but nothing
+    // was driven in the third-party document, and no source path reached it.
+    expect(state.mode).toBe("select");
+    expect(found).toBe(false);
+    expect(evaluations(harness)).toHaveLength(before);
+    expect(evaluations(harness).some((e) => e.includes("+page.svelte"))).toBe(false);
+    expect(evaluations(harness).some((e) => e.includes("Card.svelte"))).toBe(false);
+  });
+
+  it("carries the mode set while suspended into the resumed install", async () => {
+    const harness = await suspendedHarness();
+    await harness.bridge.setMode(PROJECT_ID, "session-1", "select");
+
+    harness.wc.url = "http://localhost:5173/";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(harness.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(false);
+    });
+    const installed = harness.wc.debugger.commands
+      .filter((c) => c.method === "Page.addScriptToEvaluateOnNewDocument")
+      .map((c) => String(c.params?.source));
+    expect(installed.at(-1)).toContain('mode: "select"');
+  });
+
+  it("drives a live binding, and refuses a location it cannot bound", async () => {
+    const harness = makeHarness();
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "select",
+    });
+    harness.wc.debugger.responses.set("Runtime.evaluate", { result: { value: true } });
+
+    expect(
+      await harness.bridge.reselect(PROJECT_ID, "session-1", {
+        file: "src/routes/+page.svelte",
+        line: 12,
+        column: 4,
+      })
+    ).toBe(true);
+    expect(evaluations(harness).some((e) => e.includes("+page.svelte"))).toBe(true);
+
+    const badlyShaped = evaluations(harness).length;
+    // Bounded by the IPC schema in production; the bridge refuses to
+    // interpolate anything it has not checked itself, whatever path reached it.
+    expect(
+      await harness.bridge.reselect(PROJECT_ID, "session-1", {
+        file: "src/routes/+page.svelte",
+        line: Number.NaN,
+        column: 4,
+      })
+    ).toBe(false);
+    expect(
+      await harness.bridge.reselect(
+        PROJECT_ID,
+        "session-1",
+        { file: "src/routes/+page.svelte", line: 1, column: 0 },
+        Number.POSITIVE_INFINITY
+      )
+    ).toBe(false);
+    expect(evaluations(harness)).toHaveLength(badlyShaped);
+  });
+});
+
+describe("SitePreviewBridge blank documents", () => {
+  beforeEach(() => {
+    __resetCdpLeasesForTests();
+  });
+
+  afterEach(() => {
+    __resetCdpLeasesForTests();
+  });
+
+  it("installs on the blank page a preview starts on", async () => {
+    const harness = makeHarness();
+    harness.wc.url = "about:blank";
+    const state = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    expect(state.suspended).toBe(false);
+    expect(harness.wc.debugger.methods()).toContain("Page.addScriptToEvaluateOnNewDocument");
+  });
+
+  it("suspends when a page navigates to about:blank", async () => {
+    // A top-level navigation to about:blank inherits the initiator's origin,
+    // so the blank allowance ends the moment anything has been committed.
+    const harness = makeHarness();
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+    });
+    announceContexts(harness.wc);
+
+    harness.wc.url = "about:blank";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(harness.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(true);
+    });
+    expect(harness.pushed).toContainEqual({
+      kind: "origin-policy",
+      sessionId: "session-1",
+      projectId: PROJECT_ID,
+      documentEpoch: 1,
+      suspended: true,
+    });
+  });
+});

@@ -2,9 +2,14 @@ import { BrowserWindow, webContents } from "electron";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
-import { broadcastToRenderer, sendToRenderer, typedHandle } from "../utils.js";
+import {
+  broadcastToRenderer,
+  sendToRenderer,
+  typedHandle,
+  typedHandleWithContext,
+} from "../utils.js";
 import { startOAuthLoopback } from "../../services/OAuthLoopbackService.js";
-import type { HandlerDependencies } from "../types.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   CdpRemoteArg,
   CdpStackTrace,
@@ -1139,7 +1144,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
   };
 
-  const handleRegisterPanel = async (payload: unknown): Promise<void> => {
+  const handleRegisterPanel = async (ctx: IpcContext, payload: unknown): Promise<void> => {
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -1153,6 +1158,35 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       panelId: string;
       kind?: unknown;
     };
+
+    // The registration is what other subsystems read a guest's identity out
+    // of — `SitePreviewBridge` gates a bind on `getPanelKind(id)` being
+    // `dev-preview`, and `protocols.ts` gates permission prompts on it — so
+    // the sender has to own the webContents it is naming. A `<webview>`'s
+    // `hostWebContents` is the renderer that embeds it, and every legitimate
+    // caller registers a webview from the view rendering it.
+    const target = webContents.fromId(webContentsId);
+    // Gone already: the service's own `destroyed` hook drops whatever was
+    // registered for this id, and there is nothing left to prove ownership
+    // against, so there is no registration to make either.
+    if (!target || target.isDestroyed()) return;
+    const embedder = target.hostWebContents;
+    if (!embedder || embedder.isDestroyed() || embedder.id !== ctx.webContentsId) {
+      throw new AppError({
+        code: "PERMISSION",
+        message: "That webContents is not a webview this view embeds",
+        context: { webContentsId, panelId },
+      });
+    }
+
+    // What this does NOT prove is `kind`. A panel's kind is renderer state —
+    // main has no model of the grid — so the host cannot contradict a sender
+    // that calls its own webview a dev preview. The residual is bounded and
+    // accepted: with ownership enforced, the only thing a renderer can
+    // mislabel is a webview it already embeds, and a bind on it still has to
+    // pass `resolveGuestProject` (same project) and the guest origin policy
+    // (a local dev-server document). Proving the kind would need a host-side
+    // panel model, which is a different change.
     getWebviewDialogService().registerPanel(
       webContentsId,
       panelId,
@@ -1559,7 +1593,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
   const cleanups: Array<() => void> = [
     typedHandle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState),
-    typedHandle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
+    typedHandleWithContext(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
     typedHandle(CHANNELS.WEBVIEW_DIALOG_RESPONSE, handleDialogResponse),
     typedHandle(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, handleStartConsoleCapture),
     typedHandle(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, handleStopConsoleCapture),

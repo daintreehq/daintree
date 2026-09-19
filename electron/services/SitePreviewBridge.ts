@@ -504,6 +504,10 @@ export class SitePreviewBridge {
       });
     }
     binding.mode = mode;
+    // Recorded but not poked: a suspended binding has no runtime of ours in
+    // the page, and the document standing there is one the policy excluded.
+    // The next install bakes the mode in from `binding.mode`.
+    if (binding.suspended) return toState(binding);
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (wc) {
       // Fixed host-authored source with one enum member interpolated — the guest
@@ -543,6 +547,20 @@ export class SitePreviewBridge {
         context: { sessionId },
       });
     }
+    // The one op that carries data *into* the guest. A suspended binding is
+    // showing a document the policy excluded, and these are worktree-relative
+    // source paths: evaluating them there would hand a third-party page the
+    // layout of the user's repository.
+    if (binding.suspended) return false;
+    // `buildReselectSource` JSON-encodes every value, which is what keeps a
+    // path from closing the literal it lands in. This bounds the shape as
+    // well, so a caller that reaches the bridge without the IPC schema cannot
+    // widen what gets embedded — an object with a `toJSON`, a non-finite
+    // number, anything but a plain location.
+    if (!isSourceLocation(loc)) return false;
+    if (component !== null && !isSourceLocation(component)) return false;
+    if (!Number.isSafeInteger(index) || index < 0) return false;
+    if (occurrence !== null && !isPlainString(occurrence)) return false;
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (!wc) return false;
     const result = (await this.send(wc, "Runtime.evaluate", {
@@ -563,6 +581,9 @@ export class SitePreviewBridge {
         context: { sessionId },
       });
     }
+    // Nothing of ours is in a suspended binding's page, so this would only
+    // poke whatever off-policy document is standing there.
+    if (binding.suspended) return;
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (!wc) return;
     await this.send(wc, "Runtime.evaluate", {
@@ -581,6 +602,8 @@ export class SitePreviewBridge {
         context: { sessionId },
       });
     }
+    // As above: a suspended binding has no runtime to tell.
+    if (binding.suspended) return;
     const wc = this.deps.getWebContents(binding.webContentsId);
     if (!wc) return;
     await this.send(wc, "Runtime.evaluate", {
@@ -825,12 +848,18 @@ export class SitePreviewBridge {
     // in the queue; installing then leaves a runtime in the guest that nothing
     // owns or removes.
     if (binding.detached || this.closed) return;
+    // Whether the guest is still showing the document it was created with. A
+    // blank preview is installed on so the runtime is in place for the dev
+    // server's first document; a blank document reached by navigating is not
+    // the same thing, because it inherits the origin that sent it there, so
+    // the allowance ends the moment anything commits.
+    const initialDocument = binding.documentEpoch === 0 && binding.installedEpoch === null;
     // The policy is checked per document, not per binding: the preview can
     // navigate anywhere, and the runtime goes only where the adapter said. It
     // is checked before the double-install guard below, because an install
     // that read its epoch under a navigation has satisfied that guard for a
     // document it never looked at.
-    if (!originPolicyAllows(binding.origins, wc.getURL())) {
+    if (!originPolicyAllows(binding.origins, wc.getURL(), { initialDocument })) {
       await this.suspend(binding, wc);
       return;
     }
@@ -934,7 +963,7 @@ export class SitePreviewBridge {
     // one outside the policy. The reinstall it queued will remove the script
     // just registered; the evaluate is what would put the runtime into the
     // live document, and that is the one thing not to do.
-    if (!originPolicyAllows(binding.origins, wc.getURL())) return;
+    if (!originPolicyAllows(binding.origins, wc.getURL(), { initialDocument })) return;
 
     // The new-document script only runs on the *next* document, so evaluate it
     // once into the current one. Without this, binding would require a reload.
@@ -1116,6 +1145,26 @@ function isTrustedContext(binding: Binding, contextId: number): boolean {
   // one that counts.
   if (!lease.mainFrameId) return true;
   return lease.contexts.get(contextId) === lease.mainFrameId;
+}
+
+/**
+ * A compiled source location, checked by shape rather than by type. The IPC
+ * schema bounds these already; this is the bridge refusing to interpolate
+ * anything it has not looked at itself, whatever path reached it.
+ */
+function isSourceLocation(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  const loc = value as { file?: unknown; line?: unknown; column?: unknown };
+  return (
+    typeof loc.file === "string" &&
+    loc.file.length > 0 &&
+    Number.isSafeInteger(loc.line) &&
+    Number.isSafeInteger(loc.column)
+  );
+}
+
+function isPlainString(value: unknown): boolean {
+  return typeof value === "string";
 }
 
 function toState(binding: Binding): SitePreviewBindingState {

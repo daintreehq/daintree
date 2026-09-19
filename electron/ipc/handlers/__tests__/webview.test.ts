@@ -1468,3 +1468,65 @@ describe("registerWebviewHandlers", () => {
     });
   });
 });
+
+describe("webview:register-panel ownership", () => {
+  let cleanup: (() => void) | null = null;
+  const EMBEDDER_ID = 7;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    __resetCdpLeasesForTests();
+    webContentsMock.fromId.mockReturnValue(mockWebContents);
+    mockWebContents.isDestroyed.mockReturnValue(false);
+    mockWebContents.hostWebContents = { id: EMBEDDER_ID, isDestroyed: () => false };
+    cleanup = registerWebviewHandlers(deps);
+  });
+
+  afterEach(() => {
+    mockWebContents.hostWebContents = null;
+    if (cleanup) {
+      cleanup();
+      cleanup = null;
+    }
+  });
+
+  function register(senderId: number, payload: unknown) {
+    return getHandler("webview:register-panel")({ sender: { id: senderId } }, payload);
+  }
+
+  it("registers a webview the sender embeds", async () => {
+    await register(EMBEDDER_ID, {
+      webContentsId: 42,
+      panelId: "preview-1",
+      kind: "dev-preview",
+    });
+    expect(mockDialogService.registerPanel).toHaveBeenCalledWith(42, "preview-1", "dev-preview");
+  });
+
+  it("refuses a webContents the sender does not embed", async () => {
+    // Otherwise any renderer could label another view's guest a dev preview
+    // and have `SitePreviewBridge` bind to it.
+    await expect(register(EMBEDDER_ID + 1, { webContentsId: 42, panelId: "p" })).rejects.toThrow(
+      /does not|not a webview/i
+    );
+    expect(mockDialogService.registerPanel).not.toHaveBeenCalled();
+  });
+
+  it("refuses a webContents that is not an embedded guest at all", async () => {
+    mockWebContents.hostWebContents = null;
+    await expect(register(EMBEDDER_ID, { webContentsId: 42, panelId: "p" })).rejects.toThrow();
+    expect(mockDialogService.registerPanel).not.toHaveBeenCalled();
+  });
+
+  it("registers nothing for a guest that has gone away", async () => {
+    webContentsMock.fromId.mockReturnValue(null as unknown as typeof mockWebContents);
+    await register(EMBEDDER_ID, { webContentsId: 42, panelId: "p" });
+    expect(mockDialogService.registerPanel).not.toHaveBeenCalled();
+  });
+
+  it("still rejects a payload of the wrong shape", async () => {
+    await expect(register(EMBEDDER_ID, { webContentsId: "42", panelId: "p" })).rejects.toThrow(
+      /Invalid arguments/
+    );
+  });
+});

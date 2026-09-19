@@ -41,11 +41,26 @@ describe("isLocalPreviewUrl", () => {
 
   it("counts a preview that has not loaded a site yet as local", () => {
     // Installing on the blank page is what puts the runtime in place for the
-    // dev server's first document.
-    expect(isLocalPreviewUrl("")).toBe(true);
-    expect(isLocalPreviewUrl(null)).toBe(true);
-    expect(isLocalPreviewUrl("about:blank")).toBe(true);
+    // dev server's first document — but only while it *is* the starting page.
+    const initial = { initialDocument: true };
+    expect(isLocalPreviewUrl("", initial)).toBe(true);
+    expect(isLocalPreviewUrl(null, initial)).toBe(true);
+    expect(isLocalPreviewUrl("about:blank", initial)).toBe(true);
     expect(isLocalPreviewUrl("chrome-error://chromewebdata/")).toBe(true);
+  });
+
+  it("refuses a blank document something navigated to", () => {
+    // A top-level navigation to about:blank inherits the initiator's origin,
+    // so an off-policy page would otherwise reopen the tap by going there.
+    expect(isLocalPreviewUrl("about:blank")).toBe(false);
+    expect(isLocalPreviewUrl("about:srcdoc")).toBe(false);
+    expect(isLocalPreviewUrl("")).toBe(false);
+    expect(originPolicyAllows("local-preview", "about:blank")).toBe(false);
+    expect(originPolicyAllows("local-preview", "about:blank", { initialDocument: false })).toBe(
+      false
+    );
+    // An adapter declared for any origin is unaffected either way.
+    expect(originPolicyAllows("any", "about:blank")).toBe(true);
   });
 });
 
@@ -68,6 +83,16 @@ describe("buildOriginGuardSource", () => {
     expect(guardSays("local-preview", "https://example.com/oauth")).toBe(false);
     expect(guardSays("local-preview", "http://localhost:5173/")).toBe(true);
     expect(guardSays("any", "https://example.com/oauth")).toBe(true);
+  });
+
+  it("never grants the blank-document allowance from inside a page", () => {
+    // The script only ever runs in a document that exists, and a blank one it
+    // runs in is one the guest navigated to. The concession is the host's, and
+    // the guard is built with it hard off — which is what a page navigating to
+    // about:blank would otherwise exploit.
+    expect(buildOriginGuardSource("local-preview")).toContain("location.href, false)");
+    expect(guardSays("local-preview", "about:blank")).toBe(false);
+    expect(guardSays("local-preview", "")).toBe(false);
   });
 
   it("gives the same verdict in the page as the host gives itself", () => {

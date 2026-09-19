@@ -17,21 +17,39 @@ export type GuestOriginPolicy =
 
 export const DEFAULT_GUEST_ORIGIN_POLICY: GuestOriginPolicy = "local-preview";
 
+export interface OriginPolicyContext {
+  /**
+   * True only while the guest is still showing the document it was created
+   * with — nothing has been committed in it yet. That is the one state in
+   * which a blank document is "no site here yet" rather than a destination.
+   *
+   * A blank document a *page* navigated to is a different thing entirely: a
+   * top-level navigation to `about:blank` inherits the initiator's origin, so
+   * without this distinction any document the preview shows could reopen the
+   * tap by navigating to it. The allowance is therefore the host's alone, and
+   * only before the first navigation.
+   */
+  initialDocument?: boolean;
+}
+
 /**
  * Whether a document at `url` counts as a local preview. An empty URL and the
- * pages a preview shows before any site loads are local: there is nothing
- * there yet, and installing on them is what puts the runtime in place for the
- * dev server's first document.
+ * blank page a preview shows before any site loads are local *only* while
+ * nothing has been navigated to yet — see {@link OriginPolicyContext}.
  */
-export function isLocalPreviewUrl(url: string | null | undefined): boolean {
-  return evaluateOriginPolicy("local-preview", url ?? "");
+export function isLocalPreviewUrl(
+  url: string | null | undefined,
+  context?: OriginPolicyContext
+): boolean {
+  return evaluateOriginPolicy("local-preview", url ?? "", context?.initialDocument === true);
 }
 
 export function originPolicyAllows(
   policy: GuestOriginPolicy,
-  url: string | null | undefined
+  url: string | null | undefined,
+  context?: OriginPolicyContext
 ): boolean {
-  return evaluateOriginPolicy(policy, url ?? "");
+  return evaluateOriginPolicy(policy, url ?? "", context?.initialDocument === true);
 }
 
 /**
@@ -57,17 +75,24 @@ export function originPolicyAllows(
  * is what an OAuth hop or an external link actually is, and the host is what
  * removes the script and disposes the runtime regardless.
  */
-function evaluateOriginPolicy(policy: string, url: string): boolean {
+function evaluateOriginPolicy(policy: string, url: string, initialDocument: boolean): boolean {
   if (policy === "any") return true;
-  if (!url) return true;
+  // No document yet. Allowed only as the guest's starting state: a blank
+  // document reached by navigating inherits the origin that sent it there, so
+  // granting this from inside a live page would hand an off-policy document a
+  // way back in.
+  if (!url) return initialDocument;
   let parsed: URL;
   try {
     parsed = new URL(url);
   } catch {
     return false;
   }
-  // Schemes a preview shows before, or instead of, a site. Nothing to protect.
-  if (parsed.protocol === "about:" || parsed.protocol === "chrome-error:") return true;
+  if (parsed.protocol === "about:") return initialDocument;
+  // Chromium's own error page for a navigation that failed. Its origin is
+  // opaque and its content is the browser's, not the site's, so there is
+  // nothing here for a page to inherit or script.
+  if (parsed.protocol === "chrome-error:") return true;
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false;
   const host = parsed.hostname.toLowerCase().replace(/\.$/, "");
   if (host === "localhost" || host.endsWith(".localhost")) return true;
@@ -100,7 +125,13 @@ function evaluateOriginPolicy(policy: string, url: string): boolean {
  * The policy as an expression the guest evaluates against its own document,
  * for the host to place at the very top of the injected script. `true` means
  * the script may go on to install itself.
+ *
+ * `initialDocument` is hard-coded false, and must stay that way: a script only
+ * ever runs in a document that exists, and the one it runs in is by definition
+ * one the guest navigated to — including a blank one, whose origin is the
+ * initiator's. The pre-navigation allowance is the host's to make at install
+ * time, from state the page cannot reach.
  */
 export function buildOriginGuardSource(policy: GuestOriginPolicy): string {
-  return `(${evaluateOriginPolicy.toString()})(${JSON.stringify(policy)}, location.href)`;
+  return `(${evaluateOriginPolicy.toString()})(${JSON.stringify(policy)}, location.href, false)`;
 }
