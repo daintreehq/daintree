@@ -688,7 +688,28 @@ describe("installTerminalBoundListeners", () => {
       scrollable.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, bubbles: true }));
 
       expect(deps.onUserScrollIntent).toHaveBeenCalledWith("t1");
-      expect(managed.lastWheelAt).toBeGreaterThan(0);
+    });
+
+    it.each(["ctrlKey", "altKey", "metaKey", "shiftKey"] as const)(
+      "does not fire for a %s-modified wheel",
+      (modifier) => {
+        const { managed, deps } = install();
+
+        managed.hostElement.dispatchEvent(
+          new WheelEvent("wheel", { deltaY: 10, bubbles: true, [modifier]: true })
+        );
+
+        expect(deps.onUserScrollIntent).not.toHaveBeenCalled();
+      }
+    );
+
+    it("stops firing once the listeners are torn down", () => {
+      const { managed, deps } = install();
+
+      for (const dispose of managed.listeners) dispose();
+      managed.hostElement.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, bubbles: true }));
+
+      expect(deps.onUserScrollIntent).not.toHaveBeenCalled();
     });
 
     it.each(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"])(

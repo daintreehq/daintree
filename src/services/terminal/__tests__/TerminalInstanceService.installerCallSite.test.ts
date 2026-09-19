@@ -217,9 +217,6 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
     const holdSpy = vi.spyOn(manager, "holdForScroll");
 
     const deps = installMock.mock.calls[0]?.[3] as { onUserScrollIntent: (id: string) => void };
-    // window.electron.system is empty here: any IPC to the main process
-    // would throw, so reaching the assertion proves the hold never left the
-    // renderer.
     deps.onUserScrollIntent("t1");
 
     expect(holdSpy).toHaveBeenCalledWith("t1", 1000);

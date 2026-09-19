@@ -325,9 +325,16 @@ export class TerminalWebGLManager {
           this.dropPoolEntry(altId);
         }
       }
-      // Nor do scroll holds; with them cleared, flipToDom queues every
-      // context still pooled for release.
+      // Nor do scroll holds. Drop held contexts directly too: a hold that
+      // already carried its pane through a DOM flip has no queued release,
+      // and flipToDom early-returns when the fleet is already in DOM mode.
+      const held = [...this.scrollHolds.keys()];
       this.clearScrollHolds();
+      for (const heldId of held) {
+        if (this.pool.has(heldId)) {
+          this.dropPoolEntry(heldId);
+        }
+      }
       this.flipToDom();
     }
   }

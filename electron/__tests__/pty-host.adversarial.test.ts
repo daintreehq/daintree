@@ -65,6 +65,7 @@ interface MockTerminalRecord {
   analysisEnabled?: boolean;
   wasKilled?: boolean;
   isExited?: boolean;
+  lastInputTime?: number;
 }
 
 interface InspectablePauseCoordinator {
@@ -968,6 +969,47 @@ describe("pty-host adversarial", () => {
     expect(dataLoss).toHaveLength(2);
     expect(dataLoss[0].droppedBytes).toBe(50);
     expect(dataLoss[1].droppedBytes).toBe(80);
+  });
+
+  it("flags output as echo or recent-input by its own terminal's input age (#12518)", async () => {
+    const parentPort = await loadHost();
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
+    parentPort.emit("message", { type: "spawn", id: "t2", options: { projectId: "project-1" } });
+    await flushMicrotasks();
+    const batcher = hostState.batchers[0];
+    batcher.write.mockReturnValue(true);
+
+    // Emit one chunk for t1 whose last input was `ageMs` ago; the batcher's
+    // last two args are (interactive, recentInput).
+    async function flagsForInputAge(ageMs: number | undefined): Promise<void> {
+      hostState.terminals.get("t1")!.lastInputTime =
+        ageMs === undefined ? undefined : Date.now() - ageMs;
+      batcher.write.mockClear();
+      (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "x");
+      await flushMicrotasks();
+    }
+
+    await flagsForInputAge(49);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, true, true);
+    await flagsForInputAge(50);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, false, true);
+    await flagsForInputAge(999);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, false, true);
+    await flagsForInputAge(1000);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, false, false);
+    await flagsForInputAge(undefined);
+    expect(batcher.write).toHaveBeenLastCalledWith("t1", expect.anything(), 1, true, false, false);
+
+    // A sibling without recent input of its own gets neither flag, whatever
+    // the other terminal is doing.
+    hostState.terminals.get("t1")!.lastInputTime = Date.now();
+    hostState.terminals.get("t2")!.lastInputTime = Date.now() - 5_000;
+    batcher.write.mockClear();
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t2", "y");
+    await flushMicrotasks();
+    expect(batcher.write).toHaveBeenLastCalledWith("t2", expect.anything(), 1, true, false, false);
   });
 
   it("IPC_DATA_MIRROR_DELIVERS_BACKGROUND_TERMINAL_OUTPUT", async () => {

@@ -66,9 +66,10 @@ export class PortBatcher {
   // echo): a throughput-mode entry swaps its 16ms timer for an immediate so the
   // echo isn't held a frame behind the flood it's interleaved with.
   // `recentInput` marks output within the longer post-input tail: it still
-  // batches, but never on a profile-stretched window — the terminal the user
-  // is driving keeps the base cadence while every other terminal pays the
-  // profile's delay.
+  // batches, but never on a profile-stretched window, so the terminal the user
+  // is driving keeps the base cadence. Its timer flushes the whole batcher like
+  // every per-terminal timer does, so siblings pending in this window ride
+  // along; nothing else moves off the profile's delay.
   write(
     id: string,
     data: Uint8Array,

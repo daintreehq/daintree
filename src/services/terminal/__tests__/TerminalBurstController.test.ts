@@ -66,11 +66,27 @@ describe("TerminalBurstController — scroll boosts stay terminal-scoped (#12518
     holdWebGLForScroll: Mock<TerminalBurstControllerDeps["holdWebGLForScroll"]>;
   };
   let controller: TerminalBurstController;
+  let electronAccess: string[];
 
   beforeEach(() => {
     vi.useFakeTimers();
-    // An empty system namespace: any IPC to the main process would throw.
-    (window as unknown as { electron: unknown }).electron = { system: {} };
+    electronAccess = [];
+    // Records every namespace read off window.electron, with resolving stub
+    // methods underneath — so a scroll path reaching for the main process at
+    // all (the removed profile override did, behind a try/catch) shows up
+    // here instead of being swallowed as a thrown TypeError.
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      value: new Proxy(
+        {},
+        {
+          get: (_target, namespace) => {
+            electronAccess.push(String(namespace));
+            return new Proxy({}, { get: () => vi.fn(() => Promise.resolve()) });
+          },
+        }
+      ),
+    });
     instances = new Map([["t1", makeManaged(TerminalRefreshTier.FOCUSED)]]);
     deps = {
       getInstance: (id) => instances.get(id),
@@ -82,7 +98,19 @@ describe("TerminalBurstController — scroll boosts stay terminal-scoped (#12518
 
   afterEach(() => {
     vi.useRealTimers();
-    delete (window as unknown as { electron?: unknown }).electron;
+    Reflect.deleteProperty(window, "electron");
+  });
+
+  it("never reaches for the main process from either scroll path", () => {
+    // Spaced past the removed override's 500ms request throttle, so a
+    // reintroduced throttled request could not hide between events.
+    for (let i = 0; i < 3; i += 1) {
+      controller.onUserScrollIntent("t1");
+      controller.onActiveWheel("t1");
+      vi.advanceTimersByTime(2_000);
+    }
+
+    expect(electronAccess).toEqual([]);
   });
 
   it("holds the scrolled terminal's WebGL context for the gesture on scrollback scroll", () => {
@@ -122,5 +150,15 @@ describe("TerminalBurstController — scroll boosts stay terminal-scoped (#12518
     controller.onActiveWheel("t1");
 
     expect(deps.holdWebGLForScroll).not.toHaveBeenCalled();
+  });
+
+  it("cancels a pending wheel-burst revert when the terminal is destroyed", () => {
+    controller.onActiveWheel("t1");
+    expect(vi.getTimerCount()).toBe(1);
+
+    controller.destroy("t1");
+
+    expect(vi.getTimerCount()).toBe(0);
+    expect(controller.isWheelActive("t1")).toBe(false);
   });
 });

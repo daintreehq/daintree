@@ -719,9 +719,17 @@ export function installTerminalBoundListeners(
   managed.listeners.push(() => scrollDisposable.dispose());
 
   const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
-  const onWheel = (ev: WheelEvent) => {
+  const onWheel = () => {
     managed._userScrollIntent = true;
     managed.lastWheelAt = Date.now();
+  };
+  // Capture phase, unlike onWheel: xterm's scrollable element stops
+  // propagation of every wheel it consumes, so a bubbling listener only sees
+  // the wheels that did NOT scroll — never an actual scrollback gesture.
+  // onWheel keeps its bubble-phase `lastWheelAt` semantics on purpose:
+  // useUnseenOutput's pill suppression has no expiry re-render, so feeding it
+  // every consumed wheel could leave the pill hidden after the gesture.
+  const onWheelScrollIntent = (ev: WheelEvent) => {
     // Skip the synthetic per-line events the alt-buffer mouse-reporting
     // amplifier dispatches (already signalled via onActiveWheel) and
     // modifier-held wheels (pinch-zoom/etc, not scrollback navigation) —
@@ -737,13 +745,12 @@ export function installTerminalBoundListeners(
       deps.onUserScrollIntent(id);
     }
   };
-  // Capture phase for the wheel: xterm's scrollable element stops propagation
-  // of every wheel it consumes, so a bubbling listener only ever saw the wheels
-  // that did NOT scroll — never an actual scrollback gesture.
-  hostElement.addEventListener("wheel", onWheel, { capture: true, passive: true });
+  hostElement.addEventListener("wheel", onWheel, { passive: true });
+  hostElement.addEventListener("wheel", onWheelScrollIntent, { capture: true, passive: true });
   hostElement.addEventListener("keydown", onKeydownScroll);
   managed.listeners.push(() => {
-    hostElement.removeEventListener("wheel", onWheel, { capture: true });
+    hostElement.removeEventListener("wheel", onWheel);
+    hostElement.removeEventListener("wheel", onWheelScrollIntent, { capture: true });
     hostElement.removeEventListener("keydown", onKeydownScroll);
   });
 

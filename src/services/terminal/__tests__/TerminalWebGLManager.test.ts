@@ -2046,6 +2046,35 @@ describe("TerminalWebGLManager", () => {
       expect(manager.isActive("s")).toBe(false);
     });
 
+    it("drops a context a hold carried through a DOM flip when hardware is lost", () => {
+      attachThree();
+      manager.holdForScroll("s", 1000);
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+      expect(manager.isActive("s")).toBe(true);
+
+      // Already in DOM mode, so flipToDom has nothing to queue: the held
+      // context must be dropped directly or it outlives the breaker trip.
+      manager.setHardwareAvailable(false);
+
+      expect(manager.isActive("s")).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("does not carry a hold over to a terminal recreated under the same id", () => {
+      attachThree();
+      manager.holdForScroll("s", 1000);
+      manager.ensureContext("c", makeManagedTerminal());
+
+      manager.onTerminalDestroyed("s");
+      manager.ensureContext("s", makeManagedTerminal());
+
+      expect(manager.isScrollHeld("s")).toBe(false);
+      expect(manager.isActive("s")).toBe(false);
+      vi.advanceTimersByTime(1000);
+      expect(manager.isActive("s")).toBe(false);
+    });
+
     it("clears the expiry timer on dispose", () => {
       attachThree();
       manager.holdForScroll("s", 1000);
