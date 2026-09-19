@@ -104,7 +104,6 @@ describe("TerminalInstanceService project-view cache lifecycle (#12514)", () => 
   let pinFocus: ReturnType<typeof vi.fn<(id: string, managed: ManagedTerminal) => void>>;
 
   beforeEach(async () => {
-    vi.useFakeTimers();
     vi.resetModules();
     viewCache.cached = false;
     viewCache.listeners.clear();
@@ -114,6 +113,10 @@ describe("TerminalInstanceService project-view cache lifecycle (#12514)", () => 
       (await import("../TerminalInstanceService")) as unknown as {
         terminalInstanceService: ViewCacheTestService;
       });
+    // Only after the import: a frozen clock on the module loader path can
+    // stall the import in CI (fakeTimersImportOrder contract). Nothing here
+    // needs a load-time timer faked — the cache dwell is armed per test.
+    vi.useFakeTimers();
     service.instances.clear();
     applyPolicy = vi.fn();
     releaseContext = vi.fn();
@@ -127,6 +130,9 @@ describe("TerminalInstanceService project-view cache lifecycle (#12514)", () => 
     service.instances.clear();
     vi.restoreAllMocks();
     vi.useRealTimers();
+    // Each test imports a fresh singleton whose watchdog and reflow heartbeat
+    // armed real intervals at construction.
+    service.dispose();
   });
 
   it("suspends painting and demotes every terminal when the view is cached", () => {
