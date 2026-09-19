@@ -7,6 +7,7 @@ export const SITE_PREVIEW_METHOD_CHANNELS = {
   setMode: "site-preview:set-mode",
   reselect: "site-preview:reselect",
   clearSelection: "site-preview:clear-selection",
+  clearHover: "site-preview:clear-hover",
   getState: "site-preview:get-state",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 

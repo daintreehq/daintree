@@ -41,7 +41,9 @@ export function SelectionIdentity({
   const { copy, copiedText } = useCopyWithFeedback({ announcement: "Path copied" });
   if (!node) return null;
   const definition = node.definition;
-  const stale = selection.stale ? STALE_COPY[selection.stale] : null;
+  // While the page is being asked for the element again, "select again" would
+  // be an instruction the next second usually withdraws.
+  const stale = selection.stale && !selection.reproving ? STALE_COPY[selection.stale] : null;
   // A component picked on the page is named as the component, with the element
   // it was reached through left to the trail below.
   const picked =

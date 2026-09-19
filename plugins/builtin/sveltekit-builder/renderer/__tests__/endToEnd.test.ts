@@ -66,6 +66,7 @@ async function setUp() {
       },
       reselect: async () => false,
       clearSelection: async () => undefined,
+      clearHover: async () => undefined,
       getState: async () => bound(),
       onEvent: (callback) => {
         emit = callback;

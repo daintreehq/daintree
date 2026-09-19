@@ -550,6 +550,7 @@ export const CHANNELS = {
   SITE_PREVIEW_SET_MODE: "site-preview:set-mode",
   SITE_PREVIEW_RESELECT: "site-preview:reselect",
   SITE_PREVIEW_CLEAR_SELECTION: "site-preview:clear-selection",
+  SITE_PREVIEW_CLEAR_HOVER: "site-preview:clear-hover",
   SITE_PREVIEW_GET_STATE: "site-preview:get-state",
   SITE_PREVIEW_EVENT: "site-preview:event",
 

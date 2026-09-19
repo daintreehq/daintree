@@ -147,6 +147,13 @@ export const sitePreviewNamespace = defineIpcNamespace({
         getSitePreviewBridge().clearSelection(requireProject(ctx), payload.sessionId),
       { withContext: true }
     ),
+    clearHover: opValidated(
+      SITE_PREVIEW_METHOD_CHANNELS.clearHover,
+      sessionSchema,
+      async (ctx, payload): Promise<void> =>
+        getSitePreviewBridge().clearHover(requireProject(ctx), payload.sessionId),
+      { withContext: true }
+    ),
     getState: opValidated(
       SITE_PREVIEW_METHOD_CHANNELS.getState,
       sessionSchema,

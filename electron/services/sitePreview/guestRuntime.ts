@@ -98,6 +98,7 @@ export function buildGuestRuntimeSource(params: GuestRuntimeParams): string {
     setMode(next) { api.mode = next; },
     reselect() { return false; },
     clearSelection() {},
+    clearHover() {},
     dispose: null,
     post(event) {
       const send = g[BINDING];
@@ -158,6 +159,18 @@ export function buildClearSelectionSource(): string {
   return `(() => {
   const api = globalThis[${JSON.stringify(GUEST_RUNTIME_GLOBAL)}];
   if (api && typeof api.clearSelection === "function") api.clearSelection();
+})();`;
+}
+
+/**
+ * Tell the guest the pointer is no longer over its page. A page embedded in a
+ * host window is not reliably told so itself: crossing into the host can
+ * deliver it no leave, out or move at all. Host-authored, fixed.
+ */
+export function buildClearHoverSource(): string {
+  return `(() => {
+  const api = globalThis[${JSON.stringify(GUEST_RUNTIME_GLOBAL)}];
+  if (api && typeof api.clearHover === "function") api.clearHover();
 })();`;
 }
 

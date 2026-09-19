@@ -34,6 +34,7 @@ interface GuestHostApi {
     occurrence?: string | null
   ): boolean;
   clearSelection(): void;
+  clearHover(): void;
   dispose: (() => void) | null;
   guest?: GuestRuntimeHandle;
 }
@@ -64,5 +65,6 @@ api.setMode = (next) => {
 api.reselect = (loc, index, component, occurrence) =>
   guest.reselect(loc, index, component, occurrence);
 api.clearSelection = () => guest.clearSelection();
+api.clearHover = () => guest.clearHover();
 api.dispose = () => guest.dispose();
 api.guest = guest;

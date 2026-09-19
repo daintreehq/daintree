@@ -443,4 +443,72 @@ test.describe.serial("Plugin: SvelteKit Site Builder", () => {
       .toBe(true);
     await window.screenshot({ path: test.info().outputPath("agent-done.png") });
   });
+
+  test("the selection survives the agent's edit, ready for the next request", async () => {
+    const { window } = ctx;
+    const panel = inspector(window);
+    const strip = window.getByRole("toolbar", { name: "Site Builder" });
+    // The edit replaced every node the selection named and changed the bytes it
+    // was proved against. The builder asks the page for it again by itself, so
+    // a follow-up is sendable without another click: Send arms only for a
+    // selection that is proved and whose revisions are known.
+    const request = panel.getByRole("textbox", { name: "Request for the agent" });
+    await request.fill("Make the corners rounder");
+    await expect(panel.getByRole("button", { name: "Send to agent" })).toBeEnabled({
+      timeout: PLUGIN_TIMEOUT,
+    });
+    await expect(strip).toContainText("FeatureCard");
+    await expect(strip.getByText("Component", { exact: true })).toBeVisible();
+    await expect(panel.getByText(/select (it )?again/i)).toHaveCount(0);
+    await expect(panel.getByRole("alert")).toHaveCount(0);
+    await request.fill("");
+    await window.screenshot({ path: test.info().outputPath("selection-kept.png") });
+  });
+
+  test("the label follows the pointer, and Deselect clears the selection", async () => {
+    const { window, app } = ctx;
+    const strip = window.getByRole("toolbar", { name: "Site Builder" });
+    await selectInPreview(window, "h1");
+    // What the page script has drawn, read through its own handle: how many
+    // labels and selection outlines, and whether a label lies over the heading.
+    const overlay = () =>
+      inPreview<{ labels: number; outlines: number; covers: boolean }>(
+        app,
+        `(() => {
+          const root = globalThis.__daintreeSitePreview?.guest?.getOverlayRoot();
+          if (!root) return null;
+          const nodes = [...root.querySelectorAll("div")];
+          const labels = nodes.filter((node) => node.firstElementChild?.tagName === "SPAN");
+          const target = document.querySelector("h1").getBoundingClientRect();
+          return {
+            labels: labels.length,
+            outlines: nodes.filter((node) => node.style.outlineWidth === "2px").length,
+            covers: labels.some((label) => {
+              const box = label.getBoundingClientRect();
+              return box.bottom > target.top && box.top < target.bottom && box.right > target.left && box.left < target.right;
+            }),
+          };
+        })()`
+      );
+    // Pointer still on the heading: outlined and labelled, the label clear of it.
+    await expect.poll(overlay).toEqual({ labels: 1, outlines: 1, covers: false });
+    await window.screenshot({ path: test.info().outputPath("selected-hovered.png") });
+
+    // Off the page and onto the builder's own strip, which is where the pointer
+    // goes next: the outline stays, the label goes.
+    await strip.hover();
+    await expect.poll(overlay).toEqual({ labels: 0, outlines: 1, covers: false });
+    await window.screenshot({ path: test.info().outputPath("selected-pointer-away.png") });
+
+    await strip.getByRole("button", { name: "Deselect" }).click();
+    await expect(strip.getByText("Click an element to ask an agent about it")).toBeVisible();
+    await expect(
+      window
+        .getByRole("complementary", { name: "Site Builder details" })
+        .getByRole("region", { name: "Selected element" })
+    ).toHaveCount(0);
+    // Deselecting takes the outline too, which was all that was left.
+    await expect.poll(overlay).toEqual({ labels: 0, outlines: 0, covers: false });
+    await window.screenshot({ path: test.info().outputPath("deselected.png") });
+  });
 });

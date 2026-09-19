@@ -76,6 +76,8 @@ export interface GuestRuntimeHandle {
    * The overlay's shadow root, or null while nothing is drawn. The root is
    * closed, so this handle is the only way in — for the host and for tests.
    */
+  /** The host saw the pointer leave the preview, which the page may never be told. */
+  clearHover(): void;
   getOverlayRoot(): ShadowRoot | null;
   dispose(): void;
 }

@@ -260,6 +260,34 @@ export function AgentComposer({
     }
     settlePinnedDefinitions(controller, memoryKey, pinned);
   });
+  // A selection the page proved again after a hot update is the same subject
+  // on newer bytes. The draft follows it: left on the old one it would cite
+  // revisions that can no longer verify, and offer "use current selection" for
+  // the element it is already about.
+  const supersedes = selection.status === "ready" ? selection.supersedes : undefined;
+  useEffect(() => {
+    if (!pinned || !current || !supersedes?.includes(pinned.selection.selectionId)) return;
+    const chosen = scopesFor(pinned.selection, pinned.picked, pinned.definitions).scopes[
+      pinned.scope
+    ];
+    const after = scopesFor(current.selection, current.picked, current.definitions).scopes;
+    // The chosen scope by what it is, not where it sat: a component added to
+    // the chain moves every index above it. One the new chain no longer names
+    // leaves the pin alone, and the user is offered the current selection.
+    const scope = after.findIndex((candidate) =>
+      chosen === undefined || candidate.kind !== chosen.kind
+        ? false
+        : candidate.kind === "element" ||
+          (chosen.kind === "component" &&
+            candidate.label === chosen.label &&
+            candidate.file === chosen.file &&
+            candidate.usedAt?.file === chosen.usedAt?.file &&
+            candidate.usedAt?.line === chosen.usedAt?.line &&
+            candidate.usedAt?.column === chosen.usedAt?.column)
+    );
+    if (scope < 0) return;
+    setPinned({ ...current, scope });
+  });
   // The picked component's identity travels with the pin, so a pinned request
   // keeps naming the component the user highlighted.
   const scopes = subject ? scopesFor(subject.selection, subject.picked, definitions).scopes : [];

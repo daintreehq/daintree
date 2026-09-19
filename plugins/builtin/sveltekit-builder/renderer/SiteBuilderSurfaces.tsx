@@ -356,6 +356,25 @@ function StripStatus({
               Component
             </Badge>
           ) : null}
+          {/* Escape clears it too, but only while the page has the keyboard —
+              which it stops having the moment the request is being typed. */}
+          <Button
+            variant="ghost"
+            size="xs"
+            className="shrink-0"
+            onClick={(event) => {
+              // The button goes with the selection. Focus it held is handed to
+              // the strip's first control, so the toolbar's keys keep working.
+              const strip = event.currentTarget.closest<HTMLElement>('[role="toolbar"]');
+              const focused = document.activeElement === event.currentTarget;
+              void controller.clearSelection();
+              if (focused) {
+                requestAnimationFrame(() => strip?.querySelector<HTMLElement>("button")?.focus());
+              }
+            }}
+          >
+            Deselect
+          </Button>
           <KeyHints />
           {location && !drawerShowing ? (
             <>
@@ -372,7 +391,9 @@ function StripStatus({
       );
     }
   }
-  if (selection.status === "resolving") return <WaitingRow label="Finding the source" />;
+  if (selection.status === "resolving" || (selection.status === "settling" && selection.retrying)) {
+    return <WaitingRow label="Finding the source" />;
+  }
   if (state.mode === "select") {
     // The strip must not contradict the drawer: an invitation to click while
     // the drawer says the source could not be opened is two surfaces telling
@@ -781,6 +802,9 @@ function SelectionBody({ state }: { state: InspectorState }) {
         </section>
       );
     case "settling":
+      // The click is kept and asked for again once the page has caught up;
+      // only when that fails is it the user's to repeat.
+      if (selection.retrying) return <WaitingRow label="Waiting for the preview to update" />;
       return (
         <InspectorNotice tone="warning" title="This file just changed — select again" role="status">
           The preview may still be showing the old version. Wait a moment for it to update, then
