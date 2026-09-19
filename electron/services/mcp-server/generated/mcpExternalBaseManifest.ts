@@ -1723,7 +1723,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Write the active worktree's prepared context into a terminal this connection created, which is how an agent it launched is handed a large codebase context. Any other panel is refused, the user's own shells included. Target an idle terminal.",
+      "Write the active worktree's prepared context into a terminal this connection created or was handed, which is how an agent it drives is given a large codebase context. Any other panel is refused. Target an idle terminal.",
     enabled: true,
     id: "terminal.injectOwned",
     inputSchema: {
@@ -1734,7 +1734,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "The terminal to inject into, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
+            "The terminal to inject into, as an `id` this session created or the user handed it. Required: there is no focus fallback.",
         },
       },
       required: ["terminalId"],
@@ -1750,7 +1750,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Stop the turn an agent is running in a panel this connection created, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
+      "Stop the turn an agent is running in a panel this connection created or was handed, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     enabled: true,
     id: "terminal.interruptOwned",
     inputSchema: {
@@ -1761,7 +1761,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "The agent panel to interrupt, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
+            "The agent panel to interrupt, as an `id` this session created or the user handed it. Required: there is no focus fallback.",
         },
       },
       required: ["terminalId"],
@@ -1825,7 +1825,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         owned: {
           description:
-            "MCP only: true keeps just the terminals you created; false or omitted applies no ownership filter. An agent pane keeps them across reconnects.",
+            "MCP only: true keeps only the terminals you created or were handed; false or omitted applies no ownership filter. An agent pane keeps them across reconnects.",
           type: "boolean",
         },
         terminalId: {
@@ -2000,7 +2000,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Read what the agent in a panel this connection created last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
+      "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
     enabled: true,
     examples: [
       {
@@ -2020,7 +2020,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "The agent panel to read, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
+            "The agent panel to read, as an `id` this session created or the user handed it. Required: there is no focus fallback.",
         },
         maxBytes: {
           description: "Text budget in escaped bytes, 1024 to 49152; default 24576.",
@@ -2217,7 +2217,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Bring the user to a panel this session created, switching workspace and raising the window when it is somewhere they are not looking. Only panels this connection created can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
+      "Bring the user to a panel this session created or was handed, switching workspace and raising the window when it is somewhere they are not looking. No other panel can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
     enabled: true,
     id: "terminal.revealOwned",
     inputSchema: {
@@ -2228,7 +2228,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           type: "string",
           minLength: 1,
           description:
-            "The panel to reveal, as an `id` this session received when it created the panel.",
+            "The panel to reveal, as an `id` this session created or the user handed it.",
         },
       },
       required: ["terminalId"],
@@ -2244,7 +2244,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     category: "terminal",
     danger: "safe",
     description:
-      "Queue text as one submission to a terminal this connection created: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused, the user's own shells included. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
+      "Queue text as one submission to a terminal this connection created or was handed: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
     enabled: true,
     id: "terminal.sendCommandOwned",
     inputSchema: {
@@ -2256,7 +2256,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           minLength: 1,
           maxLength: 512,
           description:
-            "The terminal to submit to, as an `id` this session got when it created the panel.",
+            "The terminal to submit to, as an `id` this session created or the user handed it.",
         },
         command: {
           type: "string",

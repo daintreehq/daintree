@@ -874,6 +874,10 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
+  "mcp-server:adopt-terminal": {
+    args: [payload: { terminalId: string; orchestratorPaneId: string }];
+    result: import("./mcpServer.js").TerminalAdoptionResult;
+  };
   "mcp-server:clear-audit-log": {
     args: [];
     result: void;
@@ -948,6 +952,18 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:list-help-session-bearers": {
     args: [];
     result: import("./mcpServer.js").HelpSessionBearerRecord[];
+  };
+  "mcp-server:list-orchestrator-panes": {
+    args: [];
+    result: string[];
+  };
+  "mcp-server:list-terminal-adoptions": {
+    args: [];
+    result: import("./mcpServer.js").TerminalAdoptionEntry[];
+  };
+  "mcp-server:release-terminal-adoption": {
+    args: [payload: { terminalId: string }];
+    result: boolean;
   };
   "mcp-server:reset-denial-counts": {
     args: [payload: { sessionId: string }];

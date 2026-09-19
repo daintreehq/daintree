@@ -6,6 +6,7 @@ import { CHANNELS } from "../../channels.js";
 import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
+import { getMcpServerServiceRef } from "../../../window/serviceRefs.js";
 import {
   acceptCapturedAgentSession,
   releaseSupersededCapturedSession,
@@ -41,6 +42,10 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     mcpPaneConfigService.revokePaneConfig(id).catch((err) => {
       console.error("[MCP] Failed to revoke pane config on exit:", err);
     });
+    // A hand-over ends with the terminal that was handed over (#12490). The
+    // orchestrator's side ends with its bearer, which the revocation above
+    // covers. Unloaded means nothing was ever handed over.
+    getMcpServerServiceRef()?.handleTerminalExit(id);
     broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
       name: "terminal:exit",
       payload: [id, exitCode],
@@ -69,6 +74,9 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {
+    // A hand-over is of one process (#12490): a later launch under the id, or
+    // the handed-over launch failing to start, ends it.
+    getMcpServerServiceRef()?.handleTerminalSpawnResult(id, result);
     if (result.success) {
       // A confirmed relaunch may supersede a session a natural exit left on
       // the pane (#12433); a refused one leaves the running process's id alone.

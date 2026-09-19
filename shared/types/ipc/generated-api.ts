@@ -327,6 +327,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["hibernation:update-config"]["result"]>;
   };
   mcpServer: {
+    adoptTerminal(
+      ...args: IpcInvokeMap["mcp-server:adopt-terminal"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:adopt-terminal"]["result"]>;
     clearAuditLog(
       ...args: IpcInvokeMap["mcp-server:clear-audit-log"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:clear-audit-log"]["result"]>;
@@ -378,6 +381,15 @@ export interface GeneratedElectronAPI {
     listHelpSessionBearers(
       ...args: IpcInvokeMap["mcp-server:list-help-session-bearers"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:list-help-session-bearers"]["result"]>;
+    listOrchestratorPanes(
+      ...args: IpcInvokeMap["mcp-server:list-orchestrator-panes"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:list-orchestrator-panes"]["result"]>;
+    listTerminalAdoptions(
+      ...args: IpcInvokeMap["mcp-server:list-terminal-adoptions"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:list-terminal-adoptions"]["result"]>;
+    releaseTerminalAdoption(
+      ...args: IpcInvokeMap["mcp-server:release-terminal-adoption"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:release-terminal-adoption"]["result"]>;
     resetDenialCounts(
       ...args: IpcInvokeMap["mcp-server:reset-denial-counts"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:reset-denial-counts"]["result"]>;

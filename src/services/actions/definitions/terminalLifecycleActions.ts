@@ -295,7 +295,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.revealOwned",
     title: "Reveal Owned Terminal",
     description:
-      "Bring the user to a panel this session created, switching workspace and raising the window when it is somewhere they are not looking. Only panels this connection created can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
+      "Bring the user to a panel this session created or was handed, switching workspace and raising the window when it is somewhere they are not looking. No other panel can be revealed. Call it when the user asked to be taken to the agent, not to report progress.",
     category: "terminal",
     kind: "command",
     // Reversible navigation: nothing is destroyed and the user can switch back.
@@ -314,9 +314,7 @@ export function registerTerminalLifecycleActions(
       terminalId: z
         .string()
         .min(1)
-        .describe(
-          "The panel to reveal, as an `id` this session received when it created the panel."
-        ),
+        .describe("The panel to reveal, as an `id` this session created or the user handed it."),
     }),
     run: async () => {
       throw new Error(

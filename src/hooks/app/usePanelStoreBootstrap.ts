@@ -11,6 +11,7 @@ import type { TerminalConfig } from "@shared/types/ipc/config";
 import { setupTerminalStoreListeners } from "../../store/panelStore";
 import { setupProjectStatsListeners } from "../../store/projectStatsStore";
 import { setupFleetSnapshotListeners } from "../../store/fleetSnapshotStore";
+import { setupTerminalAdoptionListeners } from "../../store/terminalAdoptionStore";
 import { setupSystemWakeListeners } from "../../store/systemWakeStore";
 import { useCachedProjectViewsStore } from "../../store/cachedProjectViewsStore";
 import { useResourceMonitoringStore } from "../../store/resourceMonitoringStore";
@@ -36,12 +37,14 @@ export function usePanelStoreBootstrap(terminalConfig?: TerminalConfig | null) {
     const cleanupTerminalStore = setupTerminalStoreListeners();
     const cleanupProjectStats = setupProjectStatsListeners();
     const cleanupFleetSnapshot = setupFleetSnapshotListeners();
+    const cleanupTerminalAdoptions = setupTerminalAdoptionListeners();
     const cleanupSystemWake = setupSystemWakeListeners();
 
     return () => {
       cleanupTerminalStore();
       cleanupProjectStats();
       cleanupFleetSnapshot();
+      cleanupTerminalAdoptions();
       cleanupSystemWake();
     };
   }, []);

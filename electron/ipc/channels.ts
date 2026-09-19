@@ -751,6 +751,16 @@ export const CHANNELS = {
    */
   MCP_SERVER_DISCONNECT_BEARER: "mcp-server:disconnect-bearer",
   /**
+   * Hand a running terminal to an orchestrating agent pane, or take it back
+   * (#12490). Renderer-only by construction: no action or MCP tool reaches
+   * these, so a hand-over always starts with the user.
+   */
+  MCP_SERVER_ADOPT_TERMINAL: "mcp-server:adopt-terminal",
+  MCP_SERVER_RELEASE_TERMINAL_ADOPTION: "mcp-server:release-terminal-adoption",
+  MCP_SERVER_LIST_TERMINAL_ADOPTIONS: "mcp-server:list-terminal-adoptions",
+  /** Panes holding a live Daintree bearer, which a terminal can be handed to (#12490). */
+  MCP_SERVER_LIST_ORCHESTRATOR_PANES: "mcp-server:list-orchestrator-panes",
+  /**
    * Push channel: a grant lifecycle event (`issued`, `expired`, `revoked`)
    * fired for the help-session pinned to this renderer. Targeted send —
    * grant state is session-scoped and never broadcast.

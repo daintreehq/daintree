@@ -1816,6 +1816,15 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * The launch generation of the incarnation main is tracking under `id`, or
+   * null for an unknown terminal. Lets a caller holding authority over one
+   * incarnation tell a result for it apart from one for a successor (#12490).
+   */
+  getLaunchGeneration(id: string): number | null {
+    return this.pendingSpawns.get(id)?.launchGeneration ?? null;
+  }
+
+  /**
    * Owning project of a terminal, from the locally tracked spawn options
    * (spawn() resolves a missing projectId from the active project context).
    * Null for unknown terminals — callers fall back to unscoped delivery.

@@ -2,9 +2,10 @@ import { dialog } from "electron";
 import { writeFile } from "fs/promises";
 import { CHANNELS } from "../channels.js";
 import type * as McpServerServiceModule from "../../services/McpServerService.js";
+import type * as McpPaneConfigServiceModule from "../../services/McpPaneConfigService.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { MCP_SERVER_METHOD_CHANNELS } from "./mcpServer.preload.js";
-import { broadcastToRenderer } from "../utils.js";
+import { broadcastToRenderer, checkRateLimit } from "../utils.js";
 import { sanitizePath } from "../../utils/pathScrubber.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import type {
@@ -22,9 +23,12 @@ import type {
   McpRevokeSessionGrantsResult,
   McpRuntimeSnapshot,
   McpServerStatusSnapshot,
+  TerminalAdoptionEntry,
+  TerminalAdoptionResult,
 } from "../../../shared/types/ipc/mcpServer.js";
 
 type McpServerSingleton = typeof McpServerServiceModule.mcpServerService;
+type McpPaneConfigSingleton = typeof McpPaneConfigServiceModule.mcpPaneConfigService;
 
 let cachedMcpServerService: McpServerSingleton | null = null;
 async function getMcpServerService(): Promise<McpServerSingleton> {
@@ -33,6 +37,19 @@ async function getMcpServerService(): Promise<McpServerSingleton> {
     cachedMcpServerService = mod.mcpServerService;
   }
   return cachedMcpServerService;
+}
+
+async function getMcpPaneConfigService(): Promise<McpPaneConfigSingleton> {
+  const mod = await import("../../services/McpPaneConfigService.js");
+  return mod.mcpPaneConfigService;
+}
+
+// Panel ids are `${kind}-${uuid}`; a requested id may run longer, and the
+// owned tools cap theirs at the same length.
+function assertPanelId(value: unknown, what: string): asserts value is string {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+    throw new Error(`Invalid ${what}`);
+  }
 }
 
 export const mcpServerNamespace = defineIpcNamespace({
@@ -348,6 +365,76 @@ export const mcpServerNamespace = defineIpcNamespace({
         return svc.listHelpSessionBearers();
       }
     ),
+    /**
+     * Hand a running terminal to an orchestrating agent pane (#12490). The
+     * user's consent is collected in the component before this is called;
+     * nothing an agent can dispatch reaches it.
+     */
+    adoptTerminal: op(
+      MCP_SERVER_METHOD_CHANNELS.adoptTerminal,
+      async (
+        ctx,
+        payload: {
+          terminalId: string;
+          orchestratorPaneId: string;
+        }
+      ): Promise<TerminalAdoptionResult> => {
+        checkRateLimit(CHANNELS.MCP_SERVER_ADOPT_TERMINAL, 20, 10_000);
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        const { terminalId, orchestratorPaneId } = payload;
+        assertPanelId(terminalId, "terminalId");
+        assertPanelId(orchestratorPaneId, "orchestratorPaneId");
+        const [svc, paneConfig] = await Promise.all([
+          getMcpServerService(),
+          getMcpPaneConfigService(),
+        ]);
+        // Resolved and recorded with no await between them, so a bearer
+        // revoked in the meantime cannot be handed a terminal.
+        return svc.adoptTerminal({
+          terminalId,
+          orchestratorPaneId,
+          orchestrator: paneConfig.getOrchestratorPane(orchestratorPaneId),
+          // The view the user acted in must be the terminal's own project, so
+          // one project's view cannot hand over another project's terminal.
+          ...(ctx.projectId !== null ? { callerWorkspaceId: ctx.projectId } : {}),
+        });
+      },
+      { withContext: true }
+    ),
+    /**
+     * Take a handed-over terminal back. Resolves false when it wasn't handed
+     * over. Never rate limited: the way out of a hand-over must always work.
+     */
+    releaseTerminalAdoption: op(
+      MCP_SERVER_METHOD_CHANNELS.releaseTerminalAdoption,
+      async (payload: { terminalId: string }): Promise<boolean> => {
+        if (!payload || typeof payload !== "object") {
+          throw new Error("Invalid payload");
+        }
+        assertPanelId(payload.terminalId, "terminalId");
+        const svc = await getMcpServerService();
+        return svc.releaseTerminalAdoption(payload.terminalId);
+      }
+    ),
+    listTerminalAdoptions: op(
+      MCP_SERVER_METHOD_CHANNELS.listTerminalAdoptions,
+      async (): Promise<TerminalAdoptionEntry[]> => {
+        const svc = await getMcpServerService();
+        return svc.listTerminalAdoptions();
+      }
+    ),
+    listOrchestratorPanes: op(
+      MCP_SERVER_METHOD_CHANNELS.listOrchestratorPanes,
+      async (): Promise<string[]> => {
+        const [svc, paneConfig] = await Promise.all([
+          getMcpServerService(),
+          getMcpPaneConfigService(),
+        ]);
+        return svc.filterOrchestratorPanes(paneConfig.listOrchestratorPanes());
+      }
+    ),
     disconnectBearer: op(
       MCP_SERVER_METHOD_CHANNELS.disconnectBearer,
       async (tokenHash: string): Promise<DisconnectBearerResult> => {
@@ -379,9 +466,21 @@ export function registerMcpServerHandlers(): () => void {
   void getMcpServerService()
     .then((svc) => {
       if (cancelled) return;
-      pendingUnsubscribe = svc.onRuntimeStateChange((snapshot) => {
+      const offRuntimeState = svc.onRuntimeStateChange((snapshot) => {
         broadcastToRenderer(CHANNELS.MCP_SERVER_RUNTIME_STATE_CHANGED, snapshot);
       });
+      // Global rather than project-scoped: the list is tiny and changes only
+      // on a user gesture or a pane exit.
+      const offAdoptions = svc.onTerminalAdoptionsChange((adoptions) => {
+        broadcastToRenderer(CHANNELS.EVENTS_PUSH, {
+          name: "terminal:adoptions-changed",
+          payload: adoptions,
+        });
+      });
+      pendingUnsubscribe = () => {
+        offRuntimeState();
+        offAdoptions();
+      };
     })
     .catch((err) => {
       console.warn("[McpServerHandlers] Failed to subscribe to runtime-state changes:", err);

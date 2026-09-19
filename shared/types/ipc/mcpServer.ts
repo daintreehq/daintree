@@ -527,6 +527,43 @@ export interface McpRevokeNativeGrantResult {
   revoked: boolean;
 }
 
+/**
+ * A terminal the user handed to an orchestrating agent pane (#12490). The
+ * orchestrator may submit to it, interrupt it, reveal it and read its last
+ * message through the `*Owned` tools, but never close it.
+ */
+export interface TerminalAdoptionEntry {
+  terminalId: string;
+  orchestratorPaneId: string;
+  adoptedAt: number;
+}
+
+/**
+ * Why a hand-over was refused:
+ * - `self` — a pane cannot be handed to itself.
+ * - `not-orchestrator` — the chosen pane holds no live Daintree bearer, or one
+ *   whose tier cannot submit input.
+ * - `terminal-gone` — the terminal is no longer running.
+ * - `other-project` — the two panes belong to different projects.
+ * - `launched-by-orchestrator` — the chosen pane launched the terminal and already drives it.
+ * - `launched-by-another` — another client launched the terminal and already drives it.
+ * - `already-handed` — the terminal is already handed to another pane.
+ */
+export type TerminalAdoptionRefusal =
+  | "self"
+  | "not-orchestrator"
+  | "terminal-gone"
+  | "other-project"
+  | "launched-by-orchestrator"
+  | "launched-by-another"
+  | "already-handed";
+
+// Discriminated on `status`: `ok` is forbidden on IPC results
+// (`ForbidIpcEnvelopeKeys`), and a refusal here is an answer, not a failure.
+export type TerminalAdoptionResult =
+  | { status: "handed-over"; adoption: TerminalAdoptionEntry }
+  | { status: "refused"; reason: TerminalAdoptionRefusal; heldByPaneId?: string };
+
 /** Minimum and maximum values accepted for the configurable ring-buffer cap. */
 export const MCP_AUDIT_MIN_RECORDS = 50;
 export const MCP_AUDIT_MAX_RECORDS = 10000;
