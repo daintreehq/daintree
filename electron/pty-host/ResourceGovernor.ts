@@ -174,6 +174,7 @@ export class ResourceGovernor {
   // sampled far less often than memory pressure.
   private readonly FD_SAMPLE_INTERVAL_MS = 30000;
   private fdSampleInterval: NodeJS.Timeout | null = null;
+  private fdSampleFailureLogged = false;
   private throttleStartTime = 0;
   private readonly fdMonitor: FdMonitor;
   private readonly killedPids = new Map<number, number>();
@@ -623,7 +624,21 @@ export class ResourceGovernor {
 
   private sampleFdUsage(): void {
     const now = Date.now();
-    const owners = this.deps.getFdOwners();
+    let owners: FdOwnerCounts;
+    try {
+      owners = this.deps.getFdOwners();
+    } catch (error) {
+      // An exception escaping this timer would reach the host's
+      // uncaughtException handler and take every terminal down with it.
+      // Skip the sample and say so once per failure run.
+      if (!this.fdSampleFailureLogged) {
+        this.fdSampleFailureLogged = true;
+        console.warn("[ResourceGovernor] FD owner accounting failed; skipping samples:", error);
+      }
+      return;
+    }
+    this.fdSampleFailureLogged = false;
+
     const sample = this.fdMonitor.sample(owners, now);
     if (!sample) return;
 

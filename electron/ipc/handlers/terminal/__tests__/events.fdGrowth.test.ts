@@ -108,19 +108,34 @@ describe("terminal event handlers — fd-growth (#12520)", () => {
     expect(message).toContain("12 min after it rose");
   });
 
+  it("omits the type breakdown when the elevation carries none", () => {
+    ptyClient.emit("fd-growth", makePayload({ descriptorTypes: undefined }));
+
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    const [message] = logWarn.mock.calls[0] as [string];
+    expect(message).toContain("FD count elevated");
+    expect(message).not.toContain("Descriptor types");
+    expect(message).not.toContain("undefined");
+  });
+
   it("states observations only — no leak verdict and no PTY-limit percentage", () => {
     ptyClient.emit("fd-growth", makePayload());
     ptyClient.emit("fd-growth", makePayload({ state: "recovered", growth: 0 }));
 
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logInfo).toHaveBeenCalledTimes(1);
     for (const [message] of [...logWarn.mock.calls, ...logInfo.mock.calls] as [string][]) {
       expect(message).not.toMatch(/leak/i);
       expect(message).not.toMatch(/% of limit/);
     }
   });
 
-  it("does not relay the transition to renderers, so open views add no copies", () => {
+  it("does not relay either transition to renderers, so open views add no copies", () => {
     ptyClient.emit("fd-growth", makePayload());
+    ptyClient.emit("fd-growth", makePayload({ state: "recovered", growth: 0 }));
 
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logInfo).toHaveBeenCalledTimes(1);
     expect(broadcastToRenderer).not.toHaveBeenCalled();
     expect(broadcastToProjectRenderers).not.toHaveBeenCalled();
   });

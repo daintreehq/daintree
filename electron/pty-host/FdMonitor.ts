@@ -6,9 +6,10 @@ import type { FdGrowthPayload, FdOwnerCounts, FdTypeCounts } from "../../shared/
 // Measured against the bundled node-pty: five macOS PTYs added ten descriptors
 // and closing them returned all ten.
 const PTY_FDS: Partial<Record<NodeJS.Platform, number>> = { darwin: 2, linux: 1 };
-// A worker_thread runs its own event loop, which holds a poller and an async
-// wakeup descriptor for as long as the worker lives.
-const WORKER_FDS = 2;
+// A worker_thread runs its own event loop for as long as it lives: a poller
+// and an async wakeup handle everywhere, plus on Linux the SIGCHLD pipe libuv
+// opens per loop (macOS watches child exits through kqueue instead).
+const WORKER_FDS: Partial<Record<NodeJS.Platform, number>> = { darwin: 2, linux: 4 };
 
 // Startup opens descriptors that settle within the first minutes (module
 // loads, pool warm, session restore), so nothing is calibrated before this.
@@ -19,11 +20,14 @@ const SETTLE_SAMPLES = 3;
 // A host that never settles (continuous churn) calibrates here regardless.
 const CALIBRATION_DEADLINE_MS = 10 * 60_000;
 // Growth beyond what the owners account for. Bounded noise the model does not
-// cover (a one-off descriptor after the first spawn, transient spawn pipes,
-// worker respawns) stays well under this; a descriptor retained per
-// open/close cycle crosses it after 32 cycles.
+// cover (a one-off descriptor after the first spawn, worker respawns) stays
+// well under this; a descriptor retained per open/close cycle crosses it after
+// 32 cycles.
 const ELEVATED_GROWTH = 32;
-const ELEVATED_SAMPLES = 3;
+// Short-lived children (`ps`/`lsof` probes, spawns in flight) hold stdio
+// sockets for well under a second, so a burst can land on any one sample; it
+// cannot land on five in a row, minutes apart.
+const ELEVATED_SAMPLES = 5;
 const RECOVERED_GROWTH = 16;
 const RECOVERED_SAMPLES = 2;
 // The baseline only moves down, and only on a sustained lower reading — never
@@ -59,6 +63,7 @@ interface SettlingSample {
 export class FdMonitor {
   private readonly fdPath: string | null;
   private readonly ptyFds: number;
+  private readonly workerFds: number;
   private readonly startedAt: number;
   private settling: SettlingSample[] = [];
   private baselineFds: number | null = null;
@@ -80,6 +85,7 @@ export class FdMonitor {
       this.fdPath = null;
     }
     this.ptyFds = PTY_FDS[platform] ?? 1;
+    this.workerFds = WORKER_FDS[platform] ?? 2;
     this.startedAt = options.startedAt ?? Date.now();
   }
 
@@ -94,7 +100,7 @@ export class FdMonitor {
 
   expectedFds(owners: FdOwnerCounts): number {
     const ptys = owners.terminals + owners.pooledPtys + owners.pluginPtys;
-    return ptys * this.ptyFds + owners.analysisWorkers * WORKER_FDS;
+    return ptys * this.ptyFds + owners.analysisWorkers * this.workerFds;
   }
 
   /**

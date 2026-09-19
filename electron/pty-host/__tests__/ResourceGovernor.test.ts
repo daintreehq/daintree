@@ -171,10 +171,46 @@ describe("ResourceGovernor", () => {
     const deps = createMockDeps();
     const governor = new ResourceGovernor(deps);
     governor.start();
+
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+    expect(mockSample).toHaveBeenCalledTimes(1);
     governor.dispose();
 
-    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 2);
+    mockSample.mockReturnValue({
+      ...defaultFdSample,
+      transition: { state: "elevated", growth: 50 },
+    });
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 3);
+    expect(mockSample).toHaveBeenCalledTimes(1);
+    expect(fdGrowthEvents(deps)).toHaveLength(0);
+  });
+
+  it("skips a sample when owner accounting throws instead of crashing the host", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const getFdOwners = vi.fn().mockImplementation(() => {
+      throw new Error("registry mid-teardown");
+    });
+    const deps = createMockDeps({ getFdOwners });
+    const governor = new ResourceGovernor(deps);
+    governor.start();
+    governor.trackKilledPid(1357);
+
+    expect(() => vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 3)).not.toThrow();
+    expect(getFdOwners).toHaveBeenCalledTimes(3);
     expect(mockSample).not.toHaveBeenCalled();
+    // One warning for the whole failure run, not one per sample.
+    const accountingWarnings = warn.mock.calls.filter((c) =>
+      String(c[0]).includes("FD owner accounting failed")
+    );
+    expect(accountingWarnings).toHaveLength(1);
+    // The 2s resource tick is unaffected.
+    expect(mockIsProcessAlive).toHaveBeenCalledWith(1357);
+
+    getFdOwners.mockReturnValue(defaultOwners);
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+    expect(mockSample).toHaveBeenCalledTimes(1);
+
+    governor.dispose();
   });
 
   it("skips FD monitoring on unsupported platforms", () => {

@@ -40,19 +40,26 @@ function fakeStats(kind: "char" | "socket" | "fifo" | "file" | "dir" | "other") 
 /**
  * Drives a monitor through a simulated host: every `sample()` advances the
  * clock one interval and reads `fds` descriptors against the current owners.
+ * `null` makes the descriptor listing fail for that sample.
  */
 function harness(platform: NodeJS.Platform = "darwin") {
   const monitor = new FdMonitor({ fdPath: "/dev/fd", platform, startedAt: 0 });
   let now = 0;
   const transitions: NonNullable<FdSample["transition"]>[] = [];
-  const sample = (fds: number, current: FdOwnerCounts): FdSample | null => {
+  const sample = (fds: number | null, current: FdOwnerCounts): FdSample | null => {
     now += INTERVAL;
-    mockReaddirSync.mockReturnValue(listing(fds));
+    if (fds === null) {
+      mockReaddirSync.mockImplementation(() => {
+        throw new Error("EMFILE");
+      });
+    } else {
+      mockReaddirSync.mockReturnValue(listing(fds));
+    }
     const result = monitor.sample(current, now);
     if (result?.transition) transitions.push(result.transition);
     return result;
   };
-  return { monitor, sample, transitions, now: () => now };
+  return { sample, transitions, now: () => now };
 }
 
 describe("FdMonitor", () => {
@@ -93,10 +100,10 @@ describe("FdMonitor", () => {
       expect(mockReaddirSync.mock.calls).toEqual([["/dev/fd"], ["/proc/self/fd"]]);
     });
 
-    it("accounts two descriptors per PTY on macOS, one on Linux, two per worker", () => {
+    it("sums every PTY owner at the platform's per-PTY cost, plus workers", () => {
       const counts = owners({ terminals: 25, pooledPtys: 2, pluginPtys: 1, analysisWorkers: 3 });
       expect(new FdMonitor({ platform: "darwin" }).expectedFds(counts)).toBe(28 * 2 + 3 * 2);
-      expect(new FdMonitor({ platform: "linux" }).expectedFds(counts)).toBe(28 + 3 * 2);
+      expect(new FdMonitor({ platform: "linux" }).expectedFds(counts)).toBe(28 + 3 * 4);
     });
   });
 
@@ -123,22 +130,28 @@ describe("FdMonitor", () => {
       expect(sample(69, owners({ terminals: 15 }))?.baselineFds).toBe(39);
     });
 
-    it("calibrates at the deadline even if the host never settles", () => {
-      const { sample } = harness();
-      let result: FdSample | null = null;
-      for (let i = 1; i <= 20; i++) {
-        result = sample(40 + (i % 2) * 2, owners({ terminals: i % 2 }));
+    it("calibrates at the deadline, not before, if the host never settles", () => {
+      const { sample, transitions, now } = harness();
+      const churn = (i: number) => sample(40 + (i % 2) * 2, owners({ terminals: i % 2 }));
+      let i = 1;
+      for (; now() + INTERVAL < 10 * 60_000; i++) {
+        expect(churn(i)?.baselineFds).toBeNull();
       }
-      expect(result?.baselineFds).toBe(40);
+      expect(churn(i)?.baselineFds).toBe(40);
+
+      // Calibrated, so growth now registers.
+      for (let n = 0; n < 5; n++) sample(100, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
     });
   });
 
   describe.each(["darwin", "linux"] as const)("episodes on %s", (platform) => {
     const ptyFds = platform === "darwin" ? 2 : 1;
+    const workerFds = platform === "darwin" ? 2 : 4;
     // A restored fleet at the issue's scale: 25 terminals, two pooled shells,
     // three analysis workers, on top of the host's own 37 descriptors.
     const fleet = owners({ terminals: 25, pooledPtys: 2, analysisWorkers: 3 });
-    const fleetFds = 37 + 27 * ptyFds + 3 * 2;
+    const fleetFds = 37 + 27 * ptyFds + 3 * workerFds;
 
     function calibrated() {
       const h = harness(platform);
@@ -156,22 +169,21 @@ describe("FdMonitor", () => {
 
       // Twenty more terminals, which also spawn the rest of the worker pool.
       const bigger = owners({ terminals: 45, pooledPtys: 2, analysisWorkers: 6 });
-      for (let i = 0; i < 60; i++) sample(37 + 47 * ptyFds + 6 * 2, bigger);
+      for (let i = 0; i < 60; i++) sample(37 + 47 * ptyFds + 6 * workerFds, bigger);
 
       // Close them again; the workers stay.
       const after = owners({ ...fleet, analysisWorkers: 6 });
-      for (let i = 0; i < 60; i++) sample(fleetFds + 6, after);
+      for (let i = 0; i < 60; i++) sample(fleetFds + 3 * workerFds, after);
 
       expect(transitions).toEqual([]);
     });
 
-    it("ignores a burst of descriptors that does not last three samples", () => {
+    it("ignores bursts of short-lived descriptors that miss any sample in five", () => {
       const { sample, transitions } = calibrated();
-      sample(fleetFds, fleet);
-      sample(fleetFds + 200, fleet);
-      sample(fleetFds + 200, fleet);
-      sample(fleetFds, fleet);
-      sample(fleetFds + 200, fleet);
+      for (let round = 0; round < 50; round++) {
+        for (let i = 0; i < 4; i++) sample(fleetFds + 200, fleet);
+        sample(fleetFds, fleet);
+      }
       expect(transitions).toEqual([]);
     });
 
@@ -187,13 +199,14 @@ describe("FdMonitor", () => {
         sample(fleetFds + leaked, fleet);
       };
 
-      for (let i = 0; i < 31; i++) cycle();
+      // Growth first reaches the threshold on the 32nd close and has held for
+      // five samples by the 34th.
+      for (let i = 0; i < 33; i++) cycle();
       expect(transitions).toEqual([]);
 
       mockFstatSync.mockImplementation((fd: number) =>
         fakeStats(fd % 3 === 0 ? "char" : fd % 3 === 1 ? "fifo" : "file")
       );
-      cycle();
       cycle();
       expect(transitions).toHaveLength(1);
       const elevated = transitions[0]!;
@@ -201,7 +214,7 @@ describe("FdMonitor", () => {
         state: "elevated",
         ...fleet,
         baselineFds: 37,
-        sustainedSamples: 3,
+        sustainedSamples: 5,
       });
       expect(elevated.growth).toBeGreaterThanOrEqual(32);
       expect(elevated.fdCount - elevated.expectedFds - elevated.baselineFds).toBe(elevated.growth);
@@ -226,7 +239,7 @@ describe("FdMonitor", () => {
       expect(transitions[1]!.descriptorTypes).toBeUndefined();
 
       // A second leak is a second episode.
-      for (let i = 0; i < 3; i++) sample(fleetFds + 40, fleet);
+      for (let i = 0; i < 5; i++) sample(fleetFds + 40, fleet);
       expect(transitions.map((t) => t.state)).toEqual(["elevated", "recovered", "elevated"]);
       expect(transitions[2]!.episodeStartedAt).toBeGreaterThan(elevated.episodeStartedAt);
     });
@@ -235,8 +248,7 @@ describe("FdMonitor", () => {
       const { sample, transitions, now } = calibrated();
       sample(fleetFds + 40, fleet);
       const firstHigh = now();
-      sample(fleetFds + 40, fleet);
-      sample(fleetFds + 40, fleet);
+      for (let i = 0; i < 4; i++) sample(fleetFds + 40, fleet);
       expect(transitions[0]?.episodeStartedAt).toBe(firstHigh);
     });
 
@@ -256,9 +268,31 @@ describe("FdMonitor", () => {
       expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
     });
 
+    it("absorbs descriptors already held at calibration, then catches growth beyond them", () => {
+      const h = harness(platform);
+      // 20 descriptors already retained before the host settled: they are
+      // part of the baseline, which is the state later growth is judged from.
+      for (let i = 0; i < 7; i++) h.sample(fleetFds + 20, fleet);
+      for (let i = 0; i < 20; i++) h.sample(fleetFds + 20, fleet);
+      expect(h.transitions).toEqual([]);
+      for (let i = 0; i < 5; i++) h.sample(fleetFds + 20 + 32, fleet);
+      expect(h.transitions.map((t) => t.state)).toEqual(["elevated"]);
+      expect(h.transitions[0]).toMatchObject({ baselineFds: 37 + 20, growth: 32 });
+    });
+
+    it("works from a negative baseline when the owners overestimate", () => {
+      const h = harness(platform);
+      // Fewer descriptors than the owner model expects.
+      const lean = fleetFds - 50;
+      for (let i = 0; i < 7; i++) h.sample(lean, fleet);
+      expect(h.sample(lean, fleet)?.baselineFds).toBe(37 - 50);
+      for (let i = 0; i < 5; i++) h.sample(lean + 32, fleet);
+      expect(h.transitions.map((t) => t.state)).toEqual(["elevated"]);
+    });
+
     it("needs two consecutive low samples to recover", () => {
       const { sample, transitions } = calibrated();
-      for (let i = 0; i < 3; i++) sample(fleetFds + 50, fleet);
+      for (let i = 0; i < 5; i++) sample(fleetFds + 50, fleet);
       sample(fleetFds, fleet);
       sample(fleetFds + 50, fleet);
       sample(fleetFds + 10, fleet);
@@ -300,16 +334,12 @@ describe("FdMonitor", () => {
 
   describe("failed listings", () => {
     it("neither extends nor breaks a streak", () => {
-      const { monitor, sample, transitions, now } = harness();
+      const { sample, transitions } = harness();
       for (let i = 0; i < 7; i++) sample(40, owners());
 
-      sample(80, owners());
-      sample(80, owners());
-      mockReaddirSync.mockImplementation(() => {
-        throw new Error("EMFILE");
-      });
-      expect(monitor.sample(owners(), now() + INTERVAL)).toBeNull();
-      mockReaddirSync.mockReset();
+      for (let i = 0; i < 4; i++) sample(80, owners());
+      expect(sample(null, owners())).toBeNull();
+      expect(sample(null, owners())).toBeNull();
       expect(transitions).toEqual([]);
 
       sample(80, owners());
@@ -317,16 +347,26 @@ describe("FdMonitor", () => {
     });
 
     it("never reads as a drop to zero that could end an episode", () => {
-      const { monitor, sample, transitions, now } = harness();
+      const { sample, transitions } = harness();
       for (let i = 0; i < 7; i++) sample(40, owners());
-      for (let i = 0; i < 3; i++) sample(80, owners());
+      for (let i = 0; i < 5; i++) sample(80, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
 
-      mockReaddirSync.mockImplementation(() => {
-        throw new Error("EMFILE");
-      });
-      for (let i = 1; i <= 5; i++) monitor.sample(owners(), now() + i * INTERVAL);
+      for (let i = 0; i < 5; i++) expect(sample(null, owners())).toBeNull();
+      // Still the same episode: had the failures ended it, this would open a
+      // second one.
+      for (let i = 0; i < 10; i++) sample(80, owners());
 
       expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+    });
+
+    it("does not count a failed listing toward settling", () => {
+      const { sample } = harness();
+      // Warm-up ends on the fourth sample, which is the first settled one.
+      for (let i = 0; i < 4; i++) sample(40, owners());
+      for (let i = 0; i < 5; i++) expect(sample(null, owners())).toBeNull();
+      expect(sample(40, owners())?.baselineFds).toBeNull();
+      expect(sample(40, owners())?.baselineFds).toBe(40);
     });
   });
 });
