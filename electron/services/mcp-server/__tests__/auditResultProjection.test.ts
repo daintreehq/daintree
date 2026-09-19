@@ -14,6 +14,7 @@ const OK_RESULT = {
     truncated: false,
     recordedAt: 1,
     stopReason: "end_turn",
+    nextCursor: "CURSOR-SENTINEL",
   },
   unansweredToolUses: [
     { id: "toolu_q", name: "AskUserQuestion", input: { questions: [{ question: QUESTION }] } },

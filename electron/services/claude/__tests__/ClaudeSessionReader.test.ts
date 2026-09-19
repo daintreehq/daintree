@@ -33,7 +33,9 @@ import {
 import { deriveProjectSlug } from "../ClaudeSubagentReader.js";
 import {
   LAST_MESSAGE_TEXT_MAX_BYTES,
+  LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES,
   LAST_MESSAGE_TOOL_USE_LIMIT,
+  type AgentLastMessage,
   type AgentLastMessageOk,
   type AgentLastMessageResult,
 } from "../../../../shared/types/agentLastMessage.js";
@@ -589,6 +591,357 @@ describe("readClaudeLastMessage — reading from the end", () => {
   });
 });
 
+const escapedBytes = (value: string) => Buffer.byteLength(JSON.stringify(value)) - 2;
+
+// Pages back from where `first` starts until the cursor runs out, the way a
+// caller would, and returns the results in the order they were read.
+async function resultsFrom(first: Parameters<typeof read>[0] = {}): Promise<AgentLastMessageOk[]> {
+  const results: AgentLastMessageOk[] = [];
+  let options = first;
+  for (let i = 0; i < 100; i++) {
+    const result = ok(await read(options));
+    const cursor = result.message?.nextCursor;
+    if (cursor === undefined) throw new Error("expected a message");
+    results.push(result);
+    if (cursor === null) return results;
+    options = { ...options, messageIndex: undefined, cursor };
+  }
+  throw new Error("the cursor never ran out");
+}
+
+const pagesFrom = async (first: Parameters<typeof read>[0] = {}): Promise<AgentLastMessage[]> =>
+  (await resultsFrom(first)).map((result) => result.message!);
+
+const rebuilt = (pages: AgentLastMessage[]) =>
+  pages
+    .map((page) => page.text)
+    .reverse()
+    .join("");
+
+// Everything that costs a different number of bytes once escaped, plus a
+// pair and a lone surrogate, so a page boundary lands on each kind.
+const mixed = (length: number) => {
+  const pieces = [
+    "plain ",
+    'q"uote ',
+    "back\\slash ",
+    "\u0001ctl ",
+    "tab\t",
+    "日本語 ",
+    "🚀",
+    "\ud800x ",
+  ];
+  let out = "";
+  for (let i = 0; out.length < length; i++) out += pieces[i % pieces.length];
+  return out;
+};
+
+describe("readClaudeLastMessage — reading more of a message (#12496)", () => {
+  it("returns more of a long message when asked, and still keeps the end", async () => {
+    const body = "x".repeat(40 * 1024) + "THE END";
+    await seed([assistant("msg_1", [text(body)])]);
+
+    const byDefault = ok(await read()).message;
+    const asked = ok(await read({ maxBytes: LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES })).message;
+
+    expect(byDefault?.truncated).toBe(true);
+    expect(byDefault?.nextCursor).toEqual(expect.any(String));
+    expect(asked).toMatchObject({ text: body, truncated: false, nextCursor: null });
+  });
+
+  it("keeps less when asked for less", async () => {
+    await seed([assistant("msg_1", [text("y".repeat(4096) + "THE END")])]);
+
+    const message = ok(await read({ maxBytes: 1024 })).message;
+
+    expect(escapedBytes(message!.text)).toBeLessThanOrEqual(1024);
+    expect(message?.text.endsWith("THE END")).toBe(true);
+    expect(message?.truncated).toBe(true);
+  });
+
+  it("hands out no cursor when the whole message fits", async () => {
+    await seed([assistant("msg_1", [text("Short.")])]);
+
+    expect(ok(await read()).message).toMatchObject({ truncated: false, nextCursor: null });
+  });
+
+  it("pages back through a message longer than any one response, with no gap or overlap", async () => {
+    const blocks = [mixed(70_000), mixed(50_000), mixed(30_000)];
+    await seed([prompt("report"), ...blocks.map((block) => assistant("msg_1", [text(block)]))]);
+    const whole = blocks.map((block) => block.trim()).join("\n\n");
+
+    for (const maxBytes of [undefined, LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES]) {
+      const pages = await pagesFrom(maxBytes === undefined ? {} : { maxBytes });
+
+      expect(pages.length).toBeGreaterThan(2);
+      expect(rebuilt(pages)).toBe(whole);
+      for (const page of pages) {
+        expect(escapedBytes(page.text)).toBeLessThanOrEqual(
+          maxBytes ?? LAST_MESSAGE_TEXT_MAX_BYTES
+        );
+        expect(page.id).toBe("msg_1");
+        // A page never starts on the second half of a surrogate pair.
+        const first = page.text.charCodeAt(0);
+        expect(first >= 0xdc00 && first <= 0xdfff).toBe(false);
+      }
+      expect(pages.slice(0, -1).every((page) => page.truncated)).toBe(true);
+      expect(pages.at(-1)?.truncated).toBe(false);
+    }
+  });
+
+  it("pages in the smallest steps a caller may ask for", async () => {
+    const body = mixed(12_000);
+    await seed([assistant("msg_1", [text(body)])]);
+
+    const pages = await pagesFrom({ maxBytes: 1024 });
+
+    expect(pages.length).toBeGreaterThan(10);
+    expect(rebuilt(pages)).toBe(body.trim());
+    expect(pages.every((page) => escapedBytes(page.text) <= 1024)).toBe(true);
+  });
+
+  // Fitting the whole result under the response cap can cut more of the head
+  // than the text budget did. The cursor has to start where the text that was
+  // actually returned starts, or the difference is never read.
+  it("continues from the text that survived fitting, not from the page before it", async () => {
+    const uses = Array.from({ length: LAST_MESSAGE_TOOL_USE_LIMIT }, (_, i) =>
+      toolUse(`toolu_${i}_${"i".repeat(240)}`, "N".repeat(250))
+    );
+    const body = mixed(120_000);
+    await seed([assistant("msg_1", [text(body)]), ...uses.map((use) => assistant("msg_1", [use]))]);
+
+    const results = await resultsFrom({ maxBytes: LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES });
+    const pages = results.map((result) => result.message!);
+
+    expect(escapedBytes(pages[0]!.text)).toBeLessThan(LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES - 1024);
+    expect(rebuilt(pages)).toBe(body.trim());
+    for (const result of results) {
+      expect(result.unansweredToolUses).toHaveLength(LAST_MESSAGE_TOOL_USE_LIMIT);
+      expect(Buffer.byteLength(JSON.stringify(result))).toBeLessThanOrEqual(
+        MCP_RESPONSE_TEXT_MAX_BYTES
+      );
+    }
+  });
+
+  it("keeps paging the same message after the agent has moved on", async () => {
+    const report = mixed(60_000);
+    const lines = [prompt("report"), assistant("msg_1", [text(report)])];
+    await seed(lines);
+    const first = ok(await read()).message!;
+
+    await seed([...lines, prompt("thanks"), assistant("msg_2", [text("You're welcome.")])]);
+    const rest = await pagesFrom({ cursor: first.nextCursor! });
+
+    expect(rest.every((page) => page.id === "msg_1")).toBe(true);
+    expect(rebuilt([first, ...rest])).toBe(report.trim());
+    expect(ok(await read({ cursor: first.nextCursor! })).newerRecordsFollow).toBe(true);
+  });
+
+  // Claude Code appends a message's blocks, so text already read keeps its
+  // offsets while more of the same message arrives.
+  it("keeps paging when more of the same message is written", async () => {
+    const opening = mixed(60_000);
+    const lines = [prompt("report"), assistant("msg_1", [text(opening)])];
+    await seed(lines);
+    const first = ok(await read()).message!;
+
+    await seed([...lines, assistant("msg_1", [text("A later paragraph.")])]);
+    const rest = await pagesFrom({ cursor: first.nextCursor! });
+
+    expect(rebuilt([first, ...rest])).toBe(opening.trim());
+  });
+
+  it("reports a cursor whose message changed rather than reading another", async () => {
+    await seed([prompt("report"), assistant("msg_1", [text(mixed(60_000))])]);
+    const first = ok(await read()).message!;
+
+    await seed([prompt("report"), assistant("msg_1", [text("Rewritten " + mixed(60_000))])]);
+
+    expect(await read({ cursor: first.nextCursor! })).toEqual({
+      status: "unavailable",
+      reason: "message-not-found",
+    });
+  });
+
+  it("reports the cap when the cursor's message has left the read", async () => {
+    const lines = [prompt("report"), assistant("msg_1", [text(mixed(8_000))])];
+    await seed(lines);
+    const first = ok(await read({ maxBytes: 1024 })).message!;
+
+    await seed([...lines, prompt("next"), toolResult("toolu_big", "z".repeat(8192))]);
+
+    expect(await read({ cursor: first.nextCursor!, maxScanBytes: 4096 })).toEqual({
+      status: "unavailable",
+      reason: "search-cap-reached",
+    });
+  });
+
+  it("reports a cursor that is not one it minted as not found", async () => {
+    await seed([assistant("msg_1", [text("Reply.")])]);
+
+    expect(await read({ cursor: "not-a-cursor" })).toEqual({
+      status: "unavailable",
+      reason: "message-not-found",
+    });
+  });
+});
+
+describe("readClaudeLastMessage — an earlier message (#12496)", () => {
+  it("reads the reply before the latest", async () => {
+    await seed([
+      prompt("write the report"),
+      assistant("msg_1", [text("The long report.")]),
+      prompt("thanks"),
+      assistant("msg_2", [text("Anytime.")]),
+    ]);
+
+    const latest = ok(await read({ messageIndex: 0 }));
+    const earlier = ok(await read({ messageIndex: 1 }));
+
+    expect(latest.message?.text).toBe("Anytime.");
+    expect(earlier.message).toMatchObject({ id: "msg_1", text: "The long report." });
+    expect(earlier.newerRecordsFollow).toBe(true);
+  });
+
+  it("counts only replies with text, and never blends two of them", async () => {
+    await seed([
+      assistant("msg_1", [text("First.")]),
+      assistant("msg_2", [text("Second.")]),
+      assistant("msg_3", [toolUse("toolu_1", "Bash")]),
+      toolResult("toolu_1"),
+      assistant("msg_4", [text("Third.")]),
+    ]);
+
+    expect(ok(await read({ messageIndex: 1 })).message?.text).toBe("Second.");
+    expect(ok(await read({ messageIndex: 2 })).message?.text).toBe("First.");
+  });
+
+  it("counts a record with no message id as a reply of its own", async () => {
+    await seed([
+      assistant("msg_1", [text("Older.")]),
+      assistant(null, [text("No id.")]),
+      assistant("msg_2", [text("Newest.")]),
+    ]);
+
+    expect(ok(await read({ messageIndex: 1 })).message).toMatchObject({ id: null, text: "No id." });
+    expect(ok(await read({ messageIndex: 2 })).message?.text).toBe("Older.");
+  });
+
+  it("reaches back across a compaction", async () => {
+    await seed([
+      assistant("msg_1", [text("Before compaction.")]),
+      system("compact_boundary"),
+      assistant("msg_2", [text("After.")]),
+    ]);
+
+    expect(ok(await read({ messageIndex: 1 })).message?.text).toBe("Before compaction.");
+  });
+
+  // The record that ends a message passed over is read again as the newest
+  // record of whatever came before it, so its own calls still count — and a
+  // prompt that carries a result still answers the call it names.
+  it("returns the calls made in or after the earlier reply that nothing answered", async () => {
+    await seed([
+      assistant("msg_1", [text("Report.")]),
+      assistant("msg_1", [toolUse("toolu_old", "Bash"), toolUse("toolu_asked", "Read")]),
+      JSON.stringify({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            { type: "tool_result", tool_use_id: "toolu_asked", content: "ok" },
+            { type: "text", text: "and also this" },
+          ],
+        },
+        timestamp: STAMP,
+      }),
+      assistant("msg_2", [text("Middle.")]),
+      assistant("msg_3", [toolUse("toolu_pending", "Write")]),
+      assistant("msg_4", [text("Later.")]),
+    ]);
+
+    const result = ok(await read({ messageIndex: 2 }));
+
+    expect(result.message?.text).toBe("Report.");
+    expect(result.unansweredToolUses).toEqual([
+      { id: "toolu_old", name: "Bash" },
+      { id: "toolu_pending", name: "Write" },
+    ]);
+  });
+
+  it("does not count sidechain or harness records as replies", async () => {
+    await seed([
+      assistant("msg_1", [text("Main reply.")]),
+      assistant("msg_side", [text("Subagent chatter.")], { isSidechain: true }),
+      assistant("msg_meta", [text("Injected.")], { isMeta: true }),
+      assistant("msg_2", [text("Latest.")]),
+    ]);
+
+    expect(ok(await read({ messageIndex: 1 })).message?.text).toBe("Main reply.");
+  });
+
+  it("reports an index past the first reply as not found", async () => {
+    await seed([assistant("msg_1", [text("Only.")])]);
+
+    expect(await read({ messageIndex: 1 })).toEqual({
+      status: "unavailable",
+      reason: "message-not-found",
+    });
+  });
+
+  it("reports an earlier message as not found when there is no transcript", async () => {
+    expect(await read({ messageIndex: 1 })).toEqual({
+      status: "unavailable",
+      reason: "message-not-found",
+    });
+  });
+
+  it("reports the cap rather than an older reply when the earlier one is out of reach", async () => {
+    await seed([
+      assistant("msg_1", [text("Far back.")]),
+      toolResult("toolu_1", "x".repeat(4096)),
+      assistant("msg_2", [text("Latest.")]),
+    ]);
+
+    expect(await read({ messageIndex: 1, chunkBytes: 512, maxScanBytes: 2048 })).toEqual({
+      status: "unavailable",
+      reason: "search-cap-reached",
+    });
+  });
+
+  it("pages through an earlier reply by its cursor", async () => {
+    const report = mixed(6_000);
+    await seed([
+      prompt("report"),
+      assistant("msg_1", [text(report)]),
+      prompt("thanks"),
+      assistant("msg_2", [text("Welcome.")]),
+    ]);
+
+    const pages = await pagesFrom({ messageIndex: 1, maxBytes: 1024 });
+
+    expect(pages.length).toBeGreaterThan(3);
+    expect(pages.every((page) => page.id === "msg_1" && page.text.length > 0)).toBe(true);
+    expect(rebuilt(pages)).toBe(report.trim());
+  });
+
+  it("pages a reply that has no message id", async () => {
+    const reply = mixed(5_000);
+    await seed([
+      prompt("go"),
+      assistant(null, [text(reply)]),
+      prompt("next"),
+      assistant("msg_2", [text("Short.")]),
+    ]);
+
+    const pages = await pagesFrom({ messageIndex: 1, maxBytes: 1024 });
+
+    expect(pages.length).toBeGreaterThan(3);
+    expect(pages.every((page) => page.id === null)).toBe(true);
+    expect(rebuilt(pages)).toBe(reply.trim());
+  });
+});
+
 describe("readClaudeLastMessage — which file", () => {
   it("reports nothing on record when the session has no transcript yet", async () => {
     expect(await read()).toEqual({ status: "unavailable", reason: "no-message" });
@@ -725,7 +1078,14 @@ describe("fitWithinResponseCap", () => {
   const base: AgentLastMessageOk = {
     status: "ok",
     provider: "claude",
-    message: { id: "m", text: "x".repeat(200), truncated: false, recordedAt: 1, stopReason: null },
+    message: {
+      id: "m",
+      text: "x".repeat(200),
+      truncated: false,
+      recordedAt: 1,
+      stopReason: null,
+      nextCursor: null,
+    },
     unansweredToolUses: [{ id: "t", name: "AskUserQuestion", input: { q: "y".repeat(200) } }],
     newerRecordsFollow: false,
     fileUpdatedAt: 1,

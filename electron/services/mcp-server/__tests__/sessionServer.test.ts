@@ -25,6 +25,7 @@ import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
 import { ResourceOwnershipLedger } from "../resourceOwnership.js";
 import type { AgentLastMessageResult } from "../../../../shared/types/agentLastMessage.js";
+import { encodeMessageCursor } from "../../claude/ClaudeMessageCursor.js";
 import {
   buildToolError,
   buildMcpErrorPayload,
@@ -7244,6 +7245,7 @@ describe("session-scoped resource ownership (#11909)", () => {
         truncated: false,
         recordedAt: 1,
         stopReason: "end_turn",
+        nextCursor: null,
       },
       unansweredToolUses: [],
       newerRecordsFollow: false,
@@ -7275,6 +7277,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(payloadOf(result)).toEqual(READ_RESULT);
       expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
         "terminal-1",
+        {},
         expect.any(AbortSignal)
       );
       expect(dispatchAction).not.toHaveBeenCalled();
@@ -7292,14 +7295,85 @@ describe("session-scoped resource ownership (#11909)", () => {
           terminalId: "terminal-1",
           sessionId: "someone-elses",
           path: "/etc/passwd",
+          maxScanBytes: 1e9,
         },
       });
 
       expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledTimes(1);
       expect(handleTerminalReadLastMessageOwned.mock.calls[0]).toEqual([
         "terminal-1",
+        {},
         expect.any(AbortSignal),
       ]);
+    });
+
+    // How much of which message is the caller's to choose (#12496), and the
+    // only thing beyond the id that reaches the executor.
+    it("forwards the read options it validated", async () => {
+      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-options");
+      const cursor = encodeMessageCursor("msg_1", "Text before the page.", 5);
+
+      await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1", maxBytes: 49152, messageIndex: 2 },
+      });
+      await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-1", cursor, path: "/etc/passwd" },
+      });
+
+      expect(handleTerminalReadLastMessageOwned.mock.calls.map((call) => call[1])).toEqual([
+        { maxBytes: 49152, messageIndex: 2 },
+        { cursor },
+      ]);
+    });
+
+    // Nothing else validates a main-executed call, so an out-of-contract value
+    // is refused here rather than read with.
+    it("refuses read options out of contract, without reading, and audits the refusal", async () => {
+      const { server, deps, handleTerminalReadLastMessageOwned } = readHarness("s-read-invalid");
+
+      for (const extra of [
+        { maxBytes: 1_000_000 },
+        { messageIndex: -1 },
+        { cursor: "made-up" },
+        { cursor: encodeMessageCursor("msg_1", "Text.", 2), messageIndex: 0 },
+      ]) {
+        const result = await callTool(server, {
+          name: "terminal.readLastMessageOwned",
+          arguments: { terminalId: "terminal-1", ...extra },
+        });
+        expect(result.isError).toBe(true);
+        expect(toolErrorPayload(result).code).toBe("VALIDATION_ERROR");
+      }
+
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          outcome: {
+            kind: "result",
+            value: expect.objectContaining({
+              ok: false,
+              error: expect.objectContaining({ code: "VALIDATION_ERROR" }),
+            }),
+          },
+        })
+      );
+    });
+
+    // Ownership is decided first, so a malformed request for someone else's
+    // panel learns nothing more than a well-formed one would.
+    it("refuses a panel the session did not create before looking at its options", async () => {
+      const { server, handleTerminalReadLastMessageOwned } = readHarness("s-read-foreign-options");
+
+      const result = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-theirs", maxBytes: "lots" },
+      });
+
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(errorText(result)).not.toContain("maxBytes");
+      expect(handleTerminalReadLastMessageOwned).not.toHaveBeenCalled();
     });
 
     it("refuses a panel the session did not create, without reading anything", async () => {

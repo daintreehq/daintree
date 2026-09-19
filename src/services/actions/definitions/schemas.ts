@@ -614,13 +614,17 @@ const AgentLastMessageSchema = z.object({
   id: z.string().nullable(),
   text: z
     .string()
-    .describe("Its text blocks in order, cut to 24 KiB once escaped, keeping the end."),
+    .describe("Its text blocks in order, cut to `maxBytes` once escaped, keeping the end."),
   truncated: z.boolean().describe("The start of the message was cut to fit."),
   recordedAt: z.number().nullable(),
   stopReason: z
     .string()
     .nullable()
     .describe("Raw from the transcript, not a verdict on whether the turn ended."),
+  nextCursor: z
+    .string()
+    .nullable()
+    .describe("Pass as `cursor` for the text before this. Null once nothing earlier is in reach."),
 });
 
 /**
@@ -638,7 +642,7 @@ export const TerminalLastMessageResultSchema = z
       status: z.literal("ok"),
       provider: z.enum(["claude", "codex"]),
       message: AgentLastMessageSchema.nullable().describe(
-        "The last reply that had text. Null when only an unanswered tool call is on record."
+        "The selected reply with text. Null when only an unanswered tool call is on record."
       ),
       unansweredToolUses: z
         .array(
@@ -666,7 +670,7 @@ export const TerminalLastMessageResultSchema = z
       reason: z
         .enum(AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS)
         .describe(
-          "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted."
+          "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted. 'message-not-found': no reply at that index, or the cursor's message changed."
         ),
     }),
   ])

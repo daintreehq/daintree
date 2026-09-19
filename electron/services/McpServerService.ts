@@ -292,8 +292,8 @@ export class McpServerService {
       handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
       handleTerminalGetStatusViewless: (rawArgs, workspaceId) =>
         handleTerminalGetStatusViewless(rawArgs, workspaceId),
-      handleTerminalReadLastMessageOwned: (terminalId, signal) =>
-        handleTerminalReadLastMessageOwned(terminalId, signal),
+      handleTerminalReadLastMessageOwned: (terminalId, options, signal) =>
+        handleTerminalReadLastMessageOwned(terminalId, options, signal),
       // The pty-host's own spawn tracking spans every view, which is what a
       // collision check needs: a panel store only knows its own (#12407).
       isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,

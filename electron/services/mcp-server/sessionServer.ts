@@ -110,6 +110,7 @@ import { buildToolCallResult } from "./toolCallResult.js";
 import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
+import { parseLastMessageReadArgs, type LastMessageReadArgs } from "./lastMessageArgs.js";
 import {
   extractOwnedResourcesFromDispatch,
   type OwnedResourceKind,
@@ -179,10 +180,12 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
 export interface OwnedMainExecutors {
   /**
    * Read the last message the agent in an owned panel wrote to its own
-   * transcript (#12479). Given the checked id and nothing else the caller sent.
+   * transcript (#12479). Given the checked id and the read options its entry's
+   * `readOptions` validated (#12496), and nothing else the caller sent.
    */
   handleTerminalReadLastMessageOwned: (
     terminalId: string,
+    options: import("../../../shared/types/agentLastMessage.js").AgentLastMessageReadOptions,
     signal: AbortSignal
   ) => Promise<import("../../../shared/types/agentLastMessage.js").AgentLastMessageResult>;
 }
@@ -221,6 +224,13 @@ type OwnedResourceTool = {
   | {
       executor: "main";
       handler: keyof OwnedMainExecutors;
+      /**
+       * The arguments beyond the id that reach the executor, validated and
+       * copied by name (#12496). Nothing else checks them — a main-executed call
+       * never passes through the action's schema parse — so a refusal here is a
+       * validation error returned before anything is read.
+       */
+      readOptions: (args: unknown) => LastMessageReadArgs;
     }
 );
 
@@ -320,6 +330,7 @@ const OWNED_RESOURCE_TOOLS: Record<string, OwnedResourceTool> = {
     resourceKind: "terminal",
     executor: "main",
     handler: "handleTerminalReadLastMessageOwned",
+    readOptions: parseLastMessageReadArgs,
     idArg: "terminalId",
     releasesOwnership: false,
   },
@@ -1799,14 +1810,26 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         // A main-executed owned tool (#12479) runs straight after the gate
         // above and before anything resolves a renderer manifest, so a
         // workspace with no live view still answers it. The executor is handed
-        // the checked id and nothing else the caller sent — the same rebuild the
-        // delegated tools get. Read-only and never `danger: "confirm"`, so the
-        // strip shows a plain in-flight row; audit and strip-settle unify via
-        // the shared `finally`.
+        // the checked id and the options its entry validated, and nothing else
+        // the caller sent — the same rebuild the delegated tools get. Read-only
+        // and never `danger: "confirm"`, so the strip shows a plain in-flight
+        // row; audit and strip-settle unify via the shared `finally`.
         if (ownedResource?.executor === "main" && ownedResourceId !== undefined) {
+          const read = ownedResource.readOptions(args);
+          if (!read.ok) {
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: "VALIDATION_ERROR", message: read.message } },
+            };
+            return buildToolError({ code: "VALIDATION_ERROR", message: read.message });
+          }
           emitToolCallStarted(false);
           try {
-            const result = await deps[ownedResource.handler](ownedResourceId, extra.signal);
+            const result = await deps[ownedResource.handler](
+              ownedResourceId,
+              read.options,
+              extra.signal
+            );
             outcome = { kind: "result", value: { ok: true, result } };
             // The same success bookkeeping the delegated owned tools get on
             // the renderer path: a grant that admitted the call slides its

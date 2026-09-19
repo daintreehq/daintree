@@ -16,6 +16,11 @@
  * Claude Code writes one content block per record, and the blocks of one API
  * message share its `message.id`. None of it is contracted, so every field is
  * parsed as optional and a line that won't parse costs that line.
+ *
+ * A caller can ask for more of one message than the default keeps, page back
+ * through it with the cursor each page hands out, or name an earlier message by
+ * how many replies back it is (#12496). All of it stays inside the same bounded
+ * read; nothing is kept between calls.
  */
 
 import { constants as fsConstants, type Stats } from "fs";
@@ -28,7 +33,9 @@ import {
   LAST_MESSAGE_TOOL_INPUT_MAX_BYTES,
   LAST_MESSAGE_TOOL_INPUTS_TOTAL_MAX_BYTES,
   LAST_MESSAGE_TOOL_USE_LIMIT,
+  type AgentLastMessage,
   type AgentLastMessageOk,
+  type AgentLastMessageReadOptions,
   type AgentLastMessageResult,
   type AgentLastMessageUnavailableReason,
   type AgentUnansweredToolUse,
@@ -39,6 +46,7 @@ import {
   isSafeSessionId,
   recordText,
 } from "./ClaudeSubagentReader.js";
+import { cursorMatches, decodeMessageCursor, encodeMessageCursor } from "./ClaudeMessageCursor.js";
 
 /** Bytes read per step back from the end of the file. */
 const CHUNK_BYTES = 256 * 1024;
@@ -57,8 +65,11 @@ const FIELD_MAX_CHARS = 256;
  */
 const TOOL_INPUT_MAX_DEPTH = 32;
 
-/** Injection seams for tests: the step and the ceiling, nothing else. */
-export interface ClaudeSessionReaderOptions {
+/**
+ * What the caller asked for, already validated, plus the injection seams for
+ * tests: the step and the ceiling, nothing else.
+ */
+export interface ClaudeSessionReaderOptions extends AgentLastMessageReadOptions {
   signal?: AbortSignal;
   chunkBytes?: number;
   maxScanBytes?: number;
@@ -522,6 +533,14 @@ interface FoundMessage {
   complete: boolean;
 }
 
+/** Whether `record`, read after some of `id`'s records, lies before that message began. */
+function endsMessage(record: SessionRecord, id: string | null): boolean {
+  if (record.type === "user") return !record.isMeta && record.isPrompt;
+  if (record.type === "system") return record.subtype === "compact_boundary";
+  if (record.type === "assistant") return record.messageId === null || record.messageId !== id;
+  return false;
+}
+
 /**
  * The last main-chain assistant message with text, plus the tool uses nothing
  * has answered since.
@@ -536,6 +555,11 @@ interface FoundMessage {
  * reply is never looked for past the read's ceiling: if the ceiling comes
  * first, the answer is that it could not be found, not whatever older reply
  * happened to be within reach.
+ *
+ * An earlier message (`messageIndex`) or the one a cursor names is found the
+ * same way, by carrying on past each newer message with text, and everything
+ * said about the last one then holds for it: its tool uses are the calls made
+ * in or after it, and whatever it passed over is newer conversation.
  */
 export async function readClaudeLastMessage(
   location: ClaudeSessionLocation,
@@ -543,6 +567,10 @@ export async function readClaudeLastMessage(
 ): Promise<AgentLastMessageResult> {
   const { signal } = options;
   if (!isSafeSessionId(location.sessionId)) return unavailable("no-session");
+  const cursor = options.cursor === undefined ? null : decodeMessageCursor(options.cursor);
+  if (options.cursor !== undefined && !cursor) return unavailable("message-not-found");
+  const index = cursor ? 0 : (options.messageIndex ?? 0);
+  const latestWanted = !cursor && index === 0;
 
   let handle: FileHandle | null = null;
   try {
@@ -550,7 +578,7 @@ export async function readClaudeLastMessage(
     const transcript = await findTranscript(location, signal);
     // Claude Code writes the file with the first message, so a session nobody
     // has typed into has nothing on record yet.
-    if (!transcript) return unavailable("no-message");
+    if (!transcript) return unavailable(latestWanted ? "no-message" : "message-not-found");
     const opened = await openVerified(transcript.file, transcript.rootReal);
     if (!opened) return unavailable("store-unreadable");
     handle = opened.handle;
@@ -561,6 +589,10 @@ export async function readClaudeLastMessage(
     const seenToolUses = new Set<string>();
     const unanswered: ToolUse[] = [];
     let found: FoundMessage | null = null;
+    let selected: { message: FoundMessage; text: string } | null = null;
+    // Messages with text passed over on the way to the one wanted; each is
+    // newer than it.
+    let passed = 0;
     // What was read before the reply was found, and so is newer than it: a
     // prompt or a tool result sets the first; the assistant ids are kept rather
     // than counted because the reply's own later blocks — a question after its
@@ -577,6 +609,12 @@ export async function readClaudeLastMessage(
       }
     };
 
+    const choose = (message: FoundMessage): { message: FoundMessage; text: string } | null => {
+      if (!cursor && passed !== index) return null;
+      const text = [...message.texts].reverse().join("\n\n");
+      return !cursor || cursorMatches(cursor, message.id, text) ? { message, text } : null;
+    };
+
     for await (const bytes of linesFromEnd(handle, stats.size, state, {
       chunkBytes: options.chunkBytes ?? CHUNK_BYTES,
       maxScanBytes: options.maxScanBytes ?? MAX_SCAN_BYTES,
@@ -585,41 +623,36 @@ export async function readClaudeLastMessage(
       const record = parseSessionRecord(bytes.toString("utf8"));
       if (!record || record.isSidechain) continue;
       if (record.type === "assistant" && record.isMeta) continue;
-
       if (record.type === "user") {
         for (const id of record.toolResultIds) answered.add(id);
-        if (record.isMeta) continue;
-        if (record.isPrompt) {
-          // A prompt older than the reply is where the reply began.
-          if (found) {
-            found.complete = true;
-            break;
-          }
-          userFollows = true;
-          continue;
-        }
-        // A bare result read before the reply is activity after its text; one
-        // read after it sits between the reply's own records and is older.
-        if (!found && record.toolResultIds.length > 0) userFollows = true;
-        continue;
+      }
+
+      if (found && endsMessage(record, found.id)) {
+        found.complete = true;
+        selected = choose(found);
+        if (selected) break;
+        // Not the one wanted, so the record that ended it is read again below
+        // as the newest record of whatever came before.
+        passed += 1;
+        found = null;
       }
 
       if (found) {
-        if (record.type === "system" && record.subtype === "compact_boundary") {
-          found.complete = true;
-          break;
-        }
         if (record.type !== "assistant") continue;
-        if (record.messageId === null || record.messageId !== found.id) {
-          found.complete = true;
-          break;
-        }
         collectToolUses(record);
         const text = recordText(record.message);
         if (text) found.texts.push(text);
         continue;
       }
 
+      if (record.type === "user") {
+        // A prompt, or a bare result, read before the reply is activity after
+        // its text.
+        if (!record.isMeta && (record.isPrompt || record.toolResultIds.length > 0)) {
+          userFollows = true;
+        }
+        continue;
+      }
       if (record.type !== "assistant") continue;
       collectToolUses(record);
       const text = recordText(record.message);
@@ -635,32 +668,47 @@ export async function readClaudeLastMessage(
         // Without an id nothing else can be told to belong to it.
         complete: record.messageId === null,
       };
-      if (found.complete) break;
+      if (found.complete) {
+        selected = choose(found);
+        if (selected) break;
+        passed += 1;
+        found = null;
+      }
     }
+    // The read ran out partway through a message, at the start of the file or
+    // at the ceiling.
+    if (found && !selected) selected = choose(found);
 
-    if (!found) {
+    if (!selected) {
       if (state.capReached) return unavailable("search-cap-reached");
+      if (!latestWanted) return unavailable("message-not-found");
       if (unanswered.length === 0) return unavailable("no-message");
     }
 
-    let message: AgentLastMessageOk["message"] = null;
-    if (found) {
-      const tail = tailWithinJsonBytes(
-        found.texts.reverse().join("\n\n"),
-        LAST_MESSAGE_TEXT_MAX_BYTES
+    let message: AgentLastMessage | null = null;
+    // Where the page ends in the message's text: the end of it, or where the
+    // previous page began.
+    const end = selected ? (cursor?.end ?? selected.text.length) : 0;
+    if (selected) {
+      const page = tailWithinJsonBytes(
+        selected.text.slice(0, end),
+        options.maxBytes ?? LAST_MESSAGE_TEXT_MAX_BYTES
       );
       message = {
-        id: found.id,
-        text: tail.text,
+        id: selected.message.id,
+        text: page.text,
         // Blocks of this message may sit beyond the ceiling, which is a cut
         // head just as surely as the byte cap is.
-        truncated: tail.truncated || (!found.complete && state.capReached),
-        recordedAt: found.recordedAt,
-        stopReason: found.stopReason,
+        truncated: page.truncated || (!selected.message.complete && state.capReached),
+        recordedAt: selected.message.recordedAt,
+        stopReason: selected.message.stopReason,
+        // A stand-in no shorter than the real one, which can only be minted
+        // once fitting has settled where the page starts.
+        nextCursor: encodeMessageCursor(selected.message.id, selected.text, end),
       };
     }
 
-    return fitWithinResponseCap({
+    const fitted = fitWithinResponseCap({
       status: "ok",
       provider: "claude",
       message,
@@ -668,12 +716,25 @@ export async function readClaudeLastMessage(
       newerRecordsFollow:
         state.partialTail ||
         userFollows ||
-        laterAssistantIds.some((id) => id === null || id !== found?.id),
+        passed > 0 ||
+        laterAssistantIds.some((id) => id === null || id !== selected?.message.id),
       fileUpdatedAt: Math.round(stats.mtimeMs),
     });
+    if (!selected || !fitted.message) return fitted;
+    // The start of the text that survived fitting, not of the page before it:
+    // a cursor from the earlier start would skip whatever fitting cut.
+    const start = end - fitted.message.text.length;
+    return {
+      ...fitted,
+      message: {
+        ...fitted.message,
+        nextCursor:
+          start > 0 ? encodeMessageCursor(selected.message.id, selected.text, start) : null,
+      },
+    };
   } catch (error) {
     if (signal?.aborted) throw error;
-    if (isAbsence(error)) return unavailable("no-message");
+    if (isAbsence(error)) return unavailable(latestWanted ? "no-message" : "message-not-found");
     return unavailable("store-unreadable");
   } finally {
     await handle?.close();
