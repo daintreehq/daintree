@@ -9,11 +9,39 @@ const bridge = vi.hoisted(() => ({
   detach: vi.fn(async () => undefined),
   setMode: vi.fn(async () => ({ sessionId: "s1" })),
   getState: vi.fn(() => null),
+  disposeAll: vi.fn(async () => undefined),
 }));
 
+/** The deps `registerSitePreviewHandlers` hands the bridge, `push` among them. */
+const captured = vi.hoisted(() => ({ deps: null as { push?: unknown } | null }));
+
 vi.mock("../../../services/SitePreviewBridge.js", () => ({
-  getSitePreviewBridge: () => bridge,
+  getSitePreviewBridge: (deps?: { push?: unknown }) => {
+    if (deps) captured.deps = deps;
+    return bridge;
+  },
   resetSitePreviewBridge: vi.fn(),
+}));
+
+vi.mock("../../../services/sitePreview/builtinGuestAdapters.js", () => ({
+  registerBuiltinGuestAdapters: () => () => undefined,
+}));
+
+const projectViews = vi.hoisted(
+  () => new Map<string, Array<{ id: number; isDestroyed: () => boolean; send: unknown }>>()
+);
+
+vi.mock("../../../window/webContentsRegistry.js", () => ({
+  getWebContentsForProject: (projectId: string) => projectViews.get(projectId) ?? [],
+}));
+
+// The namespace wires `ipcMain.handle` on register; the routing under test is
+// the push closure, not the registration.
+vi.mock("../../utils.js", () => ({
+  typedHandle: () => () => undefined,
+  typedHandleValidated: () => () => undefined,
+  typedHandleWithContext: () => () => undefined,
+  typedHandleWithContextValidated: () => () => undefined,
 }));
 
 const ADAPTER_ID = "daintree.sveltekit-builder.guest";
@@ -80,7 +108,27 @@ describe("sitePreview handlers", () => {
       panelId: "panel-1",
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: 1,
     });
+  });
+
+  it("gives the bridge the sender as the binding's subscriber", async () => {
+    const all = await ops();
+    await all.bind.handler(
+      { ...ctx("project-a"), webContentsId: 9 },
+      {
+        panelId: "panel-1",
+        adapterId: ADAPTER_ID,
+      }
+    );
+    // The address observations go back to is the sender the host proved, and it
+    // is never something the payload can name.
+    expect(bridge.bind).toHaveBeenCalledWith(
+      expect.objectContaining({ subscriberWebContentsId: 9 })
+    );
+    expect(
+      all.bind.schema.safeParse({ panelId: "p", adapterId: ADAPTER_ID, webContentsId: 3 }).success
+    ).toBe(false);
   });
 
   it("defaults the mode to browse when the caller omits it", async () => {
@@ -115,5 +163,72 @@ describe("sitePreview handlers", () => {
     expect(
       all.bind.schema.safeParse({ panelId: "panel-1", adapterId: "x".repeat(600) }).success
     ).toBe(false);
+  });
+});
+
+/**
+ * A guest observation carries the user's page structure, their selection and
+ * source locations from their repository. It goes to the view that established
+ * the binding, and to nothing else — a second window on the same project, and
+ * every other plugin view sharing that renderer realm, never asked for it.
+ */
+describe("sitePreview event routing", () => {
+  function view(id: number) {
+    return { id, isDestroyed: () => false, send: vi.fn() };
+  }
+
+  async function push(
+    payload: { kind: string; projectId: string },
+    route: { subscriberWebContentsId: number }
+  ) {
+    const { registerSitePreviewHandlers } = await import("../sitePreview.js");
+    const dispose = registerSitePreviewHandlers({});
+    const send = captured.deps?.push as
+      ((p: unknown, r: { subscriberWebContentsId: number }) => void) | undefined;
+    expect(send).toBeTypeOf("function");
+    send?.(payload, route);
+    dispose();
+  }
+
+  beforeEach(() => {
+    vi.resetModules();
+    projectViews.clear();
+    captured.deps = null;
+  });
+
+  it("delivers only to the view that bound, not to the project's other views", async () => {
+    const owner = view(1);
+    const bystander = view(2);
+    projectViews.set("project-a", [owner, bystander]);
+
+    await push({ kind: "guest-event", projectId: "project-a" }, { subscriberWebContentsId: 1 });
+
+    expect(owner.send).toHaveBeenCalledTimes(1);
+    expect(owner.send).toHaveBeenCalledWith(CHANNELS.SITE_PREVIEW_EVENT, {
+      kind: "guest-event",
+      projectId: "project-a",
+    });
+    expect(bystander.send).not.toHaveBeenCalled();
+  });
+
+  it("delivers nothing when the subscriber is no longer a live view of the project", async () => {
+    const replacement = view(2);
+    projectViews.set("project-a", [replacement]);
+
+    // The view that bound was destroyed or evicted; its successor is a
+    // different WebContents that never established this binding.
+    await push({ kind: "guest-event", projectId: "project-a" }, { subscriberWebContentsId: 1 });
+
+    expect(replacement.send).not.toHaveBeenCalled();
+  });
+
+  it("never reaches a view of another project that happens to share the id", async () => {
+    const foreign = view(1);
+    projectViews.set("project-b", [foreign]);
+    projectViews.set("project-a", []);
+
+    await push({ kind: "guest-event", projectId: "project-a" }, { subscriberWebContentsId: 1 });
+
+    expect(foreign.send).not.toHaveBeenCalled();
   });
 });

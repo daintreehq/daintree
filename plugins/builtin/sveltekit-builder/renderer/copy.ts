@@ -31,6 +31,9 @@ export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
   "debugger-detached": "Disconnected — DevTools may have taken over the preview",
   "guest-flooding": "Disconnected — the page sent too many invalid messages",
   "owner-disabled": "Disconnected — the Site Builder plugin was switched off",
+  // Unreachable in practice: the view this would be addressed to is the one
+  // that went away. Present because the reason is part of the wire contract.
+  "subscriber-destroyed": "Disconnected from the dev preview",
   "host-shutdown": "Disconnected from the dev preview",
 };
 

@@ -108,6 +108,9 @@ export const sitePreviewNamespace = defineIpcNamespace({
           panelId: payload.panelId,
           adapterId: payload.adapterId,
           mode: payload.mode ?? "browse",
+          // The sender, not anything it claims to be: this is the address every
+          // observation from the resulting binding is delivered to.
+          subscriberWebContentsId: ctx.webContentsId,
         }),
       { withContext: true }
     ),
@@ -184,19 +187,33 @@ export function registerSitePreviewHandlers(_deps: HandlerDependencies): () => v
       const { pluginService } = await import("../../services/PluginService.js");
       return pluginService.hasPlugin(pluginId);
     },
-    push: (payload) => {
-      // Sent only to views of the owning project. Deliberately NOT
-      // `broadcastToProjectRenderers`: that helper falls back to an app-wide
-      // broadcast when no project views are registered, and a guest observation
-      // must never reach a window hosting a different project.
+    push: (payload, route) => {
+      // Addressed, not broadcast. A guest observation carries the structure of
+      // the user's page, what they selected in it and source locations from
+      // their repository, and only the view that established the binding has
+      // any claim on it — so this delivers to that one sender and stops.
+      // Fanning out across the project would hand the same content to a second
+      // window on the project, and to every other plugin view sharing that
+      // renderer realm, none of which ever bound.
+      //
+      // The project lookup is still what supplies the WebContents: it is a
+      // second gate, so a recycled id now serving a different project's view
+      // cannot inherit the address. Deliberately NOT
+      // `broadcastToProjectRenderers` either — that helper falls back to an
+      // app-wide broadcast when no project views are registered.
       for (const wc of getWebContentsForProject(payload.projectId)) {
+        if (wc.id !== route.subscriberWebContentsId) continue;
         if (wc.isDestroyed()) continue;
         try {
           wc.send(CHANNELS.SITE_PREVIEW_EVENT, payload);
         } catch {
           // A view torn down between the lookup and the send; nothing to do.
         }
+        return;
       }
+      // No live project view under that id: the subscriber is gone, or has been
+      // re-created since. The binding's own teardown follows; dropping the
+      // payload is the right outcome either way.
     },
   });
 

@@ -112,6 +112,18 @@ interface GuestDescriptor {
   url: string | null;
 }
 
+/**
+ * Where one binding's traffic goes. A guest observation carries the structure
+ * of the user's page, what they selected in it and the source locations behind
+ * that, so it is addressed to the view that asked for it rather than offered to
+ * every view of the project: a second window on the same project, or any other
+ * plugin view sharing that renderer realm, has no part in the binding.
+ */
+export interface SitePreviewPushRoute {
+  /** The `WebContents` the bind call came from. */
+  subscriberWebContentsId: number;
+}
+
 export interface SitePreviewBridgeDeps {
   /** Every live dev-preview guest, with the project that embeds it. */
   listGuests: () => GuestDescriptor[];
@@ -120,7 +132,13 @@ export interface SitePreviewBridgeDeps {
   getPanelKind: (webContentsId: number) => string | undefined;
   /** The project that owns the view embedding this guest, resolved host-side. */
   resolveGuestProject: (wc: Electron.WebContents) => string | null;
-  push: (payload: SitePreviewPushPayload) => void;
+  /**
+   * Deliver one observation. The route is the host's, not the payload's: it
+   * names the single view the binding was established from, and the transport
+   * must send there and nowhere else. It is a second argument rather than a
+   * field so nothing about the addressing crosses the wire.
+   */
+  push: (payload: SitePreviewPushPayload, route: SitePreviewPushRoute) => void;
   newSessionId: () => string;
   newBindingName: () => string;
   /** The guest runtime registry. Injected so tests need no real asset on disk. */
@@ -145,6 +163,12 @@ interface Binding {
   panelId: string;
   projectId: string;
   webContentsId: number;
+  /**
+   * The view that established this binding, and the only recipient of its
+   * observations. Recorded at bind time from the IPC sender, which is the one
+   * thing about the caller the host can actually prove.
+   */
+  subscriberWebContentsId: number;
   bindingName: string;
   /** The guest adapter this binding names, and the plugin that owns it. */
   adapterId: string;
@@ -303,6 +327,8 @@ export class SitePreviewBridge {
     panelId: string;
     adapterId: string;
     mode: SitePreviewMode;
+    /** The sender's WebContents; this binding's traffic goes there and nowhere else. */
+    subscriberWebContentsId: number;
   }): Promise<SitePreviewBindingState> {
     return this.withPanelLock(input.panelId, () => this.bindLocked(input));
   }
@@ -315,8 +341,9 @@ export class SitePreviewBridge {
     panelId: string;
     adapterId: string;
     mode: SitePreviewMode;
+    subscriberWebContentsId: number;
   }): Promise<SitePreviewBindingState> {
-    const { projectId, panelId, adapterId, mode } = input;
+    const { projectId, panelId, adapterId, mode, subscriberWebContentsId } = input;
 
     if (this.closed) {
       throw new AppError({
@@ -441,6 +468,7 @@ export class SitePreviewBridge {
       panelId,
       projectId,
       webContentsId,
+      subscriberWebContentsId,
       bindingName: this.deps.newBindingName(),
       adapterId,
       pluginId: adapter.pluginId,
@@ -690,6 +718,21 @@ export class SitePreviewBridge {
     };
     wc.debugger.on("detach", onDebuggerDetach);
     binding.disposers.push(() => wc.debugger.off("detach", onDebuggerDetach));
+
+    // The subscriber is usually the view embedding the guest, and dies with it.
+    // It need not be: a second window on the same project can bind to a preview
+    // hosted in the first. When that view goes, the binding has no consumer left
+    // — every push is addressed to it — so the runtime in the page would keep
+    // observing the user's site with nothing listening. `once`, because the
+    // subscriber can be the guest's own host and a second teardown is a no-op.
+    const subscriber = this.deps.getWebContents(binding.subscriberWebContentsId);
+    if (subscriber && subscriber !== wc) {
+      const onSubscriberDestroyed = (): void => {
+        void this.teardown(binding, "subscriber-destroyed").catch(() => undefined);
+      };
+      subscriber.once("destroyed", onSubscriberDestroyed);
+      binding.disposers.push(() => subscriber.off("destroyed", onSubscriberDestroyed));
+    }
   }
 
   private handleCdpMessage(
@@ -739,7 +782,7 @@ export class SitePreviewBridge {
     // the adapter's to validate, and is forwarded uninterpreted.
     if (verdict.envelope.event.type === DOCUMENT_READY) binding.guestReady = true;
 
-    this.deps.push({
+    this.emit(binding, {
       kind: "guest-event",
       sessionId: binding.sessionId,
       panelId: binding.panelId,
@@ -748,6 +791,17 @@ export class SitePreviewBridge {
       sequence: verdict.envelope.sequence,
       event: verdict.envelope.event,
     });
+  }
+
+  /**
+   * The only way out of this class. Every push is addressed to the binding's
+   * own subscriber, so a new event kind cannot reach a view that never bound:
+   * what a guest observation carries — the page's structure, the user's
+   * selection, source locations in their repository — belongs to the one view
+   * that asked for it, not to every view of the project.
+   */
+  private emit(binding: Binding, payload: SitePreviewPushPayload): void {
+    this.deps.push(payload, { subscriberWebContentsId: binding.subscriberWebContentsId });
   }
 
   private admitForParsing(binding: Binding): boolean {
@@ -801,7 +855,7 @@ export class SitePreviewBridge {
     // A page can reload in a loop. One queued reinstall is enough: it reads the
     // epoch when it runs, so it always installs the latest one.
     if (binding.reinstallQueued) {
-      this.deps.push({
+      this.emit(binding, {
         kind: "epoch-advanced",
         sessionId: binding.sessionId,
         projectId: binding.projectId,
@@ -827,7 +881,7 @@ export class SitePreviewBridge {
     // Sent after the reinstall, so the new runtime's own `documentReady` for this
     // epoch can reach a consumer *before* this. Consumers must key state on the
     // epoch carried by each event, not on the order these two arrive in.
-    this.deps.push({
+    this.emit(binding, {
       kind: "epoch-advanced",
       sessionId: binding.sessionId,
       projectId: binding.projectId,
@@ -907,7 +961,7 @@ export class SitePreviewBridge {
       // `documentReady` from inside the evaluate below, and a message arriving
       // on a still-suspended binding would be ignored.
       binding.suspended = false;
-      this.deps.push({
+      this.emit(binding, {
         kind: "origin-policy",
         sessionId: binding.sessionId,
         projectId: binding.projectId,
@@ -1028,7 +1082,7 @@ export class SitePreviewBridge {
     binding.guestReady = false;
     if (binding.detached || this.closed) return;
     binding.suspended = true;
-    this.deps.push({
+    this.emit(binding, {
       kind: "origin-policy",
       sessionId: binding.sessionId,
       projectId: binding.projectId,
@@ -1114,7 +1168,7 @@ export class SitePreviewBridge {
     binding.lease = null;
     await lease?.release().catch(() => undefined);
 
-    this.deps.push({
+    this.emit(binding, {
       kind: "detached",
       sessionId: binding.sessionId,
       projectId: binding.projectId,

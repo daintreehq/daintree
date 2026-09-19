@@ -10,6 +10,7 @@ import { isCdpDomainEnabled } from "../cdp/WebContentsCdpService.js";
 import { __resetCdpLeasesForTests, acquireCdpLease } from "../cdp/WebContentsCdpService.js";
 import { GUEST_PROTOCOL_VERSION } from "../sitePreview/guestProtocol.js";
 import { GUEST_RUNTIME_GLOBAL } from "../sitePreview/guestRuntime.js";
+import type { SitePreviewPushRoute } from "../SitePreviewBridge.js";
 import type { SitePreviewPushPayload } from "../../../shared/types/ipc/sitePreview.js";
 
 const PANEL_ID = "panel-1";
@@ -17,6 +18,10 @@ const ADAPTER_ID = "test.guest";
 const PLUGIN_ID = "test.plugin";
 const PROJECT_ID = "project-1";
 const WEB_CONTENTS_ID = 42;
+/** The view a bind comes from; every observation is addressed back to it. */
+const SUBSCRIBER_WC_ID = 77;
+/** A second view of the same project, which binds nothing of its own. */
+const OTHER_SUBSCRIBER_WC_ID = 78;
 const MAIN_FRAME_ID = "frame-main";
 const MAIN_CONTEXT_ID = 7;
 const IFRAME_CONTEXT_ID = 9;
@@ -60,8 +65,10 @@ class FakeDebugger extends EventEmitter {
 }
 
 class FakeWebContents extends EventEmitter {
-  readonly id = WEB_CONTENTS_ID;
   readonly debugger = new FakeDebugger();
+  constructor(readonly id: number = WEB_CONTENTS_ID) {
+    super();
+  }
   /** What the guest currently shows; a test navigates by setting it before `did-navigate`. */
   url = "http://localhost:5173/";
   isDestroyed(): boolean {
@@ -80,7 +87,12 @@ function makeHarness(
   } = {}
 ) {
   const wc = new FakeWebContents();
+  // The view that binds. Separate from the guest, which is a `<webview>` and
+  // never a project view of its own.
+  const subscriber = new FakeWebContents(SUBSCRIBER_WC_ID);
+  const otherSubscriber = new FakeWebContents(OTHER_SUBSCRIBER_WC_ID);
   const pushed: SitePreviewPushPayload[] = [];
+  const routes: SitePreviewPushRoute[] = [];
   let sessionCounter = 0;
   // Stands in for the host's guest-adapter registry: the bridge never sees a
   // caller-supplied body, so a test that wants one registers it here.
@@ -94,14 +106,21 @@ function makeHarness(
   // The owning plugin's lifecycle, which a test can switch off mid-flight.
   const pluginEnabled = { value: true };
   const bridge = new SitePreviewBridge({
-    push: (payload) => pushed.push(payload),
+    push: (payload, route) => {
+      pushed.push(payload);
+      routes.push(route);
+    },
     isPluginEnabled: async () => pluginEnabled.value,
     listGuests: () => [
       { webContentsId: WEB_CONTENTS_ID, panelId: PANEL_ID, projectId: PROJECT_ID, url: "http://x" },
       { webContentsId: 99, panelId: "other", projectId: "project-2", url: "http://y" },
     ],
-    getWebContents: (id) =>
-      id === WEB_CONTENTS_ID ? (wc as unknown as Electron.WebContents) : null,
+    getWebContents: (id) => {
+      if (id === WEB_CONTENTS_ID) return wc as unknown as Electron.WebContents;
+      if (id === SUBSCRIBER_WC_ID) return subscriber as unknown as Electron.WebContents;
+      if (id === OTHER_SUBSCRIBER_WC_ID) return otherSubscriber as unknown as Electron.WebContents;
+      return null;
+    },
     resolveWebContentsId: (panelId) => (panelId === PANEL_ID ? WEB_CONTENTS_ID : undefined),
     getPanelKind: () => overrides.panelKind ?? "dev-preview",
     resolveGuestProject: () =>
@@ -123,7 +142,17 @@ function makeHarness(
       return adapterBodies.get(adapterId) ?? "";
     },
   });
-  return { bridge, wc, pushed, adapterBodies, adapterLoad, pluginEnabled };
+  return {
+    bridge,
+    wc,
+    subscriber,
+    otherSubscriber,
+    pushed,
+    routes,
+    adapterBodies,
+    adapterLoad,
+    pluginEnabled,
+  };
 }
 
 /** Replay the execution-context announcements CDP makes after `Runtime.enable`. */
@@ -175,6 +204,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     const methods = harness.wc.debugger.methods();
@@ -194,6 +224,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: "not.registered",
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       })
     ).rejects.toMatchObject({ code: "NOT_FOUND" });
 
@@ -208,6 +239,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     harness.adapterLoad.fails = true;
@@ -218,6 +250,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       })
     ).rejects.toThrow(/asset missing/);
 
@@ -239,6 +272,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     // The read is the first await a bind performs, so a shutdown can finish
     // walking the bindings map before this one is ever in it. Wait for the
@@ -258,6 +292,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     // Hold the predecessor's teardown on its last CDP call so a shutdown can
     // land while the successor is still waiting to be inserted.
@@ -273,6 +308,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     await vi.waitFor(() => {
       expect(harness.wc.debugger.methods()).toContain("Runtime.removeBinding");
@@ -295,6 +331,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     const added = harness.wc.debugger.commands.find(
@@ -313,6 +350,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     harness.pushed.length = 0;
@@ -334,6 +372,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     harness.pushed.length = 0;
@@ -359,6 +398,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     harness.pushed.length = 0;
@@ -382,6 +422,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     callBinding(harness.wc, envelope({ sequence: 5 }));
@@ -415,6 +456,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     callBinding(
@@ -456,6 +498,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     const before = harness.wc.debugger.commands.filter(
       (c) => c.method === "Page.addScriptToEvaluateOnNewDocument"
@@ -484,6 +527,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     expect(state.suspended).toBe(true);
     const methods = harness.wc.debugger.methods();
@@ -508,6 +552,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     const installsBefore = harness.wc.debugger.commands.filter(
@@ -615,6 +660,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     await vi.waitFor(() => {
       expect(harness.wc.debugger.methods()).toContain("Runtime.addBinding");
@@ -648,6 +694,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     expect(state.suspended).toBe(false);
     expect(harness.wc.debugger.methods()).toContain("Page.addScriptToEvaluateOnNewDocument");
@@ -662,6 +709,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       })
     ).rejects.toThrow(/different project/i);
   });
@@ -674,6 +722,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       })
     ).rejects.toThrow(/not a dev preview/i);
   });
@@ -684,6 +733,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     const candidates = harness.bridge.listCandidates(PROJECT_ID);
@@ -699,6 +749,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     harness.pushed.length = 0;
@@ -721,12 +772,14 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     const second = await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     expect(second.sessionId).toBe("session-2");
@@ -749,6 +802,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     const methods = harness.wc.debugger.methods();
@@ -772,6 +826,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     // A guest whose contexts never arrived must not go silent — the filter is
@@ -787,12 +842,14 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       }),
       harness.bridge.bind({
         projectId: PROJECT_ID,
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       }),
     ]);
 
@@ -812,12 +869,14 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     const installIds = harness.wc.debugger.commands
@@ -835,6 +894,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     harness.pushed.length = 0;
@@ -860,6 +920,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       })
     ).rejects.toThrow(/threw while initialising/);
 
@@ -877,6 +938,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     harness.wc.debugger.rejects.set(
       "Page.removeScriptToEvaluateOnNewDocument",
@@ -898,6 +960,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     const installed = harness.wc.debugger.commands.find(
       (c) => c.method === "Page.addScriptToEvaluateOnNewDocument"
@@ -919,6 +982,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     harness.wc.debugger.emit("detach", {} as Electron.Event, "target closed");
@@ -937,6 +1001,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -965,6 +1030,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       });
       announceContexts(harness.wc);
       const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -991,6 +1057,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     const [, rebound] = await Promise.all([
@@ -1000,6 +1067,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       }),
     ]);
 
@@ -1015,6 +1083,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     const shutdown = harness.bridge.disposeAll();
@@ -1023,6 +1092,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     await shutdown;
@@ -1045,6 +1115,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       });
       await vi.waitFor(() => {
         expect(harness.wc.debugger.methods()).toContain("Page.enable");
@@ -1084,6 +1155,7 @@ describe("SitePreviewBridge", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "browse",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       });
       await vi.waitFor(() => {
         expect(harness.wc.debugger.methods()).toContain("Page.getFrameTree");
@@ -1124,6 +1196,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     await vi.waitFor(() => {
       expect(harness.wc.debugger.methods()).toContain("Page.getFrameTree");
@@ -1163,6 +1236,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     await vi.waitFor(() => {
       expect(harness.wc.debugger.methods()).toContain("Page.addScriptToEvaluateOnNewDocument");
@@ -1185,6 +1259,7 @@ describe("SitePreviewBridge", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     harness.wc.emit("destroyed");
@@ -1208,6 +1283,7 @@ describe("SitePreviewBridge owner lifecycle", () => {
         panelId: PANEL_ID,
         adapterId: ADAPTER_ID,
         mode: "select",
+        subscriberWebContentsId: SUBSCRIBER_WC_ID,
       })
     ).rejects.toThrow(/not enabled/);
 
@@ -1231,6 +1307,7 @@ describe("SitePreviewBridge owner lifecycle", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     release();
 
@@ -1245,6 +1322,7 @@ describe("SitePreviewBridge owner lifecycle", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     expect(harness.bridge.getState(PROJECT_ID, state.sessionId)).not.toBeNull();
 
@@ -1265,6 +1343,7 @@ describe("SitePreviewBridge owner lifecycle", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     await harness.bridge.disposeForPlugin("some.other.plugin");
@@ -1293,6 +1372,7 @@ describe("SitePreviewBridge disable races a bind", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     release();
 
@@ -1309,12 +1389,14 @@ describe("SitePreviewBridge disable races a bind", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     const second = await harness.bridge.bind({
       projectId: PROJECT_ID,
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
 
     expect(second.sessionId).not.toBe(first.sessionId);
@@ -1340,6 +1422,7 @@ describe("SitePreviewBridge out-of-band ops", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
     harness.wc.url = "https://accounts.example.com/login";
@@ -1403,6 +1486,7 @@ describe("SitePreviewBridge out-of-band ops", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "select",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     harness.wc.debugger.responses.set("Runtime.evaluate", { result: { value: true } });
 
@@ -1454,6 +1538,7 @@ describe("SitePreviewBridge blank documents", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     expect(state.suspended).toBe(false);
     expect(harness.wc.debugger.methods()).toContain("Page.addScriptToEvaluateOnNewDocument");
@@ -1468,6 +1553,7 @@ describe("SitePreviewBridge blank documents", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
     });
     announceContexts(harness.wc);
 
@@ -1483,5 +1569,106 @@ describe("SitePreviewBridge blank documents", () => {
       documentEpoch: 1,
       suspended: true,
     });
+  });
+});
+
+/**
+ * Who a binding's observations are for. They carry the structure of the user's
+ * page, what they selected in it and source locations from their repository, so
+ * the answer is the one view that bound — not every view of the project.
+ */
+describe("SitePreviewBridge observation addressing", () => {
+  beforeEach(() => {
+    __resetCdpLeasesForTests();
+  });
+
+  afterEach(() => {
+    __resetCdpLeasesForTests();
+  });
+
+  it("addresses every push to the view that established the binding", async () => {
+    const harness = makeHarness();
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
+    });
+    announceContexts(harness.wc);
+
+    // One of each kind the bridge emits: a guest event, an epoch advance, an
+    // origin-policy change and the detach.
+    callBinding(harness.wc, envelope());
+    harness.wc.url = "https://example.com/";
+    harness.wc.emit("did-navigate");
+    await vi.waitFor(() => {
+      expect(harness.bridge.getState(PROJECT_ID, "session-1")?.suspended).toBe(true);
+    });
+    await harness.bridge.detach(PROJECT_ID, "session-1");
+
+    const kinds = new Set(harness.pushed.map((p) => p.kind));
+    expect(kinds).toContain("guest-event");
+    expect(kinds).toContain("epoch-advanced");
+    expect(kinds).toContain("origin-policy");
+    expect(kinds).toContain("detached");
+    expect(harness.routes).toHaveLength(harness.pushed.length);
+    expect(
+      harness.routes.every((route) => route.subscriberWebContentsId === SUBSCRIBER_WC_ID)
+    ).toBe(true);
+  });
+
+  it("re-addresses to the new view when another one rebinds the same panel", async () => {
+    const harness = makeHarness();
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
+    });
+    await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+      subscriberWebContentsId: OTHER_SUBSCRIBER_WC_ID,
+    });
+    announceContexts(harness.wc);
+    harness.pushed.length = 0;
+    harness.routes.length = 0;
+
+    // The second binding's traffic. The first view is superseded and must not
+    // see the successor's observations.
+    callBinding(harness.wc, envelope({ sessionId: "session-2" }));
+
+    expect(harness.pushed).toHaveLength(1);
+    expect(harness.routes).toEqual([{ subscriberWebContentsId: OTHER_SUBSCRIBER_WC_ID }]);
+  });
+
+  it("tears the binding down when the view that bound is destroyed", async () => {
+    const harness = makeHarness();
+    const state = await harness.bridge.bind({
+      projectId: PROJECT_ID,
+      panelId: PANEL_ID,
+      adapterId: ADAPTER_ID,
+      mode: "browse",
+      subscriberWebContentsId: SUBSCRIBER_WC_ID,
+    });
+
+    harness.subscriber.emit("destroyed");
+
+    await vi.waitFor(() => {
+      expect(harness.pushed.at(-1)).toEqual({
+        kind: "detached",
+        sessionId: state.sessionId,
+        projectId: PROJECT_ID,
+        reason: "subscriber-destroyed",
+      });
+    });
+    expect(harness.bridge.getState(PROJECT_ID, state.sessionId)).toBeNull();
+    // The runtime in the user's page goes with it: nothing is left listening,
+    // so leaving it observing would be a tap with no consumer.
+    expect(harness.wc.debugger.methods()).toContain("Runtime.removeBinding");
   });
 });

@@ -136,6 +136,12 @@ export type SitePreviewDetachReason =
   | "guest-flooding"
   /** The plugin that owns the guest adapter was disabled or unloaded. */
   | "owner-disabled"
+  /**
+   * The view that established the binding went away. Observations are addressed
+   * to that view alone, so the binding has no consumer left; nobody receives
+   * this one, and it exists so the teardown path can say what happened.
+   */
+  | "subscriber-destroyed"
   | "host-shutdown";
 
 export type SitePreviewPushPayload =
