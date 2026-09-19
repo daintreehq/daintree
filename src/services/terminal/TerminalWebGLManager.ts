@@ -245,10 +245,27 @@ export class TerminalWebGLManager {
   // all (see setHardwareAvailable).
   private altBufferPinnedIds = new Set<string>();
 
+  // Scroll holds: a pane the user is scrolling keeps the WebGL context it
+  // already has through a DOM-mode flip until the gesture ends, so a threshold
+  // drop landing mid-scroll (a genuine profile downgrade, another pane becoming
+  // visible) can't swap its renderer under the wheel (#10858). Retention only:
+  // a hold never attaches a context, so scrolling can neither allocate nor
+  // churn GPU contexts. This replaced a global profile lift that did the same
+  // job by moving resource policy for every window (#12518).
+  // id → hold deadline (ms epoch); one self-rearming timer serves every hold.
+  private scrollHolds = new Map<string, number>();
+  private scrollHoldTimer: ReturnType<typeof setTimeout> | null = null;
+
   // A terminal is exempt from DOM-mode context release while it is the focus
   // pin or an alt-buffer pin. Both keep one WebGL context attached in DOM mode.
   private isPinned(id: string): boolean {
     return id === this.pinnedId || this.altBufferPinnedIds.has(id);
+  }
+
+  // Release-site exemption: pins, plus a live scroll hold. Attach paths keep
+  // using isPinned — a hold only ever keeps what is already attached.
+  private isRetained(id: string): boolean {
+    return this.isPinned(id) || this.isScrollHeld(id);
   }
 
   // xterm shares one module-global TextureAtlas across every terminal with a
@@ -308,6 +325,9 @@ export class TerminalWebGLManager {
           this.dropPoolEntry(altId);
         }
       }
+      // Nor do scroll holds; with them cleared, flipToDom queues every
+      // context still pooled for release.
+      this.clearScrollHolds();
       this.flipToDom();
     }
   }
@@ -349,6 +369,7 @@ export class TerminalWebGLManager {
     // a buffer-mode transition when the pane is revealed, so the pin must
     // survive hide/show. Dropping the want + context below is enough; the next
     // ensureContext on reveal re-attaches because isPinned(id) is still true.
+    this.scrollHolds.delete(id);
     const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
     this.pendingReleases.delete(id);
@@ -446,6 +467,56 @@ export class TerminalWebGLManager {
     return this.altBufferPinnedIds.has(id);
   }
 
+  // The user is scrolling this pane: keep its current WebGL context (if any)
+  // through a DOM-mode flip for `durationMs`. Called per wheel/scroll event, so
+  // renewal is a map write — the shared expiry timer is only armed when idle.
+  holdForScroll(id: string, durationMs: number): void {
+    if (!this.pool.has(id)) return;
+    this.scrollHolds.set(id, Date.now() + durationMs);
+    if (this.scrollHoldTimer === null) {
+      this.scrollHoldTimer = setTimeout(this.expireScrollHolds, durationMs);
+    }
+  }
+
+  isScrollHeld(id: string): boolean {
+    const until = this.scrollHolds.get(id);
+    return until !== undefined && Date.now() < until;
+  }
+
+  private expireScrollHolds = (): void => {
+    this.scrollHoldTimer = null;
+    const now = Date.now();
+    let nextDeadline = Infinity;
+    let queuedRelease = false;
+    for (const [id, until] of this.scrollHolds) {
+      if (now < until) {
+        nextDeadline = Math.min(nextDeadline, until);
+        continue;
+      }
+      this.scrollHolds.delete(id);
+      // Gesture over: settle the pane onto the fleet mode. In WebGL mode, or
+      // for a pane pinned on its own account, it keeps the context anyway.
+      if (this.mode !== "dom" || this.isPinned(id)) continue;
+      const entry = this.pool.get(id);
+      if (entry) {
+        this.pendingReleases.set(id, entry.managed);
+        queuedRelease = true;
+      }
+    }
+    if (queuedRelease) this.scheduleReleaseDrain();
+    if (nextDeadline !== Infinity) {
+      this.scrollHoldTimer = setTimeout(this.expireScrollHolds, nextDeadline - now);
+    }
+  };
+
+  private clearScrollHolds(): void {
+    if (this.scrollHoldTimer !== null) {
+      clearTimeout(this.scrollHoldTimer);
+      this.scrollHoldTimer = null;
+    }
+    this.scrollHolds.clear();
+  }
+
   // External re-evaluation hook. Threshold changes pushed from the main
   // process via useResourceProfile arrive between consumer events; without
   // this, a profile downgrade (which lowers both thresholds, e.g. balanced →
@@ -513,6 +584,7 @@ export class TerminalWebGLManager {
       this.pinnedId = null;
     }
     this.altBufferPinnedIds.delete(id);
+    this.scrollHolds.delete(id);
     const wasWanted = this.wants.delete(id);
     this.pendingEnsures.delete(id);
     this.pendingReleases.delete(id);
@@ -569,6 +641,7 @@ export class TerminalWebGLManager {
     this.wants.clear();
     this.pinnedId = null;
     this.altBufferPinnedIds.clear();
+    this.clearScrollHolds();
     if (this.atlasResyncRafId !== null) {
       try {
         cancelAnimationFrame(this.atlasResyncRafId);
@@ -639,7 +712,7 @@ export class TerminalWebGLManager {
     // xterm's DOM renderer on its next paint. Visible terminals refresh when
     // their release lands so the renderer swap is not deferred until output.
     for (const [id, entry] of this.pool) {
-      if (this.isPinned(id)) continue;
+      if (this.isRetained(id)) continue;
       this.pendingReleases.set(id, entry.managed);
     }
     this.scheduleReleaseDrain();
@@ -765,8 +838,8 @@ export class TerminalWebGLManager {
 
     // A pin may have landed on an id queued for release before the focus or
     // buffer-mode change registered (focus pin or alt-buffer pin) — keep its
-    // context.
-    if (this.isPinned(id)) {
+    // context. A scroll hold keeps it too; its expiry re-queues the release.
+    if (this.isRetained(id)) {
       if (this.pendingReleases.size > 0) {
         this.scheduleReleaseDrain();
       }

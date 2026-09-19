@@ -224,6 +224,7 @@ class TerminalInstanceService {
       getInstance: (id) => this.instances.get(id),
       applyRendererPolicy: (id, tier) => this.rendererPolicy.applyRendererPolicy(id, tier),
       isViewCached: isProjectViewCached,
+      holdWebGLForScroll: (id, durationMs) => this.webGLManager.holdForScroll(id, durationMs),
     });
 
     this.resizePassScheduler = new TerminalResizePassScheduler({

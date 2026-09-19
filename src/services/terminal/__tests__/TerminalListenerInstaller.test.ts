@@ -677,6 +677,20 @@ describe("installTerminalBoundListeners", () => {
       expect(deps.onUserScrollIntent).toHaveBeenCalledWith("t1");
     });
 
+    it("fires even when xterm's scrollable element consumes the wheel", () => {
+      const { managed, deps } = install();
+      // xterm stops propagation of every wheel that actually scrolls, so only a
+      // capture-phase listener on the host ever sees a real scrollback gesture.
+      const scrollable = document.createElement("div");
+      scrollable.addEventListener("wheel", (e) => e.stopPropagation());
+      managed.hostElement.appendChild(scrollable);
+
+      scrollable.dispatchEvent(new WheelEvent("wheel", { deltaY: 10, bubbles: true }));
+
+      expect(deps.onUserScrollIntent).toHaveBeenCalledWith("t1");
+      expect(managed.lastWheelAt).toBeGreaterThan(0);
+    });
+
     it.each(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"])(
       "fires on a %s keydown",
       (key) => {
@@ -712,7 +726,7 @@ describe("installTerminalBoundListeners", () => {
 
       // Simulate a PTY-output-driven programmatic scroll via xterm's onScroll —
       // must NOT be wired to onUserScrollIntent, or every streaming terminal
-      // would stay pinned off efficiency indefinitely (defeats the downgrade).
+      // would hold its WebGL context through DOM mode indefinitely.
       captured.onScroll?.();
 
       expect(deps.onUserScrollIntent).not.toHaveBeenCalled();

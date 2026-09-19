@@ -47,8 +47,6 @@ export interface WhySlowResourceSnapshot {
   lagPressureActive: boolean;
   /** Escalated lag latch (a single severe sample fast-pathed the latch on). */
   lagEscalatedActive: boolean;
-  /** A renderer interactive-override window is clamping the profile to ≥ balanced. */
-  interactiveOverrideActive: boolean;
   thermalState: ResourceThermalState;
   isOnBattery: boolean;
   /** CPU speed limit % (100 = unthrottled). */

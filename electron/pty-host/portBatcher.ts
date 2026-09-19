@@ -65,12 +65,17 @@ export class PortBatcher {
   // `interactive` marks output arriving just after renderer input (keystroke
   // echo): a throughput-mode entry swaps its 16ms timer for an immediate so the
   // echo isn't held a frame behind the flood it's interleaved with.
+  // `recentInput` marks output within the longer post-input tail: it still
+  // batches, but never on a profile-stretched window — the terminal the user
+  // is driving keeps the base cadence while every other terminal pays the
+  // profile's delay.
   write(
     id: string,
     data: Uint8Array,
     byteCount: number,
     owned = false,
-    interactive = false
+    interactive = false,
+    recentInput = false
   ): boolean {
     if (this.disposed) return false;
 
@@ -129,7 +134,10 @@ export class PortBatcher {
         clearImmediate(entry.immediateHandle);
         entry.immediateHandle = null;
       }
-      entry.timeoutHandle = setTimeout(() => this.flush(), throughputDelayMs);
+      const delayMs = recentInput
+        ? Math.min(throughputDelayMs, PORT_BATCH_THROUGHPUT_DELAY_MS)
+        : throughputDelayMs;
+      entry.timeoutHandle = setTimeout(() => this.flush(), delayMs);
       entry.mode = "throughput";
     }
     // throughput mode: timer already scheduled, nothing to do

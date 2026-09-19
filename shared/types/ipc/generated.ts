@@ -1714,10 +1714,6 @@ export interface GeneratedIpcInvokeMap {
     ];
     result: void;
   };
-  "system:request-interactive-override": {
-    args: [durationMs: number];
-    result: void;
-  };
   "system:show-item-in-folder": {
     args: [payload: { path: string }];
     result: void;

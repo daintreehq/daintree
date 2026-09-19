@@ -181,9 +181,7 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
         writeSelection: vi.fn().mockResolvedValue(undefined),
         readSelection: vi.fn().mockResolvedValue({ text: "" }),
       },
-      system: {
-        requestInteractiveOverride: vi.fn().mockResolvedValue(undefined),
-      },
+      system: {},
     };
 
     ({ terminalInstanceService: service } =
@@ -209,19 +207,22 @@ describe("TerminalInstanceService — installTerminalBoundListeners call-site pa
     );
   });
 
-  it("onUserScrollIntent dep requests an interactive profile-hold over IPC (#10858)", async () => {
+  it("onUserScrollIntent dep holds the pane's WebGL context locally, not the global profile (#10858, #12518)", async () => {
     await service.getOrCreate("t1", undefined, {});
+    const manager = (
+      service as unknown as {
+        webGLManager: { holdForScroll: (id: string, durationMs: number) => void };
+      }
+    ).webGLManager;
+    const holdSpy = vi.spyOn(manager, "holdForScroll");
 
     const deps = installMock.mock.calls[0]?.[3] as { onUserScrollIntent: (id: string) => void };
+    // window.electron.system is empty here: any IPC to the main process
+    // would throw, so reaching the assertion proves the hold never left the
+    // renderer.
     deps.onUserScrollIntent("t1");
 
-    expect(
-      (
-        window as unknown as {
-          electron: { system: { requestInteractiveOverride: ReturnType<typeof vi.fn> } };
-        }
-      ).electron.system.requestInteractiveOverride
-    ).toHaveBeenCalledWith(1500);
+    expect(holdSpy).toHaveBeenCalledWith("t1", 1000);
   });
 
   it("detach path: detachForProjectSwitch does not install listeners", () => {

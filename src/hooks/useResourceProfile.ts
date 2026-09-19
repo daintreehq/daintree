@@ -1,6 +1,10 @@
 import { useEffect } from "react";
-import { setWebglThresholds } from "../services/terminal/TerminalWebGLConfig";
-import { setAgentScrollbackMaxLines } from "../utils/scrollbackConfig";
+import {
+  getWebglLowerThreshold,
+  getWebglUpperThreshold,
+  setWebglThresholds,
+} from "../services/terminal/TerminalWebGLConfig";
+import { getAgentScrollbackMaxLines, setAgentScrollbackMaxLines } from "../utils/scrollbackConfig";
 import { terminalInstanceService } from "../services/terminal/TerminalInstanceService";
 import { useResourceProfileStore } from "../store/resourceProfileStore";
 import { safeFireAndForget } from "../utils/safeFireAndForget";
@@ -8,18 +12,29 @@ import type { ResourceProfilePayload } from "@shared/types/resourceProfile";
 
 export function useResourceProfile(): void {
   useEffect(() => {
+    // Each re-apply below walks live terminals, so it runs only when its own
+    // value actually moved — performance and balanced share a scrollback
+    // ceiling, for one, and a transition between them must not re-derive every
+    // open terminal's scrollback for nothing (#12518).
     const apply = (payload: ResourceProfilePayload) => {
+      const prevUpper = getWebglUpperThreshold();
+      const prevLower = getWebglLowerThreshold();
       setWebglThresholds(payload.config.webglUpperThreshold, payload.config.webglLowerThreshold);
       // Threshold writes alone don't move the live manager out of its
       // current mode — nudge it so a profile downgrade with N wants > new
       // upper flips to dom immediately instead of waiting on the next
       // consumer event to evaluate it.
-      terminalInstanceService.refreshWebGLMode();
+      if (getWebglUpperThreshold() !== prevUpper || getWebglLowerThreshold() !== prevLower) {
+        terminalInstanceService.refreshWebGLMode();
+      }
       // Same write-then-apply shape for the scrollback ceiling: the config
       // write covers terminals created later, the re-derive covers the ones
       // already open.
+      const prevScrollbackMax = getAgentScrollbackMaxLines();
       setAgentScrollbackMaxLines(payload.config.agentScrollbackMaxLines);
-      terminalInstanceService.restoreScrollbackAllForeground();
+      if (getAgentScrollbackMaxLines() !== prevScrollbackMax) {
+        terminalInstanceService.restoreScrollbackAllForeground();
+      }
       useResourceProfileStore.getState().setProfile(payload.profile);
     };
 

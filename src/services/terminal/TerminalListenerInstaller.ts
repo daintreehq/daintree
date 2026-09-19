@@ -286,17 +286,17 @@ export interface TerminalListenerInstallDeps {
   onUserInput: (id: string, data: string) => void;
   /**
    * Fired when a wheel scroll is actively forwarded to a mouse-reporting TUI.
-   * Lets the host boost the renderer tier and hold the resource profile off
-   * efficiency so an active scroll stays responsive (symptom B).
+   * Lets the host boost the renderer tier so an active scroll stays
+   * responsive (symptom B).
    */
   onActiveWheel: (id: string) => void;
   /**
    * Fired on ordinary scrollback wheel/key scrolling (not mouse-reporting
-   * forwarding). Holds the resource profile off efficiency for the scroll's
-   * duration so an in-progress profile downgrade doesn't drop the terminal's
-   * WebGL threshold mid-scroll (#10858). Unlike `onActiveWheel`, this does
-   * not boost the renderer tier — plain scrollback is client-side xterm
-   * rendering, not a PTY round-trip per redraw.
+   * forwarding). Holds the terminal's WebGL context for the scroll's duration
+   * so a threshold drop doesn't swap it onto the DOM renderer mid-scroll
+   * (#10858). Unlike `onActiveWheel`, this does not boost the renderer tier —
+   * plain scrollback is client-side xterm rendering, not a PTY round-trip per
+   * redraw.
    */
   onUserScrollIntent: (id: string) => void;
   onEnterPressed: (id: string) => void;
@@ -580,7 +580,7 @@ export function installTerminalBoundListeners(
     if (lines === 0) return;
 
     // A real scroll is being forwarded to the TUI — keep the pane fast: boost the
-    // renderer tier and hold the resource profile off efficiency for the gesture.
+    // renderer tier for the gesture.
     deps.onActiveWheel(id);
 
     pendingWheelLines += lines;
@@ -723,8 +723,8 @@ export function installTerminalBoundListeners(
     managed._userScrollIntent = true;
     managed.lastWheelAt = Date.now();
     // Skip the synthetic per-line events the alt-buffer mouse-reporting
-    // amplifier dispatches (already drives the profile hold via onActiveWheel)
-    // and modifier-held wheels (pinch-zoom/etc, not scrollback navigation) —
+    // amplifier dispatches (already signalled via onActiveWheel) and
+    // modifier-held wheels (pinch-zoom/etc, not scrollback navigation) —
     // mirrors the gating onWheelNormalize already applies for the same reasons.
     if (amplifiedWheelEvents.has(ev) || ev.ctrlKey || ev.altKey || ev.metaKey || ev.shiftKey) {
       return;
@@ -737,10 +737,13 @@ export function installTerminalBoundListeners(
       deps.onUserScrollIntent(id);
     }
   };
-  hostElement.addEventListener("wheel", onWheel, { passive: true });
+  // Capture phase for the wheel: xterm's scrollable element stops propagation
+  // of every wheel it consumes, so a bubbling listener only ever saw the wheels
+  // that did NOT scroll — never an actual scrollback gesture.
+  hostElement.addEventListener("wheel", onWheel, { capture: true, passive: true });
   hostElement.addEventListener("keydown", onKeydownScroll);
   managed.listeners.push(() => {
-    hostElement.removeEventListener("wheel", onWheel);
+    hostElement.removeEventListener("wheel", onWheel, { capture: true });
     hostElement.removeEventListener("keydown", onKeydownScroll);
   });
 

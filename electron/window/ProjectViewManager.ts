@@ -1125,8 +1125,8 @@ export class ProjectViewManager {
    * Set the available-memory band governing cached-view reclaim, without
    * mutating `maxCachedViews`. Pushed once at ResourceProfileService start (and
    * per late-created window), never on a profile transition — the band is a
-   * property of the machine, not of the profile, so the interactive
-   * efficiency→balanced clamp cannot loosen it (#11469). `null` disables
+   * property of the machine, not of the profile, so an efficiency→balanced
+   * lift cannot loosen it (#11469). `null` disables
    * reclaim entirely.
    *
    * The pair is copied: the caller's object is a long-lived service field, and

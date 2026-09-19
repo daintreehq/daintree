@@ -159,6 +159,36 @@ describe("PortBatcher", () => {
     expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("aaabbb"), 6);
   });
 
+  it("recent input keeps the base window under a stretched profile delay (#12518)", () => {
+    setPortBatchThroughputDelayMs(40);
+    const deps = createDeps();
+    const batcher = new PortBatcher(deps);
+
+    // A mouse-reporting TUI's redraw after a wheel report: past the echo
+    // window (not interactive) but inside the recent-input tail.
+    batcher.write("t1", bytes("aaa"), 3, false, false, true);
+    batcher.write("t1", bytes("bbb"), 3, false, false, true); // upgrade to throughput
+
+    vi.advanceTimersByTime(PORT_BATCH_THROUGHPUT_DELAY_MS - 1);
+    expect(deps.postMessage).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
+    expect(deps.postMessage).toHaveBeenCalledWith("t1", bytes("aaabbb"), 6);
+  });
+
+  it("recent input never lengthens a profile delay shorter than the base window", () => {
+    setPortBatchThroughputDelayMs(8);
+    const deps = createDeps();
+    const batcher = new PortBatcher(deps);
+
+    batcher.write("t1", bytes("aaa"), 3, false, false, true);
+    batcher.write("t1", bytes("bbb"), 3, false, false, true);
+
+    vi.advanceTimersByTime(8);
+    expect(deps.postMessage).toHaveBeenCalledOnce();
+  });
+
   it("profile-tuned cadence: rejects non-positive and non-finite values", () => {
     setPortBatchThroughputDelayMs(0);
     setPortBatchThroughputDelayMs(-5);

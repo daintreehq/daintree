@@ -1912,6 +1912,151 @@ describe("TerminalWebGLManager", () => {
     });
   });
 
+  describe("scroll hold (keeps a scrolled pane's context through a DOM flip — #10858, #12518)", () => {
+    beforeEach(async () => {
+      vi.useFakeTimers();
+      // vi.useFakeTimers() replaces requestAnimationFrame with its own queue;
+      // reinstall the sync shim so attaches and releases drain inline.
+      installRafShim();
+      const mod = await import("../TerminalWebGLManager");
+      mod.TerminalWebGLManager.setWebglThresholds(3, 2);
+    });
+
+    afterEach(() => {
+      manager.dispose();
+      vi.useRealTimers();
+    });
+
+    // Three wants sit at the upper threshold (3) in webgl mode; the fourth
+    // (`c`) flips the fleet to dom.
+    function attachThree(): Record<"s" | "a" | "b", ManagedTerminal> {
+      const terms = {
+        s: makeManagedTerminal(),
+        a: makeManagedTerminal(),
+        b: makeManagedTerminal(),
+      };
+      manager.ensureContext("s", terms.s);
+      manager.ensureContext("a", terms.a);
+      manager.ensureContext("b", terms.b);
+      expect(manager.getMode()).toBe("webgl");
+      return terms;
+    }
+
+    it("keeps the scrolled pane's context through a flip to dom mode, then settles it", () => {
+      attachThree();
+      manager.holdForScroll("s", 1000);
+
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+      expect(manager.isActive("s")).toBe(true);
+      expect(manager.isActive("a")).toBe(false);
+      expect(manager.isActive("b")).toBe(false);
+
+      vi.advanceTimersByTime(1000);
+      expect(manager.isScrollHeld("s")).toBe(false);
+      expect(manager.isActive("s")).toBe(false);
+    });
+
+    it("renews while the gesture continues without arming a timer per event", () => {
+      attachThree();
+      manager.holdForScroll("s", 1000);
+      manager.ensureContext("c", makeManagedTerminal());
+      const timersAfterFirstHold = vi.getTimerCount();
+
+      vi.advanceTimersByTime(600);
+      manager.holdForScroll("s", 1000);
+      manager.holdForScroll("s", 1000);
+      expect(vi.getTimerCount()).toBe(timersAfterFirstHold);
+
+      // Past the first deadline, inside the renewed one.
+      vi.advanceTimersByTime(600);
+      expect(manager.isActive("s")).toBe(true);
+
+      vi.advanceTimersByTime(400);
+      expect(manager.isActive("s")).toBe(false);
+    });
+
+    it("never attaches a context — a hold only keeps what is already there", () => {
+      attachThree();
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.isActive("a")).toBe(false);
+      const constructed = WebglAddonMock.mock.calls.length;
+
+      manager.holdForScroll("a", 1000);
+
+      expect(manager.isScrollHeld("a")).toBe(false);
+      expect(manager.isActive("a")).toBe(false);
+      expect(WebglAddonMock.mock.calls.length).toBe(constructed);
+    });
+
+    it("leaves the context alone on expiry when the fleet is back in webgl mode", () => {
+      attachThree();
+      manager.holdForScroll("s", 1000);
+      manager.ensureContext("c", makeManagedTerminal());
+      expect(manager.getMode()).toBe("dom");
+
+      manager.releaseContext("c");
+      manager.releaseContext("b");
+      expect(manager.getMode()).toBe("webgl");
+
+      vi.advanceTimersByTime(1000);
+      expect(manager.isActive("s")).toBe(true);
+    });
+
+    it("leaves the context alone on expiry when the pane is pinned on its own account", () => {
+      const terms = attachThree();
+      manager.holdForScroll("s", 1000);
+      manager.ensureContext("c", makeManagedTerminal());
+      manager.pinFocus("s", terms.s);
+
+      vi.advanceTimersByTime(1000);
+      expect(manager.getMode()).toBe("dom");
+      expect(manager.isActive("s")).toBe(true);
+    });
+
+    it("keeps a held pane through a focus move, releasing it once the gesture ends", () => {
+      const terms = attachThree();
+      manager.pinFocus("s", terms.s);
+      manager.ensureContext("c", makeManagedTerminal());
+      manager.holdForScroll("s", 1000);
+
+      // Focus moves off the scrolled pane mid-gesture: its release is queued
+      // but the hold keeps the context until the wheel stops.
+      manager.pinFocus("a", terms.a);
+      expect(manager.isActive("s")).toBe(true);
+
+      vi.advanceTimersByTime(1000);
+      expect(manager.isActive("s")).toBe(false);
+    });
+
+    it("drops the hold together with the context", () => {
+      attachThree();
+      manager.holdForScroll("s", 1000);
+      manager.releaseContext("s");
+      expect(manager.isScrollHeld("s")).toBe(false);
+    });
+
+    it("gives a hold no exemption from a hardware-loss trip", () => {
+      attachThree();
+      manager.holdForScroll("s", 1000);
+
+      manager.setHardwareAvailable(false);
+
+      expect(manager.isScrollHeld("s")).toBe(false);
+      expect(manager.isActive("s")).toBe(false);
+    });
+
+    it("clears the expiry timer on dispose", () => {
+      attachThree();
+      manager.holdForScroll("s", 1000);
+      expect(vi.getTimerCount()).toBe(1);
+
+      manager.dispose();
+
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
   describe("lazy WebglAddon loading", () => {
     // These tests exercise the dynamic-import path. They reset loader state in
     // beforeEach so the queue behavior runs against a real (mocked) import().
