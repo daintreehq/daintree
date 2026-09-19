@@ -587,7 +587,12 @@ export interface McpAuditStats {
   anomalyRecordFloor: number;
 }
 
-export type McpAnomalySeverity = "danger";
+/**
+ * Fixed per kind, not per magnitude: a first-seen combination is ordinary use
+ * (`info`), latency outliers are degradation (`warning`), and a failure cluster
+ * is explicit failure (`danger`).
+ */
+export type McpAnomalySeverity = "info" | "warning" | "danger";
 
 export type McpAnomalyKind =
   "latency-drift" | "first-seen-combination" | "failure-cluster" | "p95-z-score";
@@ -600,6 +605,13 @@ export interface McpAnomalySignal {
   severity: McpAnomalySeverity;
   timestamp: number;
   recordIds: string[];
+  /**
+   * When the signal stops being emitted if no further calls arrive — its
+   * evidence ages out of the detector's recency window — so a held snapshot can
+   * drop it without refetching. Absent on `first-seen-combination`, which
+   * stands until acknowledged.
+   */
+  expiresAt?: number;
   zScore?: number;
   durationMs?: number;
   baselineMedianMs?: number;
