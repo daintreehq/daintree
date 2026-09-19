@@ -526,6 +526,32 @@ describe("HibernationService", () => {
         }
       );
 
+      it("reports a sweep that failed outright as a failure, not as one with nothing to do", async () => {
+        // The tier-2 ladder backs off a lever that did nothing (#12517); a kill
+        // that threw for every candidate must not read as that.
+        ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
+          makeTerminal({ agentState: "idle" }),
+        ]);
+        ptyManagerMock.gracefulKillByProject.mockRejectedValueOnce(new Error("pty-host gone"));
+        projectStoreMock.getCurrentProjectId.mockReturnValue("other-proj");
+        projectStoreMock.getAllProjects.mockReturnValue([
+          {
+            id: "proj-1",
+            name: "Old",
+            path: "/projects/proj-1",
+            lastOpened: Date.now() - THIRTY_ONE_MINUTES,
+          },
+        ]);
+
+        const service = makeService();
+        await expect(service.hibernateUnderMemoryPressure()).rejects.toThrow(/1 project/);
+        expect(logError).toHaveBeenCalledWith(
+          "memory-pressure-hibernate-failed",
+          expect.any(Error),
+          expect.objectContaining({ projectId: "proj-1" })
+        );
+      });
+
       it("selects eligible idle projects and kills their PTYs", async () => {
         ptyManagerMock.getAllTerminalsAsync.mockResolvedValue([
           makeTerminal({ agentState: "idle" }),

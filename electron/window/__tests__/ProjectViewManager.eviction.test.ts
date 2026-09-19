@@ -3263,7 +3263,11 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
 
     setAvailableMb(1200);
     armPressureLadder(manager);
-    for (let tick = 0; tick < 5; tick++) tickPressureCheck(manager);
+    // The reading moves every tick, as a real one does, without leaving the band.
+    for (const availableMb of [1200, 1350, 1100, 1400, 1250]) {
+      setAvailableMb(availableMb);
+      tickPressureCheck(manager);
+    }
 
     // Five confirmed passes that can take nothing: one override, reported after
     // the pass found that out, and one account of what is holding the cache.
@@ -3295,6 +3299,16 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
     tickPressureCheck(manager);
     expect(logged("projectview.pressure-override")).toHaveLength(3);
     expect(logged("projectview.eviction-skipped")).toHaveLength(3);
+
+    // A forced tier-2 reclaim is a different override from the gradual one, so
+    // it reports even though it cannot take proj-a either — once.
+    manager.reclaimCachedViewsUnderPressure();
+    manager.reclaimCachedViewsUnderPressure();
+    expect(logged("projectview.pressure-override").at(-1)).toMatchObject({
+      forced: true,
+      evictedCount: 0,
+    });
+    expect(logged("projectview.pressure-override")).toHaveLength(4);
   });
 
   it("takes only one view per pass even when the cache sits above its cap", async () => {

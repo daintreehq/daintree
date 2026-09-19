@@ -390,6 +390,7 @@ export class HibernationService {
 
     const activeIds = this.collectActiveProjectIds();
     let terminalsKilled = 0;
+    let failures = 0;
 
     for (const project of projects) {
       // Never hibernate a project that's on-screen in ANY window (#11102).
@@ -435,11 +436,18 @@ export class HibernationService {
           ptyClient
         );
       } catch (error) {
+        failures++;
         logError("memory-pressure-hibernate-failed", error, {
           project: project.name,
           projectId: project.id,
         });
       }
+    }
+    // A sweep that failed outright is not one that found nothing to do: the
+    // ladder backs off a lever that did nothing, and must not mistake this
+    // for one.
+    if (failures > 0 && terminalsKilled === 0) {
+      throw new Error(`memory-pressure hibernation failed for ${failures} project(s)`);
     }
     return terminalsKilled;
   }

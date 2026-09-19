@@ -166,7 +166,7 @@ describe("readSystemMemorySnapshot", () => {
   it("treats a zero total as an API artifact rather than critical pressure", () => {
     // A transiently zeroed struct must not read as "no memory available" — that
     // would collapse every cached view and downgrade the profile on a glitch.
-    stub(() => ({ free: 0, purgeable: 0, fileBacked: 0, total: 8 * 1024 * 1024 }));
+    stub(() => ({ free: 0, purgeable: 0, total: 8 * 1024 * 1024 }));
     expect(readAvailableSystemMemoryMb()).toBeNull();
   });
 
@@ -213,6 +213,14 @@ describe("readSystemMemorySnapshot", () => {
     // and an under-count is what reads as critical.
     for (const purgeable of [Number.NaN, Number.POSITIVE_INFINITY, -4096, "lots"]) {
       stub(() => ({ free: 512 * 1024, purgeable, total: 8 * 1024 * 1024 }));
+      expect(readSystemMemorySnapshot()).toBeNull();
+      // However much file cache comes with it.
+      stub(() => ({
+        free: 512 * 1024,
+        purgeable,
+        fileBacked: 4 * 1024 * 1024,
+        total: 8 * 1024 * 1024,
+      }));
       expect(readSystemMemorySnapshot()).toBeNull();
     }
   });

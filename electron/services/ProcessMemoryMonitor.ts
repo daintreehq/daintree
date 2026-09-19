@@ -450,10 +450,16 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
     1: { unproductivePasses: 0, until: 0 },
     2: { unproductivePasses: 0, until: 0 },
   };
+  /**
+   * Bumped whenever the backoff is cleared, so a pass still in flight across a
+   * suspend or the end of its episode cannot write its verdict into the next.
+   */
+  let backoffEpoch = 0;
   const thresholdExceededPids = new Set<number>();
   const trendWarnedPids = new Set<number>();
 
   const clearBackoff = (reason: "pressure-cleared" | "suspend"): void => {
+    backoffEpoch++;
     for (const tier of [1, 2] as const) {
       const state = tierBackoff[tier];
       if (reason !== "suspend" && state.unproductivePasses > 0) {
@@ -477,9 +483,15 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
     tier: 1 | 2,
     outcome: MitigationOutcome,
     startedAt: number,
-    baseMs: number
+    baseMs: number,
+    epoch: number
   ): { outcome: MitigationOutcome; unproductivePasses: number; retryInMs: number } => {
     const state = tierBackoff[tier];
+    // A pass whose episode ended while it ran reports its verdict but does not
+    // record it: the next episode starts from the base cooldown.
+    if (epoch !== backoffEpoch) {
+      return { outcome, unproductivePasses: 0, retryInMs: baseMs };
+    }
     if (outcome === "productive") {
       if (state.unproductivePasses > 0) {
         logInfo("memory-pressure-backoff-cleared", {
@@ -705,6 +717,9 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
       if (!shouldRunTier1 && !shouldCheckTier2) return;
 
       mitigationInFlight = true;
+      const epoch = backoffEpoch;
+      let tier1StartedAt = 0;
+      let tier1Settled = false;
       void (async () => {
         try {
           // Force-refresh (never read stale): these samples bracket a reclaim
@@ -767,7 +782,8 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           let tier1Trim: TrimStateSummary | null = null;
           let tier1TrimFailed = false;
           if (shouldRunTier1) {
-            lastTier1At = Date.now();
+            tier1StartedAt = Date.now();
+            lastTier1At = tier1StartedAt;
             // Retire the previous reclaim as the stamp it is paired with moves.
             // Without this, a lever throwing before the measurement below (an
             // un-caught destroyHiddenWebviews) would leave an old figure sitting
@@ -836,6 +852,14 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
                     (tier1Trim?.shardsFailed ?? 0) > 0
                   ? "unknown"
                   : "unproductive";
+            const tier1Backoff = settleBackoff(
+              1,
+              tier1Outcome,
+              tier1StartedAt,
+              TIER1_MITIGATION_COOLDOWN_MS,
+              epoch
+            );
+            tier1Settled = true;
             logInfo("memory-pressure-tier1-reclaim", {
               beforeMb: Math.round(beforeMb),
               afterMb: Math.round(afterMb),
@@ -859,7 +883,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               ptyTrimFailed: tier1TrimFailed,
               pressureRemains,
               resampleFailed,
-              ...settleBackoff(1, tier1Outcome, lastTier1At, TIER1_MITIGATION_COOLDOWN_MS),
+              ...tier1Backoff,
             });
           }
 
@@ -999,10 +1023,16 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               terminalsHibernated: tier2TerminalsHibernated,
               pressureRemains: tier2PressureRemains,
               resampleFailed: tier2MeasurementFailed,
-              ...settleBackoff(2, tier2Outcome, tier2StartedAt, MITIGATION_COOLDOWN_MS),
+              ...settleBackoff(2, tier2Outcome, tier2StartedAt, MITIGATION_COOLDOWN_MS, epoch),
             });
           }
         } catch (err) {
+          // A tier-1 lever that threw ends the pass before its verdict. Hold the
+          // current delay rather than leave an expired deadline behind, which
+          // would hand a backed-off tier its base cooldown back.
+          if (tier1StartedAt !== 0 && !tier1Settled) {
+            settleBackoff(1, "unknown", tier1StartedAt, TIER1_MITIGATION_COOLDOWN_MS, epoch);
+          }
           logWarn("memory-pressure-mitigation-failed", { error: String(err) });
         } finally {
           mitigationInFlight = false;
