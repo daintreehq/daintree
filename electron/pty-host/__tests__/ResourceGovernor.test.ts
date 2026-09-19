@@ -210,6 +210,15 @@ describe("ResourceGovernor", () => {
     vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
     expect(mockSample).toHaveBeenCalledTimes(1);
 
+    // A later failure run is reported again.
+    getFdOwners.mockImplementation(() => {
+      throw new Error("registry mid-teardown");
+    });
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 2);
+    expect(
+      warn.mock.calls.filter((c) => String(c[0]).includes("FD owner accounting failed"))
+    ).toHaveLength(2);
+
     governor.dispose();
   });
 

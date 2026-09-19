@@ -91,19 +91,32 @@ describe.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
       expect(transitions).toEqual([]);
     });
 
-    it("accounts for exactly the descriptors a worker thread holds", async () => {
+    it("accounts for the descriptors a worker thread holds", async () => {
       const monitor = new FdMonitor();
       const before = realFdCount();
-      const worker = new Worker("setInterval(() => {}, 1000);", { eval: true });
+      const worker = new Worker(
+        "require('node:worker_threads').parentPort.postMessage('ready'); setInterval(() => {}, 1000);",
+        { eval: true }
+      );
       try {
+        // The message is sent from the worker's running event loop.
         await new Promise<void>((resolve, reject) => {
-          worker.once("online", () => resolve());
+          worker.once("message", () => resolve());
           worker.once("error", reject);
         });
-        // Let the worker finish bringing up its event loop.
-        await new Promise((resolve) => setTimeout(resolve, 200));
-        const held = realFdCount() - before;
-        expect(held).toBe(monitor.expectedFds({ ...NO_OWNERS, analysisWorkers: 1 }));
+        let held = realFdCount() - before;
+        for (let i = 0; i < 20; i++) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+          const next = realFdCount() - before;
+          if (next === held) break;
+          held = next;
+        }
+        const expected = monitor.expectedFds({ ...NO_OWNERS, analysisWorkers: 1 });
+        // Linux counts libuv's io_uring ring, which a kernel or sandbox may
+        // refuse; the model then overcounts by that one descriptor.
+        const refusedRing = process.platform === "linux" ? 1 : 0;
+        expect(held).toBeLessThanOrEqual(expected);
+        expect(held).toBeGreaterThanOrEqual(expected - refusedRing);
       } finally {
         await worker.terminate();
       }

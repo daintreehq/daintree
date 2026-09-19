@@ -103,7 +103,7 @@ describe("FdMonitor", () => {
     it("sums every PTY owner at the platform's per-PTY cost, plus workers", () => {
       const counts = owners({ terminals: 25, pooledPtys: 2, pluginPtys: 1, analysisWorkers: 3 });
       expect(new FdMonitor({ platform: "darwin" }).expectedFds(counts)).toBe(28 * 2 + 3 * 2);
-      expect(new FdMonitor({ platform: "linux" }).expectedFds(counts)).toBe(28 + 3 * 4);
+      expect(new FdMonitor({ platform: "linux" }).expectedFds(counts)).toBe(28 + 3 * 5);
     });
   });
 
@@ -147,7 +147,7 @@ describe("FdMonitor", () => {
 
   describe.each(["darwin", "linux"] as const)("episodes on %s", (platform) => {
     const ptyFds = platform === "darwin" ? 2 : 1;
-    const workerFds = platform === "darwin" ? 2 : 4;
+    const workerFds = platform === "darwin" ? 2 : 5;
     // A restored fleet at the issue's scale: 25 terminals, two pooled shells,
     // three analysis workers, on top of the host's own 37 descriptors.
     const fleet = owners({ terminals: 25, pooledPtys: 2, analysisWorkers: 3 });

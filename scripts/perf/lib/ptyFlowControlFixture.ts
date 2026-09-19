@@ -53,7 +53,8 @@ import type { WorkerMemoryAccounting } from "../../../electron/services/pty/anal
  *   - `electron/pty-host/ResourceGovernor.ts` unmodified: the real EMA, the
  *     real warmup gate, the real critical bypass, the real trim-before-pause
  *     one-shot, the real idle-first/agent-last pause and resume ordering, the
- *     real FD sweep, and the real gauge emissions.
+ *     real killed-PID sweep, and the real gauge emissions. FD sampling runs on
+ *     its own interval, which the fixture never starts.
  *   - Every byte budget and watermark comes from the shipped
  *     `electron/services/pty/types.ts`, never from a number this file chose.
  *

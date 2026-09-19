@@ -8,8 +8,11 @@ import type { FdGrowthPayload, FdOwnerCounts, FdTypeCounts } from "../../shared/
 const PTY_FDS: Partial<Record<NodeJS.Platform, number>> = { darwin: 2, linux: 1 };
 // A worker_thread runs its own event loop for as long as it lives: a poller
 // and an async wakeup handle everywhere, plus on Linux the SIGCHLD pipe libuv
-// opens per loop (macOS watches child exits through kqueue instead).
-const WORKER_FDS: Partial<Record<NodeJS.Platform, number>> = { darwin: 2, linux: 4 };
+// opens per loop (macOS watches child exits through kqueue instead) and an
+// io_uring ring for batching epoll changes — one fewer where the kernel or a
+// sandbox refuses io_uring, which only makes late-spawned workers read as
+// slightly less growth, never more.
+const WORKER_FDS: Partial<Record<NodeJS.Platform, number>> = { darwin: 2, linux: 5 };
 
 // Startup opens descriptors that settle within the first minutes (module
 // loads, pool warm, session restore), so nothing is calibrated before this.
@@ -25,8 +28,8 @@ const CALIBRATION_DEADLINE_MS = 10 * 60_000;
 // 32 cycles.
 const ELEVATED_GROWTH = 32;
 // Short-lived children (`ps`/`lsof` probes, spawns in flight) hold stdio
-// sockets for well under a second, so a burst can land on any one sample; it
-// cannot land on five in a row, minutes apart.
+// sockets for well under a second. A burst can land on one sample; eleven or
+// more of them live at five instants two minutes apart is not a burst.
 const ELEVATED_SAMPLES = 5;
 const RECOVERED_GROWTH = 16;
 const RECOVERED_SAMPLES = 2;
@@ -225,6 +228,10 @@ function sameOwners(a: FdOwnerCounts, b: FdOwnerCounts): boolean {
  * opened, read, or named. A PTY master is a character device, but so is
  * /dev/null; kqueue and epoll descriptors land wherever the platform's fstat
  * puts them.
+ *
+ * Synchronous on purpose, and only when an episode starts: the host already
+ * stats and reads session and history files synchronously far more often, so
+ * a stalled network mount would stop it there first.
  */
 export function classifyFds(entries: readonly string[]): FdTypeCounts {
   const counts: FdTypeCounts = {
