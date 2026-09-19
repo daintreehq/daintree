@@ -3309,6 +3309,8 @@ describe("ProjectViewManager — graduated memory reclaim (#11469)", () => {
       evictedCount: 0,
     });
     expect(logged("projectview.pressure-override")).toHaveLength(4);
+    expect(logged("projectview.eviction-skipped")).toHaveLength(4);
+    expect(logged("projectview.eviction-skipped").at(-1)).toMatchObject({ forced: true });
   });
 
   it("takes only one view per pass even when the cache sits above its cap", async () => {
