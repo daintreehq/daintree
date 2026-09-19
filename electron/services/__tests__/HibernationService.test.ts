@@ -629,10 +629,17 @@ describe("HibernationService", () => {
 
           // The falsy-lastOpened project is filtered out; only the two valid
           // projects are selected and have their PTYs killed.
-          expect(ptyManagerMock.gracefulKillByProject.mock.calls.map(([id]) => id)).toEqual([
+          expect(ptyManagerMock.gracefulKillByProject).toHaveBeenCalledTimes(2);
+          expect(ptyManagerMock.gracefulKillByProject).toHaveBeenNthCalledWith(
+            1,
             "proj-valid-1",
+            expect.anything()
+          );
+          expect(ptyManagerMock.gracefulKillByProject).toHaveBeenNthCalledWith(
+            2,
             "proj-valid-2",
-          ]);
+            expect.anything()
+          );
           expect(hibernatedProjectIds()).toEqual(["proj-valid-1", "proj-valid-2"]);
         }
       );
