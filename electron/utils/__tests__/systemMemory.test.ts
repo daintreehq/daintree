@@ -166,7 +166,7 @@ describe("readSystemMemorySnapshot", () => {
   it("treats a zero total as an API artifact rather than critical pressure", () => {
     // A transiently zeroed struct must not read as "no memory available" — that
     // would collapse every cached view and downgrade the profile on a glitch.
-    stub(() => ({ free: 0, purgeable: 0, fileBacked: 0, total: 8 * 1024 * 1024 }));
+    stub(() => ({ free: 0, purgeable: 0, total: 8 * 1024 * 1024 }));
     expect(readAvailableSystemMemoryMb()).toBeNull();
   });
 
@@ -188,7 +188,7 @@ describe("readSystemMemorySnapshot", () => {
     expect(readAvailableSystemMemoryMb()).toBeNull();
   });
 
-  it("adds purgeable to free and ignores a malformed purgeable figure", () => {
+  it("adds purgeable to free", () => {
     // macOS holds reclaimable pages as purgeable rather than free, so dropping
     // it would fire false positives on every healthy Mac.
     stub(() => ({ free: 512 * 1024, purgeable: 256 * 1024, total: 8 * 1024 * 1024 }));
@@ -198,8 +198,31 @@ describe("readSystemMemorySnapshot", () => {
     expect(snapshot).toMatchObject({ freeMb: 512, purgeableMb: 256, availableMb: 768 });
     expect(readAvailableSystemMemoryMb()).toBe(768);
 
-    stub(() => ({ free: 512 * 1024, purgeable: Number.NaN, total: 8 * 1024 * 1024 }));
-    expect(readAvailableSystemMemoryMb()).toBe(512);
+    // Zero purgeable is an ordinary reading, unlike zero file cache.
+    stub(() => ({
+      free: 512 * 1024,
+      purgeable: 0,
+      fileBacked: 1024 * 1024,
+      total: 8 * 1024 * 1024,
+    }));
+    expect(readAvailableSystemMemoryMb()).toBe(512 + 1024);
+  });
+
+  it("rejects a reported purgeable figure it cannot use instead of reading it as zero (#12517)", () => {
+    // Dropping a component the platform did report under-counts the machine,
+    // and an under-count is what reads as critical.
+    for (const purgeable of [Number.NaN, Number.POSITIVE_INFINITY, -4096, "lots"]) {
+      stub(() => ({ free: 512 * 1024, purgeable, total: 8 * 1024 * 1024 }));
+      expect(readSystemMemorySnapshot()).toBeNull();
+      // However much file cache comes with it.
+      stub(() => ({
+        free: 512 * 1024,
+        purgeable,
+        fileBacked: 4 * 1024 * 1024,
+        total: 8 * 1024 * 1024,
+      }));
+      expect(readSystemMemorySnapshot()).toBeNull();
+    }
   });
 
   it("counts Darwin's file cache as available, so a warm-cache Mac is not read as short (#12363)", () => {
@@ -220,11 +243,32 @@ describe("readSystemMemorySnapshot", () => {
     expect(snapshot!.availableMb).toBeGreaterThan(band.warningMb);
   });
 
-  it("ignores an absent or malformed fileBacked figure, as Windows and Linux report none", () => {
-    for (const fileBacked of [undefined, Number.NaN, Number.POSITIVE_INFINITY, -4096, "lots"]) {
-      stub(() => ({ free: 512 * 1024, purgeable: 256 * 1024, fileBacked, total: 8 * 1024 * 1024 }));
-      expect(readSystemMemorySnapshot()).toMatchObject({ fileBackedMb: 0, availableMb: 768 });
+  it("reads an absent fileBacked figure as not reported, as Windows and Linux report none", () => {
+    stub(() => ({ free: 512 * 1024, purgeable: 256 * 1024, total: 8 * 1024 * 1024 }));
+    expect(readSystemMemorySnapshot()).toMatchObject({ fileBackedMb: 0, availableMb: 768 });
+  });
+
+  it("treats a reported file cache that is zero or malformed as unreadable, not critical (#12517)", () => {
+    // A running Mac always has file-backed pages resident, so a zero here is an
+    // unpopulated field. Summed as zero it hands every consumer a near-empty
+    // machine — the false "critical" the issue's diagnostics carried for days.
+    for (const fileBacked of [0, Number.NaN, Number.POSITIVE_INFINITY, -4096, "lots"]) {
+      stub(() => ({ free: 60 * 1024, purgeable: 11 * 1024, fileBacked, total: 18 * 1024 * 1024 }));
+      expect(readSystemMemorySnapshot()).toBeNull();
+      expect(readAvailableSystemMemoryMb()).toBeNull();
     }
+  });
+
+  it("still trusts a genuinely low reading whose components are all present", () => {
+    // No floor: a well-formed reading this low is what real exhaustion looks
+    // like, and it is exactly when the pressure ladder has to hear about it.
+    stub(() => ({
+      free: 40 * 1024,
+      purgeable: 0,
+      fileBacked: 31 * 1024,
+      total: 18 * 1024 * 1024,
+    }));
+    expect(readAvailableSystemMemoryMb()).toBe(71);
   });
 
   it("still rejects a malformed free reading however much file cache comes with it", () => {

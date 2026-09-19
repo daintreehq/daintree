@@ -6,7 +6,7 @@
  */
 
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
-import { logInfo } from "../utils/logger.js";
+import { logDebug, logInfo } from "../utils/logger.js";
 import { cleanupEntry, sumGuestMemoryKb } from "./ProjectViewLifecycleController.js";
 import { hasActiveAgent } from "./ProjectViewAgentStateCache.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
@@ -243,23 +243,12 @@ export function evictStaleViews(
   }
   const effectiveReason: EvictionReason = criticalPressure || gradualPressure ? "pressure" : reason;
 
-  if (host.views.size <= effectiveMax) return 0;
-  if (host.activeProjectId === null) return 0;
-
-  if (criticalPressure || gradualPressure) {
-    logInfo("projectview.pressure-override", {
-      availableMb,
-      thresholdMb: policy?.criticalMb ?? null,
-      warningThresholdMb: policy?.warningMb ?? null,
-      // The sampled band, not the pass's aggressiveness — a forced tier-2
-      // reclaim can land at any band, and a sampler tick reading "critical"
-      // still sheds gradually. `forced` carries the aggressiveness.
-      pressureLevel: level,
-      forced: criticalPressure,
-      configuredMax: host.maxCachedViews,
-      effectiveMax,
-      evictionBudget: Number.isFinite(evictionBudget) ? evictionBudget : null,
-    });
+  if (host.views.size <= effectiveMax || host.activeProjectId === null) {
+    // Nothing is over target, so whatever the last pass reported has ended; a
+    // later pass that finds the cache over it again is a new episode.
+    host.lastEvictionSkippedLog = null;
+    if (criticalPressure || gradualPressure) host.lastPressureOverrideLog = null;
+    return 0;
   }
 
   // Build pid → memory index from the synchronous app.getAppMetrics()
@@ -518,6 +507,32 @@ export function evictStaleViews(
     evictedCount++;
   }
 
+  // Logged after the pass rather than before it, so it can say what the pass
+  // did — it used to announce an override on every 30s tick and then find every
+  // candidate protected (#12517). A pass that evicts always reports. One that
+  // evicts nothing reports only when the override itself has changed, so a
+  // cache pinned by live assistants logs its episode once, not every tick.
+  // `availableMb` is left out of that comparison: it moves on every reading.
+  if (criticalPressure || gradualPressure) {
+    const override = {
+      thresholdMb: policy?.criticalMb ?? null,
+      warningThresholdMb: policy?.warningMb ?? null,
+      // The sampled band, not the pass's aggressiveness — a forced tier-2
+      // reclaim can land at any band, and a sampler tick reading "critical"
+      // still sheds gradually. `forced` carries the aggressiveness.
+      pressureLevel: level,
+      forced: criticalPressure,
+      configuredMax: host.maxCachedViews,
+      effectiveMax,
+      evictionBudget: Number.isFinite(evictionBudget) ? evictionBudget : null,
+    };
+    const signature = JSON.stringify(override);
+    if (evictedCount > 0 || signature !== host.lastPressureOverrideLog) {
+      host.lastPressureOverrideLog = signature;
+      logInfo("projectview.pressure-override", { availableMb, ...override, evictedCount });
+    }
+  }
+
   // The cache is deliberately over its cap because protecting a running
   // assistant outranks the limit. Emit it so the extra resident renderers are
   // attributable — otherwise this reads as a leak in the memory logs. Gated on
@@ -550,7 +565,7 @@ export function evictStaleViews(
         (id): id is string => id !== null && id !== host.activeProjectId
       )
     );
-    logInfo("projectview.eviction-skipped", {
+    const skipped = {
       reason: effectiveReason,
       forced: criticalPressure,
       viewCount: host.views.size,
@@ -566,7 +581,17 @@ export function evictStaleViews(
       // each count means exactly one thing.
       mcpLeasedCount: mcpLeasedProjectIds.size,
       protectedProjectIds: assistantProtected.map(({ projectId }) => projectId),
-    });
+    };
+    // Once per change in what is holding the cache over, not once per pass: a
+    // live assistant pins its view for as long as it runs, and the sampler
+    // re-finds it every 30s (#12517).
+    const signature = JSON.stringify(skipped);
+    if (signature !== host.lastEvictionSkippedLog) {
+      host.lastEvictionSkippedLog = signature;
+      logInfo("projectview.eviction-skipped", skipped);
+    }
+  } else {
+    host.lastEvictionSkippedLog = null;
   }
 
   return evictedCount;
@@ -575,9 +600,12 @@ export function evictStaleViews(
 /**
  * Periodic renderer-memory sample for cached (non-active) project views.
  * Silent telemetry only — emits one `projectview.cached-memory` event per
- * cached view per tick so the keep-warm cost is observable in logs without
- * any user-visible behaviour change. Skips when the cache holds only the
- * active view (or fewer) so a single-project session generates no events.
+ * cached view per tick so the keep-warm cost is observable without any
+ * user-visible behaviour change. Debug level, like ProcessMemoryMonitor's own
+ * per-process samples: at info it was the bulk of a diagnostics log — one line
+ * per cached view every 30s, per window (#12517). Skips when the cache holds
+ * only the active view (or fewer) so a single-project session generates no
+ * events.
  */
 export function sampleCachedViewMemory(host: ProjectViewManager): void {
   if (host.views.size <= 1) return;
@@ -629,7 +657,7 @@ export function sampleCachedViewMemory(host: ProjectViewManager): void {
         gpuKb,
       };
       if (guestMemoryKb > 0) ctx.guestMemoryKb = guestMemoryKb;
-      logInfo("projectview.cached-memory", ctx);
+      logDebug("projectview.cached-memory", ctx);
     } catch {
       // Telemetry only — skip this view and continue with the rest.
     }
@@ -670,6 +698,9 @@ export function maybeEvictUnderPressure(host: ProjectViewManager): void {
   const availableMb = policy != null && host.views.size > 1 ? getAvailableMemoryMb() : null;
   if (policy == null || availableMb == null || availableMb >= policy.warningMb) {
     host.pressureSampleStreak = 0;
+    // The episode is over; the next one reports afresh even if it looks the same.
+    host.lastPressureOverrideLog = null;
+    host.lastEvictionSkippedLog = null;
     return;
   }
   host.pressureSampleStreak = Math.min(host.pressureSampleStreak + 1, PRESSURE_SAMPLES_TO_CONFIRM);

@@ -291,6 +291,12 @@ export class ProjectViewManager {
   memoryPressurePolicy: MemoryPressurePolicy | null = null;
   /** Consecutive sampler readings below the warning edge — see `maybeEvictUnderPressure`. */
   pressureSampleStreak = 0;
+  /**
+   * What the last `projectview.pressure-override` and `projectview.eviction-skipped`
+   * lines said, so an unchanged pass logs nothing — see `evictStaleViews` (#12517).
+   */
+  lastPressureOverrideLog: string | null = null;
+  lastEvictionSkippedLog: string | null = null;
   win: BrowserWindow;
   dirname: string;
   onRecreateWindow?: () => Promise<void>;
@@ -1129,6 +1135,7 @@ export class ProjectViewManager {
   setMemoryPressurePolicy(policy: MemoryPressurePolicy | null): void {
     // Readings counted against the previous band say nothing about this one.
     this.pressureSampleStreak = 0;
+    this.lastPressureOverrideLog = null;
     if (
       policy == null ||
       !Number.isFinite(policy.criticalMb) ||
@@ -1156,6 +1163,7 @@ export class ProjectViewManager {
    */
   setLowMemoryFreeThresholdMb(mb: number | null): void {
     this.pressureSampleStreak = 0;
+    this.lastPressureOverrideLog = null;
     if (mb == null || !Number.isFinite(mb) || mb <= 0) {
       this.memoryPressurePolicy = null;
     } else {

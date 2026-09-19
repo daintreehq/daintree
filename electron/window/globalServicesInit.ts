@@ -625,9 +625,7 @@ export async function initGlobalServices(
             }
             return tabsEvicted;
           },
-          hibernateIdleProjects: async () => {
-            await getHibernationService().hibernateUnderMemoryPressure();
-          },
+          hibernateIdleProjects: () => getHibernationService().hibernateUnderMemoryPressure(),
           evictCachedProjectViews: () => {
             if (!windowRegistry) return 0;
             let viewsEvicted = 0;

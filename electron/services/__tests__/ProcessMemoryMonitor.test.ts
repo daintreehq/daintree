@@ -53,6 +53,8 @@ import {
   RECLAIM_SETTLE_MS,
   MIN_RECLAIMED_MB,
   TIER1_REPRIEVE_MS,
+  TIER1_MITIGATION_COOLDOWN_MS,
+  MITIGATION_BACKOFF_MAX_MS,
   recordBlinkSample,
   forgetBlinkSample,
   getBlinkSamples,
@@ -665,7 +667,9 @@ describe("ProcessMemoryMonitor", () => {
       }
     }
 
-    function stubSystemMemoryInfo(freeKb: number, purgeableKb = 0, fileBackedKb = 0): void {
+    // `fileBacked` is omitted unless a test supplies it: a reported zero is an
+    // unreadable Darwin reading (#12517), not an empty file cache.
+    function stubSystemMemoryInfo(freeKb: number, purgeableKb = 0, fileBackedKb?: number): void {
       (
         process as {
           getSystemMemoryInfo?: () => {
@@ -932,6 +936,9 @@ describe("ProcessMemoryMonitor", () => {
 
     it("allows tier 2 re-trigger after cooldown expires", async () => {
       arrangeClosedLoopMetrics({ beforeMb: 350, afterMb: 345 });
+      // A pass that evicts something is productive, so the tier stays on its
+      // base cooldown; an empty one backs off (see "mitigation backoff").
+      mockActions.evictCachedProjectViews = vi.fn().mockReturnValue(1);
       stop = startAppMetricsMonitor(mockActions);
 
       // Trigger tier 2.
@@ -1286,6 +1293,244 @@ describe("ProcessMemoryMonitor", () => {
         .mocked(mockActions.destroyHiddenWebviews)
         .mock.calls.filter((c) => c[0] === 2).length;
       expect(destroyCallsAfterSecond).toBe(1);
+    });
+  });
+
+  describe("mitigation backoff (#12517)", () => {
+    const MINUTE = 60_000;
+    let mockActions: MemoryPressureActions;
+    /** Wall-clock time of each pass, by tier, read off the lever each tier pulls first. */
+    let passes: Record<1 | 2, number[]>;
+
+    beforeEach(() => {
+      passes = { 1: [], 2: [] };
+      mockActions = {
+        destroyHiddenWebviews: vi.fn(async (tier: 1 | 2) => {
+          passes[tier].push(Date.now());
+          return 0;
+        }),
+        hibernateIdleProjects: vi.fn().mockResolvedValue(0),
+        evictCachedProjectViews: vi.fn().mockReturnValue(0),
+      };
+      // Persistent pressure no lever here can touch.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+    });
+
+    async function advanceMinutes(minutes: number): Promise<void> {
+      // One poll at a time, so each pass's settle window runs inside the poll
+      // gap it belongs to.
+      for (let i = 0; i < minutes * 2; i++) {
+        await vi.advanceTimersByTimeAsync(30_000);
+      }
+    }
+
+    const gapsInMinutes = (times: number[]): number[] =>
+      times.slice(1).map((t, i) => Math.floor((t - times[i]) / MINUTE));
+
+    it("doubles each tier's cooldown while its passes find nothing, up to the cap", async () => {
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(5 * 60);
+
+      // Tier 1 from its 5-minute base, tier 2 from its 10-minute one; both
+      // settle at the hourly cap instead of repeating every 5 and 10 minutes.
+      const cap = MITIGATION_BACKOFF_MAX_MS / MINUTE;
+      expect(gapsInMinutes(passes[1]).slice(0, 5)).toEqual([10, 20, 40, cap, cap]);
+      expect(gapsInMinutes(passes[2]).slice(0, 4)).toEqual([20, 40, cap, cap]);
+      // Over five hours of unrelieved pressure: a handful of passes, not ~90.
+      expect(passes[1].length + passes[2].length).toBeLessThan(15);
+
+      expect(logInfo).toHaveBeenCalledWith("memory-pressure-backoff", {
+        tier: 1,
+        retryInMs: 2 * TIER1_MITIGATION_COOLDOWN_MS,
+      });
+      expect(logInfo).toHaveBeenCalledWith("memory-pressure-backoff", {
+        tier: 2,
+        retryInMs: 2 * MITIGATION_COOLDOWN_MS,
+      });
+      // The transition into backoff is logged once per tier, not per pass.
+      expect(
+        vi.mocked(logInfo).mock.calls.filter(([event]) => event === "memory-pressure-backoff")
+      ).toHaveLength(2);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier2-reclaim",
+        expect.objectContaining({ outcome: "unproductive", unproductivePasses: 3 })
+      );
+    });
+
+    it("skips the pass entirely while backed off, forced metrics sweeps included", async () => {
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceMinutes(40);
+      const before = mockGetAppMetrics.mock.calls.length;
+      const passesBefore = passes[1].length + passes[2].length;
+
+      // Both tiers are now on 40-minute delays — tier 1 last ran at minute 33,
+      // tier 2 at minute 24 — so neither is due in the next five minutes.
+      await advanceMinutes(5);
+
+      expect(passes[1].length + passes[2].length).toBe(passesBefore);
+      // One sweep per poll — the poll's own — and none of a pass's brackets.
+      expect(mockGetAppMetrics.mock.calls.length - before).toBe(10);
+    });
+
+    it("returns a tier to its base cooldown after a productive pass", async () => {
+      let viewsToEvict = 0;
+      mockActions.evictCachedProjectViews = vi.fn(() => viewsToEvict);
+      stop = startAppMetricsMonitor(mockActions);
+
+      // First tier-2 pass finds nothing and backs off to 20 minutes.
+      await advanceMinutes(10);
+      expect(passes[2]).toHaveLength(1);
+
+      // The next one evicts a view, which restores the 10-minute cooldown.
+      viewsToEvict = 1;
+      await advanceMinutes(20);
+      expect(passes[2]).toHaveLength(2);
+      viewsToEvict = 0;
+      await advanceMinutes(10);
+
+      expect(gapsInMinutes(passes[2])).toEqual([20, 10]);
+      expect(logInfo).toHaveBeenCalledWith("memory-pressure-backoff-cleared", {
+        tier: 2,
+        reason: "productive",
+        unproductivePasses: 1,
+      });
+    });
+
+    it("counts a trim that shrank terminals as productive whatever the sampler saw (#11674)", async () => {
+      mockActions.trimPtyHostState = vi.fn(async () => makeTrimSummary({ trimmed: 2 }));
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(20);
+
+      expect(gapsInMinutes(passes[1])).toEqual([5, 5, 5]);
+    });
+
+    it("neither grows nor forgets the backoff on a pass whose evidence is incomplete", async () => {
+      let shardsFailed = 0;
+      mockActions.trimPtyHostState = vi.fn(async () => makeTrimSummary({ shardsFailed }));
+      stop = startAppMetricsMonitor(mockActions);
+
+      // Pass 1 backs off to 10 minutes; pass 2 to 20.
+      await advanceMinutes(15);
+      expect(passes[1]).toHaveLength(2);
+
+      // A trim that never reached every shard is not evidence the tier found
+      // nothing, so the delay holds at 20 minutes rather than doubling to 40 —
+      // or falling back to the 5-minute base.
+      shardsFailed = 1;
+      await advanceMinutes(20);
+      expect(passes[1]).toHaveLength(3);
+      shardsFailed = 0;
+      await advanceMinutes(20);
+
+      expect(gapsInMinutes(passes[1])).toEqual([10, 20, 20]);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ outcome: "unknown", unproductivePasses: 2 })
+      );
+    });
+
+    it("clears the backoff when the pressure episode ends", async () => {
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceMinutes(20);
+      expect(passes[1].length).toBeGreaterThanOrEqual(2);
+
+      // One healthy poll ends the episode; the next pressure poll is a new one
+      // and gets its tier-1 pass straight away.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 100 * 1024, 100)]);
+      await advanceMinutes(0.5);
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 350 * 1024, 100)]);
+      const resumedAt = Date.now();
+      const passesBefore = passes[1].length;
+      await advanceMinutes(0.5);
+
+      // Backed off, tier 1 would not have been due again until minute 33.
+      expect(passes[1]).toHaveLength(passesBefore + 1);
+      expect(passes[1].at(-1)).toBeGreaterThan(resumedAt);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-backoff-cleared",
+        expect.objectContaining({ tier: 1, reason: "pressure-cleared" })
+      );
+    });
+
+    it("never lets a backoff authorize a pass the base cooldown would refuse", async () => {
+      // A productive tier 2 every time keeps it on the plain 10-minute clock.
+      mockActions.evictCachedProjectViews = vi.fn().mockReturnValue(1);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(60);
+
+      expect(passes[2].length).toBeGreaterThanOrEqual(2);
+      for (const gap of gapsInMinutes(passes[2])) {
+        expect(gap).toBeGreaterThanOrEqual(MITIGATION_COOLDOWN_MS / MINUTE);
+      }
+    });
+
+    it("counts terminals hibernated as tier-2 work", async () => {
+      // Flat memory and nothing else touched: the kill count alone has to keep
+      // the tier on its base cooldown.
+      mockActions.hibernateIdleProjects = vi.fn().mockResolvedValue(2);
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(30);
+
+      expect(gapsInMinutes(passes[2])).toEqual([10, 10]);
+    });
+
+    it("holds the delay when a tier-1 lever throws instead of dropping to the base cooldown", async () => {
+      mockActions.destroyHiddenWebviews = vi.fn(async (tier: 1 | 2) => {
+        passes[tier].push(Date.now());
+        if (tier === 1 && passes[1].length === 3) throw new Error("teardown failed");
+        return 0;
+      });
+      stop = startAppMetricsMonitor(mockActions);
+
+      await advanceMinutes(60);
+
+      // Passes at 3 and 13 back off to 20 minutes; the one at 33 throws, which
+      // proves nothing either way, so the next waits 20 again — not 5.
+      expect(gapsInMinutes(passes[1]).slice(0, 3)).toEqual([10, 20, 20]);
+      expect(logWarn).toHaveBeenCalledWith(
+        "memory-pressure-mitigation-failed",
+        expect.objectContaining({ error: expect.stringContaining("teardown failed") })
+      );
+    });
+
+    it("starts afresh after a suspend", async () => {
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceMinutes(20);
+      const passesBefore = passes[1].length;
+
+      const sleep = getSystemSleepService();
+      const onSuspend = vi.mocked(sleep.onSuspend).mock.calls[0]![0]!;
+      const onWake = vi.mocked(sleep.onWake).mock.calls[0]![0]!;
+      onSuspend();
+      onWake(0);
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
+      // Backed off, tier 1 would not have been due again until minute 33; the
+      // wake poll is a new episode and gets its pass straight away.
+      expect(passes[1]).toHaveLength(passesBefore + 1);
+    });
+
+    it("does not let a pass that straddled a suspend record into the next episode", async () => {
+      stop = startAppMetricsMonitor(mockActions);
+      for (let i = 0; i < WARMUP_INTERVALS + 1; i++) vi.advanceTimersByTime(30_000);
+      // The first tier-1 pass is now waiting out its settle window.
+      await vi.advanceTimersByTimeAsync(0);
+      expect(passes[1]).toHaveLength(1);
+
+      const onSuspend = vi.mocked(getSystemSleepService().onSuspend).mock.calls[0]![0]!;
+      onSuspend();
+      await vi.advanceTimersByTimeAsync(RECLAIM_SETTLE_MS);
+
+      // It still reports what it saw, but the cleared backoff stays cleared.
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier1-reclaim",
+        expect.objectContaining({ outcome: "unproductive", unproductivePasses: 0 })
+      );
+      expect(logInfo).not.toHaveBeenCalledWith("memory-pressure-backoff", expect.anything());
     });
   });
 

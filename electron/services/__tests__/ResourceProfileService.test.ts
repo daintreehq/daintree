@@ -1677,11 +1677,13 @@ describe("ResourceProfileService", () => {
       }
     });
 
+    // `fileBacked` is omitted unless a test supplies it: a reported zero is an
+    // unreadable Darwin reading (#12517), not an empty file cache.
     function stubSystemMemory(
       freeKb: number,
       purgeableKb: number,
       totalKb: number,
-      fileBackedKb = 0
+      fileBackedKb?: number
     ): void {
       (process as { getSystemMemoryInfo?: unknown }).getSystemMemoryInfo = vi.fn(() => ({
         free: freeKb,

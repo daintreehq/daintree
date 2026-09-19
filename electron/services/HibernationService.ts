@@ -64,13 +64,15 @@ export class HibernationService {
   // EXPERIMENT (hibernation removal, step 4): disables the PTY-kill so a
   // backgrounded project's terminals are never torn down by the *background*
   // paths — the scheduled sweep (checkAndHibernate) and memory pressure
-  // (hibernateUnderMemoryPressure). User-initiated closes (#10831 — the idle
-  // "Close Them" action) deliberately bypass this guard and DO kill, since the
-  // user explicitly asked for it; see the `reason !== "user-initiated"` check in
-  // hibernateProject(). All paths funnel through the single
-  // `gracefulKillByProject` chokepoint in hibernateProject(), guarded below.
-  // The rest of the flow (callbacks, the project-hibernated event, and the
-  // user-initiated WebContentsView eviction we KEEP) is preserved. Typed
+  // (hibernateUnderMemoryPressure, which skips its whole sweep rather than
+  // running it to a no-op on every tier-2 pass, #12517). User-initiated closes
+  // (#10831 — the idle "Close Them" action) deliberately bypass this guard and
+  // DO kill, since the user explicitly asked for it; see the
+  // `reason !== "user-initiated"` check in hibernateProject(). Every kill
+  // funnels through the single `gracefulKillByProject` chokepoint there,
+  // guarded below. On the paths that still reach it, the rest of the flow
+  // (callbacks, the project-hibernated event, and the user-initiated
+  // WebContentsView eviction we KEEP) is preserved. Typed
   // `boolean` (not the `true` literal) so the kill branch stays type-reachable
   // for the step-7 deletion; flip to `false` to revert.
   private static readonly EXPERIMENT_HIBERNATION_DISABLED: boolean = true;
@@ -367,15 +369,28 @@ export class HibernationService {
     }
   }
 
-  async hibernateUnderMemoryPressure(): Promise<void> {
+  /**
+   * Resolves with the number of terminals killed, which is the only account the
+   * tier-2 ladder gets of whether this lever did anything (#12517).
+   */
+  async hibernateUnderMemoryPressure(): Promise<number> {
+    // Under the experiment this path cannot kill anything, yet everything ahead
+    // of the kill still ran on every tier-2 pass: a registry enumeration, a git
+    // probe per candidate project, and then a "hibernated — 0 terminals
+    // suspended" toast plus a dev-preview stop for a project that was never
+    // hibernated (#12517). Skip it whole.
+    if (HibernationService.EXPERIMENT_HIBERNATION_DISABLED) return 0;
+
     const projects = projectStore.getAllProjects();
     const now = Date.now();
 
-    if (!this.ptyClient) return;
+    if (!this.ptyClient) return 0;
     const ptyClient = this.ptyClient;
     const allTerminals = await ptyClient.getAllTerminalsAsync();
 
     const activeIds = this.collectActiveProjectIds();
+    let terminalsKilled = 0;
+    let failures = 0;
 
     for (const project of projects) {
       // Never hibernate a project that's on-screen in ANY window (#11102).
@@ -414,14 +429,27 @@ export class HibernationService {
       });
 
       try {
-        await this.hibernateProject(project.id, project.name, "memory-pressure", ptyClient);
+        terminalsKilled += await this.hibernateProject(
+          project.id,
+          project.name,
+          "memory-pressure",
+          ptyClient
+        );
       } catch (error) {
+        failures++;
         logError("memory-pressure-hibernate-failed", error, {
           project: project.name,
           projectId: project.id,
         });
       }
     }
+    // A sweep that failed outright is not one that found nothing to do: the
+    // ladder backs off a lever that did nothing, and must not mistake this
+    // for one.
+    if (failures > 0 && terminalsKilled === 0) {
+      throw new Error(`memory-pressure hibernation failed for ${failures} project(s)`);
+    }
+    return terminalsKilled;
   }
 
   /**
