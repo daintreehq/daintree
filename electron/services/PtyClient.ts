@@ -877,9 +877,12 @@ export class PtyClient extends EventEmitter {
     });
     // A project shard forked mid-session missed every earlier config setter
     // (resource profile, monitoring, persistence suppression) — those are
-    // host-process-wide, so replay the caches on its first ready. Restart
-    // readies get the same replay from respawnPendingForShard below.
-    if (shard.key !== DEFAULT_SHARD_KEY && !shard.needsRespawn) {
+    // host-process-wide, so replay the caches on its first ready. The default
+    // shard needs it too: with deferred start, a setter sent before its first
+    // ready (ResourceProfileService's startup push, #12513) was posted before
+    // the host's listener existed and dropped. Restart readies get the same
+    // replay from respawnPendingForShard below.
+    if (!shard.needsRespawn) {
       this.replayGlobalConfigToShard(shard);
     }
     // Re-arm the watchdog on every successful ready — covers both the initial
@@ -1074,8 +1077,8 @@ export class PtyClient extends EventEmitter {
 
   /**
    * Replay the cached host-process-wide config to one shard: on restarts
-   * (the new process booted with defaults) and on a project shard's first
-   * ready (it missed every earlier live setter).
+   * (the new process booted with defaults) and on every shard's first ready
+   * (any setter posted before it was dropped).
    */
   private replayGlobalConfigToShard(shard: PtyShard): void {
     // Re-enable resource monitoring if it was active

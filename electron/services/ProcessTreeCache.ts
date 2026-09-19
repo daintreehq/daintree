@@ -72,6 +72,8 @@ export interface ProcessInfo {
  */
 export interface LineageLedgerHook {
   hasRoots(): boolean;
+  /** Whether a PID is a registered terminal root (its PTY shell). */
+  isRoot?(pid: number): boolean;
   reconcile(census: ProcessTreeCache): void;
 }
 
@@ -91,6 +93,9 @@ export class ProcessTreeCache {
   private lastError: Error | null = null;
   private loggedZeroSubscriberSkip: boolean = false;
   private lineageLedger: LineageLedgerHook | null = null;
+  // The owned tree as of the last successful sweep; the backoff resets when
+  // it changes. See ownedTreePids().
+  private lastOwnedPids: Set<number> = new Set();
   private cpuSnapshots = new Map<
     string,
     { kernelTicks: bigint; userTicks: bigint; wallMs: number }
@@ -374,7 +379,7 @@ export class ProcessTreeCache {
       }
     }
 
-    const changed = this.hasOwnedTreeChanged(this.childrenMap, newChildrenMap);
+    const changed = this.hasOwnedTreeChanged(newChildrenMap);
 
     this.cache = newCache;
     this.childrenMap = newChildrenMap;
@@ -441,6 +446,7 @@ export class ProcessTreeCache {
       const changed = this.cache.size > 0;
       this.cache = new Map();
       this.childrenMap = new Map();
+      this.lastOwnedPids = new Set();
       this.cpuSnapshots.clear();
       return changed;
     }
@@ -552,7 +558,7 @@ export class ProcessTreeCache {
       }
     }
 
-    const changed = this.hasOwnedTreeChanged(this.childrenMap, newChildrenMap);
+    const changed = this.hasOwnedTreeChanged(newChildrenMap);
 
     this.cache = newCache;
     this.childrenMap = newChildrenMap;
@@ -565,31 +571,47 @@ export class ProcessTreeCache {
     return changed;
   }
 
-  private hasOwnedTreeChanged(
-    oldChildrenMap: Map<number, number[]>,
-    newChildrenMap: Map<number, number[]>
-  ): boolean {
-    const collectDescendants = (childrenMap: Map<number, number[]>): Set<number> => {
-      const descendants = new Set<number>();
-      const pending = [...(childrenMap.get(process.pid) ?? [])];
-
-      while (pending.length > 0) {
-        const pid = pending.pop()!;
-        if (descendants.has(pid)) continue;
-        descendants.add(pid);
-        pending.push(...(childrenMap.get(pid) ?? []));
-      }
-
-      return descendants;
-    };
-
-    const oldPids = collectDescendants(oldChildrenMap);
-    const newPids = collectDescendants(newChildrenMap);
-    if (oldPids.size !== newPids.size) return true;
-    for (const pid of newPids) {
-      if (!oldPids.has(pid)) return true;
+  private hasOwnedTreeChanged(newChildrenMap: Map<number, number[]>): boolean {
+    const previous = this.lastOwnedPids;
+    const next = this.ownedTreePids(newChildrenMap);
+    this.lastOwnedPids = next;
+    if (previous.size !== next.size) return true;
+    for (const pid of next) {
+      if (!previous.has(pid)) return true;
     }
     return false;
+  }
+
+  /**
+   * Every descendant of this process that is terminal workload. A childless
+   * direct child counts only as a registered terminal root: the host's own
+   * probes — the foreground `ps`, the lineage `lstart` batches, `lsof`, `git`
+   * — share that shape and were caught in nearly every sweep, so counting them
+   * reset the backoff forever (#12513). Anything that runs under a shell is a
+   * grandchild and always counts.
+   */
+  private ownedTreePids(childrenMap: Map<number, number[]>): Set<number> {
+    const owned = new Set<number>();
+    const pending = (childrenMap.get(process.pid) ?? []).filter(
+      (pid) => (childrenMap.get(pid)?.length ?? 0) > 0 || this.isLineageRoot(pid)
+    );
+
+    while (pending.length > 0) {
+      const pid = pending.pop()!;
+      if (owned.has(pid)) continue;
+      owned.add(pid);
+      pending.push(...(childrenMap.get(pid) ?? []));
+    }
+
+    return owned;
+  }
+
+  private isLineageRoot(pid: number): boolean {
+    try {
+      return this.lineageLedger?.isRoot?.(pid) ?? false;
+    } catch {
+      return false;
+    }
   }
 
   getChildren(ppid: number): ProcessInfo[] {

@@ -425,8 +425,30 @@ export class ResourceProfileService {
     for (const pvm of this.getProjectViewManagersSafe()) {
       this.applyCurrentProfileTo(pvm);
     }
+    // Same for the pty host: until a profile arrives, each shard polls its
+    // process census at the host's built-in startup cadence, which is faster
+    // than any profile asks for (#12513). PtyClient caches the push and
+    // replays it to every shard as it comes up.
+    this.applyProfileToPtyHost(this.currentProfile, getFocusThrottlePollMultiplier());
 
     this.startLagMonitor();
+  }
+
+  private applyProfileToPtyHost(profile: ResourceProfile, pollMultiplier: number): void {
+    const ptyClient = this.deps.getPtyClient();
+    if (!ptyClient) return;
+    try {
+      ptyClient.setResourceProfile(profile);
+      if (pollMultiplier !== 1) {
+        // set-resource-profile resets the host's process-tree cadence to the
+        // profile baseline — re-apply the throttle on top.
+        ptyClient.setProcessTreePollInterval(
+          RESOURCE_PROFILE_CONFIGS[profile].processTreePollInterval * pollMultiplier
+        );
+      }
+    } catch {
+      // non-critical
+    }
   }
 
   /**
@@ -1140,20 +1162,7 @@ export class ResourceProfileService {
       }
     }
 
-    // Notify pty-host
-    const ptyClient = this.deps.getPtyClient();
-    if (ptyClient) {
-      try {
-        ptyClient.setResourceProfile(profile);
-        if (pollMultiplier !== 1) {
-          // set-resource-profile resets the host's process-tree cadence to the
-          // profile baseline — re-apply the throttle on top.
-          ptyClient.setProcessTreePollInterval(config.processTreePollInterval * pollMultiplier);
-        }
-      } catch {
-        // non-critical
-      }
-    }
+    this.applyProfileToPtyHost(profile, pollMultiplier);
 
     // Update the terminal-poll cadence. Both services fan out to every pty
     // shard on the same interval, so they move together — leaving one at the

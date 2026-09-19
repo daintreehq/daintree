@@ -71,7 +71,10 @@ import {
   serializeTerminalAsync,
   serializeForPersistence,
 } from "./terminalSerialization.js";
-import { ForegroundProcessGroupProbe } from "./ForegroundProcessGroupProbe.js";
+import {
+  ForegroundProcessGroupProbe,
+  type ForegroundSnapshot,
+} from "./ForegroundProcessGroupProbe.js";
 import type { AnalysisBackend, MonitorStartOptions } from "./analysis/AnalysisBackend.js";
 import {
   InThreadAnalysisBackend,
@@ -1683,10 +1686,7 @@ export class TerminalProcess {
   // a method on TerminalProcess so test suites that override the foreground
   // snapshot via instance-method replacement (`agentDetection.test.ts`) keep
   // working without rewiring the probe.
-  private readForegroundProcessGroupSnapshot(): {
-    shellPgid: number;
-    foregroundPgid: number;
-  } | null {
+  private readForegroundProcessGroupSnapshot(): ForegroundSnapshot | null {
     return this.foregroundProbe.readSnapshot();
   }
 

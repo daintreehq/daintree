@@ -142,6 +142,19 @@ describe("TerminalLineageLedger", () => {
   }
 
   describe("tracking", () => {
+    it("reports registered roots as roots until they are forgotten", () => {
+      const ledger = new TerminalLineageLedger(null);
+      ledger.registerRoot(100);
+      ledger.markRootClosing(100);
+
+      // A closing root is still one the census must treat as terminal workload.
+      expect(ledger.isRoot(100)).toBe(true);
+      expect(ledger.isRoot(200)).toBe(false);
+
+      ledger.unregisterRoot(100);
+      expect(ledger.isRoot(100)).toBe(false);
+    });
+
     it("records a descendant observed under a root", async () => {
       const ledger = new TerminalLineageLedger(null);
       const census = new FakeCensus([

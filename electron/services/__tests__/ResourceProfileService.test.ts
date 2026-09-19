@@ -49,6 +49,7 @@ import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
+import { FOCUS_THROTTLE_MULTIPLIER, setFocusThrottled } from "../../window/focusThrottleState.js";
 import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.js";
 import { resolveWebglThresholds } from "../../utils/webglContextBudget.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
@@ -781,6 +782,62 @@ describe("ResourceProfileService", () => {
 
     expectArmedPolicy(pvm);
     expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
+
+    service.stop();
+  });
+
+  it("pushes the starting profile to the pty host on start() even without a transition", () => {
+    const deps = createDeps();
+    const pty = deps.getPtyClient() as unknown as MockPtyClient;
+    const service = new ResourceProfileService(deps);
+
+    service.start();
+
+    expect(pty.setResourceProfile).toHaveBeenCalledTimes(1);
+    expect(pty.setResourceProfile).toHaveBeenCalledWith(service.getProfile());
+
+    service.stop();
+  });
+
+  it("re-applies the focus throttle over the starting profile when started blurred", () => {
+    const deps = createDeps();
+    const pty = deps.getPtyClient() as unknown as MockPtyClient & {
+      setProcessTreePollInterval: Mock;
+    };
+    pty.setProcessTreePollInterval = vi.fn();
+    const service = new ResourceProfileService(deps);
+
+    setFocusThrottled(true);
+    try {
+      service.start();
+    } finally {
+      setFocusThrottled(false);
+    }
+
+    expect(pty.setProcessTreePollInterval).toHaveBeenCalledWith(
+      RESOURCE_PROFILE_CONFIGS[service.getProfile()].processTreePollInterval *
+        FOCUS_THROTTLE_MULTIPLIER
+    );
+    // The profile push resets the host's cadence, so the throttle must land after it.
+    expect(pty.setResourceProfile.mock.invocationCallOrder[0]!).toBeLessThan(
+      pty.setProcessTreePollInterval.mock.invocationCallOrder[0]!
+    );
+
+    service.stop();
+  });
+
+  it("still starts when the pty host rejects the starting profile", () => {
+    const deps = createDeps();
+    const pty = deps.getPtyClient() as unknown as MockPtyClient;
+    pty.setResourceProfile.mockImplementation(() => {
+      throw new Error("host gone");
+    });
+    const service = new ResourceProfileService(deps);
+
+    expect(() => service.start()).not.toThrow();
+    expect(pty.setResourceProfile).toHaveBeenCalledWith(service.getProfile());
+    // Startup carried on past the rejected push to the lag monitor it arms last.
+    expect((service as unknown as { lagInterval: unknown }).lagInterval).toBeTruthy();
 
     service.stop();
   });

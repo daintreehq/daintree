@@ -23,6 +23,13 @@ export const INITIAL_FOREGROUND_SENTINEL = Object.freeze({
 export interface ForegroundSnapshot {
   shellPgid: number;
   foregroundPgid: number;
+  /**
+   * When the `ps` behind this reading was started. The cache serves a reading
+   * for a while after it lands, and a slow probe lands well after it sampled,
+   * so this — not the age of the cache — is what says whether the reading can
+   * postdate some event. Absent on the warm-up sentinel.
+   */
+  sampledAt?: number;
 }
 
 export interface ForegroundProcessGroupProbeHost {
@@ -80,6 +87,7 @@ export class ForegroundProcessGroupProbe {
   private async refresh(ptyPid: number): Promise<void> {
     this.refreshing = true;
     const checkId = ++this.checkId;
+    const sampledAt = Date.now();
     let nextSnapshot: ForegroundSnapshot | null = null;
     try {
       const { stdout } = await execFileAsync("ps", ["-o", "pgid=,tpgid=", "-p", String(ptyPid)], {
@@ -91,7 +99,7 @@ export class ForegroundProcessGroupProbe {
       const shellPgid = Number.parseInt(pgidText ?? "", 10);
       const foregroundPgid = Number.parseInt(tpgidText ?? "", 10);
       if (Number.isFinite(shellPgid) && Number.isFinite(foregroundPgid)) {
-        nextSnapshot = { shellPgid, foregroundPgid };
+        nextSnapshot = { shellPgid, foregroundPgid, sampledAt };
       }
     } catch {
       // ps -p races (process exited) and aborts both surface here. Persisting
