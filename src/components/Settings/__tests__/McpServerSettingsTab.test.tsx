@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { parse as parseToml } from "smol-toml";
 import { McpServerSettingsTab } from "../McpServerSettingsTab";
@@ -1290,6 +1290,79 @@ describe("McpServerSettingsTab", () => {
     expect(container.textContent).not.toContain("failure-cluster");
     const banner = container.querySelector("[data-anomaly-severity]");
     expect(banner?.getAttribute("data-anomaly-severity")).toBe("info");
+  });
+
+  it("expires a signal while Settings stays open, without refetching", async () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+    try {
+      const getAuditStats = vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "failure-cluster:flaky.tool:r1",
+            kind: "failure-cluster",
+            toolId: "flaky.tool",
+            severity: "danger",
+            timestamp: t0,
+            recordIds: ["r1"],
+            expiresAt: t0 + 60_000,
+            clusterSize: 3,
+            clusterWindow: 10,
+          },
+          {
+            id: "first-seen:new.tool:external",
+            kind: "first-seen-combination",
+            toolId: "new.tool",
+            tier: "external",
+            severity: "info",
+            timestamp: t0,
+            recordIds: ["r2"],
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      });
+      installMcpApi({
+        getAuditStats,
+        getLogRecords: vi.fn().mockResolvedValue([
+          {
+            id: "r1",
+            toolId: "flaky.tool",
+            argsSummary: "{}",
+            result: "error" as const,
+            timestamp: t0,
+            durationMs: 5,
+          },
+        ]),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "2 anomaly signals");
+      expect(container.querySelectorAll('[aria-label="Anomaly (error)"]')).toHaveLength(1);
+      const fetches = getAuditStats.mock.calls.length;
+
+      // The shared minute ticker emits on visibility restore; that re-derives the
+      // viewer's `now` past the cluster's expiry.
+      vi.setSystemTime(t0 + 61_000);
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+
+      await waitForContent(container, "1 anomaly signal (1 first-seen-combination)");
+      expect(
+        container.querySelector("[data-anomaly-severity]")?.getAttribute("data-anomaly-severity")
+      ).toBe("info");
+      expect(container.querySelectorAll('[aria-label="Anomaly (error)"]')).toHaveLength(0);
+      expect(getAuditStats.mock.calls.length).toBe(fetches);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("renders an info-toned banner when only first-seen signals are present", async () => {
