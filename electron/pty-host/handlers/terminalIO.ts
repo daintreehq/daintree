@@ -10,11 +10,19 @@ export function createTerminalIOHandlers(ctx: HostContext): HandlerMap {
     },
 
     submit: (msg) => {
-      ptyManager.submit(msg.id, msg.text, msg.submissionToken, msg.handbackCode);
+      // Only the one known guard crosses; anything else is dropped rather than
+      // trusted to mean "no check".
+      const guard = msg.guard === "settled-prompt" ? msg.guard : undefined;
+      ptyManager.submit(msg.id, msg.text, msg.submissionToken, msg.handbackCode, guard);
     },
 
     stage: (msg) => {
       ptyManager.stage(msg.id, msg.text);
+    },
+
+    "withdraw-submission": (msg) => {
+      if (typeof msg.submissionToken !== "string") return;
+      ptyManager.withdrawGuardedSubmission(msg.id, msg.submissionToken);
     },
 
     resize: (msg) => {

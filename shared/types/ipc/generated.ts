@@ -914,6 +914,14 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./mcpServer.js").McpLogRecord[];
   };
+  "mcp-server:get-pane-wake-enabled": {
+    args: [];
+    result: boolean;
+  };
+  "mcp-server:get-pane-watch-state": {
+    args: [terminalId: string];
+    result: import("../terminalWatch.js").PaneWatchState | null;
+  };
   "mcp-server:get-runtime-state": {
     args: [];
     result: import("./mcpServer.js").McpRuntimeSnapshot;
@@ -993,6 +1001,10 @@ export interface GeneratedIpcInvokeMap {
     args: [enabled: boolean];
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
+  "mcp-server:set-pane-wake-enabled": {
+    args: [enabled: boolean];
+    result: boolean;
+  };
   "mcp-server:set-port": {
     args: [port: number | null];
     result: import("./mcpServer.js").McpServerStatusSnapshot;
@@ -1000,6 +1012,10 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:set-session-tier": {
     args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
     result: { sessionId: string; tier: "action" | "workbench" | "system" };
+  };
+  "mcp-server:stop-pane-watches": {
+    args: [terminalId: string];
+    result: void;
   };
   "menu:show-application": {
     args: [payload?: import("../menu.js").ShowApplicationMenuPayload | undefined];

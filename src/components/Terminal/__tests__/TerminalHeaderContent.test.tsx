@@ -55,6 +55,10 @@ vi.mock("../TerminalResourceSparkline", () => ({
 }));
 
 // The real chip only renders once a provider reports children over IPC.
+vi.mock("../TerminalWatchChip", () => ({
+  TerminalWatchChip: () => null,
+}));
+
 let mockSubagentChipVisible = false;
 
 vi.mock("../SubagentChip", () => ({

@@ -357,6 +357,12 @@ export interface GeneratedElectronAPI {
     getLogRecords(
       ...args: IpcInvokeMap["mcp-server:get-log-records"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-log-records"]["result"]>;
+    getPaneWakeEnabled(
+      ...args: IpcInvokeMap["mcp-server:get-pane-wake-enabled"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-pane-wake-enabled"]["result"]>;
+    getPaneWatchState(
+      ...args: IpcInvokeMap["mcp-server:get-pane-watch-state"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:get-pane-watch-state"]["result"]>;
     getRuntimeState(
       ...args: IpcInvokeMap["mcp-server:get-runtime-state"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:get-runtime-state"]["result"]>;
@@ -411,12 +417,18 @@ export interface GeneratedElectronAPI {
     setEnabled(
       ...args: IpcInvokeMap["mcp-server:set-enabled"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-enabled"]["result"]>;
+    setPaneWakeEnabled(
+      ...args: IpcInvokeMap["mcp-server:set-pane-wake-enabled"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:set-pane-wake-enabled"]["result"]>;
     setPort(
       ...args: IpcInvokeMap["mcp-server:set-port"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-port"]["result"]>;
     setSessionTier(
       ...args: IpcInvokeMap["mcp-server:set-session-tier"]["args"]
     ): Promise<IpcInvokeMap["mcp-server:set-session-tier"]["result"]>;
+    stopPaneWatches(
+      ...args: IpcInvokeMap["mcp-server:stop-pane-watches"]["args"]
+    ): Promise<IpcInvokeMap["mcp-server:stop-pane-watches"]["result"]>;
   };
   menu: {
     showApplication(

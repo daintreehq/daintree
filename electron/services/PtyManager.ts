@@ -47,7 +47,11 @@ import {
   resolveCaptureBranch,
   trackAgentSessionCapture,
 } from "./pty/agentSessionCaptureDelivery.js";
-import type { GracefulKillResult, TerminalResizeResult } from "../../shared/types/pty-host.js";
+import type {
+  GracefulKillResult,
+  TerminalResizeResult,
+  TerminalSubmitGuard,
+} from "../../shared/types/pty-host.js";
 import {
   isUsableTerminalGeometry,
   isValidTerminalGeometry,
@@ -642,7 +646,13 @@ export class PtyManager extends EventEmitter {
    * Submit text as a command to the terminal.
    * Handles bracketed paste and CR timing on the backend for reliable execution.
    */
-  submit(id: string, text: string, submissionToken?: string, handbackCode?: string): void {
+  submit(
+    id: string,
+    text: string,
+    submissionToken?: string,
+    handbackCode?: string,
+    guard?: TerminalSubmitGuard
+  ): void {
     const terminal = this.registry.get(id);
     if (!terminal) {
       logWarn(`Terminal ${id} not found, cannot submit`);
@@ -652,7 +662,7 @@ export class PtyManager extends EventEmitter {
       // that would answer for tokens this host never accepted.
       return;
     }
-    terminal.submit(text, submissionToken, handbackCode);
+    terminal.submit(text, submissionToken, handbackCode, guard);
   }
 
   /**
@@ -660,6 +670,11 @@ export class PtyManager extends EventEmitter {
    * both "no such terminal" and "this terminal has no record" — the read
    * surfaces already distinguish those, having resolved the terminal first.
    */
+  /** Withdraw a guarded submission (#12491); a terminal that is gone has nothing to withdraw. */
+  withdrawGuardedSubmission(id: string, submissionToken: string): void {
+    this.registry.get(id)?.withdrawGuardedSubmission(submissionToken);
+  }
+
   getSubmission(id: string, submissionToken: string): TerminalSubmissionRecord | undefined {
     return this.registry.get(id)?.getSubmission(submissionToken);
   }

@@ -31,6 +31,10 @@ export const MCP_SERVER_METHOD_CHANNELS = {
   releaseTerminalAdoption: "mcp-server:release-terminal-adoption",
   listTerminalAdoptions: "mcp-server:list-terminal-adoptions",
   listOrchestratorPanes: "mcp-server:list-orchestrator-panes",
+  getPaneWakeEnabled: "mcp-server:get-pane-wake-enabled",
+  setPaneWakeEnabled: "mcp-server:set-pane-wake-enabled",
+  getPaneWatchState: "mcp-server:get-pane-watch-state",
+  stopPaneWatches: "mcp-server:stop-pane-watches",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof MCP_SERVER_METHOD_CHANNELS;

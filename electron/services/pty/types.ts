@@ -67,6 +67,13 @@ export interface TerminalPublicState {
   traceId?: string;
   analysisEnabled: boolean;
   lastInputTime: number;
+  /**
+   * Last raw input that could have put text in the composer (#12491): typing,
+   * pasting, staging. Unlike `lastInputTime` it ignores the submit lane's own
+   * writes and the focus, mouse and query reports xterm sends by itself, so a
+   * click on the pane does not read as a draft.
+   */
+  lastTypedInputAt?: number;
   lastOutputTime: number;
   lastCheckTime: number;
   /**

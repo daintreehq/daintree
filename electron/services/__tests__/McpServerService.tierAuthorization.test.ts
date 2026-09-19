@@ -1289,6 +1289,21 @@ describe("McpServerService", () => {
       }),
       waitUntilIdleManifestEntry(),
       waitUntilIdleBatchManifestEntry(),
+      // Terminal watches (#12491), on the action tier beside the waits.
+      ...(
+        [
+          ["terminal.registerWatch", "Watch Terminals"],
+          ["terminal.listWatches", "List Terminal Watches"],
+          ["terminal.getWatchEvents", "Read Terminal Watch Events"],
+          ["terminal.cancelWatch", "Cancel Terminal Watch"],
+        ] as const
+      ).map(([id, title]) =>
+        createManifestEntry({
+          id: id as ActionId,
+          title,
+          description: `${title} for this pane.`,
+        })
+      ),
       // Session continuity + recipe-editor handoffs added to ACTION_TIER_ADDONS
       // by #11908. The coverage loops below iterate the live allowlist, so an
       // id tiered without an entry here fails as a missing tool rather than as

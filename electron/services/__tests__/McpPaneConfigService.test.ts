@@ -521,6 +521,21 @@ describe("McpPaneConfigService", () => {
       expect(service.getOwnershipPrincipalForToken("")).toBeNull();
     });
 
+    it("resolves a pane bearer to its own terminal until it is revoked (#12491)", async () => {
+      const { token } = await service.preparePaneConfig({
+        paneId: "pane-own",
+        port: 45454,
+        tier: "action",
+      });
+
+      expect(service.getPaneIdForToken(token)).toBe("pane-own");
+      expect(service.getPaneIdForToken("not-a-pane-token")).toBeNull();
+      expect(service.getPaneIdForToken("")).toBeNull();
+
+      await service.revokePaneConfig("pane-own");
+      expect(service.getPaneIdForToken(token)).toBeNull();
+    });
+
     it("tells the listener the principal in the same step the bearer is revoked", async () => {
       const listener = vi.fn<(principal: string) => void>();
       service.setOwnershipPrincipalRevokedListener(listener);

@@ -164,6 +164,9 @@ function wirePaneTokenResolvers(mcpServerService: McpServerSingleton): void {
   mcpServerService.setPaneOwnershipPrincipalResolver((token) =>
     mcpPaneConfigService.getOwnershipPrincipalForToken(token)
   );
+  mcpServerService.setPaneTerminalResolver((token) =>
+    mcpPaneConfigService.getPaneIdForToken(token)
+  );
   mcpPaneConfigService.setOwnershipPrincipalRevokedListener((principal) =>
     mcpServerService.revokeOwnershipPrincipal(principal)
   );

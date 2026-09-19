@@ -10,6 +10,7 @@ import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
 import type {
   TerminalResizeResult,
+  TerminalSubmitGuard,
   TerminalSubmitStatusState,
 } from "../../../shared/types/pty-host.js";
 import type { PanelTitleMode } from "../../../shared/types/panel.js";
@@ -1194,6 +1195,7 @@ export class TerminalProcess {
       traceId: t.traceId,
       analysisEnabled: t.analysisEnabled,
       lastInputTime: t.lastInputTime,
+      lastTypedInputAt: t.lastTypedInputAt,
       lastOutputTime: t.lastOutputTime,
       lastCheckTime: t.lastCheckTime,
       detectedAgentId: t.detectedAgentId,
@@ -1302,11 +1304,11 @@ export class TerminalProcess {
    * handback (#12488); its instruction is already in `text`. A terminal that
    * never asked keeps no tracker, so its submits pay one property read.
    */
-  submit(text: string, token?: string, handbackCode?: string): void {
+  submit(text: string, token?: string, handbackCode?: string, guard?: TerminalSubmitGuard): void {
     const tracker =
       handbackCode !== undefined ? this.ensureHandbackTracker() : this.terminalInfo.handbackTracker;
     const onPtyWritten = tracker?.noteSubmission(handbackCode, token);
-    this.inputController.submit(text, token, onPtyWritten);
+    this.inputController.submit(text, token, onPtyWritten, guard);
   }
 
   private ensureHandbackTracker(): HandbackTracker {
@@ -1320,6 +1322,11 @@ export class TerminalProcess {
    * One tracked submission's correlation record, by the token its caller minted
    * (#12337). `undefined` means this incarnation holds no record for it.
    */
+  /** Withdraw a guarded submission this terminal holds (#12491). */
+  withdrawGuardedSubmission(token: string): void {
+    this.writeQueue.withdrawGuardedSubmission(token);
+  }
+
   getSubmission(token: string): TerminalSubmissionRecord | undefined {
     return this.writeQueue.getSubmission(token);
   }

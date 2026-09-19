@@ -366,6 +366,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     /** Submit-lane status for one terminal (#11875). Fires only for submits that
      *  cross the slow/stalled threshold or fail. */
     onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
+    /** A pane's terminal watches changed (#12491). Callers filter by `terminalId`. */
+    onWatchState(
+      callback: (data: import("../terminalWatch.js").PaneWatchState) => void
+    ): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**
      * Geometry the PTY actually holds after each resize it processed. Compare

@@ -236,8 +236,12 @@ export type PtyHostRequest =
       submissionToken?: string;
       /** Handback code minted for this submission (#12488); its instruction is already in `text`. */
       handbackCode?: string;
+      /** Admission check run when the submission reaches the lane (#12491). */
+      guard?: TerminalSubmitGuard;
     }
   | { type: "stage"; id: string; text: string }
+  /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
+  | { type: "withdraw-submission"; id: string; submissionToken: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }
@@ -934,6 +938,8 @@ export interface PtyHostTerminalInfo {
   lastOutputChangeAt?: number;
   /** Activity timestamps idle detection runs on; absent means "unknown activity", not "idle". */
   lastInputTime?: number;
+  /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
+  lastTypedInputAt?: number;
   lastOutputTime?: number;
   spawnedAt: number;
   isTrashed?: boolean;
@@ -1107,6 +1113,17 @@ export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed
 
 /** Payload for submit-status events. One in-flight submit per terminal, so the
  *  terminal id is a sufficient correlator — no submission id is needed. */
+/**
+ * A condition a submission must still meet when it reaches the terminal's
+ * submit lane (#12491), checked before any byte is written.
+ *
+ * `settled-prompt` admits only an agent waiting at a prompt with nothing typed
+ * since it settled there (`evaluateWakeGate`), and abandons the trailing Enter
+ * if input arrives between the body and the Enter. A refusal finalises the
+ * submission `cancelled` with nothing written.
+ */
+export type TerminalSubmitGuard = "settled-prompt";
+
 export interface TerminalSubmitStatusPayload {
   id: string;
   state: TerminalSubmitStatusState;

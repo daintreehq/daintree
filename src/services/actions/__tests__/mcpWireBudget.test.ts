@@ -606,7 +606,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // only.
   // 219_950 → 220_600 for #12496, measured at 220_561 B: the same spend as the
   // external raise above, on a tool that is on both surfaces.
-  const MAX_COHORT_PAYLOAD_BYTES = 220_600;
+  // 220_600 → 226_350 for #12491's four terminal-watch tools, measured at
+  // 226_301 B. In-app only — an api-key client has no pane to wake, so the
+  // external ceiling above does not move. The spend is 1_101 B of description,
+  // the watch arguments, and output schemas for all four: the observations and
+  // the wake's standing are read back as structured content, and a client that
+  // validates it needs the schema to accept it at all. Their property
+  // descriptions were cut to the target before measuring.
+  const MAX_COHORT_PAYLOAD_BYTES = 226_350;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

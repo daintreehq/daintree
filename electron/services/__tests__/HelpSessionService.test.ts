@@ -41,6 +41,7 @@ const {
     setHelpSessionActionContextResolver: vi.fn(),
     setHelpSessionIdResolver: vi.fn(),
     setSessionIdResolver: vi.fn(),
+    setHelpSessionTerminalResolver: vi.fn(),
     disconnectHelpBearer: vi.fn(),
     recordTurnOutcome: vi.fn(),
     getRuntimeState: vi.fn<
@@ -3272,6 +3273,26 @@ describe("HelpSessionService", () => {
       mockStoreGet.mockReturnValue({ daintreeControl: true });
       await service.provisionSession(provisionInput());
       expect(mockMcpServerService.setSessionIdResolver).toHaveBeenCalled();
+    });
+
+    it("resolves a session to the terminal it is bound to, for terminal watches (#12491)", async () => {
+      mockStoreGet.mockReset();
+      mockStoreGet.mockReturnValue({ daintreeControl: true });
+      mockMcpServerService.setHelpSessionTerminalResolver.mockClear();
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+
+      // Before a PTY is bound there is no pane to wake.
+      expect(service.getTerminalIdForSession(result.sessionId)).toBeNull();
+      service.markTerminalForToken(result.token, "term-1");
+
+      const resolver = mockMcpServerService.setHelpSessionTerminalResolver.mock.calls.at(
+        -1
+      )?.[0] as ((sessionId: string) => string | null) | undefined;
+      expect(resolver?.(result.sessionId)).toBe("term-1");
+
+      await service.revokeSession(result.sessionId);
+      expect(service.getTerminalIdForSession(result.sessionId)).toBeNull();
     });
 
     it("records a mcp-not-ready turn outcome when ensureMcpServerReady fails", async () => {

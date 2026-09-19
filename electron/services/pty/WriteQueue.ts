@@ -19,6 +19,15 @@ const SUBMIT_SLOW_THRESHOLD_MS = 3000;
  */
 const SUBMIT_STALLED_THRESHOLD_MS = 30000;
 
+/** A guard that throws has not admitted anything. */
+function admitJob(admit: () => boolean): boolean {
+  try {
+    return admit();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Handed to `performSubmit` so it can report the one thing the queue cannot
  * observe from the outside: that the trailing Enter reached node-pty (#12337).
@@ -36,6 +45,17 @@ export interface SubmitExecutionContext {
    * genuinely happened. Idempotent, and a no-op for an untracked submit.
    */
   markPtyWritten: () => void;
+  /**
+   * Set for a submission admitted by a guard (#12491). Input arriving between
+   * its body and its Enter abandons the Enter, so the user's keystrokes are
+   * never submitted as part of a line they did not write.
+   */
+  abandonEnterOnInput?: boolean;
+  /**
+   * True once the requester of a guarded submission has withdrawn it (#12491).
+   * Checked before the Enter, so a withdrawn line is never submitted.
+   */
+  isWithdrawn?: () => boolean;
 }
 
 /** One queued submission plus the caller's optional correlation token. */
@@ -44,6 +64,12 @@ interface SubmitJob {
   token?: string;
   /** Run once when this submission reaches `pty_written`, tokened or not (#12488). */
   onPtyWritten?: () => void;
+  /**
+   * Checked when the job takes the lane, before anything is written (#12491).
+   * A refusal drops the job as `cancelled`: judged earlier, the answer could
+   * be stale by the time the lane is free.
+   */
+  admit?: () => boolean;
 }
 
 export interface WriteQueueOptions {
@@ -132,8 +158,30 @@ export class WriteQueue {
    * (which pass no token) cost nothing.
    */
   private readonly finalizedSubmissions: TerminalSubmissionRecord[] = [];
+  /** The guarded submission currently holding the lane, by token (#12491). */
+  private inFlightGuardedToken: string | undefined;
+  /** Whether its requester has withdrawn it since it took the lane. */
+  private inFlightGuardedWithdrawn = false;
 
   constructor(private readonly options: WriteQueueOptions) {}
+
+  /**
+   * Withdraw a guarded submission (#12491): dropped as `cancelled` if it is
+   * still queued, and its Enter abandoned if its body is already in the
+   * composer. Only guarded submissions can be withdrawn — an ordinary one is
+   * the user's or an agent's own and is never taken back from here.
+   */
+  withdrawGuardedSubmission(token: string): void {
+    const index = this.submitQueue.findIndex(
+      (job) => job.token === token && job.admit !== undefined
+    );
+    if (index !== -1) {
+      this.submitQueue.splice(index, 1);
+      this.finalizeIfPending(token, "cancelled");
+      return;
+    }
+    if (this.inFlightGuardedToken === token) this.inFlightGuardedWithdrawn = true;
+  }
 
   /**
    * Serialise an async submit. The first caller wins the in-flight slot and
@@ -141,7 +189,7 @@ export class WriteQueue {
    * drain in FIFO order. The in-flight flag is set synchronously before the
    * first await so two callers cannot both pass the guard.
    */
-  submit(text: string, token?: string, onPtyWritten?: () => void): void {
+  submit(text: string, token?: string, onPtyWritten?: () => void, admit?: () => boolean): void {
     if (this.disposed) {
       // A tracked submit into a disposed queue is answered rather than
       // forgotten: `cancelled` says Daintree dropped it, where silence would
@@ -164,7 +212,7 @@ export class WriteQueue {
     if (token !== undefined && !this.pendingSubmissions.has(token)) {
       this.pendingSubmissions.set(token, { token, phase: "queued", at: Date.now() });
     }
-    this.submitQueue.push({ text, token, onPtyWritten });
+    this.submitQueue.push({ text, token, onPtyWritten, admit });
     if (this.submitInFlight) return;
     this.submitInFlight = true;
     void this.drainSubmitQueue();
@@ -418,7 +466,16 @@ export class WriteQueue {
         if (next === undefined) continue;
         this.submitStatusReported = false;
         const token = next.token;
+        if (next.admit !== undefined && !admitJob(next.admit)) {
+          if (token !== undefined) this.finalizeIfPending(token, "cancelled");
+          continue;
+        }
         if (token !== undefined) this.advanceSubmission(token, "writing");
+        const guarded = next.admit !== undefined;
+        if (guarded) {
+          this.inFlightGuardedToken = token;
+          this.inFlightGuardedWithdrawn = false;
+        }
         try {
           // Await the submit itself — never a race against the timer. The timer
           // reports; it does not release the lane (#11875).
@@ -428,6 +485,13 @@ export class WriteQueue {
               if (token !== undefined) this.finalizeIfPending(token, "pty_written");
               next.onPtyWritten?.();
             },
+            ...(guarded
+              ? {
+                  abandonEnterOnInput: true,
+                  isWithdrawn: () =>
+                    this.inFlightGuardedToken === token && this.inFlightGuardedWithdrawn,
+                }
+              : {}),
           });
           this.armSlowSubmitReporting(startedAt);
           await work;
@@ -449,6 +513,10 @@ export class WriteQueue {
           this.options.onWriteError?.(error, { operation: "performSubmit" });
         } finally {
           this.clearSubmitStatusTimer();
+          if (guarded) {
+            this.inFlightGuardedToken = undefined;
+            this.inFlightGuardedWithdrawn = false;
+          }
         }
       }
     } finally {

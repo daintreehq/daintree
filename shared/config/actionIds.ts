@@ -17,6 +17,12 @@ export const BUILT_IN_ACTION_IDS = [
   "terminal.readLastMessageOwned",
   "terminal.resumeSessions",
 
+  // -- terminalWatchActions --
+  "terminal.registerWatch",
+  "terminal.listWatches",
+  "terminal.getWatchEvents",
+  "terminal.cancelWatch",
+
   // -- terminalMetaActions --
   "terminal.setClientMetadata",
 
@@ -576,4 +582,10 @@ export const DENY_PLUGIN_DISPATCH_ACTION_IDS = [
   "terminal.interrupt",
   "terminal.interruptOwned",
   "terminal.readLastMessageOwned",
+  // Main-process only, keyed on the caller's MCP credential (#12491): a plugin
+  // dispatch has no pane to watch from.
+  "terminal.registerWatch",
+  "terminal.listWatches",
+  "terminal.getWatchEvents",
+  "terminal.cancelWatch",
 ] as const satisfies readonly BuiltInRuntimeActionId[];

@@ -205,6 +205,13 @@ export const ACTION_TIER_ADDONS = [
   "terminal.rename",
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
   "terminal.waitUntilIdleBatch",
+  // The event-driven counterpart to the waits (#12491): a pane registers what
+  // to watch and is woken instead of polling. Off the external surface on
+  // purpose — an api-key client has no pane to wake.
+  "terminal.registerWatch",
+  "terminal.listWatches",
+  "terminal.getWatchEvents",
+  "terminal.cancelWatch",
 
   "recipe.list",
   "recipe.run",

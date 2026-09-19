@@ -31,6 +31,7 @@ vi.mock("@/components/icons", () => {
   const stub = () => null;
   return {
     McpServerIcon: stub,
+    Radar: stub,
     DaintreeIcon: stub,
     SpinnerCircle: stub,
     HollowCircle: stub,
@@ -105,6 +106,8 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     listActiveBearers: vi.fn().mockResolvedValue([]),
     listHelpSessionBearers: vi.fn().mockResolvedValue([]),
     disconnectBearer: vi.fn().mockResolvedValue({ tokenHash: "", disconnected: true }),
+    getPaneWakeEnabled: vi.fn().mockResolvedValue(false),
+    setPaneWakeEnabled: vi.fn().mockImplementation(async (enabled: boolean) => enabled),
     ...overrides,
   };
 }
@@ -165,6 +168,37 @@ describe("McpServerSettingsTab", () => {
       },
       { timeout: 5000 }
     );
+
+  describe("pane wakes (#12491)", () => {
+    const paneWakeSwitch = (container: HTMLElement) =>
+      container.querySelector<HTMLButtonElement>(
+        '[aria-label="Wake agents from terminal watches"]'
+      );
+
+    it("shows the stored value once main has answered", async () => {
+      installMcpApi({ getPaneWakeEnabled: vi.fn().mockResolvedValue(true) });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+
+      await waitFor(() => expect(paneWakeSwitch(container)?.disabled).toBe(false));
+      expect(paneWakeSwitch(container)?.getAttribute("aria-checked")).toBe("true");
+    });
+
+    it("never presents a failed read as off", async () => {
+      installMcpApi({ getPaneWakeEnabled: vi.fn().mockRejectedValue(new Error("ipc down")) });
+      const { container } = render(
+        <SettingsValidationProvider>
+          <McpServerSettingsTab />
+        </SettingsValidationProvider>
+      );
+
+      await waitForContent(container, "Couldn't read this setting.");
+      expect(paneWakeSwitch(container)?.disabled).toBe(true);
+    });
+  });
 
   it("renders API key in a non-input display element", async () => {
     const { container } = render(
