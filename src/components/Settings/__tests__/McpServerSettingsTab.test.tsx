@@ -1112,8 +1112,8 @@ describe("McpServerSettingsTab", () => {
             id: "latency-drift:1",
             kind: "latency-drift",
             toolId: "slow.tool",
-            severity: "danger",
-            timestamp: Date.now() - 3_600_001,
+            severity: "warning",
+            timestamp: Date.now(),
             recordIds: ["r1"],
             zScore: 4.2,
             durationMs: 5000,
@@ -1152,7 +1152,7 @@ describe("McpServerSettingsTab", () => {
             id: "latency-drift:1",
             kind: "latency-drift",
             toolId: "slow.tool",
-            severity: "danger",
+            severity: "warning",
             timestamp: Date.now(),
             recordIds: ["r1"],
             zScore: 4.2,
@@ -1174,21 +1174,94 @@ describe("McpServerSettingsTab", () => {
     expect(container.textContent).not.toContain("anomaly signal");
   });
 
-  it("Ignore last hour chip appears when signals exist and is not suppressed", async () => {
+  it("tones the banner and each row marker by the highest severity backing it", async () => {
+    const now = Date.now();
     installMcpApi({
       getAuditStats: vi.fn().mockResolvedValue({
         auth401Count: 0,
         anomalySignals: [
           {
-            id: "latency-drift:1",
+            id: "first-seen:flaky.tool:action",
+            kind: "first-seen-combination",
+            toolId: "flaky.tool",
+            tier: "action",
+            severity: "info",
+            timestamp: now,
+            recordIds: ["r1"],
+          },
+          {
+            id: "failure-cluster:flaky.tool:r1",
+            kind: "failure-cluster",
+            toolId: "flaky.tool",
+            severity: "danger",
+            timestamp: now,
+            recordIds: ["r1"],
+            clusterSize: 3,
+            clusterWindow: 10,
+          },
+          {
+            id: "latency-drift:slow.tool:r2",
             kind: "latency-drift",
             toolId: "slow.tool",
-            severity: "danger",
-            timestamp: Date.now() - 3_600_001,
-            recordIds: ["r1"],
+            severity: "warning",
+            timestamp: now,
+            recordIds: ["r2"],
             zScore: 4.2,
             durationMs: 5000,
             baselineMedianMs: 10,
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      }),
+      getLogRecords: vi.fn().mockResolvedValue([
+        {
+          id: "r1",
+          toolId: "flaky.tool",
+          argsSummary: "{}",
+          result: "error" as const,
+          timestamp: now,
+          durationMs: 5,
+        },
+        {
+          id: "r2",
+          toolId: "slow.tool",
+          argsSummary: "{}",
+          result: "success" as const,
+          timestamp: now,
+          durationMs: 5000,
+        },
+      ]),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "anomaly signal");
+
+    const banner = container.querySelector("[data-anomaly-severity]");
+    expect(banner?.getAttribute("data-anomaly-severity")).toBe("danger");
+    expect(container.querySelectorAll('[aria-label="Anomaly (error)"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[aria-label="Anomaly (warning)"]')).toHaveLength(1);
+    expect(container.querySelectorAll('[aria-label="Anomaly (info)"]')).toHaveLength(0);
+    expect(container.textContent).not.toContain("Ignore last hour");
+  });
+
+  it("renders an info-toned banner when only first-seen signals are present", async () => {
+    installMcpApi({
+      getAuditStats: vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "first-seen:new.tool:external",
+            kind: "first-seen-combination",
+            toolId: "new.tool",
+            tier: "external",
+            severity: "info",
+            timestamp: Date.now(),
+            recordIds: ["r1"],
           },
         ],
         anomalySuppressed: false,
@@ -1201,7 +1274,9 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "Ignore last hour");
+    await waitForContent(container, "anomaly signal");
+    const banner = container.querySelector("[data-anomaly-severity]");
+    expect(banner?.getAttribute("data-anomaly-severity")).toBe("info");
   });
 
   it("anomaly signals do not trigger notify()", async () => {
@@ -1213,7 +1288,7 @@ describe("McpServerSettingsTab", () => {
             id: "latency-drift:1",
             kind: "latency-drift",
             toolId: "slow.tool",
-            severity: "danger",
+            severity: "warning",
             timestamp: Date.now(),
             recordIds: ["r1"],
             zScore: 4.2,

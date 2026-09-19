@@ -587,7 +587,12 @@ export interface McpAuditStats {
   anomalyRecordFloor: number;
 }
 
-export type McpAnomalySeverity = "danger";
+/**
+ * Fixed per kind, not per magnitude: a first-seen combination is ordinary use
+ * (`info`), latency outliers are degradation (`warning`), and a failure cluster
+ * is explicit failure (`danger`).
+ */
+export type McpAnomalySeverity = "info" | "warning" | "danger";
 
 export type McpAnomalyKind =
   "latency-drift" | "first-seen-combination" | "failure-cluster" | "p95-z-score";

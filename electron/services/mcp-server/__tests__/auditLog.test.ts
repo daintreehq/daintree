@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuditService, type AuditOutcome, type McpAuditLogStore } from "../auditLog.js";
 import {
   type McpAuditResult,
@@ -722,6 +722,44 @@ describe("AuditService.recordAuth401 / getAuditStats", () => {
 });
 
 describe("AuditService anomaly detection", () => {
+  const RECENCY_WINDOW_MS = 15 * 60_000;
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const failureOutcome: AuditOutcome = {
+    kind: "result",
+    value: {
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "fail" },
+    } as import("../../../../shared/types/actions.js").ActionDispatchResult,
+  };
+
+  function append(
+    service: AuditService,
+    opts: { toolId?: string; durationMs?: number; failed?: boolean } = {}
+  ) {
+    service.appendRecord({
+      toolId: opts.toolId ?? "test.tool",
+      sessionId: "sess-1",
+      tier: "action",
+      args: {},
+      durationMs: opts.durationMs ?? 10,
+      outcome: opts.failed ? failureOutcome : successOutcome,
+      argsSummary: "{}",
+    });
+  }
+
+  // 10–18ms: median 14, MAD 2, so anything past ~23ms scores z ≥ 3.
+  function appendHealthy(service: AuditService, count: number, toolId = "test.tool") {
+    for (let i = 0; i < count; i++) append(service, { toolId, durationMs: 10 + (i % 5) * 2 });
+  }
+
+  function signalsOfKind(service: AuditService, kind: string) {
+    return service.getAuditStats().anomalySignals.filter((s) => s.kind === kind);
+  }
+
   function makeRecords(
     count: number,
     factory: (i: number) => Partial<{
@@ -805,6 +843,7 @@ describe("AuditService anomaly detection", () => {
     expect(firstSeen).toHaveLength(1);
     expect(firstSeen[0]!.toolId).toBe("tool.new");
     expect(firstSeen[0]!.tier).toBe("external");
+    expect(firstSeen[0]!.severity).toBe("info");
   });
 
   it("first-seen: passive read (markSeen=false) does not consume the signal", () => {
@@ -943,36 +982,70 @@ describe("AuditService anomaly detection", () => {
     expect(drift).toHaveLength(0);
   });
 
-  it("latency-drift: emits signal for outlier duration", () => {
+  it("latency-drift: a single slow call in a healthy session produces no signal", () => {
     const { service } = makeFixture();
-    // 49 records with some natural variance so MAD > 0.
-    for (let i = 0; i < 49; i++) {
-      service.appendRecord({
-        toolId: "test.tool",
-        sessionId: "sess-1",
-        tier: "action",
-        args: {},
-        durationMs: 10 + (i % 5) * 2,
-        outcome: successOutcome,
-        argsSummary: "{}",
-      });
-    }
-    // One extreme outlier.
-    service.appendRecord({
-      toolId: "test.tool",
-      sessionId: "sess-1",
-      tier: "action",
-      args: {},
-      durationMs: 5000,
-      outcome: successOutcome,
-      argsSummary: "{}",
-    });
-    const stats = service.getAuditStats();
-    const drift = stats.anomalySignals.filter((s) => s.kind === "latency-drift");
-    expect(drift.length).toBeGreaterThanOrEqual(1);
-    const outlier = drift.find((s) => s.recordIds.length > 0);
-    expect(outlier).toBeDefined();
-    expect(outlier!.zScore).toBeGreaterThanOrEqual(3);
+    appendHealthy(service, 49);
+    // e.g. one call in flight across an 18-minute sleep/wake stall.
+    append(service, { durationMs: 18 * 60_000 });
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: two recent outliers are not enough", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 48);
+    append(service, { durationMs: 5000 });
+    append(service, { durationMs: 5000 });
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: three recent outliers in the tool's last ten calls produce one warning", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 40);
+    append(service, { durationMs: 5000 });
+    appendHealthy(service, 2);
+    append(service, { durationMs: 6000 });
+    appendHealthy(service, 3);
+    append(service, { durationMs: 7000 });
+    appendHealthy(service, 2);
+
+    const drift = signalsOfKind(service, "latency-drift");
+    expect(drift).toHaveLength(1);
+    const signal = drift[0]!;
+    expect(signal.severity).toBe("warning");
+    expect(signal.toolId).toBe("test.tool");
+    expect(signal.recordIds).toHaveLength(3);
+    // Anchored on the newest outlier.
+    expect(signal.id).toBe(`latency-drift:test.tool:${signal.recordIds[2]}`);
+    expect(signal.durationMs).toBe(7000);
+    expect(signal.baselineMedianMs).toBe(14);
+    expect(signal.zScore).toBeGreaterThanOrEqual(3);
+  });
+
+  it("latency-drift: outliers that have left the tool's last ten calls stop counting", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 37);
+    for (let i = 0; i < 3; i++) append(service, { durationMs: 5000 });
+    appendHealthy(service, 10);
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: other tools' traffic doesn't push a tool's outliers out of its window", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 27);
+    for (let i = 0; i < 3; i++) append(service, { durationMs: 5000 });
+    appendHealthy(service, 20, "other.tool");
+
+    const drift = signalsOfKind(service, "latency-drift");
+    expect(drift).toHaveLength(1);
+    expect(drift[0]!.toolId).toBe("test.tool");
+  });
+
+  it("latency-drift: a tool needs a baseline before its calls are judged", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 40, "busy.tool");
+    appendHealthy(service, 7, "new.tool");
+    for (let i = 0; i < 3; i++) append(service, { toolId: "new.tool", durationMs: 5000 });
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
   });
 
   it("latency-drift: excludes non-success records from baseline", () => {
@@ -1045,6 +1118,7 @@ describe("AuditService anomaly detection", () => {
     const clusters = stats.anomalySignals.filter((s) => s.kind === "failure-cluster");
     expect(clusters.length).toBeGreaterThanOrEqual(1);
     expect(clusters[0]!.clusterSize).toBeGreaterThanOrEqual(3);
+    expect(clusters[0]!.severity).toBe("danger");
   });
 
   it("failure-cluster: does not fire for only 2 failures in a window", () => {
@@ -1139,7 +1213,7 @@ describe("AuditService anomaly detection", () => {
       ["tool.f", 90],
     ];
     for (const [toolId, base] of toolBases) {
-      for (let i = 0; i < 15; i++) {
+      for (let i = 0; i < 25; i++) {
         service.appendRecord({
           toolId,
           sessionId: "sess-1",
@@ -1152,7 +1226,7 @@ describe("AuditService anomaly detection", () => {
       }
     }
     // Tool.e has extreme p95.
-    for (let i = 0; i < 15; i++) {
+    for (let i = 0; i < 25; i++) {
       service.appendRecord({
         toolId: "tool.e",
         sessionId: "sess-1",
@@ -1167,6 +1241,85 @@ describe("AuditService anomaly detection", () => {
     const p95 = stats.anomalySignals.filter((s) => s.kind === "p95-z-score");
     expect(p95.length).toBeGreaterThanOrEqual(1);
     expect(p95[0]!.toolId).toBe("tool.e");
+    expect(p95[0]!.severity).toBe("warning");
+  });
+
+  function appendP95Fixture(service: AuditService, toolE: (i: number) => number) {
+    const toolBases: [string, number][] = [
+      ["tool.a", 10],
+      ["tool.b", 30],
+      ["tool.c", 50],
+      ["tool.d", 70],
+      ["tool.f", 90],
+    ];
+    for (const [toolId, base] of toolBases) {
+      for (let i = 0; i < 25; i++) append(service, { toolId, durationMs: base + i });
+    }
+    for (let i = 0; i < 25; i++) append(service, { toolId: "tool.e", durationMs: toolE(i) });
+  }
+
+  it("p95-z-score: a single spike can't set a tool's p95", () => {
+    const { service } = makeFixture();
+    appendP95Fixture(service, (i) => (i === 24 ? 50_000 : 50 + i));
+    expect(signalsOfKind(service, "p95-z-score")).toHaveLength(0);
+  });
+
+  it("statistical signals expire once their evidence ages past the recency window", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const { service } = makeFixture();
+    appendHealthy(service, 44);
+    for (let i = 0; i < 3; i++) append(service, { durationMs: 5000 });
+    for (let i = 0; i < 3; i++) append(service, { failed: true });
+    appendP95Fixture(service, (i) => 5000 + i * 50);
+
+    const kinds = ["latency-drift", "failure-cluster", "p95-z-score"];
+    for (const kind of kinds) expect(signalsOfKind(service, kind).length).toBeGreaterThan(0);
+
+    vi.setSystemTime(t0 + RECENCY_WINDOW_MS - 1);
+    for (const kind of kinds) expect(signalsOfKind(service, kind).length).toBeGreaterThan(0);
+
+    // No new calls — the signals clear on age alone, while the records stay.
+    vi.setSystemTime(t0 + RECENCY_WINDOW_MS);
+    for (const kind of kinds) expect(signalsOfKind(service, kind)).toHaveLength(0);
+    expect(service.getLogRecords().length).toBeGreaterThan(0);
+  });
+
+  it("a relaunch hydrating stale records from disk doesn't revive their signals", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const first = makeFixture();
+    appendHealthy(first.service, 44);
+    for (let i = 0; i < 3; i++) append(first.service, { durationMs: 5000 });
+    for (let i = 0; i < 3; i++) append(first.service, { failed: true });
+    expect(signalsOfKind(first.service, "latency-drift")).toHaveLength(1);
+    expect(signalsOfKind(first.service, "failure-cluster")).toHaveLength(1);
+    first.service.flushNow();
+
+    vi.setSystemTime(t0 + 20 * 60_000);
+    const relaunched = makeFixture({}, first.getPersistedLog());
+    const stats = relaunched.service.getAuditStats();
+    expect(stats.anomalySuppressed).toBe(false);
+    expect(stats.anomalySignals.filter((s) => s.kind !== "first-seen-combination")).toHaveLength(0);
+  });
+
+  it("failure-cluster: failures that have aged out don't combine with a fresh one", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const { service } = makeFixture();
+    appendHealthy(service, 47);
+    append(service, { failed: true });
+    append(service, { failed: true });
+
+    vi.setSystemTime(t0 + RECENCY_WINDOW_MS);
+    append(service, { failed: true });
+    expect(signalsOfKind(service, "failure-cluster")).toHaveLength(0);
   });
 });
 
