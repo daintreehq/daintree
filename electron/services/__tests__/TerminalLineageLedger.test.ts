@@ -40,6 +40,20 @@ import {
 
 const isWindows = process.platform === "win32";
 
+/**
+ * Stand-in PID for an orphan the reaper should signal. Resolved at runtime
+ * because `isForbiddenTarget` refuses this process and its parent: a literal
+ * that happened to equal the worker's own pid or ppid silently emptied the
+ * candidate set, so every "kills the entry" assertion saw zero calls and every
+ * "retains the survivor" assertion saw no file. That is a PID lottery, and it
+ * only ever loses on CI, where fork workers land in the low thousands.
+ */
+const ORPHAN_PID = (() => {
+  let pid = 4242;
+  while (pid === process.pid || pid === process.ppid) pid += 1;
+  return pid;
+})();
+
 function startTimeFor(pid: number): string {
   return isWindows
     ? `2026-01-01T00:00:0${pid % 10}.0000000+00:00`
@@ -838,25 +852,25 @@ describe("TerminalLineageLedger", () => {
     }
 
     it("kills entries whose start time still matches", async () => {
-      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }]);
 
       await reapPersistedLineages(tmpDir);
 
       if (isWindows) {
         expect(mockSpawnSync).toHaveBeenCalledWith(
           "taskkill",
-          ["/T", "/F", "/PID", "4242"],
+          ["/T", "/F", "/PID", String(ORPHAN_PID)],
           expect.anything()
         );
       } else {
-        expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
-        expect(killSpy).toHaveBeenCalledWith(4242, "SIGKILL");
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGKILL");
       }
       expect(fs.existsSync(filePath)).toBe(false);
     });
 
     it("never signals a PID whose start time no longer matches", async () => {
-      writeLedger([{ pid: 4242, startTime: "a-different-boot-of-this-pid", rootPid: 100 }]);
+      writeLedger([{ pid: ORPHAN_PID, startTime: "a-different-boot-of-this-pid", rootPid: 100 }]);
 
       await reapPersistedLineages(tmpDir);
 
@@ -866,7 +880,7 @@ describe("TerminalLineageLedger", () => {
     });
 
     it("discards the whole ledger when the boot epoch does not match", async () => {
-      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }], {
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }], {
         bootEpochSec: currentBootEpochSec() - 100_000,
       });
 
@@ -891,7 +905,9 @@ describe("TerminalLineageLedger", () => {
     });
 
     it("ignores a ledger written by a future schema version", async () => {
-      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }], { version: 99 });
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }], {
+        version: 99,
+      });
 
       await reapPersistedLineages(tmpDir);
 
@@ -909,13 +925,13 @@ describe("TerminalLineageLedger", () => {
     });
 
     it("picks up an interrupted reap claim", async () => {
-      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }]);
       fs.renameSync(filePath, `${filePath}.reaping`);
 
       await reapPersistedLineages(tmpDir);
 
       if (!isWindows) {
-        expect(killSpy).toHaveBeenCalledWith(4242, "SIGTERM");
+        expect(killSpy).toHaveBeenCalledWith(ORPHAN_PID, "SIGTERM");
       }
       expect(fs.existsSync(`${filePath}.reaping`)).toBe(false);
     });
@@ -926,14 +942,14 @@ describe("TerminalLineageLedger", () => {
       mockExecFileAsync.mockRejectedValue(
         Object.assign(new Error("spawn ps EPERM"), { code: "EPERM" })
       );
-      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }]);
 
       await reapPersistedLineages(tmpDir);
 
       expect(killSpy).not.toHaveBeenCalled();
       const retained = readRetained();
       expect(retained?.attempts).toBe(1);
-      expect(retained?.entries.map((e) => e.pid)).toEqual([4242]);
+      expect(retained?.entries.map((e) => e.pid)).toEqual([ORPHAN_PID]);
     });
 
     it("keeps a retained survivor list off the path a new host will write", async () => {
@@ -944,7 +960,7 @@ describe("TerminalLineageLedger", () => {
       mockExecFileAsync.mockRejectedValue(
         Object.assign(new Error("spawn ps EPERM"), { code: "EPERM" })
       );
-      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }]);
 
       await reapPersistedLineages(tmpDir);
       expect(fs.existsSync(filePath)).toBe(false);
@@ -954,14 +970,16 @@ describe("TerminalLineageLedger", () => {
       ledger.reconcile(new FakeCensus([{ pid: 10, ppid: 1 }]));
       await flush();
 
-      expect(readRetained()?.entries.map((e) => e.pid)).toEqual([4242]);
+      expect(readRetained()?.entries.map((e) => e.pid)).toEqual([ORPHAN_PID]);
     });
 
     it("gives up on an unresolvable ledger after a bounded number of launches", async () => {
       mockExecFileAsync.mockRejectedValue(
         Object.assign(new Error("spawn ps EPERM"), { code: "EPERM" })
       );
-      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }], { attempts: 2 });
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }], {
+        attempts: 2,
+      });
 
       await reapPersistedLineages(tmpDir);
 
@@ -977,7 +995,7 @@ describe("TerminalLineageLedger", () => {
       mockExecFileAsync.mockImplementation(async () => {
         throw Object.assign(new Error("Command failed: ps"), { code: 1, stdout: "" });
       });
-      writeLedger([{ pid: 4242, startTime: startTimeFor(4242), rootPid: 100 }]);
+      writeLedger([{ pid: ORPHAN_PID, startTime: startTimeFor(ORPHAN_PID), rootPid: 100 }]);
 
       await reapPersistedLineages(tmpDir);
 
