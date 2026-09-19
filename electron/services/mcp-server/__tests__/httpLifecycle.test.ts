@@ -2516,7 +2516,7 @@ describe("HttpLifecycle", () => {
         await sessionDeps.requestManifest();
         await sessionDeps.dispatchAction("terminal.list", {}, false);
 
-        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_MISSING);
+        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_MISSING, undefined);
         expect(deps.requestManifest).not.toHaveBeenCalled();
         expect(deps.dispatchAction).not.toHaveBeenCalled();
       });
@@ -2685,16 +2685,20 @@ describe("HttpLifecycle", () => {
         await sessionDeps.requestManifest();
         await sessionDeps.dispatchAction("terminal.list", {}, false);
 
-        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_A);
+        // No launch view to prefer: only an agent pane's binding carries one.
+        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_A, undefined);
         // Only external sessions may bind a workspace — a selector from a
         // pinned bearer is refused at handshake — so the origin threaded here
         // is always "external" (#11808).
+        // Nothing beyond the route: no replayed context, preferred view, or
+        // caller identity — those are an agent pane's (#12486).
         expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
           WS_A,
           "terminal.list",
           {},
           false,
-          "external"
+          "external",
+          undefined
         );
         // Never the focus-following path — that is the retargeting this removes.
         expect(deps.dispatchAction).not.toHaveBeenCalled();
@@ -2749,8 +2753,256 @@ describe("HttpLifecycle", () => {
         const lc = new HttpLifecycle(deps);
 
         expect(sessionDepsFor(lc, "bound", { workspaceId: WS_A }).getCachedManifest()).toEqual([]);
-        expect(deps.getCachedManifestForWorkspace).toHaveBeenCalledWith(WS_A);
+        expect(deps.getCachedManifestForWorkspace).toHaveBeenCalledWith(WS_A, undefined);
         expect(deps.getCachedManifest).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("agent-pane launch binding (#12486)", () => {
+      const PANE_TOKEN = "pane-token-9f3a";
+      const PANE_AUTH = `Bearer ${PANE_TOKEN}`;
+      const LAUNCH_CONTEXT = { projectId: WS_A, activeWorktreeId: "wt-7" };
+
+      /**
+       * A lifecycle that authenticates PANE_TOKEN at a ladder tier, as the
+       * composite validator does for every pane bearer, and binds it to WS_A.
+       */
+      function paneLifecycle(
+        deps: HttpLifecycleDeps,
+        binding: import("../shared.js").PaneWorkspaceBinding | null = {
+          workspaceId: WS_A,
+          launchWebContentsId: 42,
+          actionContext: LAUNCH_CONTEXT,
+        }
+      ) {
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "action" : false));
+        const paneResolver = vi.fn((token: string) => (token === PANE_TOKEN ? binding : null));
+        lc.setPaneWorkspaceBindingResolver(paneResolver);
+        (lc as unknown as { port: number }).port = 45454;
+        return { lc, paneResolver };
+      }
+
+      /** Open a real SSE session — the transport Claude panes connect over. */
+      async function openSse(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        res.writeHead = vi.fn();
+        res.write = vi.fn(() => true);
+        res.end = vi.fn();
+        res.headersSent = false;
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(
+          {
+            method: "GET",
+            url: "/sse",
+            headers: { host: "127.0.0.1:45454", authorization: auth },
+          } as unknown as http.IncomingMessage,
+          res as unknown as http.ServerResponse
+        );
+        const [sessionId] = Array.from(deps.sessionStore.sessions.keys());
+        return sessionId!;
+      }
+
+      /**
+       * The session deps the production handshake itself built, not a rebuilt
+       * copy: a handshake that stopped passing the pane binding through would
+       * leave a rebuilt copy routing correctly while the real session followed
+       * focus.
+       */
+      async function openSseWithDeps(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const build = vi.spyOn(
+          lc as unknown as {
+            buildSessionServerDeps: (
+              ...a: unknown[]
+            ) => import("../sessionServer.js").SessionServerDeps;
+          },
+          "buildSessionServerDeps"
+        );
+        const sessionId = await openSse(lc, deps, auth);
+        const sessionDeps = build.mock.results[0]!
+          .value as import("../sessionServer.js").SessionServerDeps;
+        build.mockRestore();
+        return { sessionId, sessionDeps };
+      }
+
+      it("binds a pane's /sse session to its launch workspace, as a non-renderer-owned origin", async () => {
+        const deps = bindingDeps();
+        const { lc } = paneLifecycle(deps);
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        expect(deps.sessionStore.sessionWorkspaceMap.get(sessionId)).toBe(WS_A);
+        expect(deps.sessionStore.sessionContextMap.get(sessionId)).toEqual(LAUNCH_CONTEXT);
+        // Routing only. The session is still an external-origin bearer at the
+        // tier it was minted with, so nothing it may call has changed (#12407).
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("external");
+        expect(deps.sessionStore.isRendererOwnedOrigin(sessionId)).toBe(false);
+        expect(deps.sessionStore.sessionTierMap.get(sessionId)).toBe("action");
+        // Not a WebContents pin: that route dies with the view for good.
+        expect(deps.sessionStore.sessionWebContentsMap.has(sessionId)).toBe(false);
+      });
+
+      it("routes the pane's calls to its workspace with its launch context and view, never focus", async () => {
+        const deps = bindingDeps({
+          requestManifestForWorkspace: vi.fn().mockResolvedValue([]),
+          dispatchActionForWorkspace: vi.fn().mockResolvedValue({ result: { ok: true } }),
+          getCachedManifestForWorkspace: vi.fn(() => []),
+        });
+        const { lc } = paneLifecycle(deps);
+        const { sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        await sessionDeps.requestManifest();
+        await sessionDeps.dispatchAction("worktree.getCurrent", {}, false);
+        sessionDeps.getCachedManifest();
+
+        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith(WS_A, 42);
+        expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
+          WS_A,
+          "worktree.getCurrent",
+          {},
+          false,
+          "external",
+          { contextOverride: LAUNCH_CONTEXT, preferredWebContentsId: 42 }
+        );
+        expect(deps.getCachedManifestForWorkspace).toHaveBeenCalledWith(WS_A, 42);
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+        expect(deps.requestManifest).not.toHaveBeenCalled();
+        expect(deps.getCachedManifest).not.toHaveBeenCalled();
+        // The binding the client can read back names the pane's workspace.
+        expect(sessionDeps.workspaceBinding?.workspaceId).toBe(WS_A);
+        expect(sessionDeps.preferredWebContentsId).toBe(42);
+      });
+
+      it("keeps the launch context on a call that outlives its session's teardown", async () => {
+        // A call awaiting its manifest can resume after the transport closed and
+        // `clearSessionBinding` ran. It must still act on the pane's worktree,
+        // not drop the context and act on the view's current selection.
+        const deps = bindingDeps({
+          dispatchActionForWorkspace: vi.fn().mockResolvedValue({ result: { ok: true } }),
+        });
+        const { lc } = paneLifecycle(deps);
+        const { sessionId, sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        deps.sessionStore.clearSessionBinding(sessionId);
+        await sessionDeps.dispatchAction("git.stageAll", {}, false);
+
+        expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
+          WS_A,
+          "git.stageAll",
+          {},
+          false,
+          "external",
+          { contextOverride: LAUNCH_CONTEXT, preferredWebContentsId: 42 }
+        );
+      });
+
+      it("passes the launch view to a reveal, so it switches the window the pane's runs are in", async () => {
+        const revealOwnedRun = vi.fn().mockResolvedValue({
+          envelope: { result: { ok: true, result: null } },
+          raised: true,
+        });
+        const deps = bindingDeps({ revealOwnedRun });
+        const { lc } = paneLifecycle(deps);
+        const { sessionDeps } = await openSseWithDeps(lc, deps, PANE_AUTH);
+
+        await sessionDeps.revealOwnedRun!(WS_A, "pilot.openRun", { runId: "t1" }, false);
+
+        expect(revealOwnedRun).toHaveBeenCalledWith(
+          WS_A,
+          "pilot.openRun",
+          { runId: "t1" },
+          false,
+          "external",
+          42
+        );
+      });
+
+      it("binds identity-only when the launch workspace has no live view at handshake", async () => {
+        // An evicted launch view is a route that comes back, not a reason to
+        // refuse the pane — or to let it follow focus meanwhile.
+        const deps = bindingDeps();
+        const { lc } = paneLifecycle(deps, { workspaceId: WS_MISSING });
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        expect(deps.sessionStore.sessionWorkspaceMap.get(sessionId)).toBe(WS_MISSING);
+        expect(deps.sessionStore.sessionContextMap.has(sessionId)).toBe(false);
+      });
+
+      it("binds the /mcp handshake the same way", async () => {
+        const deps = bindingDeps();
+        const { lc } = paneLifecycle(deps);
+        // The SDK rejects the stub request and the sweep reclaims the session,
+        // so observe the production writes as they happen.
+        const writes: Record<string, unknown[]> = { workspace: [], origin: [], context: [] };
+        const watch = <V>(map: Map<string, V>, key: string) => {
+          const realSet = map.set.bind(map);
+          map.set = (id: string, value: V) => {
+            writes[key]!.push(value);
+            return realSet(id, value);
+          };
+        };
+        watch(deps.sessionStore.sessionWorkspaceMap, "workspace");
+        watch(deps.sessionStore.sessionOriginMap, "origin");
+        watch(deps.sessionStore.sessionContextMap, "context");
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: PANE_AUTH }),
+          fakeRes(),
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(writes).toEqual({
+          workspace: [WS_A],
+          origin: ["external"],
+          context: [LAUNCH_CONTEXT],
+        });
+      });
+
+      it("refuses a workspace selector from a pane — its target is not the client's to choose", async () => {
+        const deps = bindingDeps();
+        const { lc, paneResolver } = paneLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: PANE_AUTH, "daintree-workspace-id": WS_B }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(parseRejection(res).error.data.code).toBe("WORKSPACE_SELECTOR_NOT_ALLOWED");
+        expect(paneResolver).not.toHaveBeenCalled();
+        expect(deps.sessionStore.sessionWorkspaceMap.size).toBe(0);
+      });
+
+      it("never consults the pane binding for a bearer the assistant resolver pins", async () => {
+        // Pin precedence keeps the two binding models disjoint: an assistant
+        // bearer routes by its WebContents, with its own renderer-owned origin.
+        const deps = bindingDeps();
+        const { lc, paneResolver } = paneLifecycle(deps);
+        lc.setAssistantPaneWebContentsResolver((token) => (token === PANE_TOKEN ? 77 : null));
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        expect(paneResolver).not.toHaveBeenCalled();
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("assistant-pane");
+        expect(deps.sessionStore.sessionWebContentsMap.get(sessionId)).toBe(77);
+        expect(deps.sessionStore.sessionWorkspaceMap.has(sessionId)).toBe(false);
+      });
+
+      it("leaves an api-key session with no selector following focus", async () => {
+        const deps = bindingDeps();
+        const { lc } = paneLifecycle(deps);
+
+        const sessionId = await openSse(lc, deps, "Bearer test-api-key");
+
+        expect(deps.sessionStore.sessionWorkspaceMap.has(sessionId)).toBe(false);
+        expect(deps.sessionStore.sessionContextMap.has(sessionId)).toBe(false);
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("external");
       });
     });
 

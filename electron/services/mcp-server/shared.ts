@@ -58,7 +58,7 @@ export type HelpTokenValidator = (token: string) => HelpAssistantTier | false;
  * `httpLifecycle` to record the session in `sessionWebContentsMap` and route
  * all of that session's tool calls through the pinned view rather than the
  * "first live view" fallback. Returns null for non-help bearers (api-key /
- * pane tokens), which keep the existing focused-window semantics.
+ * pane tokens), which route by workspace binding or follow window focus.
  */
 export type HelpSessionWebContentsResolver = (token: string) => number | null;
 /**
@@ -69,7 +69,7 @@ export type HelpSessionWebContentsResolver = (token: string) => number | null;
  * against the worktree/terminal the user had focused when they launched the
  * assistant — not whatever they happen to be looking at when the model's
  * tool call lands. Returns null for non-help bearers (api-key / pane
- * tokens), which intentionally keep the live focused-window context.
+ * tokens); an agent pane's snapshot comes from its workspace binding instead.
  */
 export type HelpSessionActionContextResolver = (token: string) => ActionContext | null;
 /**
@@ -97,6 +97,40 @@ export type AssistantPaneWebContentsResolver = (token: string) => number | null;
  * context.
  */
 export type AssistantPaneActionContextResolver = (token: string) => ActionContext | null;
+/**
+ * Where an ordinary agent pane's MCP session routes (#12486): the workspace it
+ * was launched in, not whichever window has focus when a call arrives.
+ *
+ * The workspace id is the routing identity, re-resolved per call so the pane
+ * survives its view being evicted and recreated. `launchWebContentsId` is the
+ * view that launched it, preferred while it is alive and still shows the
+ * workspace, so a workspace open in two windows keeps routing to the one the
+ * pane belongs to instead of failing as ambiguous. `actionContext` is the
+ * launch-time snapshot replayed on every dispatch (#8317).
+ */
+export interface PaneWorkspaceBinding {
+  workspaceId: string;
+  launchWebContentsId?: number;
+  actionContext?: ActionContext;
+}
+/**
+ * Resolver consulted at MCP handshake for an ordinary agent pane bearer's
+ * launch workspace (#12486). Consulted only after the help and assistant-pane
+ * resolvers miss, and confers no origin: the session stays `external`, so
+ * binding where its calls land never widens what it may call (#12407).
+ */
+export type PaneWorkspaceBindingResolver = (token: string) => PaneWorkspaceBinding | null;
+/**
+ * What an agent pane's workspace-bound dispatch carries beyond an external
+ * session's (#12486). Every field is optional, so an external bound session
+ * passes nothing and dispatches exactly as it always has.
+ */
+export interface WorkspaceDispatchOptions {
+  /** The pane's launch-time snapshot, replayed as a help session's is (#8317). */
+  contextOverride?: ActionContext;
+  /** The pane's launch view, preferred while it still shows the workspace. */
+  preferredWebContentsId?: number;
+}
 export type { HelpAssistantTier };
 
 export { MCP_SERVER_KEY } from "../../../shared/config/mcpClientConfigs.js";

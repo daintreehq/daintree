@@ -171,8 +171,10 @@ const {
   mockPreparePaneConfig,
   mockRevokePaneConfig,
   mockRegisterAssistantPaneBearer,
+  mockRegisterPaneWorkspaceBinding,
   mockSetAssistantPaneWebContentsResolver,
   mockSetAssistantPaneActionContextResolver,
+  mockSetPaneWorkspaceBindingResolver,
   mockEnsureReady,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "workbench" | "action" | "system" | false>(),
@@ -182,8 +184,10 @@ const {
   mockRevokePaneConfig: vi.fn<(paneId: string) => Promise<void>>(),
   mockRegisterAssistantPaneBearer:
     vi.fn<(token: string, webContentsId: number, actionContext?: unknown) => void>(),
+  mockRegisterPaneWorkspaceBinding: vi.fn<(token: string, binding: unknown) => void>(),
   mockSetAssistantPaneWebContentsResolver: vi.fn(),
   mockSetAssistantPaneActionContextResolver: vi.fn(),
+  mockSetPaneWorkspaceBindingResolver: vi.fn(),
   mockEnsureReady: vi.fn<() => Promise<boolean>>(),
 }));
 
@@ -250,6 +254,8 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       mockSetAssistantPaneWebContentsResolver(...args),
     setAssistantPaneActionContextResolver: (...args: unknown[]) =>
       mockSetAssistantPaneActionContextResolver(...args),
+    setPaneWorkspaceBindingResolver: (...args: unknown[]) =>
+      mockSetPaneWorkspaceBindingResolver(...args),
   },
 }));
 
@@ -259,6 +265,8 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
     revokePaneConfig: (paneId: string) => mockRevokePaneConfig(paneId),
     registerAssistantPaneBearer: (token: string, webContentsId: number, actionContext?: unknown) =>
       mockRegisterAssistantPaneBearer(token, webContentsId, actionContext),
+    registerPaneWorkspaceBinding: (token: string, binding: unknown) =>
+      mockRegisterPaneWorkspaceBinding(token, binding),
   },
 }));
 
@@ -2753,6 +2761,152 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBeUndefined();
+  });
+});
+
+describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)", () => {
+  let ptyClient: {
+    spawn: ReturnType<typeof vi.fn>;
+    hasTerminal: ReturnType<typeof vi.fn>;
+    write: ReturnType<typeof vi.fn>;
+  };
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    const os = await import("os");
+    tmpDir = os.tmpdir();
+    ptyClient = {
+      spawn: vi.fn(),
+      hasTerminal: vi.fn(() => false),
+      write: vi.fn(),
+    };
+    mockGetCurrentProject.mockReturnValue({ id: "p1", path: tmpDir, name: "p" });
+    mockGetProjectById.mockImplementation((id: string) =>
+      id === "p1" || id === "p2" ? { id, path: tmpDir, name: id } : null
+    );
+    mockGetProjectSettings.mockResolvedValue({ daintreeMcpTier: "action" });
+    mockValidateToken.mockReturnValue(false);
+    mockIsRunning.mockReturnValue(true);
+    mockCurrentPort.mockReturnValue(45454);
+    mockPreparePaneConfig.mockReset();
+    mockPreparePaneConfig.mockResolvedValue({
+      configPath: "/tmp/pane-config.json",
+      token: "pane-token",
+      pluginServerKeys: [],
+    });
+    mockRevokePaneConfig.mockReset();
+    mockRevokePaneConfig.mockResolvedValue(undefined);
+  });
+
+  async function launchClaude(
+    event: Record<string, unknown>,
+    options: Record<string, unknown> = {}
+  ): Promise<void> {
+    registerTerminalLifecycleHandlers({ ptyClient } as unknown as HandlerDependencies);
+    await getSpawnHandler()(event as unknown as Electron.IpcMainInvokeEvent, {
+      id: "claude-pane",
+      cols: 80,
+      rows: 24,
+      cwd: tmpDir,
+      command: "claude",
+      launchAgentId: "claude",
+      projectId: "p1",
+      ...options,
+    });
+  }
+
+  it("binds the pane bearer to its launch workspace, launch view, and launch context", async () => {
+    const launchContext = { projectId: "p1", activeWorktreeId: "wt-7", focusedTerminalId: "x" };
+
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" }, { actionContext: launchContext });
+
+    expect(mockRegisterPaneWorkspaceBinding).toHaveBeenCalledWith("pane-token", {
+      workspaceId: "p1",
+      launchWebContentsId: 42,
+      actionContext: launchContext,
+    });
+    // Wired so the handshake can reach the binding, and registered before the
+    // PTY starts — the CLI's first handshake can race anything later.
+    expect(mockSetPaneWorkspaceBindingResolver).toHaveBeenCalled();
+    expect(mockRegisterPaneWorkspaceBinding.mock.invocationCallOrder[0]).toBeLessThan(
+      ptyClient.spawn.mock.invocationCallOrder[0]!
+    );
+    // An ordinary pane is never promoted to the assistant's renderer-owned pin.
+    expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
+  });
+
+  it("binds to the pane's own project even when another project is globally current", async () => {
+    // The global current project belongs to whichever window switched last —
+    // the retargeting this binding removes (#6016).
+    mockGetCurrentProject.mockReturnValue({ id: "p2", path: tmpDir, name: "p2" });
+
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    expect(mockRegisterPaneWorkspaceBinding).toHaveBeenCalledWith(
+      "pane-token",
+      expect.objectContaining({ workspaceId: "p1", launchWebContentsId: 42 })
+    );
+  });
+
+  it("names no launch view when the sender is not a view of the pane's workspace", async () => {
+    // A sender showing another workspace, or one whose workspace is unknown,
+    // is not "the view that launched it" — the workspace route decides alone.
+    await launchClaude({ sender: { id: 42 }, projectId: "p2" });
+    await launchClaude({ sender: { id: 43 } }, { id: "claude-pane-2" });
+    await launchClaude({}, { id: "claude-pane-3" });
+
+    expect(mockRegisterPaneWorkspaceBinding.mock.calls.map(([, binding]) => binding)).toEqual([
+      { workspaceId: "p1" },
+      { workspaceId: "p1" },
+      { workspaceId: "p1" },
+    ]);
+  });
+
+  it("takes the launch view from the sender's URL before its view has registered", async () => {
+    // The initial window loads before its view is registered, so the registry
+    // has no workspace for it yet; hydration reads the URL for the same reason.
+    await launchClaude({
+      sender: { id: 42, getURL: () => "app://daintree/index.html?projectId=p1" },
+    });
+    await launchClaude(
+      { sender: { id: 43, getURL: () => "app://daintree/index.html?projectId=p2" } },
+      { id: "claude-pane-2" }
+    );
+
+    expect(mockRegisterPaneWorkspaceBinding.mock.calls.map(([, binding]) => binding)).toEqual([
+      { workspaceId: "p1", launchWebContentsId: 42 },
+      { workspaceId: "p1" },
+    ]);
+  });
+
+  it("drops a launch context that names another project", async () => {
+    // Replayed against p1's view, a p2 snapshot would fail every dispatch as
+    // BINDING_STALE — permanently. The live context is the better answer.
+    await launchClaude(
+      { sender: { id: 42 }, projectId: "p1" },
+      { actionContext: { projectId: "p2", activeWorktreeId: "wt-other" } }
+    );
+
+    expect(mockRegisterPaneWorkspaceBinding).toHaveBeenCalledWith("pane-token", {
+      workspaceId: "p1",
+      launchWebContentsId: 42,
+    });
+  });
+
+  it("registers no binding when the project's Daintree tier mints no bearer", async () => {
+    // Plugin-only config: a file with no Daintree entry and no pane token.
+    mockPreparePaneConfig.mockResolvedValue({
+      configPath: "/tmp/pane-config.json",
+      token: null,
+      pluginServerKeys: ["daintree-plugin"],
+    });
+
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    expect(mockRegisterPaneWorkspaceBinding).not.toHaveBeenCalled();
+    expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBeUndefined();
   });
 });
 

@@ -529,6 +529,12 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * before issuing a mutation. Absent for unbound sessions.
    */
   workspaceBinding?: McpWorkspaceBinding;
+  /**
+   * An agent pane's launch view (#12486), which its route prefers while the
+   * view still shows the bound workspace. Read by the binding resource so it
+   * reports the route calls actually take. Absent for every other session.
+   */
+  preferredWebContentsId?: number;
   requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
   dispatchAction: (
     actionId: string,
@@ -2623,7 +2629,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     try {
       return {
         contents: [
-          await readResourceContents(uri, parsed, dispatchAction, workspaceBinding?.workspaceId),
+          await readResourceContents(
+            uri,
+            parsed,
+            dispatchAction,
+            workspaceBinding?.workspaceId,
+            deps.preferredWebContentsId
+          ),
         ],
       };
     } catch (err) {
@@ -2845,13 +2857,14 @@ async function readResourceContents(
   uri: string,
   parsed: ParsedResourceUri,
   dispatchAction: SessionServerDeps["dispatchAction"],
-  boundWorkspaceId: string | undefined
+  boundWorkspaceId: string | undefined,
+  preferredWebContentsId: number | undefined
 ): Promise<{ uri: string; mimeType: string; text: string }> {
   if (parsed.kind === "binding") {
     // Resolved fresh on every read, from the same registry routing consults, so
     // "this says available" and "a call would route" cannot drift (#7003 — never
     // a cache, and never another session's or window's state).
-    const state = readWorkspaceBindingState(boundWorkspaceId ?? null);
+    const state = readWorkspaceBindingState(boundWorkspaceId ?? null, preferredWebContentsId);
     return { uri, mimeType: "application/json", text: JSON.stringify(state) };
   }
   if (parsed.kind === "pulse") {

@@ -113,8 +113,12 @@ export function registerWorktreeQueryActions(
     danger: "safe",
     scope: "renderer",
     resultSchema: z.object({ worktree: WorktreeSummarySchema.nullable() }),
-    run: async () => {
-      const activeWorktreeId = callbacks.getActiveWorktreeId();
+    run: async (_args, ctx) => {
+      // The dispatch's own context first: a session replaying the context it
+      // was launched with means the worktree it runs in, not whichever one the
+      // user has since selected (#8317, #12486). For any live dispatch the two
+      // are the same selection.
+      const activeWorktreeId = ctx.activeWorktreeId ?? callbacks.getActiveWorktreeId();
       if (!activeWorktreeId) {
         return { worktree: null };
       }

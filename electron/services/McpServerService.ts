@@ -48,6 +48,7 @@ import type {
   HelpSessionIdResolver,
   AssistantPaneWebContentsResolver,
   AssistantPaneActionContextResolver,
+  PaneWorkspaceBindingResolver,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -243,21 +244,43 @@ export class McpServerService {
           contextOverride,
           sessionOrigin
         ),
-      requestManifestForWorkspace: (workspaceId) =>
-        this.bridge.requestManifestForWorkspace(workspaceId),
-      dispatchActionForWorkspace: (workspaceId, actionId, args, confirmed, sessionOrigin) =>
+      requestManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
+        this.bridge.requestManifestForWorkspace(workspaceId, preferredWebContentsId),
+      dispatchActionForWorkspace: (
+        workspaceId,
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        options
+      ) =>
         this.bridge.dispatchActionForWorkspace(
           workspaceId,
           actionId,
           args,
           confirmed,
-          sessionOrigin
+          sessionOrigin,
+          options
         ),
       // Deliberately not this session's own route (#12315): a reveal runs in
       // the view that is being replaced, in the window that already holds the
       // destination workspace.
-      revealOwnedRun: (workspaceId, actionId, args, confirmed, sessionOrigin) =>
-        this.bridge.revealOwnedRun(workspaceId, actionId, args, confirmed, sessionOrigin),
+      revealOwnedRun: (
+        workspaceId,
+        actionId,
+        args,
+        confirmed,
+        sessionOrigin,
+        preferredWebContentsId
+      ) =>
+        this.bridge.revealOwnedRun(
+          workspaceId,
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin,
+          preferredWebContentsId
+        ),
       resolveWorkspaceBinding: (workspaceId) => this.bridge.resolveWorkspaceBinding(workspaceId),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
@@ -275,8 +298,8 @@ export class McpServerService {
       isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
-      getCachedManifestForWorkspace: (workspaceId) =>
-        this.bridge.getCachedManifestForWorkspace(workspaceId),
+      getCachedManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
+        this.bridge.getCachedManifestForWorkspace(workspaceId, preferredWebContentsId),
       clearCachedManifest: () => this.bridge.clearCache(),
       cleanupListeners: this.cleanupListeners,
       pendingManifests: this.pendingManifests,
@@ -358,6 +381,10 @@ export class McpServerService {
 
   setAssistantPaneActionContextResolver(resolver: AssistantPaneActionContextResolver | null): void {
     this.httpLifecycle.setAssistantPaneActionContextResolver(resolver);
+  }
+
+  setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
+    this.httpLifecycle.setPaneWorkspaceBindingResolver(resolver);
   }
 
   private emitStatusChange(): void {

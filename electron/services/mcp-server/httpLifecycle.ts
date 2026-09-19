@@ -19,6 +19,9 @@ import type {
   HelpSessionIdResolver,
   AssistantPaneWebContentsResolver,
   AssistantPaneActionContextResolver,
+  PaneWorkspaceBinding,
+  PaneWorkspaceBindingResolver,
+  WorkspaceDispatchOptions,
   McpTier,
   McpSessionOrigin,
   McpWorkspaceBinding,
@@ -104,22 +107,28 @@ export interface HttpLifecycleDeps {
     sessionOrigin?: McpSessionOrigin
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   // Workspace-bound variants used for external sessions that named a workspace
-  // at handshake (#11789). They resolve the workspace's current view per call,
-  // so a session survives its view being replaced and fails closed rather than
-  // following focus when it can't. Optional for the same reason as the pinned
-  // variants above: test fixtures that don't wire workspace routing.
+  // at handshake (#11789) and for agent panes bound to their launch workspace
+  // (#12486). They resolve the workspace's current view per call, so a session
+  // survives its view being replaced and fails closed rather than following
+  // focus when it can't. `preferredWebContentsId` is a pane's launch view,
+  // preferred while it still shows the workspace. Optional for the same reason
+  // as the pinned variants above: test fixtures that don't wire workspace
+  // routing. A pane's dispatch also carries its launch context.
   requestManifestForWorkspace?: (
-    workspaceId: string
+    workspaceId: string,
+    preferredWebContentsId?: number
   ) => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
   dispatchActionForWorkspace?: (
     workspaceId: string,
     actionId: string,
     args: unknown,
     confirmed?: boolean,
-    sessionOrigin?: McpSessionOrigin
+    sessionOrigin?: McpSessionOrigin,
+    options?: WorkspaceDispatchOptions
   ) => Promise<import("./shared.js").DispatchEnvelope>;
   getCachedManifestForWorkspace?: (
-    workspaceId: string
+    workspaceId: string,
+    preferredWebContentsId?: number
   ) => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   /**
    * Take the user to a run and bring its window with them (#12315).
@@ -132,7 +141,8 @@ export interface HttpLifecycleDeps {
     actionId: string,
     args: unknown,
     confirmed: boolean,
-    sessionOrigin: McpSessionOrigin
+    sessionOrigin: McpSessionOrigin,
+    preferredWebContentsId?: number
   ) => Promise<{ envelope: import("./shared.js").DispatchEnvelope; raised: boolean }>;
   /**
    * Validate a handshake workspace selector, or throw when it names no live
@@ -295,6 +305,7 @@ export class HttpLifecycle {
   private helpSessionIdResolver: HelpSessionIdResolver | null = null;
   private assistantPaneWebContentsResolver: AssistantPaneWebContentsResolver | null = null;
   private assistantPaneActionContextResolver: AssistantPaneActionContextResolver | null = null;
+  private paneWorkspaceBindingResolver: PaneWorkspaceBindingResolver | null = null;
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -389,6 +400,10 @@ export class HttpLifecycle {
     this.assistantPaneActionContextResolver = resolver;
   }
 
+  setPaneWorkspaceBindingResolver(resolver: PaneWorkspaceBindingResolver | null): void {
+    this.paneWorkspaceBindingResolver = resolver;
+  }
+
   /**
    * Parses a Bearer header and asks the help-session resolver — then the
    * assistant-pane resolver (#10647) — which renderer minted it, keeping *which*
@@ -401,9 +416,10 @@ export class HttpLifecycle {
    * external-client inventory all need that distinction, so it is recorded here
    * rather than inferred downstream.
    *
-   * Returns null for bearers that own no renderer — api-key clients and generic
-   * pane tokens — which are classified `external` and keep the focused-window
-   * fallback in `buildSessionServerDeps` unless they bind a workspace.
+   * Returns null for bearers that own no renderer — api-key clients and agent
+   * pane tokens — which are classified `external`. An api-key client follows
+   * window focus unless it names a workspace; an agent pane is bound to its
+   * launch workspace by {@link resolvePaneWorkspaceBinding} instead.
    */
   private resolveSessionPin(
     authHeader: string
@@ -415,6 +431,41 @@ export class HttpLifecycle {
     const fromPane = this.assistantPaneWebContentsResolver?.(token) ?? null;
     if (fromPane !== null) return { origin: "assistant-pane", webContentsId: fromPane };
     return null;
+  }
+
+  /**
+   * The launch workspace of an ordinary agent pane bearer (#12486), for a
+   * bearer neither pin resolver matched.
+   *
+   * Server-derived, never client-supplied: the binding was recorded when the
+   * pane was spawned, so the pane cannot choose or change its target, and a
+   * selector from one is still refused by {@link resolveWorkspaceSelector} on
+   * tier. It sets routing only. The session keeps the `external` origin every
+   * unpinned bearer gets, so being bound to a view never makes a pane
+   * renderer-owned (#12407).
+   */
+  private resolvePaneWorkspaceBinding(authHeader: string): PaneWorkspaceBinding | null {
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    return this.paneWorkspaceBindingResolver?.(token) ?? null;
+  }
+
+  /**
+   * Describe a pane's launch workspace for the session's binding record. Same
+   * best-effort shape as a selector binding: the descriptive fields come from
+   * the live view when exactly one answers, and an unreachable workspace binds
+   * identity-only — the pane was launched there, so the route comes back when
+   * the workspace does, and each call reports the gap meanwhile.
+   */
+  private describePaneWorkspaceBinding(workspaceId: string): McpWorkspaceBinding {
+    const resolve = this.deps.resolveWorkspaceBinding;
+    if (!resolve) return { workspaceId };
+    try {
+      return resolve(workspaceId);
+    } catch (err) {
+      if (err instanceof WorkspaceBindingError) return { workspaceId };
+      throw err;
+    }
   }
 
   /**
@@ -1232,6 +1283,13 @@ export class HttpLifecycle {
       });
       const sessionId = transport.sessionId;
       const tier = resolveTokenTier(authHeader, this.apiKeyBearerHash, this.helpTokenValidator);
+      // An agent pane's launch workspace (#12486) is resolved before any session
+      // state is written, as the /mcp selector is, so an unexpected resolver
+      // failure leaves nothing behind. This is the transport Claude panes use.
+      const pin = this.resolveSessionPin(authHeader);
+      const paneBinding = pin === null ? this.resolvePaneWorkspaceBinding(authHeader) : null;
+      const workspaceBinding =
+        paneBinding !== null ? this.describePaneWorkspaceBinding(paneBinding.workspaceId) : null;
       this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
       this.deps.sessionStore.registerClientMetadata(
         sessionId,
@@ -1241,14 +1299,18 @@ export class HttpLifecycle {
       this.deps.sessionStore.bindSessionCredential(sessionId, sessionCredentialDigest(authHeader));
       this.touchBearer(authHeader, resolveUserAgent(req), sessionId, tier);
 
-      const pin = this.resolveSessionPin(authHeader);
       this.deps.sessionStore.sessionOriginMap.set(sessionId, pin?.origin ?? "external");
       const pinnedWebContentsId = pin?.webContentsId ?? null;
       if (pinnedWebContentsId !== null) {
         this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pinnedWebContentsId);
       }
 
-      const boundActionContext = this.resolveActionContext(authHeader);
+      if (workspaceBinding !== null) {
+        this.deps.sessionStore.sessionWorkspaceMap.set(sessionId, workspaceBinding.workspaceId);
+      }
+
+      const boundActionContext =
+        this.resolveActionContext(authHeader) ?? paneBinding?.actionContext ?? null;
       if (boundActionContext !== null) {
         this.deps.sessionStore.sessionContextMap.set(sessionId, boundActionContext);
       }
@@ -1258,7 +1320,11 @@ export class HttpLifecycle {
         this.deps.sessionStore.sessionHelpIdMap.set(sessionId, helpSessionId);
       }
 
-      const deps = this.buildSessionServerDeps(sessionId);
+      const deps = this.buildSessionServerDeps(
+        sessionId,
+        workspaceBinding ?? undefined,
+        paneBinding ?? undefined
+      );
       const server = createSessionServer(sessionId, deps);
 
       const idleTimer = this.deps.sessionStore.createIdleTimer(sessionId);
@@ -1453,7 +1519,14 @@ export class HttpLifecycle {
       this.rejectHandshake(res, selector.rejection);
       return;
     }
-    const workspaceBinding = selector?.binding ?? null;
+    // Looked up only without a selector. A pane bearer never gets here with
+    // one — its tier refuses it above — so this only makes explicit that the
+    // two sources of a binding can never both apply.
+    const paneBinding =
+      pin === null && selector === null ? this.resolvePaneWorkspaceBinding(authHeader) : null;
+    const workspaceBinding =
+      selector?.binding ??
+      (paneBinding !== null ? this.describePaneWorkspaceBinding(paneBinding.workspaceId) : null);
 
     const newSessionId = randomUUID();
     this.deps.sessionStore.sessionTierMap.set(newSessionId, tier);
@@ -1472,7 +1545,8 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionWorkspaceMap.set(newSessionId, workspaceBinding.workspaceId);
     }
 
-    const boundActionContext = this.resolveActionContext(authHeader);
+    const boundActionContext =
+      this.resolveActionContext(authHeader) ?? paneBinding?.actionContext ?? null;
     if (boundActionContext !== null) {
       this.deps.sessionStore.sessionContextMap.set(newSessionId, boundActionContext);
     }
@@ -1482,7 +1556,11 @@ export class HttpLifecycle {
       this.deps.sessionStore.sessionHelpIdMap.set(newSessionId, helpSessionId);
     }
 
-    const deps = this.buildSessionServerDeps(newSessionId, workspaceBinding ?? undefined);
+    const deps = this.buildSessionServerDeps(
+      newSessionId,
+      workspaceBinding ?? undefined,
+      paneBinding ?? undefined
+    );
     const server = createSessionServer(newSessionId, deps);
     const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
     const allowedOrigins = [`http://127.0.0.1:${this.port}`, `http://localhost:${this.port}`];
@@ -1615,21 +1693,26 @@ export class HttpLifecycle {
    * handshake. Three routes, in precedence order:
    *
    * 1. **Workspace-bound** (#11789) — an external session that named a
-   *    workspace. Every operation re-resolves that workspace's current view, so
+   *    workspace, or an agent pane bound to the workspace it was launched in
+   *    (#12486). Every operation re-resolves that workspace's current view, so
    *    the session survives its view being replaced and fails closed rather
-   *    than following focus when the workspace has no single live view.
+   *    than following focus when the workspace has no single live view. A
+   *    pane's launch view is preferred while it still shows the workspace.
    * 2. **WebContents-pinned** (#7002) — help-session and assistant-pane
    *    bearers, routed to the renderer that minted them, with a cache-free
    *    manifest lookup so window A's manifest can never be served to window B.
-   * 3. **Unbound** — api-key / pane tokens, which keep the shared dispatch and
-   *    cached-manifest path and follow window focus, as documented.
+   * 3. **Unbound** — api-key tokens with no selector, which keep the shared
+   *    dispatch and cached-manifest path and follow window focus, as
+   *    documented.
    *
    * The two bound routes are mutually exclusive by construction: a selector
-   * from a pinned bearer is refused at handshake.
+   * from a pinned bearer is refused at handshake, and a pane binding is only
+   * looked up for a bearer neither pin resolver matched.
    */
   private buildSessionServerDeps(
     sessionId: string,
-    workspaceBinding?: McpWorkspaceBinding
+    workspaceBinding?: McpWorkspaceBinding,
+    paneBinding?: PaneWorkspaceBinding
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
@@ -1639,6 +1722,19 @@ export class HttpLifecycle {
     // mid-call must keep failing closed to its own workspace rather than
     // silently reverting to the focused-window path.
     const boundWorkspaceId = workspaceBinding?.workspaceId ?? null;
+    // Only ever alongside a workspace binding: the handshake derives one from
+    // the other. Undefined for an external bound session, whose route has no
+    // launch view to prefer and nothing extra to carry. Captured with the
+    // workspace, for the workspace's reason: a session torn down while a call
+    // awaits its manifest must still dispatch against the pane's own worktree,
+    // not drop its context and act on whatever the view has selected.
+    const paneDispatchOptions: WorkspaceDispatchOptions | undefined = paneBinding
+      ? {
+          contextOverride: paneBinding.actionContext,
+          preferredWebContentsId: paneBinding.launchWebContentsId,
+        }
+      : undefined;
+    const preferredWebContentsId = paneBinding?.launchWebContentsId;
     // Captured at build time (both handshakes populate the map before calling
     // this) so an in-flight dispatch settling after teardown deletes the map
     // entry still stamps its audit record / resolves its turnId correctly.
@@ -1673,7 +1769,7 @@ export class HttpLifecycle {
       () => {
         if (boundWorkspaceId !== null) {
           return workspaceManifest
-            ? workspaceManifest(boundWorkspaceId)
+            ? workspaceManifest(boundWorkspaceId, preferredWebContentsId)
             : Promise.reject(missingWorkspaceRoute());
         }
         const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
@@ -1698,7 +1794,14 @@ export class HttpLifecycle {
     const revealOwnedRun: import("./sessionServer.js").SessionServerDeps["revealOwnedRun"] =
       bridgeReveal
         ? (workspaceId, actionId, args, confirmed) =>
-            bridgeReveal(workspaceId, actionId, args, confirmed ?? false, sessionOrigin)
+            bridgeReveal(
+              workspaceId,
+              actionId,
+              args,
+              confirmed ?? false,
+              sessionOrigin,
+              preferredWebContentsId
+            )
         : undefined;
 
     const dispatchAction: import("./sessionServer.js").SessionServerDeps["dispatchAction"] = (
@@ -1707,21 +1810,31 @@ export class HttpLifecycle {
       confirmed
     ) => {
       if (boundWorkspaceId !== null) {
-        // No context override: unlike a help session, which replays the
-        // ActionContext snapshot taken when the user launched it (#8317), a
-        // bound external session has no launch moment to replay — and the bound
-        // view's own live context already describes the right workspace.
+        // A bound external session records no context: unlike a help session,
+        // which replays the ActionContext snapshot taken when the user launched
+        // it (#8317), it has no launch moment to replay, and the bound view's
+        // own live context already describes the right workspace. An agent
+        // pane does have one (#12486), so its snapshot rides along here.
         //
         // No `callerInfo` either: it exists solely to name the requesting client
-        // in the confirm dialog (#9157), and a bound session's surface excludes
-        // every confirm-gated tool, so nothing could ever read it.
+        // in the confirm dialog (#9157). A bound external session's surface
+        // excludes every confirm-gated tool, so nothing could ever read it, and
+        // a pane's ladder-tier bearer has none to give — the bearer register
+        // withholds it for every non-external tier, bound or not.
         //
         // `sessionOrigin` is threaded even though only `external` sessions may
         // bind — a selector from a pinned bearer is refused at handshake — so
         // the payload is built the same way on all three routes rather than one
         // of them relying on a default that a later binding rule could falsify.
         return workspaceDispatch
-          ? workspaceDispatch(boundWorkspaceId, actionId, args, confirmed, sessionOrigin)
+          ? workspaceDispatch(
+              boundWorkspaceId,
+              actionId,
+              args,
+              confirmed,
+              sessionOrigin,
+              paneDispatchOptions
+            )
           : Promise.reject(missingWorkspaceRoute());
       }
       const id = this.deps.sessionStore.sessionWebContentsMap.get(sessionId);
@@ -1755,7 +1868,10 @@ export class HttpLifecycle {
         // Workspace-bound sessions get the same treatment against the view that
         // currently owns their workspace (#11789).
         if (boundWorkspaceId !== null) {
-          return this.deps.getCachedManifestForWorkspace?.(boundWorkspaceId) ?? null;
+          return (
+            this.deps.getCachedManifestForWorkspace?.(boundWorkspaceId, preferredWebContentsId) ??
+            null
+          );
         }
         if (pinnedWebContentsId !== null) {
           return this.deps.getCachedManifestForWebContents?.(pinnedWebContentsId) ?? null;
@@ -1928,6 +2044,7 @@ export class HttpLifecycle {
       // (#11789) — a client must be able to verify where its calls will land
       // before it issues the first mutation.
       ...(workspaceBinding ? { workspaceBinding } : {}),
+      ...(preferredWebContentsId !== undefined ? { preferredWebContentsId } : {}),
       requestManifest,
       dispatchAction,
       revealOwnedRun,

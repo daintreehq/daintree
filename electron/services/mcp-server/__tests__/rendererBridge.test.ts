@@ -1286,6 +1286,144 @@ describe("rendererBridge — workspace-bound routing (#11789)", () => {
     registerView("ws-a", 101);
     expect(bridge.resolveWorkspaceBinding("ws-a")).toEqual({ workspaceId: "ws-a" });
   });
+
+  describe("agent-pane dispatch options (#12486)", () => {
+    function sentDispatches(wc: FakeWebContents) {
+      return wc.send.mock.calls
+        .filter(([channel]) => channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST)
+        .map(([, payload]) => payload as Record<string, unknown>);
+    }
+
+    it("replays the launch context, which an external session never sends", async () => {
+      const wc = registerView("ws-a", 101);
+      const launchContext = { projectId: "ws-a", activeWorktreeId: "wt-7" };
+
+      const paneCall = bridge.dispatchActionForWorkspace(
+        "ws-a",
+        "worktree.getCurrent",
+        {},
+        false,
+        "external",
+        { contextOverride: launchContext }
+      );
+      await settleDispatch();
+      await paneCall;
+
+      const externalCall = bridge.dispatchActionForWorkspace(
+        "ws-a",
+        "worktree.getCurrent",
+        {},
+        false
+      );
+      await settleDispatch();
+      await externalCall;
+
+      const [pane, external] = sentDispatches(wc);
+      expect(pane!.context).toEqual(launchContext);
+      expect(external!.context).toBeUndefined();
+    });
+
+    it("prefers the launch view when its workspace is open in two views", async () => {
+      // Without a preference this is `ambiguous` and every call fails. The
+      // pane's own view is a named target, not a focus-order guess.
+      registerView("ws-a", 101);
+      const launchView = registerView("ws-a", 102);
+
+      const promise = bridge.dispatchActionForWorkspace(
+        "ws-a",
+        "terminal.list",
+        {},
+        false,
+        "external",
+        { preferredWebContentsId: 102 }
+      );
+      await settleDispatch();
+      await promise;
+
+      expect(sentDispatches(launchView)).toHaveLength(1);
+      expect(sentDispatches(mockWebContentsRegistry.get(101) as FakeWebContents)).toHaveLength(0);
+    });
+
+    it("ignores a preferred view that is not one of the workspace's views", async () => {
+      // A launch view that now belongs to another workspace — or was never one
+      // of this workspace's — must not pull the call across the boundary.
+      const own = registerView("ws-a", 101);
+      const other = registerView("ws-b", 202);
+
+      const promise = bridge.dispatchActionForWorkspace(
+        "ws-a",
+        "terminal.list",
+        {},
+        false,
+        "external",
+        { preferredWebContentsId: 202 }
+      );
+      await settleDispatch();
+      await promise;
+
+      expect(sentDispatches(own)).toHaveLength(1);
+      expect(sentDispatches(other)).toHaveLength(0);
+    });
+
+    it("falls back to the workspace's replacement view once the launch view is gone", async () => {
+      // Eviction destroys the launch view and a cold start registers a new id.
+      // The pane's PTY survived, so its session must too — the preference
+      // simply stops matching and the workspace route takes over.
+      registerView("ws-a", 101);
+      mockProjectViews.set("ws-a", []);
+      mockWebContentsRegistry.delete(101);
+
+      await expect(
+        bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false, "external", {
+          preferredWebContentsId: 101,
+        })
+      ).rejects.toMatchObject({ code: "SESSION_BINDING_GONE", retriable: true });
+
+      const replacement = registerView("ws-a", 303);
+      const promise = bridge.dispatchActionForWorkspace(
+        "ws-a",
+        "terminal.list",
+        {},
+        false,
+        "external",
+        { preferredWebContentsId: 101 }
+      );
+      await settleDispatch();
+      await promise;
+
+      expect(sentDispatches(replacement)).toHaveLength(1);
+    });
+
+    it("still fails as ambiguous when the launch view is gone and two views remain", async () => {
+      registerView("ws-a", 101);
+      registerView("ws-a", 102);
+
+      await expect(
+        bridge.dispatchActionForWorkspace("ws-a", "terminal.list", {}, false, "external", {
+          preferredWebContentsId: 999,
+        })
+      ).rejects.toMatchObject({ code: "SESSION_BINDING_GONE", reason: "ambiguous" });
+    });
+
+    it("resolves the manifest and its warm cache through the launch view too", async () => {
+      registerView("ws-a", 101);
+      registerView("ws-a", 102);
+
+      const promise = bridge.requestManifestForWorkspace("ws-a", 102);
+      const [requestId] = [...pendingManifests.keys()];
+      expect(pendingManifests.get(requestId!)!.webContentsId).toBe(102);
+      mockIpcMain.emit(
+        CHANNELS.MCP_SERVER_GET_MANIFEST_RESPONSE,
+        { sender: { id: 102 } },
+        { requestId, manifest: [{ id: "terminal.list" }] }
+      );
+      await promise;
+
+      expect(bridge.getCachedManifestForWorkspace("ws-a", 102)).toEqual([{ id: "terminal.list" }]);
+      // Same workspace, no preference: still ambiguous, still no shared cache.
+      expect(bridge.getCachedManifestForWorkspace("ws-a")).toBeNull();
+    });
+  });
 });
 
 describe("rendererBridge — thaw and eviction lease for routed operations (#11790)", () => {
@@ -1936,6 +2074,40 @@ describe("rendererBridge — reveal routing and window raise (#12315)", () => {
     // Provenance survives the reveal route — an external client's call must not
     // reach the renderer stamped as the assistant's.
     expect(active.send.mock.calls[0][1]).toMatchObject({ sessionOrigin: "assistant-pane" });
+  });
+
+  it("reveals through an agent pane's launch view when its workspace is open in two windows (#12486)", async () => {
+    // The pane's runs live in the view it dispatches into — its launch view —
+    // so the reveal must switch that window, not the first holder's.
+    const firstHolder = makeWebContents(3101);
+    const launchView = makeWebContents(3102);
+    const firstWindow = makeWindow(1);
+    const launchWindow = makeWindow(2);
+    register(firstHolder, firstWindow);
+    register(launchView, launchWindow);
+    respondWith(launchView, { ok: true, result: "opened" });
+    mockProjectViews.set("ws-owned", [firstHolder, launchView]);
+    const entries = {
+      current: [
+        { window: firstWindow, activeWebContents: firstHolder },
+        { window: launchWindow, activeWebContents: launchView },
+      ],
+    };
+    const bridge = makeBridge(makeRegistry(entries));
+
+    const { raised } = await bridge.revealOwnedRun(
+      "ws-owned",
+      "pilot.openRun",
+      { runId: "t1" },
+      false,
+      "external",
+      3102
+    );
+
+    expect(launchView.send).toHaveBeenCalledTimes(1);
+    expect(firstHolder.send).not.toHaveBeenCalled();
+    expect(raised).toBe(true);
+    expect(raiseLog).toEqual(["2:show", "2:focus"]);
   });
 
   it.each([

@@ -10,21 +10,26 @@ vi.mock("@/clients", () => ({
     getAvailableBranch: vi.fn(),
   },
 }));
+const viewWorktrees = vi.hoisted(() => new Map<string, Record<string, unknown>>());
 vi.mock("@/store/createWorktreeStore", () => ({
-  getCurrentViewStore: () => ({ getState: () => ({ worktrees: new Map() }) }),
+  getCurrentViewStore: () => ({ getState: () => ({ worktrees: viewWorktrees }) }),
 }));
 
 import { registerWorktreeQueryActions } from "../worktreeQueryActions";
 
 type ActionFactory = () => AnyActionDefinition;
 
-function getDefinition(id: string, worktrees: unknown[] = []): AnyActionDefinition {
+function getDefinition(
+  id: string,
+  worktrees: unknown[] = [],
+  activeWorktreeId: string | null = null
+): AnyActionDefinition {
   const registry = new Map<string, ActionFactory>();
   registerWorktreeQueryActions(
     registry as never,
     {
       getWorktrees: () => worktrees,
-      getActiveWorktreeId: () => null,
+      getActiveWorktreeId: () => activeWorktreeId,
     } as never
   );
   return registry.get(id)!();
@@ -170,5 +175,43 @@ describe("worktree.listBranches bounded reads", () => {
     expect(result.branches).toEqual([]);
     expect(result.total).toBe(5);
     expect(result.hasMore).toBe(false);
+  });
+});
+
+describe("worktree.getCurrent follows the dispatch context (#12486)", () => {
+  beforeEach(() => {
+    viewWorktrees.clear();
+    viewWorktrees.set("wt-launch", { id: "wt-launch", path: "/repo/launch", branch: "launch" });
+    viewWorktrees.set("wt-selected", {
+      id: "wt-selected",
+      path: "/repo/selected",
+      branch: "selected",
+    });
+  });
+
+  it("answers with the worktree a replayed launch context names, not the live selection", async () => {
+    // An agent pane launched in one worktree keeps calling this after the
+    // user selects another; "current" is the pane's own (#8317).
+    const definition = getDefinition("worktree.getCurrent", [], "wt-selected");
+
+    const result: unknown = await definition.run(undefined, { activeWorktreeId: "wt-launch" });
+
+    expect(result).toMatchObject({ worktree: { id: "wt-launch", path: "/repo/launch" } });
+  });
+
+  it("falls back to the live selection when the context names no worktree", async () => {
+    const definition = getDefinition("worktree.getCurrent", [], "wt-selected");
+
+    const result: unknown = await definition.run(undefined, {});
+
+    expect(result).toMatchObject({ worktree: { id: "wt-selected" } });
+  });
+
+  it("reports no worktree when the replayed one is gone, rather than borrowing the selection", async () => {
+    const definition = getDefinition("worktree.getCurrent", [], "wt-selected");
+
+    const result: unknown = await definition.run(undefined, { activeWorktreeId: "wt-deleted" });
+
+    expect(result).toEqual({ worktree: null });
   });
 });

@@ -147,6 +147,7 @@ vi.mock("../../../../services/McpServerService.js", () => ({
     ensureReady: async () => true,
     setAssistantPaneWebContentsResolver: vi.fn(),
     setAssistantPaneActionContextResolver: vi.fn(),
+    setPaneWorkspaceBindingResolver: vi.fn(),
   },
 }));
 

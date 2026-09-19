@@ -207,10 +207,13 @@ export function onWorkspaceResidencyChanged(
  * Resolved fresh on every call — never cached, never another session's or
  * window's state (#7003). The live-view count comes from the same registry
  * routing consults, so "this read says available" and "a call would route" are
- * the same fact rather than two that can drift.
+ * the same fact rather than two that can drift. That includes an agent pane's
+ * launch view (#12486): routing prefers it while it is one of the workspace's
+ * live views, so a second view does not make that pane's route ambiguous.
  */
 export function readWorkspaceBindingState(
-  boundWorkspaceId: string | null
+  boundWorkspaceId: string | null,
+  preferredWebContentsId?: number
 ): McpWorkspaceBindingState {
   const observedAt = Date.now();
   if (boundWorkspaceId === null) {
@@ -225,7 +228,11 @@ export function readWorkspaceBindingState(
     };
   }
 
-  const liveViewCount = getWebContentsForProject(boundWorkspaceId).length;
+  const liveViews = getWebContentsForProject(boundWorkspaceId);
+  const liveViewCount = liveViews.length;
+  const preferredIsLive =
+    preferredWebContentsId !== undefined &&
+    liveViews.some((wc) => wc.id === preferredWebContentsId);
   // A live view means the workspace is here now, whatever took an earlier one:
   // reporting an eviction beside it would describe a loss that has already been
   // recovered, and in a second window's case one that never applied to this
@@ -235,7 +242,12 @@ export function readWorkspaceBindingState(
 
   return {
     workspaceId: boundWorkspaceId,
-    routeState: liveViewCount === 0 ? "not-found" : liveViewCount === 1 ? "available" : "ambiguous",
+    routeState:
+      liveViewCount === 0
+        ? "not-found"
+        : liveViewCount === 1 || preferredIsLive
+          ? "available"
+          : "ambiguous",
     liveViewCount,
     keepResident: isWorkspaceKeepResident(boundWorkspaceId),
     evictedAt: record?.at ?? null,
