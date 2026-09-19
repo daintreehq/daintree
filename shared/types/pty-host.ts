@@ -773,15 +773,7 @@ export type PtyHostEvent =
       projectId: string;
       result: { id: string; agentSessionId: string | null };
     }
-  | {
-      type: "fd-leak-warning";
-      fdCount: number;
-      activeTerminals: number;
-      estimatedLeaked: number;
-      orphanedPids: number[];
-      ptmxLimit: number | null;
-      timestamp: number;
-    }
+  | ({ type: "fd-growth" } & FdGrowthPayload)
   | {
       type: "resource-metrics";
       metrics: TerminalResourceBatchPayload;
@@ -802,12 +794,49 @@ export type PtyHostEvent =
       snapshot: PtyHostWorkerGovernanceSnapshot;
     };
 
-export interface FdLeakWarningPayload {
+/** Open descriptors in the pty-host grouped by what `fstat` reports for each. */
+export interface FdTypeCounts {
+  charDevice: number;
+  socket: number;
+  fifo: number;
+  file: number;
+  directory: number;
+  other: number;
+  /** Closed between listing and inspection, or not inspectable. */
+  unavailable: number;
+}
+
+/** Processes and threads in the pty-host that hold descriptors by design. */
+export interface FdOwnerCounts {
+  /** Terminals whose PTY is still open (exited, preserved terminals excluded). */
+  terminals: number;
+  pooledPtys: number;
+  pluginPtys: number;
+  analysisWorkers: number;
+}
+
+/**
+ * One pty-host's descriptor count moving away from, or back to, its
+ * post-restore baseline. Emitted once per transition, never per sample, and
+ * it records what was observed — whether the growth is a leak is left to the
+ * reader.
+ */
+export interface FdGrowthPayload extends FdOwnerCounts {
+  state: "elevated" | "recovered";
+  hostPid: number;
   fdCount: number;
-  activeTerminals: number;
-  estimatedLeaked: number;
-  orphanedPids: number[];
-  ptmxLimit: number | null;
+  /** Descriptors the owners above account for. */
+  expectedFds: number;
+  /** `fdCount - expectedFds` once the host settled after restore. */
+  baselineFds: number;
+  /** `fdCount - expectedFds - baselineFds` on this sample. */
+  growth: number;
+  /** Consecutive samples on this side of the threshold. */
+  sustainedSamples: number;
+  sampleIntervalMs: number;
+  episodeStartedAt: number;
+  /** Only on `elevated`: the type breakdown when the episode began. */
+  descriptorTypes?: FdTypeCounts;
   timestamp: number;
 }
 

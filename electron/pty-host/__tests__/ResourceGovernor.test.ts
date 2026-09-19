@@ -1,8 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 // Shared mock state that tests can reconfigure
-let mockCheckForLeaks: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
+let mockSample: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let mockFdMonitorSupported: boolean;
+const mockIsProcessAlive = vi.hoisted(() => vi.fn<(pid: number) => boolean>());
 
 vi.mock("../FdMonitor.js", () => {
   return {
@@ -10,10 +11,9 @@ vi.mock("../FdMonitor.js", () => {
       get supported() {
         return mockFdMonitorSupported;
       }
-      getFdCount = vi.fn().mockReturnValue(10);
-      checkForLeaks = (...args: unknown[]) => mockCheckForLeaks(...args);
+      sample = (...args: unknown[]) => mockSample(...args);
     },
-    isProcessAlive: vi.fn(),
+    isProcessAlive: (pid: number) => mockIsProcessAlive(pid),
   };
 });
 
@@ -34,7 +34,7 @@ function createMockDeps(overrides?: Partial<ResourceGovernorDeps>): ResourceGove
   return {
     getTerminalIds: vi.fn().mockReturnValue([]),
     getPauseCoordinator: vi.fn().mockReturnValue(undefined),
-    getTerminalCount: vi.fn().mockReturnValue(0),
+    getFdOwners: vi.fn().mockReturnValue(defaultOwners),
     incrementPauseCount: vi.fn(),
     sendEvent: vi.fn(),
     emitTerminalStatus: vi.fn(),
@@ -65,21 +65,24 @@ function mockMemoryUsage(heapMb: number, externalMb = 0, arrayBuffersMb = 0) {
 // tests can keep advancing a single 2s tick.
 const ADVANCE_TO_ENGAGE_MS = 12000;
 
-const defaultLeakResult = {
-  totalFds: 10,
-  baselineFds: 5,
-  estimatedTerminalFds: 5,
-  activeTerminals: 2,
-  isWarning: false,
-  orphanedPids: [] as number[],
-  ptmxLimit: 511,
-};
+const FD_SAMPLE_INTERVAL_MS = 30000;
+
+const defaultOwners = { terminals: 0, pooledPtys: 0, pluginPtys: 0, analysisWorkers: 0 };
+
+const defaultFdSample = { fdCount: 40, expectedFds: 0, baselineFds: 40, transition: null };
+
+function fdGrowthEvents(deps: ResourceGovernorDeps) {
+  return (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls
+    .map((c: unknown[]) => c[0] as Record<string, unknown>)
+    .filter((e) => e?.type === "fd-growth");
+}
 
 describe("ResourceGovernor", () => {
   beforeEach(() => {
     vi.useFakeTimers();
     mockFdMonitorSupported = true;
-    mockCheckForLeaks = vi.fn().mockReturnValue({ ...defaultLeakResult });
+    mockSample = vi.fn().mockReturnValue({ ...defaultFdSample });
+    mockIsProcessAlive.mockReset().mockReturnValue(false);
   });
 
   afterEach(() => {
@@ -94,65 +97,84 @@ describe("ResourceGovernor", () => {
     governor.dispose();
   });
 
-  it("calls checkResources on interval", () => {
-    const deps = createMockDeps();
+  it("samples descriptors on their own 30s interval, not the 2s resource tick", () => {
+    const owners = { terminals: 25, pooledPtys: 2, pluginPtys: 0, analysisWorkers: 3 };
+    const deps = createMockDeps({ getFdOwners: vi.fn().mockReturnValue(owners) });
     const governor = new ResourceGovernor(deps);
     governor.start();
 
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS - 2000);
+    expect(mockSample).not.toHaveBeenCalled();
+
     vi.advanceTimersByTime(2000);
-    expect(deps.getTerminalCount).toHaveBeenCalled();
-    expect(mockCheckForLeaks).toHaveBeenCalled();
+    expect(mockSample).toHaveBeenCalledTimes(1);
+    expect(mockSample).toHaveBeenCalledWith(owners, Date.now());
+
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+    expect(mockSample).toHaveBeenCalledTimes(2);
 
     governor.dispose();
   });
 
-  it("emits fd-leak-warning when FD monitor reports warning", () => {
-    mockCheckForLeaks.mockReturnValue({
-      totalFds: 50,
-      baselineFds: 5,
-      estimatedTerminalFds: 45,
-      activeTerminals: 2,
-      isWarning: true,
-      orphanedPids: [1234],
-      ptmxLimit: 511,
-    });
-
-    const deps = createMockDeps({
-      getTerminalCount: vi.fn().mockReturnValue(2),
-    });
-
-    const governor = new ResourceGovernor(deps);
-    governor.start();
-
-    vi.advanceTimersByTime(2000);
-
-    expect(deps.sendEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "fd-leak-warning",
-        fdCount: 50,
-        activeTerminals: 2,
-        orphanedPids: [1234],
-        ptmxLimit: 511,
-      })
-    );
-
-    governor.dispose();
-  });
-
-  it("does not emit warning when FD monitor reports no warning", () => {
+  it("emits fd-growth only for a transition the monitor reports", () => {
+    const transition = {
+      state: "elevated",
+      terminals: 25,
+      pooledPtys: 2,
+      pluginPtys: 0,
+      analysisWorkers: 3,
+      fdCount: 140,
+      expectedFds: 60,
+      baselineFds: 37,
+      growth: 43,
+      sustainedSamples: 3,
+      episodeStartedAt: 1000,
+    };
     const deps = createMockDeps();
     const governor = new ResourceGovernor(deps);
     governor.start();
 
-    vi.advanceTimersByTime(2000);
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+    expect(fdGrowthEvents(deps)).toHaveLength(0);
 
-    const calls = (deps.sendEvent as ReturnType<typeof vi.fn>).mock.calls;
-    const fdWarnings = calls.filter(
-      (c: unknown[]) => (c[0] as Record<string, unknown>)?.type === "fd-leak-warning"
-    );
-    expect(fdWarnings).toHaveLength(0);
+    mockSample.mockReturnValueOnce({ ...defaultFdSample, transition });
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+
+    expect(fdGrowthEvents(deps)).toEqual([
+      {
+        type: "fd-growth",
+        ...transition,
+        hostPid: process.pid,
+        sampleIntervalMs: FD_SAMPLE_INTERVAL_MS,
+        timestamp: expect.any(Number),
+      },
+    ]);
 
     governor.dispose();
+  });
+
+  it("does not emit when a sample fails", () => {
+    mockSample.mockReturnValue(null);
+    const deps = createMockDeps();
+    const governor = new ResourceGovernor(deps);
+    governor.start();
+
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 3);
+    expect(mockSample).toHaveBeenCalledTimes(3);
+    expect(fdGrowthEvents(deps)).toHaveLength(0);
+
+    governor.dispose();
+  });
+
+  it("stops sampling descriptors after dispose", () => {
+    const deps = createMockDeps();
+    const governor = new ResourceGovernor(deps);
+    governor.start();
+    governor.dispose();
+
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 2);
+    expect(mockSample).not.toHaveBeenCalled();
   });
 
   it("skips FD monitoring on unsupported platforms", () => {
@@ -162,9 +184,9 @@ describe("ResourceGovernor", () => {
     const governor = new ResourceGovernor(deps);
     governor.start();
 
-    vi.advanceTimersByTime(2000);
+    vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 2);
 
-    expect(mockCheckForLeaks).not.toHaveBeenCalled();
+    expect(mockSample).not.toHaveBeenCalled();
 
     governor.dispose();
   });
@@ -2577,7 +2599,7 @@ describe("ResourceGovernor", () => {
   });
 
   describe("trackKilledPid", () => {
-    it("tracks killed PIDs and passes them to FdMonitor after grace period", () => {
+    it("probes killed PIDs once they pass the grace period", () => {
       const deps = createMockDeps();
       const governor = new ResourceGovernor(deps);
       governor.start();
@@ -2586,11 +2608,37 @@ describe("ResourceGovernor", () => {
 
       // First tick — grace period not elapsed yet (only 2s, need 4s)
       vi.advanceTimersByTime(2000);
-      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, []);
+      expect(mockIsProcessAlive).not.toHaveBeenCalled();
 
       // After grace period (6s total from start, 4s from trackKilledPid)
       vi.advanceTimersByTime(4000);
-      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [5678]);
+      expect(mockIsProcessAlive).toHaveBeenCalledTimes(1);
+      expect(mockIsProcessAlive).toHaveBeenCalledWith(5678);
+
+      // Probed once, then dropped.
+      vi.advanceTimersByTime(4000);
+      expect(mockIsProcessAlive).toHaveBeenCalledTimes(1);
+
+      governor.dispose();
+    });
+
+    it("warns about a killed PID that is still alive after the grace period", () => {
+      mockIsProcessAlive.mockImplementation((pid) => pid === 4321);
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.start();
+
+      governor.trackKilledPid(4321);
+      governor.trackKilledPid(8765);
+      vi.advanceTimersByTime(6000);
+
+      const orphanWarnings = warn.mock.calls.filter((c) =>
+        String(c[0]).includes("Orphaned PTY PIDs")
+      );
+      expect(orphanWarnings).toHaveLength(1);
+      expect(String(orphanWarnings[0]?.[0])).toContain("4321");
+      expect(String(orphanWarnings[0]?.[0])).not.toContain("8765");
 
       governor.dispose();
     });
@@ -2599,9 +2647,8 @@ describe("ResourceGovernor", () => {
       // Regression for #10842: the orphan sweep used to sit behind the
       // `if (!supported) return` guard, so on Windows (no /proc/fd) killedPids
       // grew unbounded until dispose(). Prove the entry is swept while
-      // unsupported by flipping support on afterward and asserting the next
-      // FD check sees an empty orphan list — if the pid had leaked it would
-      // surface here.
+      // unsupported by flipping support on afterward and asserting the pid is
+      // never probed — if it had leaked, the next tick would probe it.
       mockFdMonitorSupported = false;
 
       const deps = createMockDeps();
@@ -2611,15 +2658,13 @@ describe("ResourceGovernor", () => {
       governor.trackKilledPid(9999);
 
       // Past the 4s grace window — the unconditional sweep deletes the entry
-      // even though checkForLeaks never runs while unsupported.
+      // without probing it while unsupported.
       vi.advanceTimersByTime(6000);
-      expect(mockCheckForLeaks).not.toHaveBeenCalled();
+      expect(mockIsProcessAlive).not.toHaveBeenCalled();
 
-      // FD monitoring becomes available: the next tick runs checkForLeaks with
-      // no orphan candidates, proving the pid was already pruned.
       mockFdMonitorSupported = true;
       vi.advanceTimersByTime(2000);
-      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, []);
+      expect(mockIsProcessAlive).not.toHaveBeenCalled();
 
       governor.dispose();
     });
@@ -2637,11 +2682,11 @@ describe("ResourceGovernor", () => {
 
       // Tick at t=6000: A is 6s old (swept), B is 3s old (kept).
       vi.advanceTimersByTime(3000);
-      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [1111]);
+      expect(mockIsProcessAlive.mock.calls).toEqual([[1111]]);
 
       // Tick at t=8000: B is now 5s old (swept).
       vi.advanceTimersByTime(2000);
-      expect(mockCheckForLeaks).toHaveBeenLastCalledWith(0, [2222]);
+      expect(mockIsProcessAlive.mock.calls).toEqual([[1111], [2222]]);
 
       governor.dispose();
     });
@@ -2836,8 +2881,8 @@ describe("ResourceGovernor", () => {
     });
 
     it("survives a throwing accounting dep and completes the tick on host-only signal", () => {
-      // A bad pool snapshot must not abort the whole resource tick — FD checks
-      // and the host-only memory signal still run.
+      // A bad pool snapshot must not abort the whole resource tick — the
+      // killed-PID sweep at its tail and the host-only memory signal still run.
       mockMemoryUsage(400); // 400/512 = 78.1% heap-bound > 70% warning
       const deps = createMockDeps({
         getWorkerMemoryAccounting: vi.fn().mockImplementation(() => {
@@ -2847,9 +2892,10 @@ describe("ResourceGovernor", () => {
 
       const governor = new ResourceGovernor(deps);
       governor.start();
-      expect(() => vi.advanceTimersByTime(2000)).not.toThrow();
+      governor.trackKilledPid(2468);
+      expect(() => vi.advanceTimersByTime(6000)).not.toThrow();
 
-      expect(mockCheckForLeaks).toHaveBeenCalled();
+      expect(mockIsProcessAlive).toHaveBeenCalledWith(2468);
       const event = findWarningEvent(deps);
       expect(event?.isWarning).toBe(true);
       expect(event?.workerHeapMb).toBe(0);

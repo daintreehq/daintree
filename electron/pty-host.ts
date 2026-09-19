@@ -731,7 +731,13 @@ function disconnectWindow(windowId: number, reason: string): void {
 const resourceGovernor = new ResourceGovernor({
   getTerminalIds: () => ptyManager.getAll().map((t) => t.id),
   getPauseCoordinator,
-  getTerminalCount: () => ptyManager.getActiveTerminalIds().length,
+  getFdOwners: () => ({
+    terminals: ptyManager.getLivePtyCount(),
+    pooledPtys: ptyPool?.getPoolSize() ?? 0,
+    pluginPtys: pluginPtyManager.getLiveCount(),
+    analysisWorkers:
+      analysisWorkerPool?.getMemoryAccounting().filter((slot) => slot.alive).length ?? 0,
+  }),
   incrementPauseCount: (count) => {
     backpressureManager.stats.pauseCount += count;
   },

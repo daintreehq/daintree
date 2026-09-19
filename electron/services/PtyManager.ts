@@ -927,6 +927,18 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Terminals whose PTY is still open. Exited terminals kept for their output
+   * stay registered but hold no PTY descriptors.
+   */
+  getLivePtyCount(): number {
+    let count = 0;
+    for (const terminal of this.registry.getAll()) {
+      if (terminal.getPublicState().hasPty) count++;
+    }
+    return count;
+  }
+
+  /**
    * Get all active terminals.
    */
   getAll(): TerminalInfo[] {

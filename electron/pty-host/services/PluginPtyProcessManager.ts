@@ -186,6 +186,10 @@ export class PluginPtyProcessManager {
   }
 
   /** Tear down every live plugin PTY. Called on host shutdown / dispatcher disposal. */
+  getLiveCount(): number {
+    return this.entries.size;
+  }
+
   disposeAll(): void {
     for (const entry of [...this.entries.values()]) {
       this.teardownEntry(entry, "dispose");

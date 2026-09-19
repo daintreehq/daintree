@@ -108,7 +108,6 @@ import type {
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
 } from "../pty-host.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { KeepAwakeState } from "./keepAwake.js";
@@ -1416,7 +1415,6 @@ export interface IpcEventMap {
   // A pane's terminal watches changed (#12491); project-scoped send.
   "terminal:watch-state": import("../terminalWatch.js").PaneWatchState;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
-  "terminal:fd-leak-warning": FdLeakWarningPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
   "terminal:broadcast-write-result": BroadcastWriteResultPayload;
   "terminal:send-key": [id: string, key: string];

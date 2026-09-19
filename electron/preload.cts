@@ -166,7 +166,6 @@ import type {
   SpawnResult,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
 } from "../shared/types/pty-host.js";
@@ -1360,9 +1359,6 @@ function buildElectronApi(): ElectronAPI {
       onResourceMetrics: (
         callback: (data: { metrics: TerminalResourceBatchPayload; timestamp: number }) => void
       ) => _typedOn(CHANNELS.TERMINAL_RESOURCE_METRICS, callback),
-
-      onFdLeakWarning: (callback: (data: FdLeakWarningPayload) => void) =>
-        _typedOn(CHANNELS.TERMINAL_FD_LEAK_WARNING, callback),
 
       onBackendCrashed: (
         callback: (data: {

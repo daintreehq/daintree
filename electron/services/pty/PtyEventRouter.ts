@@ -22,7 +22,7 @@
 import type { EventEmitter } from "events";
 import type {
   BroadcastWriteResultPayload,
-  FdLeakWarningPayload,
+  FdGrowthPayload,
   PtyHostEvent,
   PtyHostSpawnOptions,
   SpawnResult,
@@ -400,16 +400,10 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       return true;
     }
 
-    case "fd-leak-warning": {
-      const flwEvent: FdLeakWarningPayload = {
-        fdCount: event.fdCount,
-        activeTerminals: event.activeTerminals,
-        estimatedLeaked: event.estimatedLeaked,
-        orphanedPids: event.orphanedPids,
-        ptmxLimit: event.ptmxLimit,
-        timestamp: event.timestamp,
-      };
-      emitter.emit("fd-leak-warning", flwEvent);
+    case "fd-growth": {
+      const { type: _type, ...fdGrowth } = event;
+      const fdEvent: FdGrowthPayload = fdGrowth;
+      emitter.emit("fd-growth", fdEvent);
       return true;
     }
 
