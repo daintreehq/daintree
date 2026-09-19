@@ -49,7 +49,8 @@ import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
-import { FOCUS_THROTTLE_MULTIPLIER, setFocusThrottled } from "../../window/focusThrottleState.js";
+import { setPollThrottle } from "../../window/focusThrottleState.js";
+import { derivePowerPolicy, powerPolicyPollMultiplier } from "../../../shared/types/powerPolicy.js";
 import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.js";
 import { resolveWebglThresholds } from "../../utils/webglContextBudget.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
@@ -807,16 +808,24 @@ describe("ResourceProfileService", () => {
     pty.setProcessTreePollInterval = vi.fn();
     const service = new ResourceProfileService(deps);
 
-    setFocusThrottled(true);
+    const blurred = powerPolicyPollMultiplier(
+      derivePowerPolicy({
+        onBattery: false,
+        screenLocked: false,
+        anyWindowFocused: false,
+        anyWindowVisible: true,
+      })
+    );
+
+    setPollThrottle({ throttled: true, multiplier: blurred });
     try {
       service.start();
     } finally {
-      setFocusThrottled(false);
+      setPollThrottle({ throttled: false, multiplier: 1 });
     }
 
     expect(pty.setProcessTreePollInterval).toHaveBeenCalledWith(
-      RESOURCE_PROFILE_CONFIGS[service.getProfile()].processTreePollInterval *
-        FOCUS_THROTTLE_MULTIPLIER
+      RESOURCE_PROFILE_CONFIGS[service.getProfile()].processTreePollInterval * blurred
     );
     // The profile push resets the host's cadence, so the throttle must land after it.
     expect(pty.setResourceProfile.mock.invocationCallOrder[0]!).toBeLessThan(
