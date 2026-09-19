@@ -1901,7 +1901,10 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     const rawCluster = raw.filter((s) => s.kind === "failure-cluster");
     expect(rawDrift).toHaveLength(1);
     expect(rawCluster).toHaveLength(1);
+    // The baseline is taken when the ring crosses the detection floor, so
+    // `tool.flaky` — appended after that — is a genuine first-seen combination.
     expect(snapshot.anomalySignalCountsByKind).toEqual({
+      "first-seen-combination": 1,
       "latency-drift": 1,
       "failure-cluster": 1,
     });
