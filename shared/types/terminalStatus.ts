@@ -28,7 +28,8 @@ export type TerminalStatusSource = "renderer" | "pty";
  * It cuts both ways. `hasPty` and `lastOutputChangeAt` are read in the
  * pty-host, so the reduced `pty` answer reports them and the richer `renderer`
  * answer cannot — a surface listing nothing is not the same as a surface that
- * saw everything.
+ * saw everything. The renderer reads `lastOutputChangeAt` only when the call
+ * asked for output (#12495), so it drops out of this list for those calls.
  */
 export type TerminalStatusUnavailableField =
   "armed" | "lastCheckResult" | "exitCode" | "hasPty" | "lastOutputChangeAt";
@@ -51,7 +52,8 @@ export interface TerminalStatusEntry {
    * When the terminal's visible content last changed, ignoring recognised
    * spinner and timer redraws (#12428). An observation for the caller to act
    * on, never a hang verdict: long reasoning leaves the screen just as still.
-   * Read in the pty-host, so only the `pty` answer reports it.
+   * Read in the pty-host, so the `renderer` answer reports it only when the
+   * call asked for output (#12495).
    */
   lastOutputChangeAt?: number;
   exitCode?: number | null;
@@ -79,6 +81,19 @@ export interface TerminalStatusEntry {
   submission?: TerminalSubmissionRecord;
   error?: string;
 }
+
+/**
+ * One terminal's `lastOutputChangeAt` as read for the renderer's
+ * `terminal.getStatus` (#12495).
+ *
+ * `read` with no timestamp says the terminal was read and no content change has
+ * been observed yet; `unreadable` says nothing was observed at all — gone, not
+ * owned by the caller, or its backend query failed. Folding the second into the
+ * first would present a failed read as a screen that was watched and never
+ * changed.
+ */
+export type TerminalOutputActivityLookup =
+  { status: "read"; lastOutputChangeAt?: number } | { status: "unreadable" };
 
 export interface TerminalStatusResult {
   terminals: TerminalStatusEntry[];

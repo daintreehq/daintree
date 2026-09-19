@@ -28,6 +28,7 @@ export const CHANNELS = {
   TERMINAL_INPUT: "terminal:input",
   TERMINAL_SUBMIT: "terminal:submit",
   TERMINAL_GET_SUBMISSIONS: "terminal:get-submissions",
+  TERMINAL_GET_OUTPUT_ACTIVITY: "terminal:get-output-activity",
   TERMINAL_RESIZE: "terminal:resize",
   TERMINAL_KILL: "terminal:kill",
   TERMINAL_ERROR: "terminal:error",

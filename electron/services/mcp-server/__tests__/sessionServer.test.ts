@@ -637,6 +637,12 @@ describe("sessionServer prompt handler", () => {
     // the reassurance must be gone and some confirm-first instruction present.
     expect(text).not.toMatch(/safe to auto-drive/);
     expect(text).toMatch(/confirm against output/i);
+    // `includeOutput` also fills `lastOutputChangeAt` (#12495). The recipe must
+    // keep both of the field's limits: absence is unknown, and a still screen
+    // is not a hang.
+    expect(text).toMatch(/includeOutput[^\n]*lastOutputChangeAt/);
+    expect(text).toMatch(/lastOutputChangeAt[^\n]*absent when no change was observed/);
+    expect(text).toMatch(/lastOutputChangeAt[^\n]*NOT a hang verdict/);
   });
 
   it("does not dispatch worktree.getCurrent for triage_terminals (static prompt)", async () => {

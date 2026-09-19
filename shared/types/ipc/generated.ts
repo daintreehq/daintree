@@ -1802,6 +1802,10 @@ export interface GeneratedIpcInvokeMap {
     args: [id: string];
     result: import("./terminal.js").TerminalInfoPayload;
   };
+  "terminal:get-output-activity": {
+    args: [terminalIds: string[]];
+    result: Record<string, import("../terminalStatus.js").TerminalOutputActivityLookup>;
+  };
   "terminal:get-serialized-state": {
     args: [terminalId: string];
     result: import("../terminal.js").SerializedTerminalSnapshot | null;
