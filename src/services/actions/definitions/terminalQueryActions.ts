@@ -91,7 +91,7 @@ export function registerTerminalQueryActions(
           .boolean()
           .optional()
           .describe(
-            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none."
+            "MCP only: true keeps just the terminals you created; false or omitted applies no ownership filter. An agent pane keeps them across reconnects."
           ),
         terminalId: z
           .string()

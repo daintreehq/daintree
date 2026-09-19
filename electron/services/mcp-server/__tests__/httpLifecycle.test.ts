@@ -38,6 +38,7 @@ import { HttpLifecycle, sessionCredentialDigest } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
 import type { SessionServerDeps } from "../sessionServer.js";
+import { ResourceOwnershipLedger } from "../resourceOwnership.js";
 import { WorkspaceBindingError } from "../rendererBridge.js";
 import { AuditService, type McpAuditLogStore } from "../auditLog.js";
 
@@ -117,7 +118,11 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
         this.sessionOriginMap.delete(sessionId);
         this.sessionWorkspaceMap.delete(sessionId);
         this.sessionCredentialMap.delete(sessionId);
+        this.resourceOwnership.clearSession(sessionId);
       },
+      // A real ledger, so the handshake's principal binding is observed as the
+      // session server will read it (#12487).
+      resourceOwnership: new ResourceOwnershipLedger(),
       // Real behaviour for the same reason as the origin predicates: a stub
       // that always matched would make every session-binding test vacuous.
       sessionCredentialMap: new Map<string, string>(),
@@ -3003,6 +3008,141 @@ describe("HttpLifecycle", () => {
         expect(deps.sessionStore.sessionWorkspaceMap.has(sessionId)).toBe(false);
         expect(deps.sessionStore.sessionContextMap.has(sessionId)).toBe(false);
         expect(deps.sessionStore.getOrigin(sessionId)).toBe("external");
+      });
+    });
+
+    describe("pane-bearer ownership principal (#12487)", () => {
+      const PANE_TOKEN = "pane-token-5c1e";
+      const PANE_AUTH = `Bearer ${PANE_TOKEN}`;
+
+      function principalLifecycle(
+        deps: HttpLifecycleDeps,
+        principal: string | null = "principal-p"
+      ) {
+        const lc = new HttpLifecycle(deps);
+        lc.setApiKey("test-api-key");
+        lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "action" : false));
+        const resolver = vi.fn((token: string) => (token === PANE_TOKEN ? principal : null));
+        lc.setPaneOwnershipPrincipalResolver(resolver);
+        (lc as unknown as { port: number }).port = 45454;
+        return { lc, resolver };
+      }
+
+      async function openSse(lc: HttpLifecycle, deps: HttpLifecycleDeps, auth: string) {
+        const before = new Set(deps.sessionStore.sessions.keys());
+        const res = new EventEmitter() as EventEmitter & Record<string, unknown>;
+        res.writeHead = vi.fn();
+        res.write = vi.fn(() => true);
+        res.end = vi.fn();
+        res.headersSent = false;
+        await (
+          lc as unknown as {
+            handleRequest: (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
+          }
+        ).handleRequest(
+          {
+            method: "GET",
+            url: "/sse",
+            headers: { host: "127.0.0.1:45454", authorization: auth },
+          } as unknown as http.IncomingMessage,
+          res as unknown as http.ServerResponse
+        );
+        const sessionId = Array.from(deps.sessionStore.sessions.keys()).find(
+          (id) => !before.has(id)
+        );
+        return sessionId!;
+      }
+
+      it("binds a pane's /sse session to the principal its bearer resolves to", async () => {
+        const deps = bindingDeps();
+        const { lc, resolver } = principalLifecycle(deps);
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        const ledger = deps.sessionStore.resourceOwnership;
+        expect(resolver).toHaveBeenCalledWith(PANE_TOKEN);
+        expect(ledger.isPrincipalOwner(ledger.ownerOf(sessionId))).toBe(true);
+      });
+
+      it("gives a session that replaces a torn-down one on the same bearer its records", async () => {
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        const ledger = deps.sessionStore.resourceOwnership;
+        const first = await openSse(lc, deps, PANE_AUTH);
+        ledger.record(ledger.ownerOf(first), [{ kind: "terminal", id: "terminal-1" }]);
+
+        deps.sessionStore.sessions.get(first)!.transport.onclose?.();
+        const second = await openSse(lc, deps, PANE_AUTH);
+
+        expect(second).not.toBe(first);
+        expect(ledger.ownerOf(first)).toBe(first);
+        expect(ledger.owns(ledger.ownerOf(second), "terminal", "terminal-1")).toBe(true);
+      });
+
+      it("binds the /mcp handshake to the principal the same way", async () => {
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        // The SDK rejects the stub request and the sweep reclaims the session,
+        // so observe the production write as it happens.
+        const bind = vi.spyOn(deps.sessionStore.resourceOwnership, "bindPrincipal");
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: PANE_AUTH }),
+          fakeRes(),
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(bind).toHaveBeenCalledExactlyOnceWith(expect.any(String), "principal-p");
+      });
+
+      it("binds an assistant-pane bearer too — it is a pane token, revoked on the same path", async () => {
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        lc.setAssistantPaneWebContentsResolver((token) => (token === PANE_TOKEN ? 77 : null));
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        const ledger = deps.sessionStore.resourceOwnership;
+        expect(deps.sessionStore.getOrigin(sessionId)).toBe("assistant-pane");
+        expect(ledger.isPrincipalOwner(ledger.ownerOf(sessionId))).toBe(true);
+      });
+
+      it("leaves an api-key session owning its records itself", async () => {
+        const deps = bindingDeps();
+        const { lc, resolver } = principalLifecycle(deps);
+
+        const sessionId = await openSse(lc, deps, "Bearer test-api-key");
+
+        expect(resolver).toHaveBeenCalledWith("test-api-key");
+        expect(deps.sessionStore.resourceOwnership.ownerOf(sessionId)).toBe(sessionId);
+      });
+
+      it("writes no session state when the principal resolver throws", async () => {
+        // Resolved ahead of every map write, like the workspace binding, so a
+        // failing lookup leaves nothing for the reaper to miss.
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps);
+        lc.setPaneOwnershipPrincipalResolver(() => {
+          throw new Error("resolver failed");
+        });
+
+        await expect(openSse(lc, deps, PANE_AUTH)).rejects.toThrow("resolver failed");
+
+        expect(deps.sessionStore.sessions.size).toBe(0);
+        expect(deps.sessionStore.sessionTierMap.size).toBe(0);
+        expect(deps.sessionStore.sessionOriginMap.size).toBe(0);
+        expect(deps.sessionStore.sessionCredentialMap.size).toBe(0);
+      });
+
+      it("keeps a bearer that resolves to no principal session-scoped", async () => {
+        // A pane token revoked between the auth gate and the handshake resolves
+        // to nothing, and the session falls back to the api-key behaviour.
+        const deps = bindingDeps();
+        const { lc } = principalLifecycle(deps, null);
+
+        const sessionId = await openSse(lc, deps, PANE_AUTH);
+
+        expect(deps.sessionStore.resourceOwnership.ownerOf(sessionId)).toBe(sessionId);
       });
     });
 

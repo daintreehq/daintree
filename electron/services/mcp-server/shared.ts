@@ -121,6 +121,14 @@ export interface PaneWorkspaceBinding {
  */
 export type PaneWorkspaceBindingResolver = (token: string) => PaneWorkspaceBinding | null;
 /**
+ * Resolver consulted at MCP handshake for the principal a per-pane bearer's
+ * resource ownership is held under (#12487). Server-derived from the bearer,
+ * never from anything the client sends, so one pane cannot name its way into
+ * another's resources. Returns null for every other bearer, whose ownership
+ * stays with the session.
+ */
+export type PaneOwnershipPrincipalResolver = (token: string) => string | null;
+/**
  * What an agent pane's workspace-bound dispatch carries beyond an external
  * session's (#12486). Every field is optional, so an external bound session
  * passes nothing and dispatches exactly as it always has.

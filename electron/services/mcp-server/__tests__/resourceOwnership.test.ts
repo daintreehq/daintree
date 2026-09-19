@@ -107,6 +107,21 @@ describe("ResourceOwnershipLedger", () => {
     expect(ledger.owns("session-a", "terminal", "terminal-1")).toBe(true);
   });
 
+  it("release against an expected record leaves a newer record under the same id alone", () => {
+    const ledger = new ResourceOwnershipLedger();
+    const [checked] = ledger.record("owner", [{ kind: "terminal", id: "terminal-1" }]);
+    // The id is created again before the cleanup that checked the first
+    // record completes.
+    ledger.record("owner", [{ kind: "terminal", id: "terminal-1" }]);
+
+    ledger.release("owner", "terminal", "terminal-1", checked);
+    expect(ledger.owns("owner", "terminal", "terminal-1")).toBe(true);
+
+    const current = ledger.get("owner", "terminal", "terminal-1");
+    ledger.release("owner", "terminal", "terminal-1", current);
+    expect(ledger.owns("owner", "terminal", "terminal-1")).toBe(false);
+  });
+
   it("clearSession revokes one session's authority and frees its ids, leaving others alone", () => {
     const ledger = new ResourceOwnershipLedger();
     ledger.record("session-a", [
@@ -124,16 +139,144 @@ describe("ResourceOwnershipLedger", () => {
     expect(ledger.record("session-c", [{ kind: "terminal", id: "terminal-a" }])).toHaveLength(1);
   });
 
-  it("clear drops every session at once", () => {
+  it("clearAllSessions drops every session at once", () => {
     const ledger = new ResourceOwnershipLedger();
     ledger.record("session-a", [{ kind: "terminal", id: "terminal-a" }]);
     ledger.record("session-b", [{ kind: "worktree", id: "/tmp/wt-b" }]);
 
-    ledger.clear();
+    ledger.clearAllSessions();
 
     expect(ledger.list("session-a")).toEqual([]);
     expect(ledger.list("session-b")).toEqual([]);
     expect(ledger.record("session-c", [{ kind: "terminal", id: "terminal-a" }])).toHaveLength(1);
+  });
+
+  describe("pane bearer principals (#12487)", () => {
+    it("treats an unbound session as its own owner", () => {
+      const ledger = new ResourceOwnershipLedger();
+      expect(ledger.ownerOf("session-a")).toBe("session-a");
+      expect(ledger.isPrincipalOwner(ledger.ownerOf("session-a"))).toBe(false);
+    });
+
+    it("hands a reconnecting session the records its bearer's earlier session created", () => {
+      const ledger = new ResourceOwnershipLedger();
+      ledger.bindPrincipal("session-1", "principal-p");
+      ledger.record(ledger.ownerOf("session-1"), [{ kind: "terminal", id: "terminal-1" }], "ws-a");
+
+      ledger.clearSession("session-1");
+      ledger.bindPrincipal("session-2", "principal-p");
+
+      const owner = ledger.ownerOf("session-2");
+      expect(ledger.isPrincipalOwner(owner)).toBe(true);
+      expect(ledger.get(owner, "terminal", "terminal-1")).toEqual({
+        kind: "terminal",
+        id: "terminal-1",
+        workspaceId: "ws-a",
+      });
+      // Nothing is readable under the raw session id — authority sits with the
+      // principal, and only a session bound to it reaches it.
+      expect(ledger.owns("session-2", "terminal", "terminal-1")).toBe(false);
+    });
+
+    it("shares one set of records between two live sessions on the same bearer", () => {
+      const ledger = new ResourceOwnershipLedger();
+      ledger.bindPrincipal("session-1", "principal-p");
+      ledger.bindPrincipal("session-2", "principal-p");
+
+      ledger.record(ledger.ownerOf("session-1"), [{ kind: "terminal", id: "terminal-1" }]);
+      ledger.record(ledger.ownerOf("session-2"), [{ kind: "terminal", id: "terminal-2" }]);
+      ledger.release(ledger.ownerOf("session-2"), "terminal", "terminal-1");
+
+      expect(ledger.list(ledger.ownerOf("session-1"))).toEqual([
+        { kind: "terminal", id: "terminal-2" },
+      ]);
+      expect(ledger.list(ledger.ownerOf("session-2"))).toEqual(
+        ledger.list(ledger.ownerOf("session-1"))
+      );
+    });
+
+    it("keeps a principal's records when one of its sessions ends", () => {
+      const ledger = new ResourceOwnershipLedger();
+      ledger.bindPrincipal("session-1", "principal-p");
+      ledger.bindPrincipal("session-2", "principal-p");
+      ledger.record(ledger.ownerOf("session-1"), [{ kind: "terminal", id: "terminal-1" }]);
+
+      ledger.clearSession("session-1");
+
+      expect(ledger.ownerOf("session-1")).toBe("session-1");
+      expect(ledger.owns(ledger.ownerOf("session-2"), "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("drops a revoked principal's records and refuses to record under it again", () => {
+      const ledger = new ResourceOwnershipLedger();
+      ledger.bindPrincipal("session-1", "principal-p");
+      const owner = ledger.ownerOf("session-1");
+      ledger.record(owner, [{ kind: "terminal", id: "terminal-1" }]);
+
+      ledger.revokePrincipal("principal-p");
+
+      expect(ledger.list(owner)).toEqual([]);
+      // A creation admitted before the revocation must not bring it back.
+      expect(ledger.record(owner, [{ kind: "terminal", id: "terminal-2" }])).toEqual([]);
+      expect(ledger.list(owner)).toEqual([]);
+      // The session stays bound to the dead principal rather than falling back
+      // to records of its own, so it owns and records nothing until it ends.
+      expect(ledger.ownerOf("session-1")).toBe(owner);
+      // The ids are freed for whoever creates them next.
+      expect(ledger.record("session-2", [{ kind: "terminal", id: "terminal-1" }])).toHaveLength(1);
+    });
+
+    it("never lets a relaunch's new principal inherit the old one's records", () => {
+      const ledger = new ResourceOwnershipLedger();
+      ledger.bindPrincipal("session-1", "principal-old");
+      ledger.record(ledger.ownerOf("session-1"), [{ kind: "terminal", id: "terminal-1" }]);
+
+      ledger.bindPrincipal("session-2", "principal-new");
+
+      expect(ledger.owns(ledger.ownerOf("session-2"), "terminal", "terminal-1")).toBe(false);
+    });
+
+    it("still gives an id to its newest creator across principals and sessions", () => {
+      const ledger = new ResourceOwnershipLedger();
+      ledger.bindPrincipal("pane-session", "principal-p");
+      const principal = ledger.ownerOf("pane-session");
+      ledger.record(principal, [{ kind: "terminal", id: "terminal-1" }]);
+
+      ledger.record("api-session", [{ kind: "terminal", id: "terminal-1" }]);
+      expect(ledger.owns(principal, "terminal", "terminal-1")).toBe(false);
+      expect(ledger.owns("api-session", "terminal", "terminal-1")).toBe(true);
+
+      // And back again, after the pane's session was replaced.
+      ledger.clearSession("pane-session");
+      ledger.bindPrincipal("pane-session-2", "principal-p");
+      ledger.record(ledger.ownerOf("pane-session-2"), [{ kind: "terminal", id: "terminal-1" }]);
+      expect(ledger.owns("api-session", "terminal", "terminal-1")).toBe(false);
+      expect(ledger.owns(principal, "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("keeps principals' records through clearAllSessions but unbinds every session", () => {
+      const ledger = new ResourceOwnershipLedger();
+      ledger.bindPrincipal("pane-session", "principal-p");
+      const principal = ledger.ownerOf("pane-session");
+      ledger.record(principal, [{ kind: "terminal", id: "terminal-pane" }]);
+      ledger.record("api-session", [{ kind: "terminal", id: "terminal-api" }]);
+
+      ledger.clearAllSessions();
+
+      expect(ledger.ownerOf("pane-session")).toBe("pane-session");
+      expect(ledger.list("api-session")).toEqual([]);
+      ledger.bindPrincipal("pane-session-2", "principal-p");
+      expect(ledger.owns(ledger.ownerOf("pane-session-2"), "terminal", "terminal-pane")).toBe(true);
+    });
+
+    it("cannot be reached by a session whose id spells the principal id", () => {
+      const ledger = new ResourceOwnershipLedger();
+      ledger.bindPrincipal("pane-session", "principal-p");
+      ledger.record(ledger.ownerOf("pane-session"), [{ kind: "terminal", id: "terminal-1" }]);
+
+      expect(ledger.owns("principal-p", "terminal", "terminal-1")).toBe(false);
+      expect(ledger.isPrincipalOwner("principal-p")).toBe(false);
+    });
   });
 });
 

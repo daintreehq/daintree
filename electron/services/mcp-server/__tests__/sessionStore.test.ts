@@ -1506,6 +1506,107 @@ describe("SessionStore resource-ownership teardown (#11909)", () => {
   });
 });
 
+// #12487 — a per-pane bearer's records belong to its principal, not to any
+// one session, so every session-ending path above must leave them in place:
+// the same bearer reconnects as a new session and has to find them.
+describe("SessionStore pane-bearer ownership survives session teardown (#12487)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    setAwakeTime(0);
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  function bindAndOwn(sessionId: string, terminalId: string): string {
+    store.resourceOwnership.bindPrincipal(sessionId, "principal-p");
+    const owner = store.resourceOwnership.ownerOf(sessionId);
+    store.resourceOwnership.record(owner, [{ kind: "terminal", id: terminalId }]);
+    return owner;
+  }
+
+  function reconnectedOwner(): string {
+    store.resourceOwnership.bindPrincipal("reconnected", "principal-p");
+    return store.resourceOwnership.ownerOf("reconnected");
+  }
+
+  it("clearSessionBinding unbinds the session and keeps the principal's records", () => {
+    bindAndOwn("s", "terminal-1");
+
+    store.clearSessionBinding("s");
+
+    expect(store.resourceOwnership.ownerOf("s")).toBe("s");
+    expect(store.resourceOwnership.owns(reconnectedOwner(), "terminal", "terminal-1")).toBe(true);
+  });
+
+  it("revokeSession keeps the principal's records", () => {
+    store.httpSessions.set("s", fakeHttpSession());
+    bindAndOwn("s", "terminal-1");
+
+    expect(store.revokeSession("s")).toBe(true);
+
+    expect(store.resourceOwnership.owns(reconnectedOwner(), "terminal", "terminal-1")).toBe(true);
+  });
+
+  it("drain keeps the principal's records and drops session-held ones", () => {
+    store.httpSessions.set("pane", fakeHttpSession());
+    store.httpSessions.set("api", fakeHttpSession());
+    bindAndOwn("pane", "terminal-pane");
+    store.resourceOwnership.record("api", [{ kind: "terminal", id: "terminal-api" }]);
+
+    store.drain();
+
+    expect(store.resourceOwnership.list("api")).toEqual([]);
+    expect(store.resourceOwnership.owns(reconnectedOwner(), "terminal", "terminal-pane")).toBe(
+      true
+    );
+  });
+
+  it("HTTP idle expiry keeps the principal's records", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      const session = fakeHttpSession();
+      store.httpSessions.set("idle", session);
+      bindAndOwn("idle", "terminal-idle");
+      session.idleTimer = store.createHttpIdleTimer("idle");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.httpSessions.has("idle")).toBe(false);
+      expect(store.resourceOwnership.owns(reconnectedOwner(), "terminal", "terminal-idle")).toBe(
+        true
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("SSE idle expiry keeps the principal's records", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      const session = fakeSseSession();
+      store.sessions.set("idle", session);
+      bindAndOwn("idle", "terminal-idle");
+      session.idleTimer = store.createIdleTimer("idle");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.sessions.has("idle")).toBe(false);
+      expect(store.resourceOwnership.owns(reconnectedOwner(), "terminal", "terminal-idle")).toBe(
+        true
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("SessionStore.hasLiveWorkspaceBinding (#11790)", () => {
   let store: SessionStore;
 

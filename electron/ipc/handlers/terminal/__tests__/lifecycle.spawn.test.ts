@@ -175,6 +175,10 @@ const {
   mockSetAssistantPaneWebContentsResolver,
   mockSetAssistantPaneActionContextResolver,
   mockSetPaneWorkspaceBindingResolver,
+  mockSetPaneOwnershipPrincipalResolver,
+  mockRevokeOwnershipPrincipal,
+  mockGetOwnershipPrincipalForToken,
+  mockSetOwnershipPrincipalRevokedListener,
   mockEnsureReady,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "workbench" | "action" | "system" | false>(),
@@ -188,6 +192,12 @@ const {
   mockSetAssistantPaneWebContentsResolver: vi.fn(),
   mockSetAssistantPaneActionContextResolver: vi.fn(),
   mockSetPaneWorkspaceBindingResolver: vi.fn(),
+  mockSetPaneOwnershipPrincipalResolver:
+    vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
+  mockRevokeOwnershipPrincipal: vi.fn<(principal: string) => void>(),
+  mockGetOwnershipPrincipalForToken: vi.fn<(token: string) => string | null>(),
+  mockSetOwnershipPrincipalRevokedListener:
+    vi.fn<(listener: ((principal: string) => void) | null) => void>(),
   mockEnsureReady: vi.fn<() => Promise<boolean>>(),
 }));
 
@@ -256,6 +266,9 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       mockSetAssistantPaneActionContextResolver(...args),
     setPaneWorkspaceBindingResolver: (...args: unknown[]) =>
       mockSetPaneWorkspaceBindingResolver(...args),
+    setPaneOwnershipPrincipalResolver: (resolver: ((token: string) => string | null) | null) =>
+      mockSetPaneOwnershipPrincipalResolver(resolver),
+    revokeOwnershipPrincipal: (principal: string) => mockRevokeOwnershipPrincipal(principal),
   },
 }));
 
@@ -267,6 +280,9 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
       mockRegisterAssistantPaneBearer(token, webContentsId, actionContext),
     registerPaneWorkspaceBinding: (token: string, binding: unknown) =>
       mockRegisterPaneWorkspaceBinding(token, binding),
+    getOwnershipPrincipalForToken: (token: string) => mockGetOwnershipPrincipalForToken(token),
+    setOwnershipPrincipalRevokedListener: (listener: ((principal: string) => void) | null) =>
+      mockSetOwnershipPrincipalRevokedListener(listener),
   },
 }));
 
@@ -2581,6 +2597,9 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
 
     // Degrade to generic pane-token behaviour rather than pinning to nothing.
     expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
+    // Ownership still follows the unpinned bearer (#12487).
+    expect(mockSetPaneOwnershipPrincipalResolver).toHaveBeenCalled();
+    expect(mockSetOwnershipPrincipalRevokedListener).toHaveBeenCalled();
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
     expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");
@@ -2835,6 +2854,30 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     // An ordinary pane is never promoted to the assistant's renderer-owned pin.
     expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
     expect(ptyClient.spawn.mock.calls[0][1].env?.DAINTREE_MCP_TOKEN).toBe("pane-token");
+  });
+
+  it("wires ownership to the pane bearer's principal before the PTY starts (#12487)", async () => {
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    const resolver = mockSetPaneOwnershipPrincipalResolver.mock.calls.at(-1)?.[0];
+    const listener = mockSetOwnershipPrincipalRevokedListener.mock.calls.at(-1)?.[0];
+    expect(resolver).toBeTypeOf("function");
+    expect(listener).toBeTypeOf("function");
+    // Wired before the CLI can handshake, like the workspace binding.
+    expect(mockSetPaneOwnershipPrincipalResolver.mock.invocationCallOrder[0]).toBeLessThan(
+      ptyClient.spawn.mock.invocationCallOrder[0]!
+    );
+    expect(mockSetOwnershipPrincipalRevokedListener.mock.invocationCallOrder[0]).toBeLessThan(
+      ptyClient.spawn.mock.invocationCallOrder[0]!
+    );
+
+    // The handshake resolves the principal from the pane service, and a
+    // revocation there reaches the MCP server's ledger.
+    mockGetOwnershipPrincipalForToken.mockReturnValueOnce("principal-1");
+    expect(resolver!("pane-token")).toBe("principal-1");
+    expect(mockGetOwnershipPrincipalForToken).toHaveBeenCalledWith("pane-token");
+    listener!("principal-1");
+    expect(mockRevokeOwnershipPrincipal).toHaveBeenCalledWith("principal-1");
   });
 
   it("binds to the pane's own project even when another project is globally current", async () => {

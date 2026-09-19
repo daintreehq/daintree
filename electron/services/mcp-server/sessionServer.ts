@@ -110,7 +110,11 @@ import { buildToolCallResult } from "./toolCallResult.js";
 import { safeSerializeToolResultCompact } from "../../utils/safeSerializeToolResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
 import { viewlessStatusArgsAreAnswerable } from "./terminalStatus.js";
-import { extractOwnedResourcesFromDispatch, type OwnedResourceKind } from "./resourceOwnership.js";
+import {
+  extractOwnedResourcesFromDispatch,
+  type OwnedResourceKind,
+  type OwnedResourceRecord,
+} from "./resourceOwnership.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -989,6 +993,37 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Captured once so discovery, the tier gate and `mcp.surface` all describe
     // the same session (#12407).
     const rendererOwnedOrigin = sessionStore.isRendererOwnedOrigin(sessionId);
+    // Whose ownership records this call reads and writes (#12487): the
+    // bearer's principal for a pane session, else the session itself. Captured
+    // at admission so the ownership gate, an `owned` listing and the
+    // post-dispatch bookkeeping all consult one owner — and so a creation that
+    // completes after the transport dropped still lands with the principal the
+    // call was authorized under, where the pane's next session finds it.
+    const ownershipOwner = sessionStore.resourceOwnership.ownerOf(sessionId);
+    const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
+    /**
+     * The record that gives this call authority over a resource, or
+     * `undefined`. One predicate for the `*Owned` gate and an `owned` listing,
+     * so the listing reports exactly the terminals those tools accept (#12487).
+     *
+     * The bound-workspace comparison is defence-in-depth only and fails OPEN
+     * when either side is unknown: panel ids carry a UUID and worktree ids are
+     * absolute paths, so a cross-workspace collision is not a live risk, and a
+     * strict check would strand a caller's own cleanup whenever the creating
+     * dispatch could not resolve its workspace.
+     */
+    const ownedRecordFor = (
+      kind: OwnedResourceKind,
+      resourceId: string
+    ): OwnedResourceRecord | undefined => {
+      const record = sessionStore.resourceOwnership.get(ownershipOwner, kind, resourceId);
+      if (record === undefined) return undefined;
+      const workspaceMismatch =
+        record.workspaceId !== undefined &&
+        boundWorkspaceId !== undefined &&
+        record.workspaceId !== boundWorkspaceId;
+      return workspaceMismatch ? undefined : record;
+    };
 
     const searchLimit = actionId === ACTIONS_SEARCH_TOOL_ID ? readSearchLimit(args) : null;
     const listPaging = actionId === ACTIONS_LIST_TOOL_ID ? readListPaging(args) : null;
@@ -1073,6 +1108,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // accidentally rewrite an action id or drop an ownership record (#11909).
     const ownedResource = OWNED_RESOURCE_TOOLS[actionId];
     let ownedResourceId: string | undefined;
+    // The record the gate accepted. A release drops only this record, so a
+    // cleanup that completes after another session on the same bearer
+    // recorded a new resource under the id cannot take the new one with it.
+    let ownedResourceRecord: OwnedResourceRecord | undefined;
 
     /**
      * Dispatch the real action an `*Owned` tool stands in for, with arguments
@@ -1113,7 +1152,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         };
       }
       const revealWorkspaceId =
-        sessionStore.resourceOwnership.get(sessionId, entry.resourceKind, resourceId)
+        sessionStore.resourceOwnership.get(ownershipOwner, entry.resourceKind, resourceId)
           ?.workspaceId ?? sessionStore.sessionWorkspaceMap.get(sessionId);
       // Omitted rather than guessed when neither is known: `pilot.openRun`
       // falls back to the executing view's own workspace, which is where the
@@ -1161,9 +1200,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           return;
         }
         sessionStore.resourceOwnership.release(
-          sessionId,
+          ownershipOwner,
           ownedResource.resourceKind,
-          ownedResourceId
+          ownedResourceId,
+          ownedResourceRecord
         );
         return;
       }
@@ -1173,12 +1213,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       // admitted before the session was revoked can land after
       // `clearSessionBinding` already dropped the ledger. Writing then would
       // resurrect a dead session's authority — and, worse, claim the id away
-      // from whoever legitimately records it next.
-      if (!sessionStore.sessions.has(sessionId) && !sessionStore.httpSessions.has(sessionId)) {
+      // from whoever legitimately records it next. A pane bearer's principal
+      // outlives its sessions, so its creation still lands after a disconnect;
+      // `record` itself refuses one whose bearer was revoked (#12487).
+      if (
+        !sessionStore.resourceOwnership.isPrincipalOwner(ownershipOwner) &&
+        !sessionStore.sessions.has(sessionId) &&
+        !sessionStore.httpSessions.has(sessionId)
+      ) {
         return;
       }
       sessionStore.resourceOwnership.record(
-        sessionId,
+        ownershipOwner,
         drafts,
         envelope.dispatchedWorkspace?.workspaceId
       );
@@ -1731,26 +1777,11 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             };
             return buildToolError({ code: "VALIDATION_ERROR", message });
           }
-          const record = sessionStore.resourceOwnership.get(
-            sessionId,
-            ownedResource.resourceKind,
-            resourceId
-          );
+          const record = ownedRecordFor(ownedResource.resourceKind, resourceId);
           // One message for "never existed", "another session's", and "the
           // user's" — see RESOURCE_NOT_OWNED_CODE for why the three must not be
-          // distinguishable. The bound-workspace comparison below is
-          // defence-in-depth only and fails OPEN when either side is unknown:
-          // panel ids carry a UUID and worktree ids are absolute paths, so a
-          // cross-workspace collision is not a live risk, and a strict check
-          // would strand a caller's own cleanup whenever the creating dispatch
-          // could not resolve its workspace.
-          const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
-          const workspaceMismatch =
-            record !== undefined &&
-            record.workspaceId !== undefined &&
-            boundWorkspaceId !== undefined &&
-            record.workspaceId !== boundWorkspaceId;
-          if (record === undefined || workspaceMismatch) {
+          // distinguishable.
+          if (record === undefined) {
             const message =
               `No ${ownedResource.resourceKind} with id '${resourceId}' was created by this session, so ` +
               `'${actionId}' will not act on it. This tool only acts on resources this ` +
@@ -1762,6 +1793,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             return buildToolError({ code: RESOURCE_NOT_OWNED_CODE, message });
           }
           ownedResourceId = resourceId;
+          ownedResourceRecord = record;
         }
 
         // A main-executed owned tool (#12479) runs straight after the gate
@@ -2320,8 +2352,9 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                   introspectionSurface
                 )
               : ownedOnly
-                ? filterTerminalListToOwned(envelope.result, (terminalId) =>
-                    sessionStore.resourceOwnership.owns(sessionId, "terminal", terminalId)
+                ? filterTerminalListToOwned(
+                    envelope.result,
+                    (terminalId) => ownedRecordFor("terminal", terminalId) !== undefined
                   )
                 : envelope.result,
           };

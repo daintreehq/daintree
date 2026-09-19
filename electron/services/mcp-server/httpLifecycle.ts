@@ -21,6 +21,7 @@ import type {
   AssistantPaneActionContextResolver,
   PaneWorkspaceBinding,
   PaneWorkspaceBindingResolver,
+  PaneOwnershipPrincipalResolver,
   WorkspaceDispatchOptions,
   McpTier,
   McpSessionOrigin,
@@ -306,6 +307,7 @@ export class HttpLifecycle {
   private assistantPaneWebContentsResolver: AssistantPaneWebContentsResolver | null = null;
   private assistantPaneActionContextResolver: AssistantPaneActionContextResolver | null = null;
   private paneWorkspaceBindingResolver: PaneWorkspaceBindingResolver | null = null;
+  private paneOwnershipPrincipalResolver: PaneOwnershipPrincipalResolver | null = null;
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -404,6 +406,10 @@ export class HttpLifecycle {
     this.paneWorkspaceBindingResolver = resolver;
   }
 
+  setPaneOwnershipPrincipalResolver(resolver: PaneOwnershipPrincipalResolver | null): void {
+    this.paneOwnershipPrincipalResolver = resolver;
+  }
+
   /**
    * Parses a Bearer header and asks the help-session resolver — then the
    * assistant-pane resolver (#10647) — which renderer minted it, keeping *which*
@@ -448,6 +454,23 @@ export class HttpLifecycle {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     return this.paneWorkspaceBindingResolver?.(token) ?? null;
+  }
+
+  /**
+   * The principal a pane bearer's resource ownership is held under (#12487),
+   * or null for every other bearer.
+   *
+   * Resolved before any session state is written, like the pane's workspace
+   * binding, and bound with no await in between, so no revocation can land
+   * between the two — a revoked token resolves to nothing, and the session
+   * keeps session-scoped ownership. Looked up whatever the session's origin:
+   * the assistant pane's bearer is a pane token too, minted and revoked on the
+   * same path.
+   */
+  private resolveOwnershipPrincipal(authHeader: string): string | null {
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    return this.paneOwnershipPrincipalResolver?.(token) ?? null;
   }
 
   /**
@@ -1290,6 +1313,7 @@ export class HttpLifecycle {
       const paneBinding = pin === null ? this.resolvePaneWorkspaceBinding(authHeader) : null;
       const workspaceBinding =
         paneBinding !== null ? this.describePaneWorkspaceBinding(paneBinding.workspaceId) : null;
+      const ownershipPrincipal = this.resolveOwnershipPrincipal(authHeader);
       this.deps.sessionStore.sessionTierMap.set(sessionId, tier);
       this.deps.sessionStore.registerClientMetadata(
         sessionId,
@@ -1300,6 +1324,9 @@ export class HttpLifecycle {
       this.touchBearer(authHeader, resolveUserAgent(req), sessionId, tier);
 
       this.deps.sessionStore.sessionOriginMap.set(sessionId, pin?.origin ?? "external");
+      if (ownershipPrincipal !== null) {
+        this.deps.sessionStore.resourceOwnership.bindPrincipal(sessionId, ownershipPrincipal);
+      }
       const pinnedWebContentsId = pin?.webContentsId ?? null;
       if (pinnedWebContentsId !== null) {
         this.deps.sessionStore.sessionWebContentsMap.set(sessionId, pinnedWebContentsId);
@@ -1527,10 +1554,14 @@ export class HttpLifecycle {
     const workspaceBinding =
       selector?.binding ??
       (paneBinding !== null ? this.describePaneWorkspaceBinding(paneBinding.workspaceId) : null);
+    const ownershipPrincipal = this.resolveOwnershipPrincipal(authHeader);
 
     const newSessionId = randomUUID();
     this.deps.sessionStore.sessionTierMap.set(newSessionId, tier);
     this.deps.sessionStore.sessionOriginMap.set(newSessionId, origin);
+    if (ownershipPrincipal !== null) {
+      this.deps.sessionStore.resourceOwnership.bindPrincipal(newSessionId, ownershipPrincipal);
+    }
     this.deps.sessionStore.registerClientMetadata(
       newSessionId,
       this.headerString(req.headers["user-agent"]),
