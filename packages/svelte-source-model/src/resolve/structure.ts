@@ -69,7 +69,37 @@ export type StructureFailureReason =
   | "uncountable-level";
 
 export type StructureResult =
-  | { status: "resolved"; location: DevLocation; kind: string; tagName: string }
+  | {
+      status: "resolved";
+      location: DevLocation;
+      kind: string;
+      tagName: string;
+      /**
+       * How many countable elements sat at each level the walk passed through,
+       * outermost first — the shape of the template around the element, as
+       * opposed to where it happens to be written.
+       *
+       * It is rejection evidence, for a caller deciding whether an element it
+       * resolved earlier is still the same one. A path alone cannot tell: insert
+       * a sibling before the second button and the stored path `button[1]`
+       * resolves cleanly to the NEW button, and the stored line and column fail
+       * in the same direction, so the two corroborate each other on the wrong
+       * element. A count that moved contradicts them both.
+       *
+       * What it does NOT establish, and a caller must not read into it:
+       * - Identity. Removing one sibling and adding another at the same level
+       *   leaves every count where it was.
+       * - That the fragment is the same fragment. These are counted inside
+       *   whichever fragment the frame resolved to; prepend another `{#if}`
+       *   holding a similar element and the frame coordinates can name the new
+       *   block, whose counts then match while describing different markup.
+       * - Anything about what rendered. This counts template elements, so an
+       *   `{#each}` over a longer list does not move it.
+       *
+       * So: equal counts are necessary, not sufficient.
+       */
+      levelCounts: readonly number[];
+    }
   | { status: "failed"; reason: StructureFailureReason; detail?: string };
 
 /** Local rather than shared: this package deliberately depends on nothing of Daintree's. */
@@ -238,7 +268,9 @@ function candidateFragments(
 }
 
 type Followed =
-  { status: "found"; node: SvelteAstNode } | { status: "missed" } | { status: "uncountable" };
+  | { status: "found"; node: SvelteAstNode; levelCounts: number[] }
+  | { status: "missed" }
+  | { status: "uncountable" };
 
 /**
  * Walks one candidate fragment down the path. Every iteration of an `{#each}`
@@ -254,9 +286,11 @@ function follow(
 ): Followed {
   let level = ownElements(fragment);
   let found: SvelteAstNode | null = null;
+  const levelCounts: number[] = [];
   for (const [depth, step] of path.entries()) {
     if (level === null) return { status: "uncountable" };
     if (level.length === 0) return { status: "missed" };
+    levelCounts.push(level.length);
     let index = step.index;
     if (depth === 0 && frame?.type === "each") {
       if (level.length === 1) index = 0;
@@ -267,7 +301,7 @@ function follow(
     found = node;
     level = ownElements(node.fragment);
   }
-  return found === null ? { status: "missed" } : { status: "found", node: found };
+  return found === null ? { status: "missed" } : { status: "found", node: found, levelCounts };
 }
 
 function lineColumnOf(source: string, offset: number): { line: number; column: number } {
@@ -339,12 +373,14 @@ export function resolveElementByStructure(
       detail: `${found.length} fragments hold an element at that path`,
     };
   }
-  const node = found[0]!.node;
+  const outcome = found[0]!;
+  const node = outcome.node;
   const { line, column } = lineColumnOf(source, node.start);
   return {
     status: "resolved",
     location: { file, line, column },
     kind: node.type,
     tagName: typeof node.name === "string" ? node.name : "element",
+    levelCounts: outcome.levelCounts,
   };
 }
