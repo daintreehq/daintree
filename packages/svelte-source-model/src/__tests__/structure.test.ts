@@ -71,6 +71,10 @@ describe("resolveElementByStructure", () => {
       location: locationOf(PAGE, '<div class="toolbar"'),
       kind: "RegularElement",
       tagName: "div",
+      // Two roots the template owns (`div.journal`, `div.journal-end` — the
+      // Header's rendered root is not one of them), then `div.toolbar` alone
+      // inside the first.
+      levelCounts: [2, 1],
     });
     // What it names is what the ordinary resolve then proves.
     const proved = resolveElementAtLocation(PAGE, locationOf(PAGE, '<div class="toolbar"'), parse);
@@ -388,5 +392,64 @@ describe("resolveElementByStructure", () => {
       parse
     );
     expect(result).toMatchObject({ status: "failed", reason: "no-fragment" });
+  });
+});
+
+describe("resolveElementByStructure level counts", () => {
+  const SIBLINGS = [
+    "<div>",
+    "  <button>one</button>",
+    "  <button>two</button>",
+    "  <span>after</span>",
+    "</div>",
+    "",
+  ].join("\n");
+
+  const secondButton = {
+    frame: null,
+    path: [
+      { tag: "div", index: 0 },
+      { tag: "button", index: 1 },
+    ],
+    hint: null,
+  } as const;
+
+  it("reports how many countable siblings sat at each level", () => {
+    const result = resolveElementByStructure(SIBLINGS, FILE, secondButton, parse);
+    expect(result).toMatchObject({
+      status: "resolved",
+      location: locationOf(SIBLINGS, "<button>two"),
+      // One root `div`, then three elements beside each other inside it.
+      levelCounts: [1, 3],
+    });
+  });
+
+  it("moves a count when a sibling is inserted, which is the whole point", () => {
+    // The path still resolves — to the element that took the old one's place.
+    // Nothing about the path or the location says so; only the count does.
+    const inserted = SIBLINGS.replace(
+      "  <button>one</button>",
+      "  <button>zero</button>\n  <button>one</button>"
+    );
+    const result = resolveElementByStructure(inserted, FILE, secondButton, parse);
+    expect(result).toMatchObject({
+      status: "resolved",
+      location: locationOf(inserted, "<button>one"),
+      levelCounts: [1, 4],
+    });
+  });
+
+  it("holds the count steady when the element is edited in place", () => {
+    // The case the gate exists to allow: same shape, different attributes.
+    const restyled = SIBLINGS.replace(
+      "<button>two</button>",
+      '<button class="btn-primary">two</button>'
+    );
+    const result = resolveElementByStructure(restyled, FILE, secondButton, parse);
+    expect(result).toMatchObject({
+      status: "resolved",
+      location: locationOf(restyled, '<button class="btn-primary">two'),
+      levelCounts: [1, 3],
+    });
   });
 });

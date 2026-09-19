@@ -159,26 +159,54 @@ async function resolveNode(
   // names. A stamp the file agrees with is kept as it is: the page can move an
   // element after stamping it, and its new place says nothing about its
   // source; a same-tag neighbour's stamp cannot be told from it here.
-  if (outcome.status === "stale" && outcome.mismatch !== undefined && observation.structure) {
-    const frame = observation.ancestry[0] ?? null;
-    const placed = model.resolveElementByStructure(
-      read.text,
-      loc.file,
-      { frame, path: observation.structure.path, hint: stamped ? loc : null },
-      parse
-    );
-    if (placed.status === "resolved") {
-      const retried = attempt(placed.location);
-      if (retried.status === "ok") {
-        outcome = retried;
-        location = placed.location;
-        placedByStructure = true;
-      }
+  // Walked once, whatever the stamp said, and read for two different things.
+  const placed = observation.structure
+    ? model.resolveElementByStructure(
+        read.text,
+        loc.file,
+        {
+          frame: observation.ancestry[0] ?? null,
+          path: observation.structure.path,
+          hint: stamped ? loc : null,
+        },
+        parse
+      )
+    : null;
+  if (
+    outcome.status === "stale" &&
+    outcome.mismatch !== undefined &&
+    placed?.status === "resolved"
+  ) {
+    const retried = attempt(placed.location);
+    if (retried.status === "ok") {
+      outcome = retried;
+      location = placed.location;
+      placedByStructure = true;
     }
   }
   if (outcome.status === "inspect-only") return inspectOnly();
   if (outcome.status === "stale") return outcome;
   const element = outcome.element;
+
+  /**
+   * What the walk can say about this placement, for a caller deciding whether
+   * a selection may be re-acquired after the page changed under it.
+   * `resolveElementByStructure` documents what the counts rule out and — more
+   * to the point — what they do not.
+   *
+   * `agrees` is reported because the resolve above deliberately keeps a
+   * same-tag stamp the shape would have placed elsewhere: right for a fresh
+   * pick the user made and watched land, not good enough to re-adopt a
+   * selection on nobody's behalf.
+   */
+  const shape =
+    placed?.status === "resolved"
+      ? {
+          levelCounts: [...placed.levelCounts],
+          agrees:
+            placed.location.line === location.line && placed.location.column === location.column,
+        }
+      : null;
 
   return {
     status: "ok",
@@ -196,6 +224,7 @@ async function resolveNode(
         ...(observation.sameLocCountPartial || placedByStructure
           ? { renderedOccurrencesAtLeast: true as const }
           : {}),
+        ...(shape === null ? {} : { shape }),
       },
       mapping: invocation === null ? "definition-only" : "exact",
     },

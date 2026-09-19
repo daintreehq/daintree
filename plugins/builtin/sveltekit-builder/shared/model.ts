@@ -112,6 +112,32 @@ export const DefinitionSchema = z
     renderedOccurrences: z.number().int().positive(),
     /** The count is a floor: the page was too large to count every copy. */
     renderedOccurrencesAtLeast: z.literal(true).optional(),
+    /**
+     * Evidence about how this element was placed, for deciding whether a
+     * selection may be re-acquired after the page changed under it. Absent when
+     * the page reported no structure, or the source could not walk it.
+     *
+     * `levelCounts` is how many countable siblings sat at each level of the
+     * path, outermost first — see `resolveElementByStructure`, which explains
+     * what it can and cannot rule out. `agrees` says whether walking the shape
+     * landed on the same place `location` names. A fresh pick keeps a same-tag
+     * stamp the shape would have placed elsewhere, because the user watched it
+     * land; nothing should be re-adopted on the user's behalf while those two
+     * disagree.
+     *
+     * Deliberately unbounded above: a count is host-derived from a contained
+     * read, the array is capped at the path's depth, and a real document can
+     * hold more siblings than any ceiling worth guessing at. A ceiling here
+     * turned a 700 KB page — well inside the source cap — into a failed
+     * selection, which is evidence costing more than it is worth.
+     */
+    shape: z
+      .object({
+        levelCounts: z.array(z.number().int().nonnegative()).min(1).max(64),
+        agrees: z.boolean(),
+      })
+      .strict()
+      .optional(),
   })
   .strict();
 export type Definition = z.infer<typeof DefinitionSchema>;
