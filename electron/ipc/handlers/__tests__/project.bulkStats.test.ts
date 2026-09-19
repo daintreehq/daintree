@@ -100,6 +100,7 @@ vi.mock("../../../services/CompletionAcknowledgementService.js", () => ({
     }
     start() {}
     stop() {}
+    setObserving() {}
   },
 }));
 

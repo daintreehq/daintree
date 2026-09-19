@@ -27,6 +27,7 @@ import { usePluginKeybindings } from "./hooks/usePluginKeybindings";
 import { usePluginMcpConsentBridge } from "./hooks/usePluginMcpConsentBridge";
 import { usePluginCapabilityConsentBridge } from "./hooks/usePluginCapabilityConsentBridge";
 import { useProjectPluginBridge } from "./hooks/useProjectPluginBridge";
+import { usePowerSavingMotion } from "./hooks/usePowerSavingMotion";
 import { useMainProcessToastListener } from "./hooks/useMainProcessToastListener";
 
 import { useKeepMounted } from "./hooks/useKeepMounted";
@@ -115,6 +116,7 @@ function AppInner() {
   useErrors();
   useUnloadCleanup();
   useResourceProfile();
+  usePowerSavingMotion();
 
   useE2EBridges();
 

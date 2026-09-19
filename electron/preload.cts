@@ -888,6 +888,10 @@ const _eventBusReplayable: ReadonlySet<keyof IpcEventBusMap> = new Set([
   // Pushed once per episode edge (#12462), so a view whose listener has not
   // mounted yet must still see the latest edge rather than lose the notice.
   "system:memory-pressure",
+  // Latest-wins policy level, delivered at did-finish-load before the motion
+  // hook has mounted; losing it would animate at the foreground rate until
+  // the next transition.
+  "system:power-policy-changed",
   "plugin:archive-install-intent",
   // Project-local plugin trust: both are pushed during `onProjectOpened`, which
   // on a cold project view runs before the React tree that subscribes has

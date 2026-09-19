@@ -713,7 +713,11 @@ describe("DiagnosticsCollector adversarial", () => {
 
     expect(payload.whySlow).toBeDefined();
     // Focus throttle reads a synchronous leaf module — always populated.
-    expect(payload.whySlow.focusThrottle).toEqual({ throttled: false, pollMultiplier: 1 });
+    expect(payload.whySlow.focusThrottle).toEqual({
+      throttled: false,
+      pollMultiplier: 1,
+      powerLevel: "active",
+    });
     expect(Array.isArray(payload.whySlow.rendererTerminals)).toBe(true);
     expect(payload.whySlow.resource).toBeNull();
     expect(payload.whySlow.pty).toBeNull();
@@ -738,7 +742,11 @@ describe("DiagnosticsCollector adversarial", () => {
     };
 
     expect(snap.pty).toBeNull();
-    expect(snap.focusThrottle).toEqual({ throttled: false, pollMultiplier: 1 });
+    expect(snap.focusThrottle).toEqual({
+      throttled: false,
+      pollMultiplier: 1,
+      powerLevel: "active",
+    });
   });
 
   it("WHY_SLOW_MEMORY_ATTRIBUTION_LEAKS_NO_COMMAND_LINES_OR_PATHS", async () => {

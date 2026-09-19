@@ -55,11 +55,42 @@ export class CompletionAcknowledgementService {
   private timer: ReturnType<typeof setInterval> | null = null;
   private dwellProjectId: string | null = null;
   private dwellSince = 0;
+  private started = false;
+  private observing = true;
 
   constructor(private readonly deps: CompletionAcknowledgementDeps) {}
 
   start(): void {
-    if (this.timer !== null) return;
+    if (this.started) return;
+    this.started = true;
+    this.startTimer();
+  }
+
+  stop(): void {
+    this.started = false;
+    this.stopTimer();
+  }
+
+  /**
+   * Pause sampling while nobody can be looking at a window — blurred, hidden,
+   * or behind a locked screen. Unobserved samples compute null anyway, and a
+   * locked screen leaves its window focused, so without this a dwell could run
+   * on while the user is away. Resuming starts a fresh dwell: locked time
+   * never counts as having seen anything.
+   */
+  setObserving(observing: boolean): void {
+    if (this.observing === observing) return;
+    this.observing = observing;
+    if (!this.started) return;
+    if (observing) {
+      this.startTimer();
+    } else {
+      this.stopTimer();
+    }
+  }
+
+  private startTimer(): void {
+    if (this.timer !== null || !this.observing) return;
     // try/catch is load-bearing: this runs on a bare timer, so an uncaught
     // throw reaches `uncaughtException` and takes the app down. The sample
     // races project removal — `markSeen` throws "Project not found" when the
@@ -76,7 +107,7 @@ export class CompletionAcknowledgementService {
     }, COMPLETION_ACK_SAMPLE_INTERVAL_MS);
   }
 
-  stop(): void {
+  private stopTimer(): void {
     if (this.timer !== null) {
       clearInterval(this.timer);
       this.timer = null;

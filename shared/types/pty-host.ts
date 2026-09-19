@@ -10,6 +10,7 @@
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
+import type { PowerPolicyLevel } from "./powerPolicy.js";
 import type { BuiltInAgentId } from "../config/agentIds.js";
 import type { AgentConfig } from "../config/agentRegistry.js";
 import type { AgentSessionRecord } from "./ipc/agentSessionHistory.js";
@@ -377,6 +378,14 @@ export type PtyHostRequest =
   | { type: "set-session-persist-suppressed"; suppressed: boolean }
   | { type: "set-resource-profile"; profile: ResourceProfile }
   | { type: "set-process-tree-poll-interval"; ms: number }
+  /**
+   * Main's power-policy level (#12515). Independent of the resource profile:
+   * the profile answers memory pressure, this answers "is anyone watching,
+   * and is the machine on battery". Stretches the host's optional cadences —
+   * ActivityMonitor quiet polling and watchdog, governor FD sweeps, analysis
+   * worker memory samples — never the output-triggered paths.
+   */
+  | { type: "set-power-policy"; level: PowerPolicyLevel }
   /**
    * Mirror the main-process plugin-agent registry into the pty-host (#10587).
    * The pty-host runs the activity monitor and resolves `getEffectiveAgentConfig`

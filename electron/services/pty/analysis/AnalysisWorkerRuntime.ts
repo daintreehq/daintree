@@ -1,4 +1,5 @@
 import { setPluginAgentRegistry } from "../../../../shared/config/pluginAgentRegistry.js";
+import { getPtyPowerLevel, setPtyPowerLevel } from "../ptyPowerPolicy.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AnalysisSession } from "./AnalysisSession.js";
 import type { IdleHeapCompactor } from "./idleHeapCompactor.js";
@@ -15,6 +16,14 @@ import type {
  * entry per session — noise next to the data-path traffic.
  */
 export const MEMORY_SAMPLE_INTERVAL_MS = 2000;
+
+/**
+ * Cadence for a worker with no heap-affecting traffic while the power policy
+ * is saving. Half the governor's 10s freshness bound, so a quiet worker's
+ * memory never reads as unknown; any heap activity returns it to the base
+ * cadence for the next sample.
+ */
+export const QUIET_MEMORY_SAMPLE_INTERVAL_MS = 5000;
 
 /**
  * Message types that count as heap activity for idle compaction — the ops
@@ -55,6 +64,9 @@ export class AnalysisWorkerRuntime {
   // total per-terminal message order.
   private readonly barriers = new Map<string, Promise<void>>();
   private memorySampleTimer: NodeJS.Timeout | null = null;
+  // Base sampling cadence; null while sampling is stopped.
+  private memorySampleIntervalMs: number | null = null;
+  private heapActivitySinceSample = false;
 
   constructor(
     private readonly emit: (msg: WorkerToHostMessage) => void,
@@ -110,28 +122,47 @@ export class AnalysisWorkerRuntime {
    * the sample, which the host treats as staleness (stale contributes 0).
    */
   startMemorySampling(intervalMs: number = MEMORY_SAMPLE_INTERVAL_MS): void {
-    if (this.memorySampleTimer) return;
-    this.memorySampleTimer = setInterval(() => {
+    if (this.memorySampleIntervalMs !== null) return;
+    this.memorySampleIntervalMs = intervalMs;
+    this.scheduleMemorySample(intervalMs);
+  }
+
+  stopMemorySampling(): void {
+    this.memorySampleIntervalMs = null;
+    if (this.memorySampleTimer) {
+      clearTimeout(this.memorySampleTimer);
+      this.memorySampleTimer = null;
+    }
+  }
+
+  /**
+   * One-shot chain rather than a fixed interval so each sample picks the next
+   * cadence: the base rate while the policy is active or the mirrors saw heap
+   * traffic since the last sample, the quiet rate otherwise. Metadata ticks
+   * never count as activity (see HEAP_ACTIVITY_MESSAGE_TYPES).
+   */
+  private scheduleMemorySample(delayMs: number): void {
+    this.memorySampleTimer = setTimeout(() => {
+      this.memorySampleTimer = null;
       try {
         this.emit({ type: "memory-sample", ...this.collectMemorySample() });
       } catch (error) {
         console.error("[AnalysisWorker] memory sample failed:", error);
       }
       this.idleHeapCompactor?.maybeCompact();
-    }, intervalMs);
+      const base = this.memorySampleIntervalMs;
+      if (base === null) return;
+      const busy = this.heapActivitySinceSample || getPtyPowerLevel() === "active";
+      this.heapActivitySinceSample = false;
+      this.scheduleMemorySample(busy ? base : Math.max(base, QUIET_MEMORY_SAMPLE_INTERVAL_MS));
+    }, delayMs);
     this.memorySampleTimer.unref?.();
   }
 
-  stopMemorySampling(): void {
-    if (this.memorySampleTimer) {
-      clearInterval(this.memorySampleTimer);
-      this.memorySampleTimer = null;
-    }
-  }
-
   handleMessage(msg: HostToWorkerMessage): void {
-    if (this.idleHeapCompactor && HEAP_ACTIVITY_MESSAGE_TYPES.has(msg.type)) {
-      this.idleHeapCompactor.noteActivity();
+    if (HEAP_ACTIVITY_MESSAGE_TYPES.has(msg.type)) {
+      this.heapActivitySinceSample = true;
+      this.idleHeapCompactor?.noteActivity();
     }
     const terminalId = "terminalId" in msg ? msg.terminalId : undefined;
     if (terminalId === undefined) {
@@ -241,6 +272,9 @@ export class AnalysisWorkerRuntime {
       }
       case "plugin-agent-registry":
         setPluginAgentRegistry(msg.registry);
+        return;
+      case "power-policy":
+        setPtyPowerLevel(msg.level);
         return;
       case "request": {
         const session = this.sessions.get(msg.terminalId);

@@ -2,7 +2,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { AnalysisWorkerRuntime } from "../analysis/AnalysisWorkerRuntime.js";
+import {
+  AnalysisWorkerRuntime,
+  QUIET_MEMORY_SAMPLE_INTERVAL_MS,
+} from "../analysis/AnalysisWorkerRuntime.js";
+import { getPtyPowerLevel, resetPtyPowerLevelForTesting } from "../ptyPowerPolicy.js";
 import { ANALYSIS_ACK_FLUSH_BYTES } from "../analysis/AnalysisSession.js";
 import type { AnalysisFinalSnapshot, WorkerToHostMessage } from "../analysisWorkerProtocol.js";
 
@@ -423,6 +427,66 @@ describe("AnalysisWorkerRuntime", () => {
       vi.advanceTimersByTime(6000);
       expect(timed.filter((m) => m.type === "memory-sample")).toHaveLength(3);
       vi.useRealTimers();
+    });
+
+    it("stretches a quiet worker's cadence while saving and snaps back on heap activity (#12515)", () => {
+      vi.useFakeTimers();
+      try {
+        const timed: WorkerToHostMessage[] = [];
+        const timedRuntime = new AnalysisWorkerRuntime(
+          (msg) => timed.push(msg),
+          () => ({ heapUsed: 7, external: 3 })
+        );
+        const samples = () => timed.filter((m) => m.type === "memory-sample").length;
+        timedRuntime.handleMessage({ type: "power-policy", level: "saving" });
+        expect(getPtyPowerLevel()).toBe("saving");
+
+        timedRuntime.startMemorySampling(2000);
+        vi.advanceTimersByTime(2000);
+        expect(samples()).toBe(1);
+
+        // Quiet since the last sample → the next one waits the quiet cadence.
+        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS - 1);
+        expect(samples()).toBe(1);
+        vi.advanceTimersByTime(1);
+        expect(samples()).toBe(2);
+
+        // Metadata ticks never count as heap activity.
+        timedRuntime.handleMessage({ type: "focus", terminalId: "t-none" });
+        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
+        expect(samples()).toBe(3);
+
+        // Heap-affecting traffic returns the next interval to the base cadence.
+        timedRuntime.handleMessage({ type: "free", terminalId: "t-none" });
+        vi.advanceTimersByTime(QUIET_MEMORY_SAMPLE_INTERVAL_MS);
+        expect(samples()).toBe(4);
+        vi.advanceTimersByTime(2000);
+        expect(samples()).toBe(5);
+
+        timedRuntime.stopMemorySampling();
+      } finally {
+        resetPtyPowerLevelForTesting();
+        vi.useRealTimers();
+      }
+    });
+
+    it("samples at the base cadence while the policy is active", () => {
+      vi.useFakeTimers();
+      try {
+        const timed: WorkerToHostMessage[] = [];
+        const timedRuntime = new AnalysisWorkerRuntime(
+          (msg) => timed.push(msg),
+          () => ({ heapUsed: 7, external: 3 })
+        );
+        timedRuntime.startMemorySampling(2000);
+
+        vi.advanceTimersByTime(10_000);
+
+        expect(timed.filter((m) => m.type === "memory-sample")).toHaveLength(5);
+        timedRuntime.stopMemorySampling();
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 });

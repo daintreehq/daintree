@@ -49,6 +49,11 @@ import {
 import { typedHandle, typedHandleWithContext } from "../utils.js";
 
 let eventLoopHistogram: IntervalHistogram | null = null;
+let eventLoopHistogramIdleTimer: NodeJS.Timeout | null = null;
+// The resource popover polls DIAGNOSTICS_GET_INFO while it is open. Once reads
+// stop for this long the fine-grained histogram is released, so its 20ms
+// sampling timer only runs while someone is looking at the reading (#12515).
+const EVENT_LOOP_HISTOGRAM_IDLE_MS = 60_000;
 
 // Approximate epoch the app process started. Captured at module evaluation
 // (the diagnostics handler is eagerly imported during startup) rather than
@@ -188,12 +193,28 @@ function beginCpuProfileCapture(session: RendererCpuProfileSession): Promise<unk
   return session.capture;
 }
 
-function ensureEventLoopHistogram(): IntervalHistogram {
+function acquireEventLoopHistogram(): IntervalHistogram {
   if (!eventLoopHistogram) {
     eventLoopHistogram = monitorEventLoopDelay({ resolution: 20 });
     eventLoopHistogram.enable();
   }
+  if (eventLoopHistogramIdleTimer) clearTimeout(eventLoopHistogramIdleTimer);
+  eventLoopHistogramIdleTimer = setTimeout(releaseEventLoopHistogram, EVENT_LOOP_HISTOGRAM_IDLE_MS);
+  eventLoopHistogramIdleTimer.unref?.();
   return eventLoopHistogram;
+}
+
+function releaseEventLoopHistogram(): void {
+  if (eventLoopHistogramIdleTimer) {
+    clearTimeout(eventLoopHistogramIdleTimer);
+    eventLoopHistogramIdleTimer = null;
+  }
+  try {
+    eventLoopHistogram?.disable();
+  } catch {
+    // Nothing left to release.
+  }
+  eventLoopHistogram = null;
 }
 
 /**
@@ -220,9 +241,7 @@ function readSystemMemoryMB(): { systemTotalMB?: number; systemAvailableMB?: num
 }
 
 export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => void {
-  const handlers: Array<() => void> = [];
-
-  const histogram = ensureEventLoopHistogram();
+  const handlers: Array<() => void> = [releaseEventLoopHistogram];
 
   const handleGetAppMetrics = (): AppMetricsSummary => {
     try {
@@ -327,6 +346,9 @@ export function registerDiagnosticsHandlers(deps: HandlerDependencies): () => vo
 
   const handleGetDiagnosticsInfo = (): DiagnosticsInfo => {
     try {
+      // Sampling starts on the first read, so that read reports ~0; the
+      // popover's next poll carries real samples.
+      const histogram = acquireEventLoopHistogram();
       return {
         uptimeSeconds: Math.floor(process.uptime()),
         eventLoopP99Ms: Math.round(histogram.percentile(99) / 1_000_000),

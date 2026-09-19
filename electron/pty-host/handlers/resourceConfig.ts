@@ -6,6 +6,8 @@ import { setLogLevelOverrides } from "../../utils/logger.js";
 import { setPortBatchThroughputDelayMs } from "../portBatcher.js";
 import { setPluginAgentRegistry } from "../../../shared/config/pluginAgentRegistry.js";
 import { setPluginProcessToolRegistry } from "../../../shared/config/pluginProcessToolRegistry.js";
+import { isPowerPolicyLevel } from "../../../shared/types/powerPolicy.js";
+import { setPtyPowerLevel } from "../../services/pty/ptyPowerPolicy.js";
 import type { HandlerMap, HostContext } from "./types.js";
 
 export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
@@ -48,6 +50,15 @@ export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
           console.warn("[PtyHost] Idle analysis-session trim failed:", err);
         }
       }
+    },
+
+    "set-power-policy": (msg) => {
+      if (!isPowerPolicyLevel(msg.level)) return;
+      // Host-thread monitors (in-thread analysis) and the governor read the
+      // mirror; worker-hosted monitors get their own copy through the pool.
+      setPtyPowerLevel(msg.level);
+      ctx.resourceGovernor.setPowerLevel(msg.level);
+      ctx.analysisWorkerPool?.setPowerLevel(msg.level);
     },
 
     "set-process-tree-poll-interval": (msg) => {

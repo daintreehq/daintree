@@ -1,59 +1,56 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-
-vi.mock("electron", () => ({
-  app: {
-    on: vi.fn(),
-  },
-  BrowserWindow: {
-    getFocusedWindow: vi.fn(() => null),
-  },
-  powerMonitor: {
-    on: vi.fn(),
-  },
-}));
-
-vi.mock("../../ipc/channels.js", () => ({
-  CHANNELS: { SYSTEM_WAKE: "system:wake" },
-}));
-
-vi.mock("../webContentsRegistry.js", () => ({
-  getAppWebContents: vi.fn(),
-}));
-
-const mockSetDiskSpaceInterval = vi.fn();
-const mockRefreshDiskSpace = vi.fn();
-const mockSetAppMetricsInterval = vi.fn();
-const mockRefreshAppMetrics = vi.fn();
-
-vi.mock("../../services/DiskSpaceMonitor.js", () => ({
-  setDiskSpaceMonitorPollInterval: mockSetDiskSpaceInterval,
-  refreshDiskSpaceMonitor: mockRefreshDiskSpace,
-}));
-
-vi.mock("../../services/ProcessMemoryMonitor.js", () => ({
-  setAppMetricsMonitorPollInterval: mockSetAppMetricsInterval,
-  refreshAppMetricsMonitor: mockRefreshAppMetrics,
-}));
-
-import { app } from "electron";
 import type { PtyClient } from "../../services/PtyClient.js";
 import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
 import type { ProjectStatsService } from "../../services/ProjectStatsService.js";
 import type { IdleTerminalNotificationService } from "../../services/IdleTerminalNotificationService.js";
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron's app.on() signature uses any
-type AppEventHandler = (...args: any[]) => void;
-const appHandlers = new Map<string, AppEventHandler>();
-(app.on as ReturnType<typeof vi.fn>).mockImplementation(
-  (event: string, handler: AppEventHandler) => {
-    appHandlers.set(event, handler);
-    return app;
-  }
-);
+type Handler = (...args: any[]) => void;
+
+const appHandlers = new Map<string, Handler>();
+const powerHandlers = new Map<string, Handler>();
+
+const mockSetDiskSpaceInterval = vi.fn();
+const mockRefreshDiskSpace = vi.fn();
+const mockSetAppMetricsInterval = vi.fn();
+const mockRefreshAppMetrics = vi.fn();
+const mockViewSend = vi.fn();
+
+/** A registered app window whose focus/visibility the test drives directly. */
+interface FakeWindow {
+  focused: boolean;
+  visible: boolean;
+  minimized: boolean;
+  handlers: Map<string, Handler>;
+  win: Electron.BrowserWindow;
+}
+
+let windows: FakeWindow[] = [];
+
+function createFakeWindow(state: Partial<Omit<FakeWindow, "handlers" | "win">> = {}): FakeWindow {
+  const handlers = new Map<string, Handler>();
+  const fake = {
+    focused: state.focused ?? true,
+    visible: state.visible ?? true,
+    minimized: state.minimized ?? false,
+    handlers,
+  } as FakeWindow;
+  fake.win = {
+    isDestroyed: () => false,
+    isVisible: () => fake.visible,
+    isMinimized: () => fake.minimized,
+    on: vi.fn((event: string, handler: Handler) => {
+      handlers.set(event, handler);
+    }),
+  } as unknown as Electron.BrowserWindow;
+  windows.push(fake);
+  return fake;
+}
 
 function createMockDeps() {
   const ptyClient = {
     setProcessTreePollInterval: vi.fn(),
+    setPowerPolicy: vi.fn(),
   } as unknown as PtyClient;
 
   const workspaceClient = {
@@ -86,44 +83,67 @@ function createMockDeps() {
   };
 }
 
-// Must import after mocks are set up
-let setupWindowFocusThrottle: typeof import("../powerMonitor.js").setupWindowFocusThrottle;
-let registerWindowForFocusThrottle: typeof import("../powerMonitor.js").registerWindowForFocusThrottle;
+type Deps = ReturnType<typeof createMockDeps>;
+
+function clearServiceMocks(mocks: Deps): void {
+  vi.mocked(mocks.workspaceClient.updateMonitorConfig).mockClear();
+  vi.mocked(mocks.workspaceClient.setPollingEnabled).mockClear();
+  vi.mocked(mocks.workspaceClient.setPRPollCadence).mockClear();
+  vi.mocked(mocks.workspaceClient.refresh).mockClear();
+  vi.mocked(mocks.statsService.updatePollInterval).mockClear();
+  vi.mocked(mocks.statsService.refresh).mockClear();
+  vi.mocked(mocks.ptyClient.setProcessTreePollInterval).mockClear();
+  vi.mocked(mocks.ptyClient.setPowerPolicy).mockClear();
+  vi.mocked(mocks.idleTerminalService.updatePollInterval).mockClear();
+  mockSetDiskSpaceInterval.mockClear();
+  mockRefreshDiskSpace.mockClear();
+  mockSetAppMetricsInterval.mockClear();
+  mockRefreshAppMetrics.mockClear();
+  mockViewSend.mockClear();
+}
+
+let powerMonitorModule: typeof import("../powerMonitor.js");
+let powerPolicyModule: typeof import("../powerPolicy.js");
+let focusThrottleModule: typeof import("../focusThrottleState.js");
 
 describe("WindowFocusThrottle", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     appHandlers.clear();
+    powerHandlers.clear();
+    windows = [];
     mockSetDiskSpaceInterval.mockClear();
     mockRefreshDiskSpace.mockClear();
     mockSetAppMetricsInterval.mockClear();
     mockRefreshAppMetrics.mockClear();
-    // Re-import to get fresh module state
+    mockViewSend.mockClear();
     vi.resetModules();
 
-    // Re-mock electron after resetModules
     vi.doMock("electron", () => ({
       app: {
-        on: vi.fn((event: string, handler: AppEventHandler) => {
+        on: vi.fn((event: string, handler: Handler) => {
           appHandlers.set(event, handler);
-          return { on: vi.fn() };
         }),
       },
       BrowserWindow: {
-        getFocusedWindow: vi.fn(() => null),
-        getAllWindows: vi.fn(() => []),
+        getFocusedWindow: vi.fn(() => windows.find((w) => w.focused)?.win ?? null),
+        getAllWindows: vi.fn(() => windows.map((w) => w.win)),
       },
       powerMonitor: {
-        on: vi.fn(),
+        on: vi.fn((event: string, handler: Handler) => {
+          powerHandlers.set(event, handler);
+        }),
+        isOnBatteryPower: vi.fn(() => false),
       },
     }));
 
     vi.doMock("../../ipc/channels.js", () => ({
-      CHANNELS: { SYSTEM_WAKE: "system:wake" },
+      CHANNELS: { EVENTS_PUSH: "events:push" },
     }));
 
     vi.doMock("../webContentsRegistry.js", () => ({
       getAppWebContents: vi.fn(),
+      getAllAppWebContents: vi.fn(() => [{ isDestroyed: () => false, send: mockViewSend }]),
     }));
 
     vi.doMock("../../services/DiskSpaceMonitor.js", () => ({
@@ -136,225 +156,310 @@ describe("WindowFocusThrottle", () => {
       refreshAppMetricsMonitor: mockRefreshAppMetrics,
     }));
 
-    const mod = await import("../powerMonitor.js");
-    setupWindowFocusThrottle = mod.setupWindowFocusThrottle;
-    registerWindowForFocusThrottle = mod.registerWindowForFocusThrottle;
+    powerMonitorModule = await import("../powerMonitor.js");
+    powerPolicyModule = await import("../powerPolicy.js");
+    focusThrottleModule = await import("../focusThrottleState.js");
   });
 
   afterEach(() => {
     vi.useRealTimers();
   });
 
-  it("throttles all services on blur when no window is focused", async () => {
-    const { deps, workspaceClient, statsService, ptyClient, idleTerminalService } =
-      createMockDeps();
-    setupWindowFocusThrottle(deps);
+  function setup(): { mocks: Deps; main: FakeWindow } {
+    const mocks = createMockDeps();
+    powerMonitorModule.setupWindowFocusThrottle(mocks.deps);
+    powerMonitorModule.setupPowerMonitor({
+      getPtyClient: () => null,
+      getWorkspaceClient: () => null,
+    });
+    const main = createFakeWindow();
+    powerMonitorModule.registerWindowForFocusThrottle(main.win);
+    return { mocks, main };
+  }
 
-    const blurHandler = appHandlers.get("browser-window-blur")!;
-    expect(blurHandler).toBeDefined();
-
-    const { BrowserWindow: BW } = await import("electron");
-    (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
-
-    blurHandler();
+  function blur(win: FakeWindow): void {
+    win.focused = false;
+    appHandlers.get("browser-window-blur")!();
     vi.advanceTimersByTime(100);
+  }
 
-    expect(workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+  function focus(win: FakeWindow): void {
+    win.focused = true;
+    appHandlers.get("browser-window-focus")!();
+  }
+
+  it("throttles every poller ×5 on blur when no window is focused", () => {
+    const { mocks, main } = setup();
+
+    blur(main);
+
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
       pollIntervalActive: 10_000,
       pollIntervalBackground: 50_000,
     });
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
-    expect(workspaceClient.setPRPollCadence).toHaveBeenCalledWith(false);
-    expect(statsService.updatePollInterval).toHaveBeenCalledWith(25_000);
-    expect(
-      vi.mocked(ptyClient as unknown as { setProcessTreePollInterval: () => void })
-        .setProcessTreePollInterval
-    ).toHaveBeenCalledWith(12_500);
-
-    // New services
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+    expect(mocks.workspaceClient.setPRPollCadence).toHaveBeenCalledWith(false);
+    expect(mocks.statsService.updatePollInterval).toHaveBeenCalledWith(25_000);
+    expect(mocks.ptyClient.setProcessTreePollInterval).toHaveBeenCalledWith(12_500);
     expect(mockSetDiskSpaceInterval).toHaveBeenCalledWith(1_500_000);
     expect(mockSetAppMetricsInterval).toHaveBeenCalledWith(150_000);
-    expect(idleTerminalService.updatePollInterval).toHaveBeenCalledWith(1_500_000);
+    expect(mocks.idleTerminalService.updatePollInterval).toHaveBeenCalledWith(1_500_000);
+    expect(focusThrottleModule.isFocusThrottled()).toBe(true);
+    expect(focusThrottleModule.getFocusThrottlePollMultiplier()).toBe(5);
   });
 
-  it("does not throttle on blur when another window is focused", async () => {
-    const { deps, workspaceClient, idleTerminalService } = createMockDeps();
-    setupWindowFocusThrottle(deps);
+  it("does not throttle on blur when another window takes focus", () => {
+    const { mocks, main } = setup();
+    const second = createFakeWindow({ focused: false });
+    powerMonitorModule.registerWindowForFocusThrottle(second.win);
 
-    const blurHandler = appHandlers.get("browser-window-blur")!;
-    const { BrowserWindow: BW } = await import("electron");
-    (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue({} as unknown);
-
-    blurHandler();
+    main.focused = false;
+    second.focused = true;
+    appHandlers.get("browser-window-blur")!();
     vi.advanceTimersByTime(100);
 
-    expect(workspaceClient.updateMonitorConfig).not.toHaveBeenCalled();
+    expect(mocks.workspaceClient.updateMonitorConfig).not.toHaveBeenCalled();
     expect(mockSetDiskSpaceInterval).not.toHaveBeenCalled();
-    expect(mockSetAppMetricsInterval).not.toHaveBeenCalled();
-    expect(idleTerminalService.updatePollInterval).not.toHaveBeenCalled();
+    expect(mocks.idleTerminalService.updatePollInterval).not.toHaveBeenCalled();
   });
 
-  it("cancels throttle when focus arrives within debounce window", async () => {
-    const { deps, workspaceClient, idleTerminalService } = createMockDeps();
-    setupWindowFocusThrottle(deps);
+  it("cancels the throttle when focus returns within the blur debounce", () => {
+    const { mocks, main } = setup();
 
-    const blurHandler = appHandlers.get("browser-window-blur")!;
-    const focusHandler = appHandlers.get("browser-window-focus")!;
-
-    blurHandler();
-    vi.advanceTimersByTime(50); // Within 100ms debounce
-    focusHandler();
+    main.focused = false;
+    appHandlers.get("browser-window-blur")!();
+    vi.advanceTimersByTime(50);
+    focus(main);
     vi.advanceTimersByTime(100);
 
-    expect(workspaceClient.updateMonitorConfig).not.toHaveBeenCalled();
+    expect(mocks.workspaceClient.updateMonitorConfig).not.toHaveBeenCalled();
     expect(mockSetDiskSpaceInterval).not.toHaveBeenCalled();
-    expect(mockSetAppMetricsInterval).not.toHaveBeenCalled();
-    expect(idleTerminalService.updatePollInterval).not.toHaveBeenCalled();
+    expect(mocks.idleTerminalService.updatePollInterval).not.toHaveBeenCalled();
   });
 
-  it("unthrottles and refreshes on focus", async () => {
-    const { deps, workspaceClient, statsService, ptyClient, idleTerminalService } =
-      createMockDeps();
-    setupWindowFocusThrottle(deps);
+  it("unthrottles and refreshes each poller once on focus", () => {
+    const { mocks, main } = setup();
+    blur(main);
+    clearServiceMocks(mocks);
 
-    const blurHandler = appHandlers.get("browser-window-blur")!;
-    const focusHandler = appHandlers.get("browser-window-focus")!;
-    const { BrowserWindow: BW } = await import("electron");
-    (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    focus(main);
 
-    // First throttle
-    blurHandler();
-    vi.advanceTimersByTime(100);
-
-    // Reset mocks to verify unthrottle calls
-    vi.mocked(workspaceClient.updateMonitorConfig).mockClear();
-    vi.mocked(workspaceClient.setPollingEnabled).mockClear();
-    vi.mocked(workspaceClient.setPRPollCadence).mockClear();
-    vi.mocked(statsService.updatePollInterval).mockClear();
-    mockSetDiskSpaceInterval.mockClear();
-    mockRefreshDiskSpace.mockClear();
-    mockSetAppMetricsInterval.mockClear();
-    mockRefreshAppMetrics.mockClear();
-
-    // Then unthrottle
-    focusHandler();
-
-    expect(workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
       pollIntervalActive: 2_000,
       pollIntervalBackground: 10_000,
     });
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
-    expect(workspaceClient.setPRPollCadence).toHaveBeenCalledWith(true);
-    expect(workspaceClient.refresh).toHaveBeenCalled();
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.setPRPollCadence).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
 
     // setPollingEnabled(true) must run before refresh() so the host is
     // polling-enabled when the refresh broadcast arrives.
-    const enableOrder = vi.mocked(workspaceClient.setPollingEnabled).mock.invocationCallOrder[0];
-    const refreshOrder = vi.mocked(workspaceClient.refresh).mock.invocationCallOrder[0];
+    const enableOrder = vi.mocked(mocks.workspaceClient.setPollingEnabled).mock
+      .invocationCallOrder[0];
+    const refreshOrder = vi.mocked(mocks.workspaceClient.refresh).mock.invocationCallOrder[0];
     expect(enableOrder).toBeLessThan(refreshOrder);
 
-    expect(statsService.updatePollInterval).toHaveBeenCalledWith(5_000);
-    expect(statsService.refresh).toHaveBeenCalled();
-    expect(
-      vi.mocked(ptyClient as unknown as { setProcessTreePollInterval: () => void })
-        .setProcessTreePollInterval
-    ).toHaveBeenCalledWith(2_500);
-
-    // New services: restore normal intervals
+    expect(mocks.statsService.updatePollInterval).toHaveBeenCalledWith(5_000);
+    expect(mocks.statsService.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.ptyClient.setProcessTreePollInterval).toHaveBeenCalledWith(2_500);
     expect(mockSetDiskSpaceInterval).toHaveBeenCalledWith(300_000);
-    expect(mockRefreshDiskSpace).toHaveBeenCalled();
+    expect(mockRefreshDiskSpace).toHaveBeenCalledTimes(1);
     expect(mockSetAppMetricsInterval).toHaveBeenCalledWith(30_000);
-    expect(mockRefreshAppMetrics).toHaveBeenCalled();
-    expect(idleTerminalService.updatePollInterval).toHaveBeenCalledWith(300_000);
+    expect(mockRefreshAppMetrics).toHaveBeenCalledTimes(1);
+    expect(mocks.idleTerminalService.updatePollInterval).toHaveBeenCalledWith(300_000);
+    expect(focusThrottleModule.isFocusThrottled()).toBe(false);
   });
 
-  it("is idempotent — double throttle only calls services once", async () => {
-    const { deps, workspaceClient, statsService, ptyClient, idleTerminalService } =
-      createMockDeps();
-    setupWindowFocusThrottle(deps);
+  it("is idempotent — a repeated blur re-applies nothing", () => {
+    const { mocks, main } = setup();
 
-    const blurHandler = appHandlers.get("browser-window-blur")!;
-    const { BrowserWindow: BW } = await import("electron");
-    (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    blur(main);
+    blur(main);
 
-    blurHandler();
-    vi.advanceTimersByTime(100);
-    blurHandler();
-    vi.advanceTimersByTime(100);
-
-    expect(workspaceClient.updateMonitorConfig).toHaveBeenCalledTimes(1);
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledTimes(1);
-    expect(statsService.updatePollInterval).toHaveBeenCalledTimes(1);
-    expect(
-      vi.mocked(ptyClient as unknown as { setProcessTreePollInterval: () => void })
-        .setProcessTreePollInterval
-    ).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledTimes(1);
+    expect(mocks.statsService.updatePollInterval).toHaveBeenCalledTimes(1);
+    expect(mocks.ptyClient.setProcessTreePollInterval).toHaveBeenCalledTimes(1);
     expect(mockSetDiskSpaceInterval).toHaveBeenCalledTimes(1);
     expect(mockSetAppMetricsInterval).toHaveBeenCalledTimes(1);
-    expect(idleTerminalService.updatePollInterval).toHaveBeenCalledTimes(1);
+    expect(mocks.idleTerminalService.updatePollInterval).toHaveBeenCalledTimes(1);
   });
 
-  it("handles minimize → throttle and restore → unthrottle via per-window events", async () => {
-    const { deps, workspaceClient, statsService, idleTerminalService } = createMockDeps();
-    setupWindowFocusThrottle(deps);
+  it("goes deep (×10) when the only window is minimized, and restore alone does not unthrottle", () => {
+    const { mocks, main } = setup();
 
-    const { BrowserWindow: BW } = await import("electron");
-    (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    main.focused = false;
+    main.minimized = true;
+    main.handlers.get("minimize")!();
 
-    const windowHandlers = new Map<string, (...args: unknown[]) => void>();
-    const mockWin = {
-      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-        windowHandlers.set(event, handler);
-      }),
-    } as unknown as Electron.BrowserWindow;
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+      pollIntervalActive: 20_000,
+      pollIntervalBackground: 100_000,
+    });
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+    expect(mockSetDiskSpaceInterval).toHaveBeenCalledWith(3_000_000);
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep");
+    clearServiceMocks(mocks);
 
-    registerWindowForFocusThrottle(mockWin);
-
-    // Minimize triggers throttle
-    windowHandlers.get("minimize")!();
-    expect(workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+    // Restored but not yet focused: visible again, still nobody looking.
+    main.minimized = false;
+    main.handlers.get("restore")!();
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
       pollIntervalActive: 10_000,
       pollIntervalBackground: 50_000,
     });
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
-    expect(mockSetDiskSpaceInterval).toHaveBeenCalledWith(1_500_000);
-    expect(mockSetAppMetricsInterval).toHaveBeenCalledWith(150_000);
-    expect(idleTerminalService.updatePollInterval).toHaveBeenCalledWith(1_500_000);
+    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    clearServiceMocks(mocks);
 
-    vi.mocked(workspaceClient.updateMonitorConfig).mockClear();
-    vi.mocked(workspaceClient.setPollingEnabled).mockClear();
-    mockSetDiskSpaceInterval.mockClear();
-    mockSetAppMetricsInterval.mockClear();
+    // Focus is what brings the user back: one refresh, foreground cadence.
+    focus(main);
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active");
+  });
 
-    // Restore triggers unthrottle
-    windowHandlers.get("restore")!();
-    expect(workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+  it("treats a hidden window like a minimized one", () => {
+    const { mocks, main } = setup();
+
+    main.focused = false;
+    main.visible = false;
+    main.handlers.get("hide")!();
+
+    expect(powerPolicyModule.getPowerPolicy().level).toBe("deep");
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+
+    // showInactive(): visible again but never focused.
+    main.visible = true;
+    main.handlers.get("show")!();
+    expect(powerPolicyModule.getPowerPolicy()).toMatchObject({
+      level: "saving",
+      canObserve: false,
+    });
+  });
+
+  it("goes deep on a locked screen even though the window keeps focus", () => {
+    const { mocks } = setup();
+
+    powerHandlers.get("lock-screen")!();
+
+    expect(powerPolicyModule.getPowerPolicy()).toMatchObject({ level: "deep", canObserve: false });
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+      pollIntervalActive: 20_000,
+      pollIntervalBackground: 100_000,
+    });
+    clearServiceMocks(mocks);
+
+    powerHandlers.get("unlock-screen")!();
+
+    expect(powerPolicyModule.getPowerPolicy().level).toBe("active");
+    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.statsService.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-reads the windows on unlock rather than assuming the prior focus", () => {
+    const { mocks, main } = setup();
+
+    powerHandlers.get("lock-screen")!();
+    // Focus moved elsewhere while locked; no blur event reaches us.
+    main.focused = false;
+    clearServiceMocks(mocks);
+
+    powerHandlers.get("unlock-screen")!();
+
+    expect(powerPolicyModule.getPowerPolicy()).toMatchObject({
+      level: "saving",
+      canObserve: false,
+    });
+    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
+  });
+
+  it("doubles the pollers on battery while the user is still watching", () => {
+    const { mocks } = setup();
+
+    powerHandlers.get("on-battery")!();
+
+    expect(powerPolicyModule.getPowerPolicy()).toMatchObject({ level: "saving", canObserve: true });
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+      pollIntervalActive: 4_000,
+      pollIntervalBackground: 20_000,
+    });
+    // Still observable: workspace polling stays on and nothing is refreshed.
+    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
+    expect(focusThrottleModule.isFocusThrottled()).toBe(false);
+    expect(focusThrottleModule.getFocusThrottlePollMultiplier()).toBe(2);
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    clearServiceMocks(mocks);
+
+    powerHandlers.get("on-ac")!();
+
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
       pollIntervalActive: 2_000,
       pollIntervalBackground: 10_000,
     });
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
-    expect(statsService.refresh).toHaveBeenCalled();
-    expect(mockSetDiskSpaceInterval).toHaveBeenCalledWith(300_000);
-    expect(mockRefreshDiskSpace).toHaveBeenCalled();
-    expect(mockSetAppMetricsInterval).toHaveBeenCalledWith(30_000);
-    expect(mockRefreshAppMetrics).toHaveBeenCalled();
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active");
   });
 
-  it("skips deps-based services gracefully when getters return null", async () => {
-    const deps = {
+  it("applies battery power reported at launch as soon as the throttle is set up", async () => {
+    vi.mocked((await import("electron")).powerMonitor.isOnBatteryPower).mockReturnValue(true);
+    powerMonitorModule.setupPowerMonitor({
+      getPtyClient: () => null,
+      getWorkspaceClient: () => null,
+    });
+    const mocks = createMockDeps();
+
+    powerMonitorModule.setupWindowFocusThrottle(mocks.deps);
+
+    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
+      pollIntervalActive: 4_000,
+      pollIntervalBackground: 20_000,
+    });
+    // The pty host and any loaded view booted assuming `active`.
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    expect(mockViewSend).toHaveBeenCalledWith("events:push", {
+      name: "system:power-policy-changed",
+      payload: expect.objectContaining({ level: "saving" }),
+    });
+  });
+
+  it("goes deep when the last window closes", () => {
+    const { mocks, main } = setup();
+
+    main.focused = false;
+    windows = [];
+    main.handlers.get("closed")!();
+
+    expect(powerPolicyModule.getPowerPolicy().level).toBe("deep");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep");
+  });
+
+  it("broadcasts every policy change to the renderer views", () => {
+    const { main } = setup();
+
+    blur(main);
+
+    expect(mockViewSend).toHaveBeenCalledWith("events:push", {
+      name: "system:power-policy-changed",
+      payload: expect.objectContaining({ level: "saving", canObserve: false }),
+    });
+  });
+
+  it("skips deps-based services gracefully when getters return null", () => {
+    powerMonitorModule.setupWindowFocusThrottle({
       getPtyClient: () => null,
       getWorkspaceClient: () => null,
       getProjectStatsService: () => null,
       getIdleTerminalNotificationService: () => null,
-    };
-    setupWindowFocusThrottle(deps);
+    });
+    const main = createFakeWindow();
+    powerMonitorModule.registerWindowForFocusThrottle(main.win);
 
-    const blurHandler = appHandlers.get("browser-window-blur")!;
-    const { BrowserWindow: BW } = await import("electron");
-    (BW.getFocusedWindow as ReturnType<typeof vi.fn>).mockReturnValue(null);
-
-    blurHandler();
-    vi.advanceTimersByTime(100);
+    blur(main);
 
     // Module-level setters are always called (they no-op internally via idempotency guard)
     expect(mockSetDiskSpaceInterval).toHaveBeenCalledWith(1_500_000);

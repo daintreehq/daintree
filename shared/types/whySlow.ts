@@ -53,11 +53,14 @@ export interface WhySlowResourceSnapshot {
   speedLimit: number;
 }
 
-/** Focus-loss polling throttle: on blur, poll intervals are multiplied. */
+/** Power-policy polling throttle: poll intervals are multiplied off the foreground. */
 export interface WhySlowFocusThrottleSnapshot {
+  /** No window can be observed (blurred, hidden, or screen locked). */
   throttled: boolean;
-  /** Poll-interval multiplier currently applied (1 when focused). */
+  /** Poll-interval multiplier currently applied (1 on AC with a focused window). */
   pollMultiplier: number;
+  /** Power-policy level driving the multiplier and the pty-host cadences. */
+  powerLevel?: import("./powerPolicy.js").PowerPolicyLevel;
 }
 
 /**

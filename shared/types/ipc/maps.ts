@@ -1704,6 +1704,8 @@ export interface IpcEventMap {
   "system:wake": SystemWakePayload;
   // Sustained system memory pressure opened or cleared (window-scoped)
   "system:memory-pressure": SystemMemoryPressurePayload;
+  // Power policy changed — battery, focus, visibility, or screen lock (#12515)
+  "system:power-policy-changed": import("../powerPolicy.js").PowerPolicySnapshot;
 
   // Portal events
   "portal:nav-event": import("../portal.js").PortalNavEvent;
@@ -2146,6 +2148,8 @@ export type IpcEventBusMap = Pick<
   | "system:wake"
   // System memory pressure episode edges (window-scoped)
   | "system:memory-pressure"
+  // Power policy (global broadcast, replayed on view load)
+  | "system:power-policy-changed"
   // Resource profile (global broadcast)
   | "resource:profile-changed"
   // Sound cancel (global broadcast)

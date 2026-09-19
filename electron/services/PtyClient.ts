@@ -119,6 +119,8 @@ import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
+import { getPowerPolicy } from "../window/powerPolicy.js";
 import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
@@ -1104,6 +1106,12 @@ export class PtyClient extends EventEmitter {
         ms: this.lastProcessTreePollIntervalMs,
       });
     }
+    // Read live rather than cached: the policy can move before this client
+    // exists, and a host boots at `active`, so only a saving level needs sending.
+    const powerLevel = getPowerPolicy().level;
+    if (powerLevel !== "active") {
+      shard.send({ type: "set-power-policy", level: powerLevel });
+    }
   }
 
   /**
@@ -1932,6 +1940,12 @@ export class PtyClient extends EventEmitter {
     this.lastProcessTreePollIntervalMs = null;
     for (const shard of this.shards.values()) {
       shard.send({ type: "set-resource-profile", profile });
+    }
+  }
+
+  setPowerPolicy(level: PowerPolicyLevel): void {
+    for (const shard of this.shards.values()) {
+      shard.send({ type: "set-power-policy", level });
     }
   }
 
