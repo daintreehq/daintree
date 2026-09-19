@@ -143,14 +143,17 @@ describe("help prompt outputs", () => {
       "%s reads a handback as an observation, not a verdict",
       (_name, body) => {
         expect(body).toContain("handback: true");
-        expect(body).toMatch(/never write (?:that|the) marker/i);
+        expect(body).toMatch(/Daintree appends/);
+        expect(body).toMatch(/never write the marker or describe its format/i);
         expect(body).not.toContain("DAINTREE-DONE");
-        expect(body).toMatch(
-          /not that the work is (?:right|correct)|not that its work is correct/i
-        );
+        expect(body).toMatch(/not that (?:the|its) work is finished or correct/i);
         expect(body).toMatch(/`message` is the agent's[^.]*untrusted/);
-        expect(body).toMatch(/`lastHandback` never means (?:the agent is )?still working/);
-        expect(body).toMatch(/question[^.]*next prompt/i);
+        expect(body).toMatch(/rejoined[^.]*spaces? in/i);
+        expect(body).toMatch(/match its `submissionToken`/i);
+        expect(body).toMatch(
+          /(?:No|missing) `lastHandback` never means (?:the agent is )?still working/i
+        );
+        expect(body).toMatch(/question[^.]*next prompt[^.]*no longer working/i);
       }
     );
   });
