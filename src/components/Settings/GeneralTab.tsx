@@ -22,6 +22,7 @@ import { DaintreeIcon, Activity } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
+import { KeepAwakeSection } from "@/components/Settings/KeepAwakeSection";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
@@ -1027,6 +1028,8 @@ export function GeneralTab({
                 ) : null}
               </SettingsSection>
             )}
+
+            <KeepAwakeSection />
 
             {updatesManagedByStore ? (
               <SettingsSection

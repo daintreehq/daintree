@@ -111,6 +111,7 @@ import type {
   FdLeakWarningPayload,
 } from "../pty-host.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { AppThemeConfig } from "../appTheme.js";
@@ -1862,6 +1863,9 @@ export interface IpcEventMap {
 
   // Hibernation events
   "hibernation:project-hibernated": HibernationProjectHibernatedPayload;
+
+  // Keep-awake events
+  "keep-awake:state-changed": KeepAwakeState;
 
   // Idle terminal notification events
   "idle-terminal:notify": IdleTerminalNotifyPayload;

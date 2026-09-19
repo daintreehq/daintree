@@ -23,6 +23,7 @@ export {
   CircleHelp, // workspace whose metadata is missing (removed while its agents ran)
   CirclePause, // run the user parked — shelved on purpose (Pilot's parked band)
   CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
+  Coffee, // Daintree keeping the machine from idle-sleeping while agents work — the long-standing keep-awake metaphor
   CircleX, // CI that failed — the cross the PR badge already uses, enclosed so a glyph standing alone reads as a verdict rather than a dismiss control
   Clock, // recency sort order (most recently opened first)
   FileText, // view selected file path in the read-only file viewer

@@ -100,6 +100,15 @@ export interface StoreSchema {
   sessionRestore: {
     enabled: boolean;
   };
+  /**
+   * Whether the power save blocker is held while agents work, and whether that
+   * extends to battery power (#12516). `PowerSaveBlockerService` is the sole
+   * reader and writer.
+   */
+  keepAwake: {
+    enabled: boolean;
+    onBattery: boolean;
+  };
   idleTerminalNotify: {
     enabled: boolean;
     thresholdMinutes: number;
@@ -665,6 +674,12 @@ const storeOptions = {
     // the user has.
     sessionRestore: {
       enabled: true,
+    },
+    // On while plugged in, which is how it always behaved; off on battery, where
+    // an unattended laptop that never idle-sleeps drains itself.
+    keepAwake: {
+      enabled: true,
+      onBattery: false,
     },
     idleTerminalNotify: {
       enabled: true,

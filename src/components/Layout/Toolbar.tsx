@@ -143,6 +143,8 @@ import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
+import { KeepAwakeIndicator } from "./KeepAwakeIndicator";
+import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
 import { ToolbarAssistantButton } from "./ToolbarAssistantButton";
@@ -644,6 +646,7 @@ export function Toolbar({
   // Read here as well as in the indicator, so its arrival or departure re-renders
   // the toolbar and the roving tab-stop sync below sees the item list change.
   const hostMemoryPauseVisible = useHostMemoryPauseStore((state) => state.visible);
+  const keepAwakeVisible = useKeepAwakeStore((state) => state.visible);
 
   // Per-item state for the overflow menu, so evicted buttons keep the signal
   // they carry on the visible toolbar (issue #9821). Reads mirror the
@@ -2567,6 +2570,14 @@ export function Toolbar({
               {hostMemoryPauseVisible && (
                 <div className="app-no-drag shrink-0">
                   <HostMemoryPauseIndicator />
+                </div>
+              )}
+
+              {/* Fixed chrome for the same reason: it exists only while the
+                  machine is being held awake (#12516). */}
+              {keepAwakeVisible && (
+                <div className="app-no-drag shrink-0">
+                  <KeepAwakeIndicator />
                 </div>
               )}
 

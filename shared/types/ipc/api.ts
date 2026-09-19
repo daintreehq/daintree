@@ -146,6 +146,7 @@ import type {
 } from "./forge.js";
 import type { TerminalConfig } from "./config.js";
 import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
+import type { KeepAwakeState } from "./keepAwake.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { KeyAction } from "../keymap.js";
@@ -1227,6 +1228,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): Promise<import("../browser.js").BrowserNavigationHistorySnapshot>;
     /** Navigate to a specific index in Chromium's navigation history */
     goToHistoryIndex(webContentsId: number, index: number): Promise<void>;
+  };
+  // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
+  keepAwake: GeneratedElectronAPI["keepAwake"] & {
+    onStateChanged(callback: (state: KeepAwakeState) => void): () => void;
   };
   // Invoke methods come from GeneratedElectronAPI; the rest are renderer-only subscriptions.
   hibernation: GeneratedElectronAPI["hibernation"] & {

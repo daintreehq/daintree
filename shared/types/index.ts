@@ -213,6 +213,9 @@ export type {
   IdleTerminalProjectEntry,
   // Session restore types
   SessionRestoreConfig,
+  // Keep-awake types
+  KeepAwakeConfig,
+  KeepAwakeState,
   // Idle background-project auto-close types
   IdleBackgroundAutoCloseConfig,
   IdleBackgroundClosedPayload,

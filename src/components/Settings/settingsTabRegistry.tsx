@@ -300,6 +300,26 @@ export const SETTINGS_REGISTRY = [
         ],
       },
       {
+        id: "general-keep-awake",
+        subtab: "overview",
+        subtabLabel: "Overview",
+        section: "Keep awake",
+        title: "Keep awake while agents work",
+        description:
+          "Hold off idle sleep while an agent is working, and choose whether that applies on battery power.",
+        keywords: [
+          "keep awake",
+          "awake",
+          "sleep",
+          "idle",
+          "power",
+          "battery",
+          "unplugged",
+          "laptop",
+          "caffeinate",
+        ],
+      },
+      {
         id: "general-hibernation",
         subtab: "hibernation",
         subtabLabel: "Hibernation",
