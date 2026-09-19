@@ -337,6 +337,71 @@ describe("PtyClient lifecycle ledger", () => {
     expect(entry?.spawnOk).toBeUndefined();
   });
 
+  describe("a spawn refused because the id is still live (#11341, #12498)", () => {
+    function refuseAsLive(launchGeneration: number) {
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: {
+          success: false,
+          id: "t1",
+          launchGeneration,
+          error: { code: "TERMINAL_ALREADY_LIVE", message: "live owner" },
+        },
+      });
+    }
+
+    it("keeps the live terminal registered under its original spawn", () => {
+      // The refusal deleted the entry the duplicate had just overwritten, so a
+      // running terminal read as gone — and the power blocker prunes on that.
+      const client = createReadyClient();
+      client.spawn("t1", { ...baseOptions, projectId: "p-live" }); // generation 1
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: { success: true, id: "t1", launchGeneration: 1 },
+      });
+
+      client.spawn("t1", { ...baseOptions, projectId: "p-duplicate" }); // generation 2
+      refuseAsLive(2);
+
+      expect(client.hasTerminal("t1")).toBe(true);
+      expect(client.getTerminalProjectId("t1")).toBe("p-live");
+    });
+
+    it("does not resurrect a terminal killed before the refusal arrives", () => {
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions);
+      client.spawn("t1", baseOptions);
+      client.kill("t1");
+
+      refuseAsLive(2);
+
+      expect(client.hasTerminal("t1")).toBe(false);
+    });
+
+    it("still drops the entry when the replacing spawn genuinely fails", () => {
+      // Any other failure means the host killed the prior incarnation to make
+      // room, so nothing is left running under the id.
+      const client = createReadyClient();
+      client.spawn("t1", baseOptions);
+      client.spawn("t1", baseOptions);
+
+      mockChild.emit("message", {
+        type: "spawn-result",
+        id: "t1",
+        result: {
+          success: false,
+          id: "t1",
+          launchGeneration: 2,
+          error: { code: "ENOENT", message: "no shell" },
+        },
+      });
+
+      expect(client.hasTerminal("t1")).toBe(false);
+    });
+  });
+
   it("records successful spawn resolution", () => {
     const client = createReadyClient();
     client.spawn("t1", baseOptions);

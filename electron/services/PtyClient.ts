@@ -358,6 +358,15 @@ export class PtyClient extends EventEmitter {
   private healthChecksPaused = false;
 
   private pendingSpawns: Map<string, PtyHostSpawnOptions> = new Map();
+  /**
+   * The registration a spawn overwrote, held until that spawn's result. A spawn
+   * for an id whose PTY is still live is rejected by the host
+   * (TERMINAL_ALREADY_LIVE, #11341), but `spawn()` has already replaced the
+   * live terminal's entry by then and the failure deletes it — leaving a
+   * running terminal that `hasTerminal` reports gone and a crash would not
+   * replay (#12498). Keyed by id, tagged with the displacing generation.
+   */
+  private displacedSpawns = new Map<string, { byGeneration: number; entry: PtyHostSpawnOptions }>();
   private ipcDataMirrorIds = new Set<string>();
   private pendingKillCount: Map<string, number> = new Map();
   // Captures streamed back for a graceful kill that is still in flight, keyed
@@ -628,6 +637,7 @@ export class PtyClient extends EventEmitter {
           if (inFlight?.requestId === requestId) inFlight.results.push(result);
         },
         onSpawnResult: (id, result) => {
+          this.settleDisplacedSpawn(id, result);
           const ledger = getLifecycleLedger();
           // Prefer the generation echoed by the host: a stale result from a
           // killed predecessor must record against its own incarnation (where
@@ -1628,8 +1638,32 @@ export class PtyClient extends EventEmitter {
     // the send so events and per-terminal requests route consistently.
     const shard = this.ensureShardForProject(resolvedProjectId);
     this.terminalOwners.set(id, shard.key);
+    const displaced = this.pendingSpawns.get(id);
+    if (displaced) {
+      this.displacedSpawns.set(id, { byGeneration: generation, entry: displaced });
+    } else {
+      this.displacedSpawns.delete(id);
+    }
     this.pendingSpawns.set(id, resolvedOptions);
     this.sendSpawnWithPostInput(shard, id, resolvedOptions);
+  }
+
+  /**
+   * Put back the entry a spawn displaced when the host refused that spawn
+   * because the id is still live. Runs after the router has already dropped the
+   * refused spawn's own entry; any other outcome just forgets the displaced one.
+   */
+  private settleDisplacedSpawn(id: string, result: SpawnResult): void {
+    const displaced = this.displacedSpawns.get(id);
+    if (!displaced || result.launchGeneration !== displaced.byGeneration) return;
+    this.displacedSpawns.delete(id);
+    if (
+      !result.success &&
+      result.error?.code === "TERMINAL_ALREADY_LIVE" &&
+      !this.pendingSpawns.has(id)
+    ) {
+      this.pendingSpawns.set(id, displaced.entry);
+    }
   }
 
   /**
@@ -1738,6 +1772,7 @@ export class PtyClient extends EventEmitter {
     getTrashedPidTracker().removeTrashed(id);
     const wasKnown = this.pendingSpawns.has(id);
     this.pendingSpawns.delete(id);
+    this.displacedSpawns.delete(id);
     this.ipcDataMirrorIds.delete(id);
 
     // Only track pendingKillCount for ids we've seen locally. An "exit"
@@ -2765,6 +2800,7 @@ export class PtyClient extends EventEmitter {
     this.shards.clear();
 
     this.pendingSpawns.clear();
+    this.displacedSpawns.clear();
     this.pendingKillCount.clear();
     this.windowProjectContexts.clear();
     this.windowFocusedTerminals.clear();

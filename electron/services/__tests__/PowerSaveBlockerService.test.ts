@@ -384,7 +384,9 @@ describe("PowerSaveBlockerService", () => {
 
     it("does not let an entry dropped at the cap keep a later acquisition alive", () => {
       startLiveWorking("term-1");
-      vi.advanceTimersByTime(12 * HOUR);
+      vi.advanceTimersByTime(12 * HOUR - 1);
+      expect(service.isBlocking()).toBe(true);
+      vi.advanceTimersByTime(1);
       expect(service.isBlocking()).toBe(false);
 
       startLiveWorking("term-2");
@@ -410,8 +412,9 @@ describe("PowerSaveBlockerService", () => {
       expect(powerSaveBlocker.start).toHaveBeenCalledTimes(2);
     });
 
-    it("still reaches the 12h cap when the registry throws at every checkpoint", () => {
-      // A held assertion with no timer armed would never be released.
+    it("keeps its next checkpoint armed when the registry throws", () => {
+      // A held assertion with no timer armed would never be released; the
+      // budget keeps counting down to the cap through the failed checkpoints.
       startLiveWorking("term-1");
       registry.hasTerminal.mockImplementation(() => {
         throw new Error("registry unavailable");
@@ -428,14 +431,18 @@ describe("PowerSaveBlockerService", () => {
       expect(vi.getTimerCount()).toBe(0);
     });
 
-    it("falls back to the 4h release once the registry is unbound", () => {
+    it("releases at the next checkpoint once the registry is unbound mid-lease", () => {
       startLiveWorking("term-1");
+      vi.advanceTimersByTime(5 * HOUR);
       service.setTerminalRegistry(null);
 
-      vi.advanceTimersByTime(4 * HOUR);
+      vi.advanceTimersByTime(3 * HOUR - 1);
+      expect(service.isBlocking()).toBe(true);
 
+      vi.advanceTimersByTime(1);
       expect(service.isBlocking()).toBe(false);
       expect(service.getActiveCount()).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
     });
 
     it("leaves no timer behind when disposed after a renewal", () => {
@@ -577,20 +584,27 @@ describe("initializePowerSaveBlockerService", () => {
     // The first initialize can come before any client exists; a later window's
     // call must still reach that instance, and rebinding must not buy the lease
     // more time.
+    const HOUR = 60 * 60 * 1000;
     const live = new Set(["term-1"]);
-    const registry = { hasTerminal: (id: string) => live.has(id) };
+    const registry = { hasTerminal: vi.fn((id: string) => live.has(id)) };
+    const replacement = { hasTerminal: vi.fn((id: string) => live.has(id)) };
     const first = initializePowerSaveBlockerService();
     startWorking("term-1");
 
     expect(initializePowerSaveBlockerService(registry)).toBe(first);
-    vi.advanceTimersByTime(8 * 60 * 60 * 1000);
+    vi.advanceTimersByTime(5 * HOUR);
+    // A later window with nothing to pass must not unbind it.
+    initializePowerSaveBlockerService();
+    vi.advanceTimersByTime(3 * HOUR);
     expect(first.isBlocking()).toBe(true);
 
-    initializePowerSaveBlockerService(registry);
-    initializePowerSaveBlockerService();
-    vi.advanceTimersByTime(4 * 60 * 60 * 1000);
+    initializePowerSaveBlockerService(replacement);
+    vi.advanceTimersByTime(4 * HOUR - 1);
+    expect(first.isBlocking()).toBe(true);
 
+    vi.advanceTimersByTime(1);
     expect(first.isBlocking()).toBe(false);
+    expect(registry.hasTerminal).toHaveBeenCalledTimes(2);
     expect((powerSaveBlocker.start as ReturnType<typeof vi.fn>).mock.calls.length).toBe(1);
   });
 

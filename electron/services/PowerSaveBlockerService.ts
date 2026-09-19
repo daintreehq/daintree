@@ -7,29 +7,22 @@ const ACTIVE_STATES = new Set<AgentState>(["working"]);
 const SAFETY_TIMEOUT_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 /**
- * Checkpoints one acquisition may renew through before it is released
- * regardless: three safety periods, twelve hours in all.
+ * Renewals one acquisition gets before it is released regardless — three
+ * safety periods, twelve hours.
  *
- * Renewal exists because the tracked map cannot refill itself.
- * `AgentStateService` suppresses a transition to the state a terminal is
- * already in, so an agent that keeps working is silent after its first event,
- * and clearing the map at four hours dropped a busy fleet's protection for the
- * rest of the session (#12498). The cap exists because nothing observable here
- * tells a busy agent from a wedged one — `agentState` reads `working` for both,
- * and output timestamps count spinners and clocks as progress (#12428). So the
- * bound is the guarantee: a leak ends at twelve hours, and a fleet still
- * working past that is unprotected until one of its terminals transitions.
- *
- * Only an acquisition resets the count, and only a `working` event can
- * acquire, so no checkpoint, prune or rebinding can extend the bound.
+ * An agent that keeps working emits nothing after its first event, so a cutoff
+ * that clears the map strands a busy fleet (#12498). Nothing here tells busy
+ * from wedged either — both read `working`, and output timestamps count
+ * spinners as progress (#12428) — so this bound is the leak guarantee. Only a
+ * `working` event can acquire and reset it. It counts checkpoints rather than
+ * wall-clock time: what a leak costs is time spent holding the machine awake.
  */
 const MAX_RENEWALS = 2;
 
 /**
- * PtyClient's main-local spawn registry. `hasTerminal` turns false on exit,
- * kill and failed spawn, and stays true across a shard-crash respawn, so a
- * false answer means the PTY is gone — whether or not an exit event reached
- * this service. It is synchronous, so pruning with it cannot race a
+ * PtyClient's main-local spawn registry: false once a terminal has exited,
+ * been killed or failed to spawn, true across a shard-crash respawn or a
+ * refused duplicate spawn. Synchronous, so pruning with it cannot race a
  * transition the way a pty-host read would.
  */
 export type TerminalRegistry = Pick<PtyClient, "hasTerminal">;
@@ -106,9 +99,8 @@ export class PowerSaveBlockerService {
   }
 
   /**
-   * Without a registry there is no evidence beyond the map itself, and renewing
-   * on the map alone is the unbounded re-arm this timeout exists to prevent —
-   * so that path keeps the original four-hour release.
+   * Without a registry nothing can drop an entry whose PTY is gone, so no
+   * renewal is granted and the original four-hour release stands.
    *
    * The release clears the map rather than keeping it: a wedged `working` entry
    * left behind would let any other terminal's event reacquire on its behalf.
