@@ -8905,7 +8905,22 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(result.isError).toBeUndefined();
       expect(handleTerminalReadLastMessageOwned).toHaveBeenCalledWith(
         "terminal-handed",
-        expect.anything()
+        {},
+        expect.any(AbortSignal)
+      );
+
+      // Paging (#12496) reaches an adopted terminal exactly as it reaches an
+      // owned one: the adoption gate runs before the options are validated.
+      const paged = await callTool(server, {
+        name: "terminal.readLastMessageOwned",
+        arguments: { terminalId: "terminal-handed", maxBytes: 49152, messageIndex: 2 },
+      });
+
+      expect(paged.isError).toBeUndefined();
+      expect(handleTerminalReadLastMessageOwned).toHaveBeenLastCalledWith(
+        "terminal-handed",
+        { maxBytes: 49152, messageIndex: 2 },
+        expect.any(AbortSignal)
       );
     });
 
