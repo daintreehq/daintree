@@ -21,19 +21,22 @@ import {
   unfreezeWebContents,
   unthrottleCpuWebContents,
   purgeMemoryWebContents,
+  readJsHeapUsedBytes,
 } from "../utils/webContentsLifecycle.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { logWarn } from "../utils/logger.js";
 import * as AgentStateCache from "./ProjectViewAgentStateCache.js";
 import { updateViewBounds } from "./ProjectViewFactory.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
-import type { ViewEntry } from "./ProjectViewManagerTypes.js";
+import type { CachedViewPurgeSession, ViewEntry } from "./ProjectViewManagerTypes.js";
 
 // Cached-view memory purge cadence. The delay keeps the likely next-switch
-// target (a just-cached view) fully warm so fast switch-back pays nothing;
-// the interval re-purges long-cached views whose background work (agent
-// output, worktree events) keeps re-accumulating garbage. Purge is per-target
-// CDP — the active view is never touched.
+// target (a just-cached view) fully warm so fast switch-back pays nothing.
+// After that a pass runs on the interval, but only collects once the heap has
+// grown by the threshold since the last collection: a quiet or frozen view
+// is left alone, while one whose background work (agent output, worktree
+// events) keeps allocating is still reclaimed. Purge is per-target CDP — the
+// active view is never touched.
 /**
  * Delay from a view becoming cached to its first memory purge. Exported so
  * the freeze harness can budget its measurement against the same number
@@ -41,6 +44,7 @@ import type { ViewEntry } from "./ProjectViewManagerTypes.js";
  */
 export const CACHED_VIEW_PURGE_DELAY_MS = 20_000;
 const CACHED_VIEW_PURGE_INTERVAL_MS = 60_000;
+const CACHED_VIEW_PURGE_MIN_GROWTH_BYTES = 32 * 1024 * 1024;
 
 /**
  * @param opts.preserveLastUsed Keep the entry's existing `lastUsed` instead of
@@ -177,7 +181,7 @@ export function deactivateEntry(
       }
     }
 
-    schedulePurge(host, current, CACHED_VIEW_PURGE_DELAY_MS);
+    startPurgeSession(host, current);
   }
 }
 
@@ -189,19 +193,76 @@ export function deactivateEntry(
  * discardable caches are not in reach from main (see the invariants on
  * `purgeMemoryWebContents`). Collecting does not stop timers, ports, or
  * agent output processing, so it is safe for cached views with live agents.
+ *
+ * The session's first collection is unconditional: it reclaims what the view
+ * left behind in the foreground. Later passes collect only on heap growth over
+ * the post-collection baseline, and skip when the heap cannot be read rather
+ * than collect blind. One pass at a time — the next is armed only once the
+ * current one settles, and only while the same cache session is live.
  */
-function schedulePurge(host: ProjectViewManager, entry: ViewEntry, delayMs: number): void {
+function startPurgeSession(host: ProjectViewManager, entry: ViewEntry): void {
+  const session: CachedViewPurgeSession = { collected: false, baselineBytes: null };
+  entry.purgeSession = session;
+  schedulePurge(host, entry, session, CACHED_VIEW_PURGE_DELAY_MS);
+}
+
+function schedulePurge(
+  host: ProjectViewManager,
+  entry: ViewEntry,
+  session: CachedViewPurgeSession,
+  delayMs: number
+): void {
   clearPurgeTimer(entry);
   const timer = setTimeout(() => {
-    const live = host.views.get(entry.projectId);
-    if (live !== entry || entry.state !== "cached") return;
-    const wc = entry.view.webContents;
-    if (!wc || wc.isDestroyed()) return;
-    void purgeMemoryWebContents(wc);
-    schedulePurge(host, entry, CACHED_VIEW_PURGE_INTERVAL_MS);
+    entry.purgeTimer = undefined;
+    void runPurgePass(host, entry, session)
+      .catch((error) => {
+        console.error("[ProjectViewManager] cached-view purge pass failed:", error);
+      })
+      .then(() => {
+        if (isPurgeSessionLive(host, entry, session)) {
+          schedulePurge(host, entry, session, CACHED_VIEW_PURGE_INTERVAL_MS);
+        }
+      });
   }, delayMs);
   timer.unref?.();
   entry.purgeTimer = timer;
+}
+
+async function runPurgePass(
+  host: ProjectViewManager,
+  entry: ViewEntry,
+  session: CachedViewPurgeSession
+): Promise<void> {
+  const live = () => isPurgeSessionLive(host, entry, session);
+  if (!live()) return;
+  const wc = entry.view.webContents;
+  if (session.collected) {
+    const used = await readJsHeapUsedBytes(wc);
+    if (used === null || !live()) return;
+    if (session.baselineBytes === null) {
+      // The read after the last collection failed; measure growth from here.
+      session.baselineBytes = used;
+      return;
+    }
+    if (used - session.baselineBytes < CACHED_VIEW_PURGE_MIN_GROWTH_BYTES) return;
+  }
+  // Re-checked after the enable round trip, so a pass that raced a
+  // reactivation never collects on a view that just went active.
+  if (!(await purgeMemoryWebContents(wc, { shouldCollect: live }))) return;
+  session.collected = true;
+  session.baselineBytes = await readJsHeapUsedBytes(wc);
+}
+
+function isPurgeSessionLive(
+  host: ProjectViewManager,
+  entry: ViewEntry,
+  session: CachedViewPurgeSession
+): boolean {
+  if (entry.purgeSession !== session) return false;
+  if (host.views.get(entry.projectId) !== entry || entry.state !== "cached") return false;
+  const wc = entry.view.webContents;
+  return !!wc && !wc.isDestroyed();
 }
 
 function clearPurgeTimer(entry: ViewEntry): void {
@@ -209,6 +270,12 @@ function clearPurgeTimer(entry: ViewEntry): void {
     clearTimeout(entry.purgeTimer);
     entry.purgeTimer = undefined;
   }
+}
+
+/** Ends the cache session, so the next one starts again from an unconditional collection. */
+function endPurgeSession(entry: ViewEntry): void {
+  clearPurgeTimer(entry);
+  entry.purgeSession = undefined;
 }
 
 /**
@@ -264,7 +331,7 @@ export function activateView(
   insertBehind = false
 ): void {
   // A view being activated must never take a scheduled cache purge.
-  clearPurgeTimer(entry);
+  endPurgeSession(entry);
   registerAppView(host.win, entry.view);
 
   // Restore visibility BEFORE unfreezing: deactivateEntry() called
@@ -433,7 +500,7 @@ export function cleanupEntry(host: ProjectViewManager, projectId: string): void 
   const entry = host.views.get(projectId);
   if (!entry) return;
 
-  clearPurgeTimer(entry);
+  endPurgeSession(entry);
 
   // Detach persistent webContents listeners before close() so any queued
   // event (did-finish-load, render-process-gone, etc.) cannot fire against

@@ -118,7 +118,8 @@ vi.mock("../../services/ProjectStore.js", () => ({
 }));
 
 vi.mock("../../utils/webContentsLifecycle.js", () => ({
-  purgeMemoryWebContents: vi.fn().mockResolvedValue(undefined),
+  purgeMemoryWebContents: vi.fn().mockResolvedValue(false),
+  readJsHeapUsedBytes: vi.fn().mockResolvedValue(null),
   freezeWebContents: vi.fn().mockResolvedValue(undefined),
   unfreezeWebContents: vi.fn().mockResolvedValue(undefined),
   unthrottleCpuWebContents: vi.fn().mockResolvedValue(undefined),
@@ -131,6 +132,7 @@ import {
   unfreezeWebContents,
   unthrottleCpuWebContents,
   purgeMemoryWebContents,
+  readJsHeapUsedBytes,
 } from "../../utils/webContentsLifecycle.js";
 import {
   registerCachedViewWebContents,
@@ -673,13 +675,38 @@ describe("ProjectViewManager — memory sampler jitter", () => {
 });
 
 describe("ProjectViewManager — cached-view memory purge", () => {
+  const MiB = 1024 * 1024;
   let manager: ProjectViewManager;
   let win: ReturnType<typeof createMockWindow>;
   let initialWc: ReturnType<typeof createMockWebContents>;
 
+  const purge = () => vi.mocked(purgeMemoryWebContents);
+  const readHeap = () => vi.mocked(readJsHeapUsedBytes);
+  const purgesOfA = () => purge().mock.calls.filter((c) => (c[0] as unknown) === initialWc);
+  const heapReadsOfA = () => readHeap().mock.calls.filter((c) => (c[0] as unknown) === initialWc);
+
+  /** A purge of proj-a that stays in flight until the test settles it. */
+  function holdNextPurgeOfA() {
+    let settle!: (collected: boolean) => void;
+    let shouldCollect: (() => boolean) | undefined;
+    purge().mockImplementation((wc, opts) => {
+      if ((wc as unknown) !== initialWc) return Promise.resolve(true);
+      shouldCollect = opts?.shouldCollect;
+      return new Promise<boolean>((resolve) => {
+        settle = resolve;
+      });
+    });
+    return {
+      shouldCollect: () => shouldCollect?.(),
+      settle: (collected: boolean) => settle(collected),
+    };
+  }
+
   beforeEach(() => {
     vi.useFakeTimers();
     vi.clearAllMocks();
+    purge().mockResolvedValue(true);
+    readHeap().mockResolvedValue(100 * MiB);
     nextWebContentsId = 100;
     win = createMockWindow();
     manager = new ProjectViewManager(win as never, {
@@ -696,53 +723,209 @@ describe("ProjectViewManager — cached-view memory purge", () => {
   });
 
   afterEach(() => {
+    purge().mockReset().mockResolvedValue(false);
+    readHeap().mockReset().mockResolvedValue(null);
     vi.useRealTimers();
   });
 
   it("purges a cached view only after the delay elapses", async () => {
     await manager.switchTo("proj-b", "/path/b");
-    expect(vi.mocked(purgeMemoryWebContents)).not.toHaveBeenCalled();
+    expect(purge()).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(19_999);
-    expect(vi.mocked(purgeMemoryWebContents)).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(purge()).not.toHaveBeenCalled();
 
-    vi.advanceTimersByTime(1);
-    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledWith(initialWc);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(purge()).toHaveBeenCalledTimes(1);
+    expect(purge()).toHaveBeenCalledWith(initialWc, {
+      shouldCollect: expect.any(Function),
+    });
   });
 
-  it("re-purges a long-cached view on the periodic interval", async () => {
+  it("collects on the first pass without consulting the heap, then records a baseline", async () => {
     await manager.switchTo("proj-b", "/path/b");
-    vi.advanceTimersByTime(20_000);
-    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(20_000);
 
-    vi.advanceTimersByTime(60_000);
-    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(2);
-    expect(
-      vi
-        .mocked(purgeMemoryWebContents)
-        .mock.calls.every((c) => c[0] === (initialWc as unknown as Electron.WebContents))
-    ).toBe(true);
+    expect(purgesOfA()).toHaveLength(1);
+    expect(heapReadsOfA()).toHaveLength(1);
+    expect(purge().mock.invocationCallOrder[0]).toBeLessThan(
+      readHeap().mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("skips later passes while heap growth stays under 32 MiB", async () => {
+    readHeap()
+      .mockResolvedValueOnce(100 * MiB)
+      .mockResolvedValueOnce(131 * MiB)
+      .mockResolvedValueOnce(90 * MiB);
+    await manager.switchTo("proj-b", "/path/b");
+
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(purgesOfA()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heapReadsOfA()).toHaveLength(2);
+    expect(purgesOfA()).toHaveLength(1);
+
+    // The skipped pass still arms the next one.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heapReadsOfA()).toHaveLength(3);
+    expect(purgesOfA()).toHaveLength(1);
+  });
+
+  it("collects on a later pass once the heap has grown 32 MiB past the baseline", async () => {
+    readHeap()
+      .mockResolvedValueOnce(100 * MiB)
+      .mockResolvedValueOnce(132 * MiB)
+      .mockResolvedValueOnce(104 * MiB)
+      .mockResolvedValueOnce(135 * MiB);
+    await manager.switchTo("proj-b", "/path/b");
+
+    await vi.advanceTimersByTimeAsync(80_000);
+    expect(purgesOfA()).toHaveLength(2);
+
+    // The baseline moved to the post-collection 104 MiB, so 135 MiB is growth
+    // of 31 MiB — no collection.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heapReadsOfA()).toHaveLength(4);
+    expect(purgesOfA()).toHaveLength(2);
+  });
+
+  it("skips a later pass whose heap read fails rather than collecting blind", async () => {
+    readHeap()
+      .mockResolvedValueOnce(100 * MiB)
+      .mockResolvedValue(null);
+    await manager.switchTo("proj-b", "/path/b");
+
+    await vi.advanceTimersByTimeAsync(20_000 + 60_000 * 3);
+
+    expect(purgesOfA()).toHaveLength(1);
+    expect(heapReadsOfA()).toHaveLength(4);
+  });
+
+  it("measures growth from the next read when the post-collection read failed", async () => {
+    readHeap()
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(200 * MiB)
+      .mockResolvedValueOnce(240 * MiB);
+    await manager.switchTo("proj-b", "/path/b");
+
+    await vi.advanceTimersByTimeAsync(20_000 + 60_000);
+    expect(purgesOfA()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(purgesOfA()).toHaveLength(2);
+  });
+
+  it("arms the next pass only after the current one settles", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const pass = holdNextPurgeOfA();
+
+    await vi.advanceTimersByTimeAsync(20_000 + 60_000 * 3);
+    expect(purgesOfA()).toHaveLength(1);
+
+    purge().mockResolvedValue(true);
+    readHeap().mockResolvedValue(200 * MiB);
+    pass.settle(true);
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(heapReadsOfA()).toHaveLength(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(heapReadsOfA()).toHaveLength(2);
+  });
+
+  it("does not collect when the view is reactivated mid-pass, and arms no further pass", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const pass = holdNextPurgeOfA();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(purgesOfA()).toHaveLength(1);
+    expect(pass.shouldCollect()).toBe(true);
+
+    await manager.switchTo("proj-a", "/path/a");
+    expect(pass.shouldCollect()).toBe(false);
+
+    pass.settle(false);
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(purgesOfA()).toHaveLength(1);
+    expect(heapReadsOfA()).toHaveLength(0);
+  });
+
+  it("does not collect when the view is reactivated during a later pass's heap read", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(purgesOfA()).toHaveLength(1);
+
+    let settleRead!: (bytes: number) => void;
+    readHeap().mockImplementation(
+      () =>
+        new Promise<number | null>((resolve) => {
+          settleRead = resolve;
+        })
+    );
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(heapReadsOfA()).toHaveLength(2);
+
+    await manager.switchTo("proj-a", "/path/a");
+    settleRead(1024 * MiB);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(purgesOfA()).toHaveLength(1);
+  });
+
+  it("a pass left over from an earlier cache session neither collects nor re-arms", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    const stale = holdNextPurgeOfA();
+    await vi.advanceTimersByTimeAsync(20_000);
+
+    await manager.switchTo("proj-a", "/path/a");
+    await manager.switchTo("proj-b", "/path/b");
+    expect(stale.shouldCollect()).toBe(false);
+
+    stale.settle(false);
+    await vi.advanceTimersByTimeAsync(19_999);
+    expect(purgesOfA()).toHaveLength(1);
+
+    // The new session's own first pass still lands on its 20 s delay.
+    await vi.advanceTimersByTimeAsync(1);
+    expect(purgesOfA()).toHaveLength(2);
+  });
+
+  it("starts each cache session over with an unconditional collection", async () => {
+    await manager.switchTo("proj-b", "/path/b");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(purgesOfA()).toHaveLength(1);
+
+    await manager.switchTo("proj-a", "/path/a");
+    await manager.switchTo("proj-b", "/path/b");
+    const readsBefore = heapReadsOfA().length;
+
+    // Flat heap: a gated pass would skip, so a collection here is the new
+    // session's unconditional first pass.
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(purgesOfA()).toHaveLength(2);
+    expect(heapReadsOfA()).toHaveLength(readsBefore + 1);
   });
 
   it("never purges a view that was reactivated before the delay", async () => {
     await manager.switchTo("proj-b", "/path/b");
-    vi.advanceTimersByTime(10_000);
+    await vi.advanceTimersByTimeAsync(10_000);
 
     await manager.switchTo("proj-a", "/path/a");
-    vi.advanceTimersByTime(120_000);
+    await vi.advanceTimersByTimeAsync(120_000);
 
-    expect(vi.mocked(purgeMemoryWebContents)).not.toHaveBeenCalledWith(initialWc);
+    expect(purgesOfA()).toHaveLength(0);
   });
 
   it("stops purging once the view is torn down", async () => {
+    purge().mockResolvedValue(false);
     await manager.switchTo("proj-b", "/path/b");
-    vi.advanceTimersByTime(20_000);
-    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(purgesOfA()).toHaveLength(1);
 
     initialWc.isDestroyed.mockReturnValue(true);
-    vi.advanceTimersByTime(120_000);
-    expect(vi.mocked(purgeMemoryWebContents)).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(purgesOfA()).toHaveLength(1);
+    expect(heapReadsOfA()).toHaveLength(0);
   });
 });
 

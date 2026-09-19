@@ -105,6 +105,13 @@ export type EvictionReason = "lru" | "pressure" | "limit-change";
  */
 export type ViewHydrationOutcome = "hydrated" | "timeout" | "cancelled";
 
+export interface CachedViewPurgeSession {
+  /** A collection has been issued since the view was cached. */
+  collected: boolean;
+  /** Heap used right after the last collection; null until one was read. */
+  baselineBytes: number | null;
+}
+
 export interface ViewEntry {
   view: WebContentsView;
   projectId: string;
@@ -114,10 +121,17 @@ export interface ViewEntry {
   crashTimestamps: number[];
   cleanupHandlers: () => void;
   /**
-   * Delayed/periodic CDP memory purge while cached (see schedulePurge).
+   * Delayed/periodic CDP memory purge while cached (see startPurgeSession).
    * Cleared on activation and teardown so a live view is never purged.
    */
   purgeTimer?: NodeJS.Timeout;
+  /**
+   * GC state of the current cache session (see startPurgeSession). Replaced
+   * each time the view is cached and dropped on activation and teardown, so
+   * the next session starts without a baseline and a pass still in flight
+   * from an earlier session can tell it was superseded.
+   */
+  purgeSession?: CachedViewPurgeSession;
   /**
    * Cold-start preload (`preload.cts`) evaluation cost in ms, self-reported by
    * the view's preload via PERF_FLUSH_RENDERER_MARKS (#9770). Set once per view

@@ -7,6 +7,7 @@ import {
   unfreezeWebContents,
   unthrottleCpuWebContents,
   purgeMemoryWebContents,
+  readJsHeapUsedBytes,
 } from "../webContentsLifecycle.js";
 
 interface MockDebugger {
@@ -300,19 +301,141 @@ describe("webContentsLifecycle", () => {
     it("swallows expected CDP errors silently", async () => {
       const wc = createMockWc();
       wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Target closed"));
-      await expect(
-        purgeMemoryWebContents(wc as unknown as Electron.WebContents)
-      ).resolves.toBeUndefined();
+      await expect(purgeMemoryWebContents(wc as unknown as Electron.WebContents)).resolves.toBe(
+        false
+      );
       expect(warnSpy).not.toHaveBeenCalled();
     });
 
     it("warns once for an unexpected CDP error", async () => {
       const wc = createMockWc();
       wc.debugger.sendCommand.mockRejectedValueOnce(new Error("boom"));
-      await expect(
-        purgeMemoryWebContents(wc as unknown as Electron.WebContents)
-      ).resolves.toBeUndefined();
+      await expect(purgeMemoryWebContents(wc as unknown as Electron.WebContents)).resolves.toBe(
+        false
+      );
       expect(warnSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports that a collection was issued", async () => {
+      const wc = createMockWc();
+      await expect(
+        purgeMemoryWebContents(wc as unknown as Electron.WebContents, { shouldCollect: () => true })
+      ).resolves.toBe(true);
+    });
+
+    it("reports no collection when skipped or destroyed", async () => {
+      await expect(
+        purgeMemoryWebContents(createMockWc({ destroyed: true }) as unknown as Electron.WebContents)
+      ).resolves.toBe(false);
+      vi.stubEnv("DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE", "1");
+      await expect(
+        purgeMemoryWebContents(createMockWc() as unknown as Electron.WebContents)
+      ).resolves.toBe(false);
+    });
+
+    it("checks shouldCollect after enabling, and skips the collection but still disables", async () => {
+      const wc = createMockWc();
+      // Recorded rather than asserted inline: the helper's own catch would
+      // swallow a failed expectation thrown from inside the callback.
+      let enabledFirst = false;
+      const shouldCollect = vi.fn(() => {
+        enabledFirst = wc.debugger.sendCommand.mock.calls.some(
+          (c: unknown[]) => c[0] === "HeapProfiler.enable"
+        );
+        return false;
+      });
+
+      await expect(
+        purgeMemoryWebContents(wc as unknown as Electron.WebContents, { shouldCollect })
+      ).resolves.toBe(false);
+
+      expect(enabledFirst).toBe(true);
+      expect(shouldCollect).toHaveBeenCalledTimes(1);
+      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
+      expect(methods).toEqual(["HeapProfiler.enable", "HeapProfiler.disable"]);
+    });
+
+    it("still disables the profiler when the collection itself fails", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand
+        .mockResolvedValueOnce(undefined)
+        .mockRejectedValueOnce(new Error("Target closed"));
+
+      await expect(purgeMemoryWebContents(wc as unknown as Electron.WebContents)).resolves.toBe(
+        false
+      );
+
+      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
+      expect(methods).toEqual([
+        "HeapProfiler.enable",
+        "HeapProfiler.collectGarbage",
+        "HeapProfiler.disable",
+      ]);
+    });
+
+    it("never sends disable when enable itself failed", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Cannot attach"));
+
+      await purgeMemoryWebContents(wc as unknown as Electron.WebContents);
+
+      const methods = wc.debugger.sendCommand.mock.calls.map((c: unknown[]) => c[0]);
+      expect(methods).toEqual(["HeapProfiler.enable"]);
+    });
+  });
+
+  describe("readJsHeapUsedBytes", () => {
+    it("returns usedSize from Runtime.getHeapUsage, attaching when needed", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand.mockResolvedValueOnce({
+        usedSize: 48_000_000,
+        totalSize: 64_000_000,
+      });
+
+      await expect(readJsHeapUsedBytes(wc as unknown as Electron.WebContents)).resolves.toBe(
+        48_000_000
+      );
+      expect(wc.debugger.attach).toHaveBeenCalledWith("1.3");
+      expect(wc.debugger.sendCommand.mock.calls).toEqual([["Runtime.getHeapUsage"]]);
+    });
+
+    it("returns null for a malformed response", async () => {
+      for (const response of [undefined, {}, { usedSize: "big" }, { usedSize: Number.NaN }]) {
+        const wc = createMockWc({ attached: true });
+        wc.debugger.sendCommand.mockResolvedValueOnce(response);
+        await expect(
+          readJsHeapUsedBytes(wc as unknown as Electron.WebContents)
+        ).resolves.toBeNull();
+      }
+    });
+
+    it("returns null without CDP when the wc is destroyed", async () => {
+      const wc = createMockWc({ destroyed: true });
+      await expect(readJsHeapUsedBytes(wc as unknown as Electron.WebContents)).resolves.toBeNull();
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("returns null without CDP when Windows E2E disables cached-view CDP commands", async () => {
+      vi.stubEnv("DAINTREE_E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE", "1");
+      const wc = createMockWc();
+      await expect(readJsHeapUsedBytes(wc as unknown as Electron.WebContents)).resolves.toBeNull();
+      expect(wc.debugger.attach).not.toHaveBeenCalled();
+      expect(wc.debugger.sendCommand).not.toHaveBeenCalled();
+    });
+
+    it("returns null and stays quiet on an expected CDP error", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("Target closed"));
+      await expect(readJsHeapUsedBytes(wc as unknown as Electron.WebContents)).resolves.toBeNull();
+      expect(warnSpy).not.toHaveBeenCalled();
+    });
+
+    it("returns null and warns once on an unexpected CDP error", async () => {
+      const wc = createMockWc();
+      wc.debugger.sendCommand.mockRejectedValueOnce(new Error("boom"));
+      await expect(readJsHeapUsedBytes(wc as unknown as Electron.WebContents)).resolves.toBeNull();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain("readJsHeapUsedBytes failed");
     });
   });
 });
