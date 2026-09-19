@@ -360,9 +360,8 @@ export class AuditService {
    * acknowledged (added to `knownCombinations`) as a side effect — see
    * {@link getSignals}. User-facing surfaces (the Settings audit log) keep the
    * default `true` so a combo fires once and then stays quiet. Passive pollers
-   * that only need the ambient count (the toolbar/HelpPanel anomaly indicator,
-   * #10022) must pass `false`, or their background cadence would consume the
-   * transient first-seen signal before the user ever navigates to the log.
+   * must pass `false`, or their background cadence would consume the transient
+   * first-seen signal before the user ever navigates to the log (#10022).
    */
   getAuditStats(markSeen = true): McpAuditStats {
     const signals = this.getSignals(markSeen);
@@ -393,9 +392,8 @@ export class AuditService {
    * `markSeen` (default `true`) governs the one stateful signal kind,
    * `first-seen-combination`: when `true`, each newly-observed `toolId+tier`
    * combo is recorded in `knownCombinations` so it fires exactly once. A passive
-   * caller passes `false` to read the same signals without acknowledging them —
-   * so a background poll can surface the ambient indicator while leaving the
-   * "fire once" acknowledgment to the user-facing audit log (#10022). The
+   * caller passes `false` to read the same signals without acknowledging them,
+   * leaving the "fire once" acknowledgment to the user-facing audit log. The
    * initial baseline seeding always runs regardless of `markSeen`, otherwise
    * every pre-existing combo would read as first-seen on the first call. The
    * other three kinds (latency drift, failure clustering, p95 z-score) are

@@ -4,7 +4,6 @@ import { render, act, fireEvent } from "@testing-library/react";
 import { ToolbarAssistantButton } from "../ToolbarAssistantButton";
 import { useHelpPanelStore } from "@/store/helpPanelStore";
 import { usePanelStore } from "@/store";
-import { __resetMcpAnomalyStoreForTesting, useMcpAnomalyStore } from "@/store/mcpAnomalyStore";
 import type { McpRuntimeSnapshot } from "@shared/types";
 
 const mcpReadiness: () => McpRuntimeSnapshot = vi.fn((): McpRuntimeSnapshot => ({
@@ -17,7 +16,9 @@ const mcpReadinessMock = mcpReadiness as ReturnType<typeof vi.fn>;
 
 vi.mock("@/components/ui/tooltip", () => ({
   Tooltip: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-  TooltipContent: () => null,
+  TooltipContent: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="assistant-tooltip">{children}</div>
+  ),
   TooltipProvider: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   TooltipTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
@@ -35,14 +36,18 @@ vi.mock("@/components/icons/DaintreeIcon", () => ({
   DaintreeIcon: () => <span data-testid="icon-daintree" />,
 }));
 
+let mockShortcut = "";
+
 vi.mock("@/hooks", () => ({
   useAriaKeyshortcuts: () => "",
-  useKeybindingDisplay: () => "",
+  useKeybindingDisplay: () => mockShortcut,
   useShortcutHintHover: () => ({}),
 }));
 
 vi.mock("@/lib/tooltipShortcut", () => ({
-  createTooltipContent: () => null,
+  createTooltipContent: (label: React.ReactNode, shortcut?: string) => (
+    <span data-shortcut={shortcut ?? ""}>{label}</span>
+  ),
 }));
 
 vi.mock("@/lib/sidebarToggle", () => ({
@@ -125,7 +130,6 @@ describe("ToolbarAssistantButton — agent state pip", () => {
     usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
     mockGestureAssistantHidden = false;
     clearAssistantGestureMock.mockClear();
-    __resetMcpAnomalyStoreForTesting();
   });
 
   it("does not render the pip when the assistant is idle", () => {
@@ -448,88 +452,82 @@ describe("ToolbarAssistantButton — agent state pip", () => {
   });
 });
 
-describe("ToolbarAssistantButton — MCP anomaly pip (#10022)", () => {
+describe("ToolbarAssistantButton — tooltip (#12509)", () => {
   beforeEach(() => {
     mcpReadinessMock.mockReturnValue({ enabled: true, state: "ready", port: 0, lastError: null });
     useHelpPanelStore.setState({ isOpen: false, sessions: { 0: emptyLane() }, activeSlot: 0 });
     usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
     mockGestureAssistantHidden = false;
-    __resetMcpAnomalyStoreForTesting();
+    mockShortcut = "";
   });
 
-  it("shows a warning pip when an anomaly is set and no other pip applies", () => {
+  function readLabels(container: HTMLElement) {
+    return {
+      tooltip: container.querySelector('[data-testid="assistant-tooltip"]')?.textContent,
+      ariaLabel: container.querySelector("button")?.getAttribute("aria-label"),
+    };
+  }
+
+  it("names the button without an Open/Close verb, whichever way the panel is toggled", () => {
     setHelpPanel({ isOpen: false, terminalId: null });
-    act(() => {
-      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 2 });
+    const { container, rerender } = render(<ToolbarAssistantButton />);
+    expect(readLabels(container)).toEqual({
+      tooltip: "Daintree Assistant",
+      ariaLabel: "Daintree Assistant",
     });
 
-    const { container, queryByTestId } = render(<ToolbarAssistantButton />);
-    const pip = queryByTestId("assistant-working-pip");
-    expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-status-warning/);
-    expect(pip!.className).not.toMatch(/animate-pulse/);
-    expect(pip!.className).not.toMatch(/accent/);
-    expect(container.querySelector("button")?.getAttribute("aria-label")).toBe(
-      "Daintree Assistant — MCP anomaly signals detected"
-    );
-  });
-
-  it("stays visible even when the panel is open (unlike the agent pip)", () => {
-    setHelpPanel({ isOpen: true, terminalId: null });
     act(() => {
-      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+      setHelpPanel({ isOpen: true, terminalId: null });
     });
-
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    const pip = queryByTestId("assistant-working-pip");
-    expect(pip?.getAttribute("data-visible")).toBe("true");
-    expect(pip!.className).toMatch(/bg-status-warning/);
+    rerender(<ToolbarAssistantButton />);
+    expect(readLabels(container)).toEqual({
+      tooltip: "Daintree Assistant",
+      ariaLabel: "Daintree Assistant",
+    });
+    expect(container.querySelector("button")?.getAttribute("aria-pressed")).toBe("true");
   });
 
-  it("is suppressed by the MCP-failed pip", () => {
+  it("reports the MCP-health status as a status, not as a reason to close the panel", () => {
     mcpReadinessMock.mockReturnValue({ state: "failed", port: 0, lastError: "oops" } as never);
-    setHelpPanel({ isOpen: false, terminalId: null });
-    act(() => {
-      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
-    });
+    setHelpPanel({ isOpen: true, terminalId: null });
 
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    const pip = queryByTestId("assistant-working-pip");
-    expect(pip!.className).toMatch(/bg-status-danger/);
-    expect(pip!.className).not.toMatch(/bg-status-warning/);
+    const { container } = render(<ToolbarAssistantButton />);
+    expect(readLabels(container)).toEqual({
+      tooltip: "Daintree Assistant — oops",
+      ariaLabel: "Daintree Assistant — oops",
+    });
   });
 
-  it("is suppressed by the MCP-starting pip", () => {
-    mcpReadinessMock.mockReturnValue({ state: "starting", port: 0, lastError: null } as never);
-    setHelpPanel({ isOpen: false, terminalId: null });
-    act(() => {
-      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+  it("carries the agent status only while the agent pip is showing", () => {
+    setHelpPanel({ isOpen: false, terminalId: "t-tip" });
+    setPanel("t-tip", "waiting");
+
+    const { container, rerender } = render(<ToolbarAssistantButton />);
+    expect(readLabels(container)).toEqual({
+      tooltip: "Daintree Assistant — Assistant is waiting",
+      ariaLabel: "Daintree Assistant — Assistant is waiting",
     });
 
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    const pip = queryByTestId("assistant-working-pip");
-    expect(pip!.className).toMatch(/bg-status-warning/);
-    // The starting pip pulses; the anomaly pip never does — proves which one won.
-    expect(pip!.className).toMatch(/animate-pulse-delayed/);
-  });
-
-  it("is suppressed by an active agent pip", () => {
-    setHelpPanel({ isOpen: false, terminalId: "t-anom" });
-    setPanel("t-anom", "working");
+    // Opening the panel suppresses the agent pip, so the status must not linger.
     act(() => {
-      useMcpAnomalyStore.setState({ hasAnomaly: true, anomalyCount: 1 });
+      setHelpPanel({ isOpen: true, terminalId: "t-tip" });
     });
-
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    const pip = queryByTestId("assistant-working-pip");
-    expect(pip!.className).toMatch(/bg-state-working/);
-    expect(pip!.className).not.toMatch(/bg-status-warning/);
+    rerender(<ToolbarAssistantButton />);
+    expect(readLabels(container)).toEqual({
+      tooltip: "Daintree Assistant",
+      ariaLabel: "Daintree Assistant",
+    });
   });
 
-  it("does not show a pip when there is no anomaly", () => {
+  it("passes the toggle shortcut through to the tooltip", () => {
+    mockShortcut = "⌘⇧A";
     setHelpPanel({ isOpen: false, terminalId: null });
 
-    const { queryByTestId } = render(<ToolbarAssistantButton />);
-    expect(queryByTestId("assistant-working-pip")?.getAttribute("data-visible")).toBe("false");
+    const { container } = render(<ToolbarAssistantButton />);
+    expect(
+      container
+        .querySelector('[data-testid="assistant-tooltip"] [data-shortcut]')
+        ?.getAttribute("data-shortcut")
+    ).toBe("⌘⇧A");
   });
 });

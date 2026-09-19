@@ -12,14 +12,8 @@ import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
 import { useMcpReadiness } from "@/hooks/useMcpReadiness";
-import { useMcpAnomalyStore } from "@/store/mcpAnomalyStore";
 import type { McpRuntimeSnapshot } from "@shared/types";
 import type { AgentState } from "@/types";
-
-// Tooltip/aria copy for the lowest-precedence anomaly pip (#10022). Surfaced
-// only when neither an MCP-health pip nor an agent pip is competing for the
-// corner — anomaly signals are background diagnostics, not live state.
-const ANOMALY_PIP_TOOLTIP = "MCP anomaly signals detected";
 
 const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
@@ -83,8 +77,8 @@ export function ToolbarAssistantButton({
   const toggle = useHelpPanelStore((s) => s.toggle);
   // The panel's actual visibility in AppLayout is `!gestureAssistantHidden &&
   // helpPanelOpen` — two independent stores. Reading only `isOpen` here would
-  // leave the button highlighted (aria-pressed, "Close" tooltip, suppressed
-  // pip) while the focus-mode gesture hides the panel. Mirror the same
+  // leave the button highlighted (aria-pressed, suppressed pip) while the
+  // focus-mode gesture hides the panel. Mirror the same
   // compound predicate so the visual state can't drift from what the user
   // actually sees.
   const gestureAssistantHidden = useFocusStore((s) => s.gestureAssistantHidden);
@@ -112,7 +106,6 @@ export function ToolbarAssistantButton({
     return best;
   });
   const mcp = useMcpReadiness();
-  const hasAnomaly = useMcpAnomalyStore((s) => s.hasAnomaly);
   const shortcut = useKeybindingDisplay("help.togglePanel");
   const ariaShortcut = useAriaKeyshortcuts("help.togglePanel");
   const hintHover = useShortcutHintHover("help.togglePanel");
@@ -142,7 +135,7 @@ export function ToolbarAssistantButton({
   const handleClick = useCallback(() => {
     suppressSidebarResizes();
     // When the gesture hides a logically-open panel the button reads as
-    // "Open"; clearing the gesture alone reveals it. Calling toggle() on
+    // closed; clearing the gesture alone reveals it. Calling toggle() on
     // top would flip isOpen to false and re-hide what the user just asked
     // to reveal. Only toggle when clearing the gesture wouldn't already
     // restore visibility.
@@ -165,19 +158,14 @@ export function ToolbarAssistantButton({
     lastSeenMarker.terminalKey === assistantTerminalKey &&
     lastSeenMarker.state === agentState;
   const showAgentPip = !pip && agentPip !== null && !isVisible && !isAcknowledged;
-  // Lowest-precedence ambient signal: an MCP audit anomaly fired (#10022). Only
-  // surfaces when no MCP-health pip and no agent pip are already claiming the
-  // corner, so it never masks a more urgent state. Stays visible whether or not
-  // the panel is open — the actionable detail link lives in the panel footer.
-  const showAnomalyPip = !pip && !showAgentPip && hasAnomaly;
-  const baseTooltip = isVisible ? "Close Daintree Assistant" : "Open Daintree Assistant";
-  const ariaLabel = pip
+  // Subject plus status, never "Open/Close … — status": joined to an action
+  // verb, the status read as the reason to take it (#12509). aria-pressed
+  // already carries open/closed, and toggle labels don't change with state.
+  const label = pip
     ? `Daintree Assistant — ${pip.tooltip}`
     : showAgentPip
       ? `Daintree Assistant — ${agentPip!.tooltip}`
-      : showAnomalyPip
-        ? `Daintree Assistant — ${ANOMALY_PIP_TOOLTIP}`
-        : "Daintree Assistant";
+      : "Daintree Assistant";
 
   return (
     <Tooltip>
@@ -190,7 +178,7 @@ export function ToolbarAssistantButton({
           data-toolbar-item={dataToolbarItem}
           onClick={handleClick}
           className={toolbarIconButtonClass}
-          aria-label={ariaLabel}
+          aria-label={label}
           aria-pressed={isVisible}
           aria-keyshortcuts={ariaShortcut}
         >
@@ -204,33 +192,17 @@ export function ToolbarAssistantButton({
               aria-hidden="true"
               data-testid="assistant-working-pip"
               data-agent-state={agentState ?? ""}
-              data-visible={pip !== null || showAgentPip || showAnomalyPip}
+              data-visible={pip !== null || showAgentPip}
               className={cn(
                 "toolbar-pip toolbar-badge",
-                pip?.className ??
-                  (showAgentPip
-                    ? agentPip?.className
-                    : showAnomalyPip
-                      ? "bg-status-warning"
-                      : undefined),
+                pip?.className ?? (showAgentPip ? agentPip?.className : undefined),
                 pip?.delayed && "animate-pulse-delayed"
               )}
             />
           </div>
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom">
-        {createTooltipContent(
-          pip
-            ? `${baseTooltip} — ${pip.tooltip}`
-            : showAgentPip
-              ? `${baseTooltip} — ${agentPip!.tooltip}`
-              : showAnomalyPip
-                ? `${baseTooltip} — ${ANOMALY_PIP_TOOLTIP}`
-                : baseTooltip,
-          shortcut
-        )}
-      </TooltipContent>
+      <TooltipContent side="bottom">{createTooltipContent(label, shortcut)}</TooltipContent>
     </Tooltip>
   );
 }
