@@ -86,13 +86,14 @@ export class AgentAvailabilityStore {
 
     this.unsubscribers.push(
       events.on("agent:spawned", (payload) => {
-        // A respawn under the same terminal id revives it (`write` drops the
-        // tombstone) and starts it over at "working", so nothing from a prior
-        // session in it can outlive the respawn. Without this, a previous
-        // "waiting" persists and waitUntilIdle settles immediately as
-        // already-idle, dropping its listener before the new session's crash
-        // "exited" event arrives (issue #10816). Only this terminal is reset —
-        // a sibling of the same type keeps its own state.
+        // A respawn under the same terminal id revives it and starts it over
+        // at "working", so nothing from a prior session in it can outlive the
+        // respawn. Without this, a previous "waiting" persists and
+        // waitUntilIdle settles immediately as already-idle, dropping its
+        // listener before the new session's crash "exited" event arrives
+        // (issue #10816). Only this terminal is reset — a sibling of the same
+        // type keeps its own state.
+        this.closedTerminals.delete(payload.terminalId);
         this.write({
           terminalId: payload.terminalId,
           agentId: payload.agentId,
@@ -100,6 +101,15 @@ export class AgentAvailabilityStore {
           lastStateChange: payload.timestamp,
           spawnedAt: payload.timestamp,
         });
+      })
+    );
+
+    // An agent the user starts by hand never announces a spawn; detection
+    // promoting the pane is the equivalent signal that a new agent session is
+    // running in it, so a restarted pane stops reading as closed.
+    this.unsubscribers.push(
+      events.on("agent:detected", (payload) => {
+        if (payload.agentType) this.closedTerminals.delete(payload.terminalId);
       })
     );
 
@@ -159,12 +169,21 @@ export class AgentAvailabilityStore {
     // Without a terminal id there is no slot to attribute the transition to,
     // and resolving one through the agent type is exactly the conflation this
     // store exists to avoid.
-    if (!payload.agentId || !payload.terminalId) return;
+    if (!payload.terminalId) return;
+    // Nothing after a kill describes the killed session — a title report
+    // queued before it can still land — and recording one would report a
+    // closed terminal as tracked again. Only a new spawn or detection reopens it.
+    if (this.closedTerminals.has(payload.terminalId)) return;
 
     const previous = this.terminals.get(payload.terminalId);
+    // A hand-started agent's identity is cleared as its PTY exits, before the
+    // final transition is emitted, so that transition arrives with no agent id.
+    // It still describes this terminal's agent.
+    const agentId = payload.agentId ?? previous?.agentId;
+    if (!agentId) return;
     const next: TerminalAgentSnapshot = {
       terminalId: payload.terminalId,
-      agentId: payload.agentId,
+      agentId,
       state: payload.state,
       lastStateChange: payload.timestamp,
     };
@@ -181,17 +200,13 @@ export class AgentAvailabilityStore {
       if (payload.exitCode !== undefined) next.exitCode = payload.exitCode;
       if (payload.exitSignal !== undefined) next.exitSignal = payload.exitSignal;
     }
-    if (previous?.spawnedAt !== undefined && previous.agentId === payload.agentId) {
+    if (previous?.spawnedAt !== undefined && previous.agentId === agentId) {
       next.spawnedAt = previous.spawnedAt;
     }
     this.write(next);
   }
 
   private write(snapshot: TerminalAgentSnapshot): void {
-    // A kill emits nothing for its terminal after `agent:killed`, so a live
-    // observation means the id is in use again — e.g. a restarted pane whose
-    // agent was started by hand and so never announced a spawn.
-    this.closedTerminals.delete(snapshot.terminalId);
     this.terminals.delete(snapshot.terminalId);
     this.terminals.set(snapshot.terminalId, snapshot);
   }

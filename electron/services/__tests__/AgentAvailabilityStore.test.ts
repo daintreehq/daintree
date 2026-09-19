@@ -126,9 +126,7 @@ describe("AgentAvailabilityStore", () => {
       expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
     });
 
-    it("ignores a transition with no agentId", () => {
-      spawn("claude", "term-1");
-
+    it("ignores a transition with no agentId for a terminal it has no record of", () => {
       events.emit("agent:state-changed", {
         terminalId: "term-1",
         state: "waiting",
@@ -138,7 +136,31 @@ describe("AgentAvailabilityStore", () => {
         confidence: 1,
       });
 
-      expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
+      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
+    });
+
+    // A hand-started agent's identity is cleared as its PTY exits, so the
+    // final transition arrives without an agent id.
+    it("attributes a transition with no agentId to the terminal's own agent", () => {
+      transition("claude", "term-1", "working");
+
+      events.emit("agent:state-changed", {
+        terminalId: "term-1",
+        state: "exited",
+        previousState: "working",
+        timestamp: 7_000,
+        trigger: "exit",
+        confidence: 1,
+        exitCode: 0,
+      });
+
+      expect(store.getTerminalSnapshot("term-1")).toEqual({
+        terminalId: "term-1",
+        agentId: "claude",
+        state: "exited",
+        lastStateChange: 7_000,
+        exitCode: 0,
+      });
     });
 
     it("records a transition for a terminal whose spawn it never saw", () => {
@@ -597,9 +619,8 @@ describe("AgentAvailabilityStore", () => {
       expect(store.getLatestSnapshotForAgent("claude")).toBeUndefined();
     });
 
-    // A restarted pane comes back as a plain shell, so an agent the user then
-    // starts by hand reports state without ever announcing a spawn.
-    it("tracks a closed terminal again once it reports a live transition", () => {
+    // A title report queued before the kill can still land after it.
+    it("does not revive a killed terminal from a transition that trails the kill", () => {
       spawn("claude", "term-1");
       events.emit("agent:killed", {
         agentId: "claude",
@@ -609,9 +630,50 @@ describe("AgentAvailabilityStore", () => {
 
       transition("claude", "term-1", "working");
 
+      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
+      expect(store.isTerminalClosed("term-1")).toBe(true);
+    });
+
+    // A restarted pane comes back as a plain shell, so an agent the user then
+    // starts by hand is detected rather than announcing a spawn.
+    it("reopens a closed terminal when detection promotes a hand-started agent in it", () => {
+      spawn("claude", "term-1");
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        agentType: "claude",
+        processName: "claude",
+        timestamp: Date.now(),
+      });
+      transition("claude", "term-1", "working");
+
       expect(store.isTerminalClosed("term-1")).toBe(false);
       expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
-      expect(store.getAgentsByAvailability().map((r) => r.terminalId)).toEqual(["term-1"]);
+    });
+
+    it("does not reopen a closed terminal for a plain process detection", () => {
+      spawn("claude", "term-1");
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      events.emit("agent:detected", {
+        terminalId: "term-1",
+        processIconId: "npm",
+        processName: "npm",
+        timestamp: Date.now(),
+      });
+      transition("claude", "term-1", "working");
+
+      expect(store.isTerminalClosed("term-1")).toBe(true);
+      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
     });
 
     it("a respawn after trash and kill is counted again", () => {

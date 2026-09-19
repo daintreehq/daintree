@@ -1464,7 +1464,7 @@ describe("McpServerService", () => {
 
     // Killing an already-idle agent emits no state change, but it still drops
     // the terminal the read was reporting.
-    it("notifies agent-state subscribers when an agent of that type is killed or spawned", async () => {
+    it("notifies agent-state subscribers when an agent of that type is spawned, killed or quits", async () => {
       const { events } = await import("../events.js");
       const { window } = createMockWindow({ getManifest: manifestForResources });
       await service.start(window);
@@ -1490,14 +1490,27 @@ describe("McpServerService", () => {
         terminalId: "term-life",
         timestamp: Date.now(),
       });
+      events.emit("agent:exited", {
+        terminalId: "term-life-2",
+        agentType: "agent-life",
+        timestamp: Date.now(),
+        exitKind: "subcommand",
+      });
       events.emit("agent:killed", {
         agentId: "different-agent",
         terminalId: "term-other",
         timestamp: Date.now(),
       });
+      events.emit("agent:exited", {
+        terminalId: "term-other",
+        agentType: "different-agent",
+        timestamp: Date.now(),
+        exitKind: "subcommand",
+      });
 
       await new Promise((r) => setTimeout(r, 50));
       expect(updated).toEqual([
+        "daintree://agent/agent-life/state",
         "daintree://agent/agent-life/state",
         "daintree://agent/agent-life/state",
       ]);

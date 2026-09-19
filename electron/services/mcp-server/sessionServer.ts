@@ -3089,9 +3089,10 @@ function subscribeResource(
         ? () => {}
         : onWorkspaceResidencyChanged(boundWorkspaceId, fire);
   } else if (parsed.kind === "agentState") {
-    // A spawn resets a terminal and a kill drops it, and either can change
-    // which terminal the read reports without any state change — killing an
-    // already-idle agent emits none.
+    // A spawn resets a terminal, and a kill or a hand-started agent quitting
+    // to its shell drops it; any of them can change which terminal the read
+    // reports without a state change of its own — killing an already-idle
+    // agent emits none.
     const offs = [
       events.on("agent:state-changed", (payload) => {
         if (payload.agentId === parsed.id) fire();
@@ -3101,6 +3102,9 @@ function subscribeResource(
       }),
       events.on("agent:killed", (payload) => {
         if (payload.agentId === parsed.id) fire();
+      }),
+      events.on("agent:exited", (payload) => {
+        if (payload.exitKind === "subcommand" && payload.agentType === parsed.id) fire();
       }),
     ];
     unsub = () => {
