@@ -8,6 +8,34 @@ import {
   MAX_CLOSED_TERMINALS as CLOSED_TERMINAL_CAPACITY,
 } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
+import type { AgentState, WaitingReason } from "../../../shared/types/agent.js";
+
+const spawn = (agentId: string, terminalId: string, timestamp = Date.now()) => {
+  events.emit("agent:spawned", { agentId, terminalId, timestamp });
+};
+
+const transition = (
+  agentId: string,
+  terminalId: string,
+  state: AgentState,
+  extra: {
+    timestamp?: number;
+    waitingReason?: WaitingReason;
+    exitCode?: number | null;
+    exitSignal?: number;
+  } = {}
+) => {
+  events.emit("agent:state-changed", {
+    agentId,
+    terminalId,
+    state,
+    previousState: state === "working" ? "idle" : "working",
+    trigger: state === "completed" || state === "exited" ? "exit" : "output",
+    confidence: 1,
+    ...extra,
+    timestamp: extra.timestamp ?? Date.now(),
+  });
+};
 
 describe("AgentAvailabilityStore", () => {
   let store: AgentAvailabilityStore;
@@ -21,515 +49,362 @@ describe("AgentAvailabilityStore", () => {
     store.dispose();
   });
 
-  describe("agent registration", () => {
-    it("registers an agent with initial state", () => {
-      store.registerAgent("agent-1", "idle");
+  describe("per-terminal state", () => {
+    it("records a spawn as working, stamped with the spawn time", () => {
+      spawn("claude", "term-1", 1234);
 
-      expect(store.getState("agent-1")).toBe("idle");
-      expect(store.isAvailable("agent-1")).toBe(true);
-    });
-
-    it("registers an agent with default idle state", () => {
-      store.registerAgent("agent-1");
-
-      expect(store.getState("agent-1")).toBe("idle");
-      expect(store.isAvailable("agent-1")).toBe(true);
-    });
-
-    it("does not overwrite existing agent on re-registration", () => {
-      store.registerAgent("agent-1", "idle");
-
-      // Simulate a state change
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
+      expect(store.getTerminalSnapshot("term-1")).toEqual({
+        terminalId: "term-1",
+        agentId: "claude",
         state: "working",
-        previousState: "idle",
-        timestamp: Date.now(),
-        trigger: "input",
-        confidence: 1.0,
+        lastStateChange: 1234,
+        spawnedAt: 1234,
+      });
+      expect(store.getAgentIdForTerminal("term-1")).toBe("claude");
+    });
+
+    it("tracks a terminal's state from its own transitions", () => {
+      spawn("claude", "term-1", 1_000);
+      transition("claude", "term-1", "waiting", { timestamp: 2_000, waitingReason: "prompt" });
+
+      expect(store.getTerminalSnapshot("term-1")).toMatchObject({
+        state: "waiting",
+        waitingReason: "prompt",
+        lastStateChange: 2_000,
+        spawnedAt: 1_000,
       });
 
-      // Try to re-register
-      store.registerAgent("agent-1", "idle");
-
-      // State should still be "working"
-      expect(store.getState("agent-1")).toBe("working");
+      transition("claude", "term-1", "working");
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
+      expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("waitingReason");
     });
 
-    it("unregisters an agent", () => {
-      store.registerAgent("agent-1", "idle");
-      store.unregisterAgent("agent-1");
+    // #12494 — agent ids name the agent type, so these two share "claude".
+    it("keeps same-type terminals in separate slots", () => {
+      spawn("claude", "term-a", 1_000);
+      spawn("claude", "term-b", 2_000);
 
-      expect(store.getState("agent-1")).toBeUndefined();
-      expect(store.isAvailable("agent-1")).toBe(false);
-    });
-  });
+      transition("claude", "term-a", "waiting", { timestamp: 3_000, waitingReason: "question" });
 
-  describe("availability tracking", () => {
-    it("tracks state changes from events", () => {
-      store.registerAgent("agent-1", "idle");
-
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
+      expect(store.getTerminalSnapshot("term-a")).toMatchObject({
+        state: "waiting",
+        waitingReason: "question",
+        lastStateChange: 3_000,
+        spawnedAt: 1_000,
+      });
+      expect(store.getTerminalSnapshot("term-b")).toEqual({
+        terminalId: "term-b",
+        agentId: "claude",
         state: "working",
-        previousState: "idle",
-        timestamp: Date.now(),
-        trigger: "input",
-        confidence: 1.0,
+        lastStateChange: 2_000,
+        spawnedAt: 2_000,
       });
-
-      expect(store.getState("agent-1")).toBe("working");
-      expect(store.isAvailable("agent-1")).toBe(false);
     });
 
-    it("considers idle state as available", () => {
-      store.registerAgent("agent-1");
+    it("does not reset an existing terminal when a same-type sibling spawns", () => {
+      spawn("claude", "term-a");
+      transition("claude", "term-a", "waiting", { waitingReason: "prompt" });
 
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "idle",
-        previousState: "working",
-        timestamp: Date.now(),
-        trigger: "output",
-        confidence: 1.0,
-      });
+      spawn("claude", "term-b");
 
-      expect(store.isAvailable("agent-1")).toBe(true);
+      expect(store.getTerminalSnapshot("term-a")?.state).toBe("waiting");
+      expect(store.getTerminalSnapshot("term-a")?.waitingReason).toBe("prompt");
     });
 
-    it("considers waiting state as available", () => {
-      store.registerAgent("agent-1");
+    it("ignores a transition with no terminalId rather than attributing it by type", () => {
+      spawn("claude", "term-1");
 
       events.emit("agent:state-changed", {
-        agentId: "agent-1",
+        agentId: "claude",
         state: "waiting",
         previousState: "working",
         timestamp: Date.now(),
         trigger: "output",
-        confidence: 1.0,
+        confidence: 1,
       });
 
-      expect(store.isAvailable("agent-1")).toBe(true);
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
     });
 
-    it("considers working state as unavailable", () => {
-      store.registerAgent("agent-1", "idle");
+    it("ignores a transition with no agentId", () => {
+      spawn("claude", "term-1");
 
       events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "working",
-        previousState: "idle",
+        terminalId: "term-1",
+        state: "waiting",
+        previousState: "working",
         timestamp: Date.now(),
-        trigger: "input",
-        confidence: 1.0,
+        trigger: "output",
+        confidence: 1,
       });
 
-      expect(store.isAvailable("agent-1")).toBe(false);
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
     });
 
-    it("ignores events without agentId", () => {
-      store.registerAgent("agent-1", "idle");
+    it("records a transition for a terminal whose spawn it never saw", () => {
+      transition("claude", "term-1", "waiting", { timestamp: 5_000 });
 
-      events.emit("agent:state-changed", {
-        state: "working",
-        previousState: "idle",
-        timestamp: Date.now(),
-        trigger: "input",
-        confidence: 1.0,
+      expect(store.getTerminalSnapshot("term-1")).toEqual({
+        terminalId: "term-1",
+        agentId: "claude",
+        state: "waiting",
+        lastStateChange: 5_000,
       });
-
-      expect(store.getState("agent-1")).toBe("idle");
     });
   });
 
   describe("exit metadata tracking", () => {
     it("caches exitCode from a completed transition", () => {
-      store.registerAgent("agent-1", "working");
+      spawn("claude", "term-1");
+      transition("claude", "term-1", "completed", { exitCode: 0 });
 
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "completed",
-        previousState: "working",
-        timestamp: Date.now(),
-        trigger: "exit",
-        confidence: 1.0,
-        exitCode: 0,
-      });
-
-      expect(store.getExitCode("agent-1")).toBe(0);
+      expect(store.getTerminalSnapshot("term-1")?.exitCode).toBe(0);
     });
 
     it("caches a non-zero exitCode from an exited transition", () => {
-      store.registerAgent("agent-1", "working");
+      spawn("claude", "term-1");
+      transition("claude", "term-1", "exited", { exitCode: 1 });
 
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "exited",
-        previousState: "working",
-        timestamp: Date.now(),
-        trigger: "exit",
-        confidence: 1.0,
-        exitCode: 1,
-      });
-
-      expect(store.getExitCode("agent-1")).toBe(1);
+      expect(store.getTerminalSnapshot("term-1")?.exitCode).toBe(1);
     });
 
     it("caches a null exitCode plus exitSignal for a signal-terminated exit", () => {
-      store.registerAgent("agent-1", "working");
+      spawn("claude", "term-1");
+      transition("claude", "term-1", "exited", { exitCode: null, exitSignal: 9 });
 
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "exited",
-        previousState: "working",
-        timestamp: Date.now(),
-        trigger: "exit",
-        confidence: 1.0,
-        exitCode: null,
-        exitSignal: 9,
-      });
-
-      expect(store.getExitCode("agent-1")).toBeNull();
-      expect(store.getExitSignal("agent-1")).toBe(9);
+      expect(store.getTerminalSnapshot("term-1")?.exitCode).toBeNull();
+      expect(store.getTerminalSnapshot("term-1")?.exitSignal).toBe(9);
     });
 
     it("does not record exit metadata for non-terminal transitions", () => {
-      store.registerAgent("agent-1", "idle");
+      spawn("claude", "term-1");
+      transition("claude", "term-1", "idle", { exitCode: 4, exitSignal: 2 });
 
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "working",
-        previousState: "idle",
-        timestamp: Date.now(),
-        trigger: "input",
-        confidence: 1.0,
-      });
-
-      expect(store.getExitCode("agent-1")).toBeUndefined();
-      expect(store.getExitSignal("agent-1")).toBeUndefined();
+      expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("exitCode");
+      expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("exitSignal");
     });
 
-    it("captures spawnedAt from agent:spawned", () => {
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: 1234,
-      });
+    it("keeps each same-type terminal's exit metadata its own", () => {
+      spawn("claude", "term-a");
+      spawn("claude", "term-b");
 
-      expect(store.getSpawnedAt("agent-1")).toBe(1234);
-    });
+      transition("claude", "term-a", "completed", { exitCode: 0 });
+      transition("claude", "term-b", "exited", { exitCode: null, exitSignal: 15 });
 
-    it("clears stale exit metadata when the agent respawns under the same id", () => {
-      store.registerAgent("agent-1", "working");
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "exited",
-        previousState: "working",
-        timestamp: Date.now(),
-        trigger: "exit",
-        confidence: 1.0,
-        exitCode: 1,
-      });
-      expect(store.getExitCode("agent-1")).toBe(1);
-
-      // A new session under the same agentId must not inherit the old exit code.
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getExitCode("agent-1")).toBeUndefined();
-    });
-
-    it("clears exit metadata on unregisterAgent", () => {
-      store.registerAgent("agent-1", "working");
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "exited",
-        previousState: "working",
-        timestamp: Date.now(),
-        trigger: "exit",
-        confidence: 1.0,
-        exitCode: 7,
-      });
-
-      store.unregisterAgent("agent-1");
-
-      expect(store.getExitCode("agent-1")).toBeUndefined();
-      expect(store.getSpawnedAt("agent-1")).toBeUndefined();
+      expect(store.getTerminalSnapshot("term-a")?.exitCode).toBe(0);
+      expect(store.getTerminalSnapshot("term-a")).not.toHaveProperty("exitSignal");
+      expect(store.getTerminalSnapshot("term-b")?.exitCode).toBeNull();
+      expect(store.getTerminalSnapshot("term-b")?.exitSignal).toBe(15);
     });
   });
 
   describe("respawn state reset (#10816)", () => {
     it("resets a stale 'waiting' state to 'working' on respawn", () => {
-      store.registerAgent("agent-1", "working");
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "waiting",
-        previousState: "working",
-        timestamp: Date.now(),
-        trigger: "output",
-        confidence: 1.0,
-        waitingReason: "prompt",
-      });
-      expect(store.getState("agent-1")).toBe("waiting");
-      expect(store.getWaitingReason("agent-1")).toBe("prompt");
+      spawn("claude", "term-1");
+      transition("claude", "term-1", "waiting", { waitingReason: "prompt" });
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("waiting");
 
-      // A fresh spawn under the same agentId must not inherit "waiting"; it
-      // would otherwise let waitUntilIdle settle as already-idle before the new
+      // A fresh spawn in the same terminal must not inherit "waiting"; it would
+      // otherwise let waitUntilIdle settle as already-idle before the new
       // session's exit event arrives.
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
+      spawn("claude", "term-1");
 
-      expect(store.getState("agent-1")).toBe("working");
-      expect(store.getWaitingReason("agent-1")).toBeUndefined();
-      expect(store.isAvailable("agent-1")).toBe(false);
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
+      expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("waitingReason");
+      expect(store.getAgentsByAvailability()).toEqual([
+        expect.objectContaining({ terminalId: "term-1", available: false }),
+      ]);
     });
 
-    it("excludes a freshly respawned agent from getAvailableAgents", () => {
-      store.registerAgent("agent-1", "waiting");
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
+    it("clears a stale 'exited' state and its exit metadata on respawn", () => {
+      spawn("claude", "term-1");
+      transition("claude", "term-1", "exited", { exitCode: 1, exitSignal: 9 });
 
-      expect(store.getAvailableAgents().find((a) => a.agentId === "agent-1")).toBeUndefined();
-    });
+      spawn("claude", "term-1");
 
-    it("clears a stale 'exited' state on respawn", () => {
-      store.registerAgent("agent-1", "working");
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "exited",
-        previousState: "working",
-        timestamp: Date.now(),
-        trigger: "exit",
-        confidence: 1.0,
-        exitCode: 1,
-      });
-      expect(store.getState("agent-1")).toBe("exited");
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getState("agent-1")).toBe("working");
-      expect(store.getExitCode("agent-1")).toBeUndefined();
+      expect(store.getTerminalSnapshot("term-1")?.state).toBe("working");
+      expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("exitCode");
+      expect(store.getTerminalSnapshot("term-1")).not.toHaveProperty("exitSignal");
     });
 
     it("records the spawn timestamp as the lastStateChange on respawn", () => {
-      store.registerAgent("agent-1", "waiting");
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: 9999,
+      spawn("claude", "term-1", 1_000);
+      transition("claude", "term-1", "waiting", { timestamp: 2_000 });
+
+      spawn("claude", "term-1", 9_999);
+
+      expect(store.getTerminalSnapshot("term-1")?.lastStateChange).toBe(9_999);
+      expect(store.getTerminalSnapshot("term-1")?.spawnedAt).toBe(9_999);
+    });
+
+    it("takes the new agent type when a terminal respawns as a different agent", () => {
+      spawn("claude", "term-1");
+      transition("claude", "term-1", "completed", { exitCode: 0 });
+
+      spawn("codex", "term-1");
+
+      expect(store.getAgentIdForTerminal("term-1")).toBe("codex");
+      expect(store.getLatestSnapshotForAgent("claude")).toBeUndefined();
+      expect(store.getLatestSnapshotForAgent("codex")?.state).toBe("working");
+    });
+
+    it("leaves a same-type sibling alone when one terminal respawns", () => {
+      spawn("claude", "term-a");
+      spawn("claude", "term-b");
+      transition("claude", "term-b", "exited", { exitCode: 2 });
+
+      spawn("claude", "term-a");
+
+      expect(store.getTerminalSnapshot("term-b")?.state).toBe("exited");
+      expect(store.getTerminalSnapshot("term-b")?.exitCode).toBe(2);
+    });
+  });
+
+  describe("getLatestSnapshotForAgent", () => {
+    it("returns undefined for an agent type with no terminal", () => {
+      expect(store.getLatestSnapshotForAgent("claude")).toBeUndefined();
+    });
+
+    it("returns the whole snapshot of the most recently updated terminal of the type", () => {
+      spawn("claude", "term-a");
+      spawn("claude", "term-b");
+      transition("claude", "term-a", "waiting", { waitingReason: "question" });
+
+      expect(store.getLatestSnapshotForAgent("claude")?.terminalId).toBe("term-a");
+
+      transition("claude", "term-b", "completed", { exitCode: 3 });
+
+      // term-b's own fields, with nothing carried over from term-a.
+      expect(store.getLatestSnapshotForAgent("claude")).toMatchObject({
+        terminalId: "term-b",
+        state: "completed",
+        exitCode: 3,
+      });
+      expect(store.getLatestSnapshotForAgent("claude")).not.toHaveProperty("waitingReason");
+    });
+
+    it("falls back to a live sibling when the latest terminal is killed", () => {
+      spawn("claude", "term-a");
+      spawn("claude", "term-b");
+      transition("claude", "term-b", "waiting");
+
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-b",
+        timestamp: Date.now(),
       });
 
-      expect(store.getLastStateChange("agent-1")).toBe(9999);
+      expect(store.getLatestSnapshotForAgent("claude")?.terminalId).toBe("term-a");
+    });
+
+    it("ignores terminals running a different agent type", () => {
+      spawn("claude", "term-a");
+      spawn("codex", "term-b");
+
+      expect(store.getLatestSnapshotForAgent("claude")?.terminalId).toBe("term-a");
     });
   });
 
   describe("getAgentsByAvailability", () => {
-    it("returns all agents with availability info", () => {
-      store.registerAgent("agent-1", "idle");
-      store.registerAgent("agent-2", "working");
+    it("returns one row per terminal, even for the same agent type", () => {
+      spawn("claude", "term-a", 1_000);
+      spawn("claude", "term-b", 2_000);
+      transition("claude", "term-b", "waiting", { timestamp: 3_000 });
 
-      const agents = store.getAgentsByAvailability();
+      const rows = store.getAgentsByAvailability();
 
-      expect(agents).toHaveLength(2);
-
-      const agent1 = agents.find((a) => a.agentId === "agent-1");
-      expect(agent1).toBeDefined();
-      expect(agent1?.available).toBe(true);
-      expect(agent1?.state).toBe("idle");
-
-      const agent2 = agents.find((a) => a.agentId === "agent-2");
-      expect(agent2).toBeDefined();
-      expect(agent2?.available).toBe(false);
-      expect(agent2?.state).toBe("working");
+      expect(rows).toHaveLength(2);
+      expect(rows.find((r) => r.terminalId === "term-a")).toEqual({
+        terminalId: "term-a",
+        agentId: "claude",
+        available: false,
+        state: "working",
+        lastStateChange: 1_000,
+      });
+      expect(rows.find((r) => r.terminalId === "term-b")).toEqual({
+        terminalId: "term-b",
+        agentId: "claude",
+        available: true,
+        state: "waiting",
+        lastStateChange: 3_000,
+      });
     });
 
-    it("returns empty array when no agents registered", () => {
-      const agents = store.getAgentsByAvailability();
-      expect(agents).toEqual([]);
+    it("counts idle and waiting as available and working as not", () => {
+      spawn("claude", "term-1");
+      spawn("codex", "term-2");
+      spawn("gemini", "term-3");
+      transition("claude", "term-1", "idle");
+      transition("codex", "term-2", "waiting");
+
+      const available = store
+        .getAgentsByAvailability()
+        .filter((r) => r.available)
+        .map((r) => r.terminalId)
+        .sort();
+      expect(available).toEqual(["term-1", "term-2"]);
     });
-  });
 
-  describe("getAvailableAgents", () => {
-    it("returns only available agents", () => {
-      store.registerAgent("agent-1", "idle");
-      store.registerAgent("agent-2", "working");
-      store.registerAgent("agent-3", "waiting");
-
-      const available = store.getAvailableAgents();
-
-      expect(available).toHaveLength(2);
-      expect(available.map((a) => a.agentId).sort()).toEqual(["agent-1", "agent-3"]);
+    it("returns empty array when no agents are tracked", () => {
+      expect(store.getAgentsByAvailability()).toEqual([]);
     });
   });
 
   describe("clear", () => {
     it("clears all tracked state", () => {
-      store.registerAgent("agent-1", "idle");
-      store.registerAgent("agent-2", "working");
+      spawn("claude", "term-1");
+      spawn("codex", "term-2");
 
       store.clear();
 
       expect(store.getAgentsByAvailability()).toEqual([]);
-      expect(store.getState("agent-1")).toBeUndefined();
+      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
     });
   });
 
   describe("trash filtering", () => {
-    it("excludes trashed agent from getAgentsByAvailability", () => {
-      store.registerAgent("agent-1", "working");
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
+    it("excludes a trashed terminal from getAgentsByAvailability", () => {
+      spawn("claude", "term-1");
 
       events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
 
-      const agents = store.getAgentsByAvailability();
-      expect(agents.find((a) => a.agentId === "agent-1")).toBeUndefined();
+      expect(store.getAgentsByAvailability()).toEqual([]);
     });
 
-    it("re-includes restored agent in getAgentsByAvailability", () => {
-      store.registerAgent("agent-1", "working");
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
+    it("re-includes a restored terminal in getAgentsByAvailability", () => {
+      spawn("claude", "term-1");
 
       events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
       events.emit("terminal:restored", { id: "term-1" });
 
-      const agents = store.getAgentsByAvailability();
-      expect(agents.find((a) => a.agentId === "agent-1")).toBeDefined();
+      expect(store.getAgentsByAvailability().map((r) => r.terminalId)).toEqual(["term-1"]);
     });
 
-    it("returns 0 active agents when all working agents are trashed", () => {
-      store.registerAgent("agent-1", "working");
-      store.registerAgent("agent-2", "working");
+    it("still counts a same-type sibling when one terminal is trashed", () => {
+      spawn("claude", "term-a");
+      spawn("claude", "term-b");
 
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-      events.emit("agent:spawned", {
-        agentId: "agent-2",
-        terminalId: "term-2",
-        timestamp: Date.now(),
-      });
+      events.emit("terminal:trashed", { id: "term-a", expiresAt: Date.now() + 60000 });
 
-      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
-      events.emit("terminal:trashed", { id: "term-2", expiresAt: Date.now() + 60000 });
-
-      expect(store.getAgentsByAvailability()).toHaveLength(0);
-    });
-
-    it("still shows non-trashed active agents", () => {
-      store.registerAgent("agent-1", "working");
-      store.registerAgent("agent-2", "working");
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-      events.emit("agent:spawned", {
-        agentId: "agent-2",
-        terminalId: "term-2",
-        timestamp: Date.now(),
-      });
-
-      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
-
-      const agents = store.getAgentsByAvailability();
-      expect(agents).toHaveLength(1);
-      expect(agents[0].agentId).toBe("agent-2");
+      expect(store.getAgentsByAvailability().map((r) => r.terminalId)).toEqual(["term-b"]);
     });
 
     it("handles trash before spawn (race condition)", () => {
-      store.registerAgent("agent-1", "working");
-
       events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
 
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
+      spawn("claude", "term-1");
 
-      expect(store.getAgentsByAvailability().find((a) => a.agentId === "agent-1")).toBeUndefined();
+      expect(store.getAgentsByAvailability()).toEqual([]);
     });
 
-    it("cleans up trash state on unregisterAgent", () => {
-      store.registerAgent("agent-1", "working");
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
-
-      store.unregisterAgent("agent-1");
-
-      // Re-register with same agentId — should not be trashed
-      store.registerAgent("agent-1", "idle");
-      expect(store.getAgentsByAvailability().find((a) => a.agentId === "agent-1")).toBeDefined();
-    });
-
-    it("clears all trash state on clear()", () => {
-      store.registerAgent("agent-1", "working");
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
+    it("forgets trash state on clear()", () => {
+      spawn("claude", "term-1");
       events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
 
       store.clear();
+      spawn("claude", "term-1");
 
-      // Re-register — should not be trashed
-      store.registerAgent("agent-1", "idle");
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      expect(store.getAgentsByAvailability().find((a) => a.agentId === "agent-1")).toBeDefined();
-    });
-
-    it("excludes trashed agents from getAvailableAgents too", () => {
-      store.registerAgent("agent-1", "idle");
-
-      events.emit("agent:spawned", {
-        agentId: "agent-1",
-        terminalId: "term-1",
-        timestamp: Date.now(),
-      });
-
-      events.emit("terminal:trashed", { id: "term-1", expiresAt: Date.now() + 60000 });
-
-      expect(store.getAvailableAgents()).toHaveLength(0);
+      expect(store.getAgentsByAvailability().map((r) => r.terminalId)).toEqual(["term-1"]);
     });
   });
 
@@ -549,47 +424,28 @@ describe("AgentAvailabilityStore", () => {
       expect(store.isHelpTerminal("term-help")).toBe(false);
     });
 
-    it("excludes help agents from getAgentsByAvailability", () => {
-      store.registerAgent("agent-help", "idle");
-      events.emit("agent:spawned", {
-        agentId: "agent-help",
-        terminalId: "term-help",
-        timestamp: Date.now(),
-      });
+    it("excludes a help terminal from getAgentsByAvailability", () => {
+      spawn("claude", "term-help");
       store.markAsHelp("term-help");
 
-      expect(
-        store.getAgentsByAvailability().find((a) => a.agentId === "agent-help")
-      ).toBeUndefined();
+      expect(store.getAgentsByAvailability()).toEqual([]);
     });
 
-    it("markAsHelp before agent:spawned still marks agent when spawn arrives", () => {
-      store.registerAgent("agent-help", "idle");
+    it("markAsHelp before agent:spawned still excludes the terminal once it spawns", () => {
       store.markAsHelp("term-help");
 
-      events.emit("agent:spawned", {
-        agentId: "agent-help",
-        terminalId: "term-help",
-        timestamp: Date.now(),
-      });
+      spawn("claude", "term-help");
 
       expect(store.isHelpTerminal("term-help")).toBe(true);
-      expect(
-        store.getAgentsByAvailability().find((a) => a.agentId === "agent-help")
-      ).toBeUndefined();
+      expect(store.getAgentsByAvailability()).toEqual([]);
     });
 
-    it("unregisterAgent clears help membership", () => {
-      store.registerAgent("agent-help", "idle");
-      events.emit("agent:spawned", {
-        agentId: "agent-help",
-        terminalId: "term-help",
-        timestamp: Date.now(),
-      });
+    it("still counts a same-type sibling of a help terminal", () => {
+      spawn("claude", "term-help");
+      spawn("claude", "term-work");
       store.markAsHelp("term-help");
-      store.unregisterAgent("agent-help");
 
-      expect(store.isHelpTerminal("term-help")).toBe(false);
+      expect(store.getAgentsByAvailability().map((r) => r.terminalId)).toEqual(["term-work"]);
     });
   });
 
@@ -597,10 +453,6 @@ describe("AgentAvailabilityStore", () => {
   // waitUntilIdle read the kill's `idle` state and could not tell a closed
   // panel from an agent at rest.
   describe("terminal-scoped release on agent:killed", () => {
-    const spawn = (agentId: string, terminalId: string) => {
-      events.emit("agent:spawned", { agentId, terminalId, timestamp: Date.now() });
-    };
-
     it("drops the terminal mapping when its agent is killed", () => {
       spawn("claude", "term-1");
       expect(store.getAgentIdForTerminal("term-1")).toBe("claude");
@@ -619,8 +471,8 @@ describe("AgentAvailabilityStore", () => {
       expect(store.isTerminalClosed("never-existed")).toBe(false);
     });
 
-    // The reason this is not `unregisterAgent`: agent ids name the agent type,
-    // so two panels running "claude" share one id.
+    // Agent ids name the agent type, so two panels running "claude" share one
+    // id and a release has to be keyed by terminal.
     it("killing one terminal leaves a live sibling of the same agent type mapped", () => {
       spawn("claude", "term-old");
       spawn("claude", "term-new");
@@ -642,22 +494,26 @@ describe("AgentAvailabilityStore", () => {
         timestamp: Date.now(),
       });
 
-      // Only the killed terminal is released. The live sibling keeps BOTH
-      // directions of the mapping — deleting the reverse entry unconditionally
-      // would un-map term-new here, which is why this is not `unregisterAgent`.
+      // Only the killed terminal is released; the live sibling keeps its record.
       expect(store.getAgentIdForTerminal("term-old")).toBeUndefined();
       expect(store.getAgentIdForTerminal("term-new")).toBe("claude");
-      expect(store.getTerminalIdForAgent("claude")).toBe("term-new");
       expect(store.isTerminalClosed("term-old")).toBe(true);
       expect(store.isTerminalClosed("term-new")).toBe(false);
-      // Deliberately NOT asserted: `agentStates` is keyed by agent id, so
-      // term-old's idle overwrote the state term-new shares. That conflation
-      // predates #12339 and this change neither fixes nor worsens it — the
-      // per-terminal mappings above are what it makes correct.
+      // term-old's idle was its own; the sibling is still where its spawn put it.
+      expect(store.getTerminalSnapshot("term-new")?.state).toBe("working");
     });
 
-    it("clears the reverse mapping when the killed terminal still owns it", () => {
+    it("drops the killed terminal's state along with its mapping", () => {
       spawn("claude", "term-1");
+      events.emit("agent:state-changed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        state: "waiting",
+        previousState: "working",
+        timestamp: Date.now(),
+        trigger: "output",
+        confidence: 1,
+      });
 
       events.emit("agent:killed", {
         agentId: "claude",
@@ -665,7 +521,30 @@ describe("AgentAvailabilityStore", () => {
         timestamp: Date.now(),
       });
 
-      expect(store.getTerminalIdForAgent("claude")).toBeUndefined();
+      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
+      expect(store.getLatestSnapshotForAgent("claude")).toBeUndefined();
+    });
+
+    it("does not revive a killed terminal from a transition that trails the kill", () => {
+      spawn("claude", "term-1");
+      events.emit("agent:killed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        timestamp: Date.now(),
+      });
+
+      events.emit("agent:state-changed", {
+        agentId: "claude",
+        terminalId: "term-1",
+        state: "exited",
+        previousState: "idle",
+        timestamp: Date.now(),
+        trigger: "exit",
+        confidence: 1,
+      });
+
+      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
+      expect(store.isTerminalClosed("term-1")).toBe(true);
     });
 
     it("ignores an agent:killed with no terminalId", () => {
@@ -761,21 +640,12 @@ describe("AgentAvailabilityStore", () => {
 
   describe("dispose", () => {
     it("stops listening to events after dispose", () => {
-      store.registerAgent("agent-1", "idle");
+      spawn("claude", "term-1");
       store.dispose();
 
-      // Emit event after dispose
-      events.emit("agent:state-changed", {
-        agentId: "agent-1",
-        state: "working",
-        previousState: "idle",
-        timestamp: Date.now(),
-        trigger: "input",
-        confidence: 1.0,
-      });
+      transition("claude", "term-1", "waiting");
 
-      // State should not have changed (or should not exist due to clear)
-      expect(store.getState("agent-1")).toBeUndefined();
+      expect(store.getTerminalSnapshot("term-1")).toBeUndefined();
     });
   });
 });

@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getActiveAgentCount, showQuitWarning } from "../quitWarning.js";
-import type { AgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
+import { AgentAvailabilityStore } from "../../services/AgentAvailabilityStore.js";
+import { events } from "../../services/events.js";
 
 function mockStore(agents: Array<{ agentId: string; state: string }>): AgentAvailabilityStore {
   return {
@@ -43,6 +44,56 @@ describe("getActiveAgentCount", () => {
       { agentId: "a2", state: "idle" },
     ]);
     expect(getActiveAgentCount(store)).toBe(0);
+  });
+});
+
+// #12494 — a fleet of identical agents is several terminals sharing one agent
+// id, and each working one is a separate agent the quit would interrupt.
+describe("getActiveAgentCount against a real store", () => {
+  let store: AgentAvailabilityStore | undefined;
+
+  afterEach(() => {
+    store?.dispose();
+    store = undefined;
+  });
+
+  const spawn = (terminalId: string) =>
+    events.emit("agent:spawned", { agentId: "claude", terminalId, timestamp: Date.now() });
+
+  it("counts two working terminals of the same agent type as two", () => {
+    store = new AgentAvailabilityStore();
+    spawn("term-a");
+    spawn("term-b");
+
+    expect(getActiveAgentCount(store)).toBe(2);
+  });
+
+  it("counts only the sibling that is still working", () => {
+    store = new AgentAvailabilityStore();
+    spawn("term-a");
+    spawn("term-b");
+    events.emit("agent:state-changed", {
+      agentId: "claude",
+      terminalId: "term-a",
+      state: "waiting",
+      previousState: "working",
+      trigger: "output",
+      confidence: 1,
+      timestamp: Date.now(),
+    });
+
+    expect(getActiveAgentCount(store)).toBe(1);
+  });
+
+  it("still counts a working sibling of a trashed or help terminal", () => {
+    store = new AgentAvailabilityStore();
+    spawn("term-trashed");
+    spawn("term-help");
+    spawn("term-live");
+    events.emit("terminal:trashed", { id: "term-trashed", expiresAt: Date.now() + 60_000 });
+    store.markAsHelp("term-help");
+
+    expect(getActiveAgentCount(store)).toBe(1);
   });
 });
 

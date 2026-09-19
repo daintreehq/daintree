@@ -207,7 +207,7 @@ describe("handleWaitUntilIdle stale-state crash race (#10816)", () => {
       timestamp: Date.now(),
       waitingReason: "prompt",
     });
-    expect(store.getState(agentId)).toBe("waiting");
+    expect(store.getTerminalSnapshot(oldTerminal)?.state).toBe("waiting");
 
     // New session spawns under the same agentId (e.g. another "claude" launch).
     events.emit("agent:spawned", { agentId, terminalId: newTerminal, timestamp: Date.now() });
@@ -260,14 +260,216 @@ describe("handleWaitUntilIdle stale-state crash race (#10816)", () => {
       timestamp: Date.now(),
       // No exitCode — failed-to-start, process never ran.
     });
-    expect(store.getState(agentId)).toBe("exited");
-    expect(store.getExitCode(agentId)).toBeUndefined();
+    expect(store.getTerminalSnapshot(terminalId)?.state).toBe("exited");
+    expect(store.getTerminalSnapshot(terminalId)).not.toHaveProperty("exitCode");
 
     const result = await handleWaitUntilIdle({ terminalId }, new AbortController().signal);
     expect(result.timedOut).toBe(false);
     expect(result.busyState).toBe("idle");
     expect(result.idleReason).toBe("exited");
     expect(result).not.toHaveProperty("exitCode");
+  });
+});
+
+// #12494 — agent ids name the agent type, so a fleet of identical agents shares
+// one. Each wait must answer from its own terminal, never from a sibling's.
+describe("same-type sibling terminals", () => {
+  const siblings = () => {
+    counter += 1;
+    return {
+      agentId: `wt-agent-shared-${counter}`,
+      a: `wt-term-sib-a-${counter}`,
+      b: `wt-term-sib-b-${counter}`,
+      c: `wt-term-sib-c-${counter}`,
+    };
+  };
+
+  const spawnAt = (agentId: string, terminalId: string, timestamp: number) => {
+    getAgentAvailabilityStore();
+    events.emit("agent:spawned", { agentId, terminalId, timestamp });
+  };
+
+  const transitionAt = (
+    agentId: string,
+    terminalId: string,
+    state: "waiting" | "completed" | "exited" | "idle",
+    timestamp: number,
+    extra: { waitingReason?: "prompt" | "question"; exitCode?: number | null } = {}
+  ) => {
+    events.emit("agent:state-changed", {
+      agentId,
+      terminalId,
+      state,
+      previousState: "working",
+      trigger: state === "completed" || state === "exited" ? "exit" : "output",
+      confidence: 1,
+      timestamp,
+      ...extra,
+    });
+  };
+
+  const pendingAfter = <T>(p: Promise<T>, ms = 60) =>
+    Promise.race([
+      p.then(() => "resolved" as const),
+      new Promise<"pending">((r) => setTimeout(() => r("pending"), ms)),
+    ]);
+
+  it("does not settle a wait on one terminal because its sibling is already waiting", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    transitionAt(agentId, a, "waiting", 3_000, { waitingReason: "question" });
+
+    const p = handleWaitUntilIdle(
+      { terminalId: b, timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(await pendingAfter(p)).toBe("pending");
+
+    transitionAt(agentId, b, "completed", 4_000, { exitCode: 0 });
+    const result = await p;
+    expect(result.timedOut).toBe(false);
+    expect(result.idleReason).toBe("completed");
+    expect(result.lastTransitionAt).toBe(4_000);
+    expect(result.exitCode).toBe(0);
+    expect(result).not.toHaveProperty("waitingReason");
+  });
+
+  it("settles a wait on an older terminal that was waiting before a sibling spawned", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    transitionAt(agentId, a, "waiting", 2_000, { waitingReason: "question" });
+    spawnAt(agentId, b, 3_000);
+
+    const result = await handleWaitUntilIdle(
+      { terminalId: a, timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(result.timedOut).toBe(false);
+    expect(result.idleReason).toBe("waiting_for_user");
+    expect(result.waitingReason).toBe("question");
+    expect(result.lastTransitionAt).toBe(2_000);
+  });
+
+  it("reports the waited terminal's own last transition on timeout", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, b, 1_000);
+    spawnAt(agentId, a, 2_000);
+    transitionAt(agentId, a, "waiting", 3_000);
+
+    const result = await handleWaitUntilIdle(
+      { terminalId: b, timeoutMs: 30 },
+      new AbortController().signal
+    );
+    expect(result.timedOut).toBe(true);
+    expect(result.busyState).toBe("working");
+    expect(result.lastTransitionAt).toBe(1_000);
+  });
+
+  it("reads each terminal's own cached exit code on the already-idle path", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    transitionAt(agentId, a, "exited", 3_000, { exitCode: 1 });
+    transitionAt(agentId, b, "completed", 4_000, { exitCode: 0 });
+
+    const signal = new AbortController().signal;
+    const resultA = await handleWaitUntilIdle({ terminalId: a }, signal);
+    const resultB = await handleWaitUntilIdle({ terminalId: b }, signal);
+
+    expect(resultA).toMatchObject({ idleReason: "exited", exitCode: 1, lastTransitionAt: 3_000 });
+    expect(resultB).toMatchObject({
+      idleReason: "completed",
+      exitCode: 0,
+      lastTransitionAt: 4_000,
+    });
+  });
+
+  it("batch 'first' settles only the terminal that is itself already waiting", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    transitionAt(agentId, a, "waiting", 3_000, { waitingReason: "prompt" });
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [a, b], mode: "first", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+
+    expect(res.timedOut).toBe(false);
+    expect(res.settledTerminalIds).toEqual([a]);
+    const aEntry = res.results.find((e) => e.terminalId === a)!;
+    expect(aEntry).toMatchObject({
+      settled: true,
+      idleReason: "waiting_for_user",
+      waitingReason: "prompt",
+      lastTransitionAt: 3_000,
+    });
+    const bEntry = res.results.find((e) => e.terminalId === b)!;
+    expect(bEntry).toMatchObject({ settled: false, busyState: "working", lastTransitionAt: 2_000 });
+    expect(bEntry).not.toHaveProperty("waitingReason");
+  });
+
+  it("batch 'all' holds for the sibling that is still working", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    spawnAt(agentId, b, 2_000);
+    transitionAt(agentId, a, "waiting", 3_000);
+
+    const p = handleWaitUntilIdleBatch(
+      { terminalIds: [a, b], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(await pendingAfter(p)).toBe("pending");
+
+    transitionAt(agentId, b, "exited", 4_000, { exitCode: 7 });
+    const res = await p;
+    expect(res.timedOut).toBe(false);
+    expect(res.settledTerminalIds).toEqual([a, b]);
+    expect(res.results.find((e) => e.terminalId === a)).not.toHaveProperty("exitCode");
+    expect(res.results.find((e) => e.terminalId === b)).toMatchObject({
+      idleReason: "exited",
+      exitCode: 7,
+    });
+  });
+
+  it("batch rows are not settled by a same-type terminal outside the request", async () => {
+    const { agentId, a, b, c } = siblings();
+    spawnAt(agentId, b, 1_000);
+    spawnAt(agentId, c, 2_000);
+    spawnAt(agentId, a, 3_000);
+    transitionAt(agentId, a, "waiting", 4_000);
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [b, c], mode: "first" },
+      new AbortController().signal,
+      { maxTimeoutMs: 40 }
+    );
+    expect(res.timedOut).toBe(true);
+    expect(res.settledTerminalIds).toEqual([]);
+  });
+
+  it("batch settles an older terminal that was waiting before a sibling spawned", async () => {
+    const { agentId, a, b } = siblings();
+    spawnAt(agentId, a, 1_000);
+    transitionAt(agentId, a, "waiting", 2_000, { waitingReason: "question" });
+    spawnAt(agentId, b, 3_000);
+
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [a], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(res.timedOut).toBe(false);
+    expect(res.results[0]).toMatchObject({
+      settled: true,
+      waitingReason: "question",
+      lastTransitionAt: 2_000,
+    });
   });
 });
 

@@ -2848,6 +2848,9 @@ async function listConcreteResources(
   }
   if (isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")) {
     const terminals = await tryDispatchList("terminal.list", deps.dispatchAction, bindingListed);
+    // The agent-state URI is addressed by agent type, so terminals running the
+    // same type all name one resource; list it once.
+    const listedAgentIds = new Set<string>();
     for (const term of terminals) {
       const id = readStringField(term, ["id", "terminalId"]);
       const label = readStringField(term, ["title", "name"]) ?? id;
@@ -2860,7 +2863,8 @@ async function listConcreteResources(
         });
       }
       const agentId = readStringField(term, ["agentId"]);
-      if (agentId && isResourcePermitted(tier, "agentState")) {
+      if (agentId && !listedAgentIds.has(agentId) && isResourcePermitted(tier, "agentState")) {
+        listedAgentIds.add(agentId);
         resources.push({
           uri: `daintree://agent/${encodeURIComponent(agentId)}/state`,
           name: `Agent state — ${label ?? agentId}`,
@@ -2949,19 +2953,24 @@ async function readResourceContents(
     return { uri, mimeType: "text/plain", text: truncateText(text) };
   }
   if (parsed.kind === "agentState") {
-    const store = getAgentAvailabilityStore();
-    const state = store.getState(parsed.id);
-    const waitingReason = state === "waiting" ? store.getWaitingReason(parsed.id) : undefined;
+    // The URI names an agent type, not a terminal, so this reports the one
+    // terminal of that type we heard from most recently — all of its fields
+    // from that one terminal, and naming it, so a sibling's state is never
+    // passed off as this one's (#12494).
+    const snapshot = getAgentAvailabilityStore().getLatestSnapshotForAgent(parsed.id);
+    const state = snapshot?.state;
+    const waitingReason = state === "waiting" ? snapshot?.waitingReason : undefined;
     // Exit metadata only after the agent has finished. exitCode may be null
     // (signal kill), so gate on the agent being in a terminal state rather than
     // on the value being truthy.
     const hasExited = state === "completed" || state === "exited";
-    const exitCode = hasExited ? store.getExitCode(parsed.id) : undefined;
-    const exitSignal = hasExited ? store.getExitSignal(parsed.id) : undefined;
-    const spawnedAt = store.getSpawnedAt(parsed.id);
-    const lastTransitionAt = store.getLastStateChange(parsed.id);
+    const exitCode = hasExited ? snapshot?.exitCode : undefined;
+    const exitSignal = hasExited ? snapshot?.exitSignal : undefined;
+    const spawnedAt = snapshot?.spawnedAt;
+    const lastTransitionAt = snapshot?.lastStateChange;
     const text = JSON.stringify({
       agentId: parsed.id,
+      ...(snapshot ? { terminalId: snapshot.terminalId } : {}),
       state: state ?? null,
       ...(waitingReason ? { waitingReason } : {}),
       ...(exitCode !== undefined ? { exitCode } : {}),

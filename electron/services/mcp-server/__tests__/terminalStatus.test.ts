@@ -272,12 +272,10 @@ describe("buildViewlessTerminalStatus results", () => {
   });
 
   it("never reports an exitCode, even for an agent that has finished", async () => {
-    // Main does cache exit metadata, but `AgentAvailabilityStore` keys it by
-    // agent *type* ("claude"), not by spawn — several terminals share one id
-    // and only the most recent is mapped back. Joining through it would report
-    // whichever same-type terminal exited last, which for a fleet of identical
-    // agents is wrong far more often than right. `agentState` still says the
-    // run finished, and how.
+    // Main caches exit metadata per terminal in `AgentAvailabilityStore`, but
+    // this answer is built from the pty-host record and does not splice in a
+    // field from that separately-fed copy. `agentState` still says the run
+    // finished, and how.
     const result = await buildViewlessTerminalStatus(
       deps([
         record({ id: "a", agentState: "exited" }),

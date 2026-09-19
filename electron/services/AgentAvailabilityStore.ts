@@ -1,7 +1,7 @@
 /**
  * AgentAvailabilityStore - Runtime availability tracking for agents.
  *
- * Subscribes to agent state changes and tracks:
+ * Subscribes to agent state changes and tracks, per terminal:
  * - Availability status (idle/waiting vs working)
  * - Real-time state updates
  */
@@ -10,10 +10,36 @@ import { events } from "./events.js";
 import type { AgentState, WaitingReason } from "../../shared/types/agent.js";
 
 export interface AgentAvailabilityInfo {
+  terminalId: string;
   agentId: string;
   available: boolean;
   state: AgentState;
   lastStateChange: number;
+}
+
+/**
+ * Everything observed about the agent in one terminal. Replaced whole on every
+ * write, so a reader holding one never sees a later transition's fields mixed
+ * into an earlier one's.
+ */
+export interface TerminalAgentSnapshot {
+  terminalId: string;
+  /** The agent *type* ("claude"), shared by every terminal running it. */
+  agentId: string;
+  state: AgentState;
+  /** Timestamp (ms) of the most recent transition, from the event payload. */
+  lastStateChange: number;
+  /** Present only while `state` is `waiting` and the reason was classified. */
+  waitingReason?: WaitingReason;
+  /**
+   * From the last `completed`/`exited` transition. `null` when the process
+   * died from a signal with no numeric code.
+   */
+  exitCode?: number | null;
+  /** Raw node-pty signal number from the last `completed`/`exited` transition. */
+  exitSignal?: number;
+  /** Absent when state arrived for a terminal whose spawn this store never saw. */
+  spawnedAt?: number;
 }
 
 /**
@@ -33,29 +59,19 @@ function isAvailableState(state: AgentState): boolean {
 export const MAX_CLOSED_TERMINALS = 256;
 
 export class AgentAvailabilityStore {
-  private agentStates: Map<string, AgentState> = new Map();
-  private waitingReasons: Map<string, WaitingReason> = new Map();
-  private lastStateChange: Map<string, number> = new Map();
-  // Exit metadata captured from the "completed"/"exited" state transition so MCP
-  // read paths (waitUntilIdle, the agentState resource) can report pass/fail
-  // without scraping output. `exitCode` is null when the process died from a
-  // signal with no numeric code; `exitSignal` is the raw node-pty signal number.
-  private exitCodes: Map<string, number | null> = new Map();
-  private exitSignals: Map<string, number> = new Map();
-  // Spawn timestamp captured from agent:spawned so supervisors can reason about
-  // run duration in the same read as state.
-  private spawnedAt: Map<string, number> = new Map();
-  private terminalToAgent: Map<string, string> = new Map();
-  private agentToTerminal: Map<string, string> = new Map();
+  // Keyed by terminal id, never agent id: an agent id names the agent type, so
+  // several terminals share one, and a slot keyed by it lets one terminal's
+  // transition answer for its sibling (#12494). Insertion order is update
+  // order — every write re-inserts — which is what lets the type-addressed
+  // resource pick the most recent observation without a separate clock.
+  private terminals: Map<string, TerminalAgentSnapshot> = new Map();
   // Terminals whose agent we observed being killed. Insertion-ordered and
   // bounded (see MAX_CLOSED_TERMINALS) — this is a tombstone set, not a
   // registry, so it exists only to answer "was this id closed, or have we
   // simply never seen it".
   private closedTerminals: Set<string> = new Set();
   private trashedTerminals: Set<string> = new Set();
-  private trashedAgentIds: Set<string> = new Set();
   private helpTerminalIds: Set<string> = new Set();
-  private helpAgentIds: Set<string> = new Set();
   private unsubscribers: Array<() => void> = [];
 
   constructor() {
@@ -67,31 +83,23 @@ export class AgentAvailabilityStore {
 
     this.unsubscribers.push(
       events.on("agent:spawned", (payload) => {
-        this.terminalToAgent.set(payload.terminalId, payload.agentId);
-        this.agentToTerminal.set(payload.agentId, payload.terminalId);
-        this.spawnedAt.set(payload.agentId, payload.timestamp);
         // A respawn under the same terminal id revives it, so drop any
         // tombstone from the previous session rather than reporting the live
         // terminal as closed forever.
         this.closedTerminals.delete(payload.terminalId);
-        // A fresh spawn resets the tracked state to "working" so a stale state
-        // from a prior session under the same agentId can't outlive a respawn.
-        // Without this, a previous "waiting" persists and waitUntilIdle settles
-        // immediately as already-idle, dropping its listener before the new
-        // session's crash "exited" event arrives (issue #10816).
-        this.agentStates.set(payload.agentId, "working");
-        this.lastStateChange.set(payload.agentId, payload.timestamp);
-        this.waitingReasons.delete(payload.agentId);
-        // A fresh spawn clears any exit metadata from a prior session under the
-        // same agentId so a stale exit code can't outlive a respawn.
-        this.exitCodes.delete(payload.agentId);
-        this.exitSignals.delete(payload.agentId);
-        if (this.trashedTerminals.has(payload.terminalId)) {
-          this.trashedAgentIds.add(payload.agentId);
-        }
-        if (this.helpTerminalIds.has(payload.terminalId)) {
-          this.helpAgentIds.add(payload.agentId);
-        }
+        // A fresh spawn starts the terminal over at "working" so nothing from
+        // a prior session in it can outlive the respawn. Without this, a
+        // previous "waiting" persists and waitUntilIdle settles immediately as
+        // already-idle, dropping its listener before the new session's crash
+        // "exited" event arrives (issue #10816). Only this terminal is reset —
+        // a sibling of the same type keeps its own state.
+        this.write({
+          terminalId: payload.terminalId,
+          agentId: payload.agentId,
+          state: "working",
+          lastStateChange: payload.timestamp,
+          spawnedAt: payload.timestamp,
+        });
       })
     );
 
@@ -100,7 +108,7 @@ export class AgentAvailabilityStore {
     // own bus and is not in the `PtyHostEvent` union, so it never crosses the
     // bridge — subscribing to it here would be dead code (same reason
     // ProjectStatsService and FleetSnapshotService skip it). A kill maps
-    // straight to `idle` in `nextAgentState`, so without this the mapping
+    // straight to `idle` in `nextAgentState`, so without this the record
     // outlives the panel and a closed terminal is indistinguishable from an
     // agent at rest (#12339).
     this.unsubscribers.push(
@@ -113,79 +121,75 @@ export class AgentAvailabilityStore {
     this.unsubscribers.push(
       events.on("terminal:trashed", (payload) => {
         this.trashedTerminals.add(payload.id);
-        const agentId = this.terminalToAgent.get(payload.id);
-        if (agentId) {
-          this.trashedAgentIds.add(agentId);
-        }
       })
     );
 
     this.unsubscribers.push(
       events.on("terminal:restored", (payload) => {
         this.trashedTerminals.delete(payload.id);
-        const agentId = this.terminalToAgent.get(payload.id);
-        if (agentId) {
-          this.trashedAgentIds.delete(agentId);
-        }
       })
     );
   }
 
   private updateAvailability(payload: {
     agentId?: string;
+    terminalId?: string;
     state: AgentState;
     timestamp: number;
     waitingReason?: WaitingReason;
     exitCode?: number | null;
     exitSignal?: number;
   }): void {
-    if (!payload.agentId) return;
+    // Without a terminal id there is no slot to attribute the transition to,
+    // and resolving one through the agent type is exactly the conflation this
+    // store exists to avoid.
+    if (!payload.agentId || !payload.terminalId) return;
+    // A kill emits its `idle` before `agent:killed`, but anything trailing the
+    // release must not recreate the record and report the terminal tracked
+    // again. Only a respawn revives a closed terminal.
+    if (this.closedTerminals.has(payload.terminalId)) return;
 
-    this.agentStates.set(payload.agentId, payload.state);
-    this.lastStateChange.set(payload.agentId, payload.timestamp);
+    const previous = this.terminals.get(payload.terminalId);
+    const next: TerminalAgentSnapshot = {
+      terminalId: payload.terminalId,
+      agentId: payload.agentId,
+      state: payload.state,
+      lastStateChange: payload.timestamp,
+    };
     if (payload.state === "waiting" && payload.waitingReason) {
-      this.waitingReasons.set(payload.agentId, payload.waitingReason);
-    } else {
-      this.waitingReasons.delete(payload.agentId);
+      next.waitingReason = payload.waitingReason;
     }
     // Cache exit metadata when the transition carries it (completed/exited from
     // a PTY exit event). `exitCode` may legitimately be null (signal kill), so
-    // gate on the field being present rather than truthy.
-    if (payload.state === "completed" || payload.state === "exited") {
-      if (payload.exitCode !== undefined) {
-        this.exitCodes.set(payload.agentId, payload.exitCode);
-      }
-      if (payload.exitSignal !== undefined) {
-        this.exitSignals.set(payload.agentId, payload.exitSignal);
-      }
-    }
+    // gate on the field being present rather than truthy. Otherwise keep what
+    // this terminal's session last reported; a spawn is what clears it.
+    const exitCode =
+      (payload.state === "completed" || payload.state === "exited") &&
+      payload.exitCode !== undefined
+        ? payload.exitCode
+        : previous?.exitCode;
+    if (exitCode !== undefined) next.exitCode = exitCode;
+    const exitSignal =
+      (payload.state === "completed" || payload.state === "exited") &&
+      payload.exitSignal !== undefined
+        ? payload.exitSignal
+        : previous?.exitSignal;
+    if (exitSignal !== undefined) next.exitSignal = exitSignal;
+    if (previous?.spawnedAt !== undefined) next.spawnedAt = previous.spawnedAt;
+    this.write(next);
+  }
+
+  private write(snapshot: TerminalAgentSnapshot): void {
+    this.terminals.delete(snapshot.terminalId);
+    this.terminals.set(snapshot.terminalId, snapshot);
   }
 
   /**
-   * Check if an agent is available to receive a new task.
+   * Everything observed about one terminal's agent, or `undefined` for a
+   * terminal that never ran one (e.g. a plain shell) or has since closed.
    */
-  isAvailable(agentId: string): boolean {
-    const state = this.agentStates.get(agentId);
-    if (!state) return false;
-    return isAvailableState(state);
-  }
-
-  /**
-   * Get the current state of an agent.
-   */
-  getState(agentId: string): AgentState | undefined {
-    return this.agentStates.get(agentId);
-  }
-
-  /**
-   * Get the most recent waitingReason for an agent, if it is currently waiting.
-   * Returns undefined if the agent is not in waiting state or has no classified reason.
-   * Note: keyed by agentId; for terminals that share an agentId (e.g. two "claude"
-   * panels) this reflects whichever waiting agent emitted last — same limitation as
-   * agentToTerminal mapping.
-   */
-  getWaitingReason(agentId: string): WaitingReason | undefined {
-    return this.waitingReasons.get(agentId);
+  getTerminalSnapshot(terminalId: string): Readonly<TerminalAgentSnapshot> | undefined {
+    return this.terminals.get(terminalId);
   }
 
   /**
@@ -193,67 +197,41 @@ export class AgentAvailabilityStore {
    * Returns undefined for terminals that have never spawned an agent (e.g. plain shells).
    */
   getAgentIdForTerminal(terminalId: string): string | undefined {
-    return this.terminalToAgent.get(terminalId);
+    return this.terminals.get(terminalId)?.agentId;
   }
 
   /**
-   * Resolve the latest terminal associated with an agent id.
+   * The most recently updated terminal running this agent type.
    *
-   * Agent ids identify the agent type today (for example "claude"), so multiple
-   * terminals can temporarily share one id. Terminal-scoped waiters use this as
-   * a guard before trusting agent-level snapshot state.
+   * Only for a surface that is addressed by agent type and cannot name a
+   * terminal — the `daintree://agent/{id}/state` resource. It returns one
+   * terminal's whole snapshot, never fields merged across siblings, and the
+   * snapshot names its terminal so a reader can tell which one it describes.
    */
-  getTerminalIdForAgent(agentId: string): string | undefined {
-    return this.agentToTerminal.get(agentId);
+  getLatestSnapshotForAgent(agentId: string): Readonly<TerminalAgentSnapshot> | undefined {
+    let latest: TerminalAgentSnapshot | undefined;
+    for (const snapshot of this.terminals.values()) {
+      if (snapshot.agentId === agentId) latest = snapshot;
+    }
+    return latest;
   }
 
   /**
-   * Timestamp (ms) of the most recent state transition for an agent, sourced from the
-   * canonical event payload rather than wall-clock time.
-   */
-  getLastStateChange(agentId: string): number | undefined {
-    return this.lastStateChange.get(agentId);
-  }
-
-  /**
-   * Process exit code from the agent's last "completed"/"exited" transition.
-   * Returns `null` when the process was signal-terminated without a numeric
-   * code, or `undefined` when the agent has not exited (or never spawned).
-   */
-  getExitCode(agentId: string): number | null | undefined {
-    return this.exitCodes.get(agentId);
-  }
-
-  /**
-   * Raw OS signal number that terminated the agent process, if one was reported.
-   * Returns `undefined` when the agent exited normally or has not exited.
-   */
-  getExitSignal(agentId: string): number | undefined {
-    return this.exitSignals.get(agentId);
-  }
-
-  /**
-   * Wall-clock spawn timestamp (ms) captured from agent:spawned, for duration
-   * reasoning. Returns `undefined` for agents registered before a spawn event.
-   */
-  getSpawnedAt(agentId: string): number | undefined {
-    return this.spawnedAt.get(agentId);
-  }
-
-  /**
-   * Get all agents with their availability status.
+   * One row per terminal running an agent, excluding trashed and help
+   * terminals. Two terminals running the same agent type are two rows.
    */
   getAgentsByAvailability(): AgentAvailabilityInfo[] {
     const agents: AgentAvailabilityInfo[] = [];
 
-    for (const [agentId, state] of this.agentStates) {
-      if (this.trashedAgentIds.has(agentId)) continue;
-      if (this.helpAgentIds.has(agentId)) continue;
+    for (const snapshot of this.terminals.values()) {
+      if (this.trashedTerminals.has(snapshot.terminalId)) continue;
+      if (this.helpTerminalIds.has(snapshot.terminalId)) continue;
       agents.push({
-        agentId,
-        available: isAvailableState(state),
-        state,
-        lastStateChange: this.lastStateChange.get(agentId) ?? 0,
+        terminalId: snapshot.terminalId,
+        agentId: snapshot.agentId,
+        available: isAvailableState(snapshot.state),
+        state: snapshot.state,
+        lastStateChange: snapshot.lastStateChange,
       });
     }
 
@@ -261,33 +239,11 @@ export class AgentAvailabilityStore {
   }
 
   /**
-   * Get only available agents.
-   */
-  getAvailableAgents(): AgentAvailabilityInfo[] {
-    return this.getAgentsByAvailability().filter((a) => a.available);
-  }
-
-  /**
-   * Register an agent's initial state.
-   * Called when a new agent terminal is spawned.
-   */
-  registerAgent(agentId: string, initialState: AgentState = "idle"): void {
-    if (!this.agentStates.has(agentId)) {
-      this.agentStates.set(agentId, initialState);
-      this.lastStateChange.set(agentId, Date.now());
-    }
-  }
-
-  /**
-   * Mark a terminal (and its associated agent) as a help terminal.
+   * Mark a terminal as a help terminal.
    * Help terminals are excluded from availability counts and quit warnings.
    */
   markAsHelp(terminalId: string): void {
     this.helpTerminalIds.add(terminalId);
-    const agentId = this.terminalToAgent.get(terminalId);
-    if (agentId) {
-      this.helpAgentIds.add(agentId);
-    }
   }
 
   /**
@@ -302,42 +258,22 @@ export class AgentAvailabilityStore {
    */
   unmarkAsHelp(terminalId: string): void {
     this.helpTerminalIds.delete(terminalId);
-    const agentId = this.terminalToAgent.get(terminalId);
-    if (agentId) {
-      this.helpAgentIds.delete(agentId);
-    }
   }
 
   /**
-   * Release one terminal's mapping and remember that it closed.
-   *
-   * Terminal-scoped on purpose, and deliberately NOT `unregisterAgent`: agent
-   * ids name the agent *type* ("claude"), so several terminals share one, and
-   * unregistering by agent id would erase `agentStates`/`exitCodes`/`spawnedAt`
-   * that a different, still-live terminal of the same type is relying on. Only
-   * the two per-terminal maps are touched, and the reverse entry only when it
-   * still points back here.
+   * Release one terminal's record and remember that it closed. A sibling
+   * running the same agent type is untouched.
    */
   releaseTerminal(terminalId: string): void {
     this.markTerminalClosed(terminalId);
-
-    const agentId = this.terminalToAgent.get(terminalId);
-    if (agentId === undefined) return;
-
-    this.terminalToAgent.delete(terminalId);
-    // `agentToTerminal` holds only the most recent terminal for an agent id, so
-    // a newer terminal of the same type may already own this entry. Dropping it
-    // unconditionally would un-map a live sibling.
-    if (this.agentToTerminal.get(agentId) === terminalId) {
-      this.agentToTerminal.delete(agentId);
-    }
+    this.terminals.delete(terminalId);
     this.trashedTerminals.delete(terminalId);
   }
 
   /**
    * Whether this terminal's agent was observed being killed. False for a
    * terminal we still track and for one we have no record of — the caller
-   * separates those two by whether a mapping exists.
+   * separates those two by whether a record exists.
    */
   isTerminalClosed(terminalId: string): boolean {
     return this.closedTerminals.has(terminalId);
@@ -356,43 +292,13 @@ export class AgentAvailabilityStore {
   }
 
   /**
-   * Unregister an agent when its terminal is removed.
-   */
-  unregisterAgent(agentId: string): void {
-    this.agentStates.delete(agentId);
-    this.waitingReasons.delete(agentId);
-    this.lastStateChange.delete(agentId);
-    this.exitCodes.delete(agentId);
-    this.exitSignals.delete(agentId);
-    this.spawnedAt.delete(agentId);
-    const terminalId = this.agentToTerminal.get(agentId);
-    if (terminalId) {
-      this.terminalToAgent.delete(terminalId);
-      this.trashedTerminals.delete(terminalId);
-      this.helpTerminalIds.delete(terminalId);
-      this.agentToTerminal.delete(agentId);
-    }
-    this.trashedAgentIds.delete(agentId);
-    this.helpAgentIds.delete(agentId);
-  }
-
-  /**
    * Clear all tracked state.
    */
   clear(): void {
-    this.agentStates.clear();
-    this.waitingReasons.clear();
-    this.lastStateChange.clear();
-    this.exitCodes.clear();
-    this.exitSignals.clear();
-    this.spawnedAt.clear();
-    this.terminalToAgent.clear();
-    this.agentToTerminal.clear();
+    this.terminals.clear();
     this.closedTerminals.clear();
     this.trashedTerminals.clear();
-    this.trashedAgentIds.clear();
     this.helpTerminalIds.clear();
-    this.helpAgentIds.clear();
   }
 
   /**
