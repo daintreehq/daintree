@@ -3015,7 +3015,10 @@ describe("HttpLifecycle", () => {
       const PANE_TOKEN = "pane-token-5c1e";
       const PANE_AUTH = `Bearer ${PANE_TOKEN}`;
 
-      function principalLifecycle(deps: HttpLifecycleDeps, principal: string | null = "principal-p") {
+      function principalLifecycle(
+        deps: HttpLifecycleDeps,
+        principal: string | null = "principal-p"
+      ) {
         const lc = new HttpLifecycle(deps);
         lc.setApiKey("test-api-key");
         lc.setHelpTokenValidator((token) => (token === PANE_TOKEN ? "action" : false));

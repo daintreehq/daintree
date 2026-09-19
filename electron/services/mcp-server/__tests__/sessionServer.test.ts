@@ -8500,8 +8500,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       const dispatchAction = vi.fn().mockImplementation(
         () =>
           new Promise((resolve) => {
-            release = () =>
-              resolve({ result: { ok: true, result: { terminalId: "terminal-1" } } });
+            release = () => resolve({ result: { ok: true, result: { terminalId: "terminal-1" } } });
           })
       );
       return {
@@ -8540,9 +8539,7 @@ describe("session-scoped resource ownership (#11909)", () => {
         expect.anything()
       );
       // Released under the principal, so no session on this bearer holds it.
-      expect(store.resourceOwnership.list(store.resourceOwnership.ownerOf("s-pane-2"))).toEqual(
-        []
-      );
+      expect(store.resourceOwnership.list(store.resourceOwnership.ownerOf("s-pane-2"))).toEqual([]);
     });
 
     it("survives a server drain, which revokes no pane bearer", async () => {
@@ -8593,9 +8590,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       held.release();
       await inFlight;
 
-      expect(store.resourceOwnership.list(store.resourceOwnership.ownerOf("s-pane-1"))).toEqual(
-        []
-      );
+      expect(store.resourceOwnership.list(store.resourceOwnership.ownerOf("s-pane-1"))).toEqual([]);
       // The id is free: nothing the relaunched pane's new bearer can see.
       paneSession(store, "s-pane-2", routedDispatch(), "principal-relaunched");
       expect(
@@ -8624,7 +8619,11 @@ describe("session-scoped resource ownership (#11909)", () => {
       const server = paneSession(store, "s-pane", dispatchAction);
       store.sessionWorkspaceMap.set("s-pane", "ws-here");
       const owner = store.resourceOwnership.ownerOf("s-pane");
-      store.resourceOwnership.record(owner, [{ kind: "terminal", id: "terminal-elsewhere" }], "ws-x");
+      store.resourceOwnership.record(
+        owner,
+        [{ kind: "terminal", id: "terminal-elsewhere" }],
+        "ws-x"
+      );
       store.resourceOwnership.record(owner, [{ kind: "terminal", id: "terminal-here" }], "ws-here");
 
       const listed = await callTool(server, {
