@@ -1713,6 +1713,34 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     });
   }
 
+  function persisted(
+    i: number,
+    toolId: string,
+    result: McpAuditResult,
+    durationMs = 10
+  ): Record<string, unknown> {
+    return {
+      id: `p-${i}`,
+      timestamp: 1_000 + i,
+      toolId,
+      sessionId: "sess-1",
+      tier: "action",
+      argsSummary: "{}",
+      result,
+      durationMs,
+    };
+  }
+
+  function withSequentialClock<T>(fn: () => T): T {
+    let now = 1_000_000;
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => ++now);
+    try {
+      return fn();
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
   it("reports an empty ring as suppressed with zero counts", () => {
     const { service } = makeFixture();
     expect(service.getDiagnosticsSnapshot()).toEqual({
@@ -1724,6 +1752,7 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
       anomalySuppressed: true,
       auth401Count: 0,
       anomalySignalCount: 0,
+      anomalySignalCountsByKind: {},
       anomalySignals: [],
       perTool: [],
     });
@@ -1738,19 +1767,67 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     append(service, { toolId: "tool.a", outcome: { kind: "collision" } });
     append(service, { toolId: "tool.a", outcome: { kind: "throw", error: new Error("x") } });
     service.appendGrantRecord({ type: "grant.issued", sessionId: "s", toolId: "tool.a", ttlMs: 1 });
-    service.recordAuth401();
 
     const snapshot = service.getDiagnosticsSnapshot();
-    expect(snapshot.recordCount).toBe(8);
-    expect(snapshot.dispatchRecordCount).toBe(7);
-    expect(snapshot.auth401Count).toBe(1);
-    // Sorted by tool id; failure = anything but success/dedup, matching the
-    // failure-cluster detector.
+    expect(snapshot.recordCount).toBe(7);
+    expect(snapshot.dispatchRecordCount).toBe(6);
     expect(snapshot.perTool).toEqual([
-      { toolId: "mcp.pre-auth", callCount: 1, failureCount: 1 },
       { toolId: "tool.a", callCount: 3, failureCount: 3 },
       { toolId: "tool.b", callCount: 3, failureCount: 1 },
     ]);
+  });
+
+  it("counts every 401 while coalesced pre-auth rows count once per record", () => {
+    const { service } = makeFixture();
+    service.recordAuth401();
+    service.recordAuth401();
+    service.recordAuth401();
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.auth401Count).toBe(3);
+    expect(snapshot.dispatchRecordCount).toBe(1);
+    expect(snapshot.perTool).toEqual([{ toolId: "mcp.pre-auth", callCount: 1, failureCount: 1 }]);
+  });
+
+  it("hydrates persisted records when the snapshot is the first read", () => {
+    const { service } = makeFixture({ auditEnabled: false }, [
+      persisted(0, "tool.a", "success"),
+      persisted(1, "tool.a", "error"),
+      persisted(2, "tool.b", "success"),
+    ]);
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    expect(snapshot.enabled).toBe(false);
+    expect(snapshot.dispatchRecordCount).toBe(3);
+    expect(snapshot.perTool).toEqual([
+      { toolId: "tool.a", callCount: 2, failureCount: 1 },
+      { toolId: "tool.b", callCount: 1, failureCount: 0 },
+    ]);
+  });
+
+  it("uses the same failure definition as the failure-cluster detector", () => {
+    // Every non-success result class, including the historical rate_limited
+    // one only reachable through hydration, plus dedup as the non-failure
+    // control, landing consecutively after a clean baseline.
+    const failures: McpAuditResult[] = [
+      "error",
+      "confirmation-pending",
+      "unauthorized",
+      "collision",
+      "rate_limited",
+    ];
+    const log = [
+      ...Array.from({ length: 50 }, (_, i) => persisted(i, "tool.ok", "success")),
+      ...failures.map((result, i) => persisted(50 + i, "tool.x", result)),
+      persisted(55, "tool.x", "dedup"),
+    ];
+    const { service } = makeFixture({}, log);
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const toolX = snapshot.perTool.find((t) => t.toolId === "tool.x");
+    expect(toolX).toEqual({ toolId: "tool.x", callCount: 6, failureCount: failures.length });
+    const clusters = snapshot.anomalySignals.filter((s) => s.kind === "failure-cluster");
+    expect(Math.max(...clusters.map((c) => c.clusterSize ?? 0))).toBe(toolX!.failureCount);
   });
 
   it("reports the dispatch count against the floor at the suppression boundary", () => {
@@ -1801,40 +1878,54 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     expect(acknowledged).toHaveLength(1);
   });
 
-  it("projects signal diagnostics without ids, arguments, results or session identity", () => {
+  it("projects latency-drift and failure-cluster signals without ids or record content", () => {
     const { service } = makeFixture();
-    for (let i = 0; i < 60; i++) {
-      append(service, {
-        durationMs: i % 2 === 0 ? 10 : 12,
-        argsSummary: '{"prompt":"ARGS_SENTINEL"}',
-        resultSummary: "RESULT_SENTINEL",
-        sessionId: "SESSION_SENTINEL",
-      });
-    }
-    append(service, { durationMs: 5000 });
-    for (let i = 0; i < 3; i++) append(service, { toolId: "tool.flaky", outcome: errorOutcome });
+    withSequentialClock(() => {
+      for (let i = 0; i < 60; i++) {
+        append(service, {
+          durationMs: i % 2 === 0 ? 10 : 12,
+          argsSummary: '{"prompt":"ARGS_SENTINEL"}',
+          resultSummary: "RESULT_SENTINEL",
+          sessionId: "SESSION_SENTINEL",
+        });
+      }
+      append(service, { durationMs: 5000 });
+      for (let i = 0; i < 3; i++) append(service, { toolId: "tool.flaky", outcome: errorOutcome });
+    });
 
     const snapshot = service.getDiagnosticsSnapshot();
-    const drift = snapshot.anomalySignals.find((s) => s.kind === "latency-drift");
-    expect(drift).toEqual({
-      kind: "latency-drift",
-      toolId: "tool.a",
-      tier: "action",
-      severity: "danger",
-      timestamp: expect.any(Number),
-      zScore: expect.any(Number),
-      durationMs: 5000,
-      baselineMedianMs: 12,
+    const raw = service.getAuditStats(false).anomalySignals;
+    const rawDrift = raw.filter((s) => s.kind === "latency-drift");
+    const rawCluster = raw.filter((s) => s.kind === "failure-cluster");
+    expect(rawDrift).toHaveLength(1);
+    expect(rawCluster).toHaveLength(1);
+    expect(snapshot.anomalySignalCountsByKind).toEqual({
+      "latency-drift": 1,
+      "failure-cluster": 1,
     });
-    const cluster = snapshot.anomalySignals.find((s) => s.kind === "failure-cluster");
-    expect(cluster).toEqual({
-      kind: "failure-cluster",
-      toolId: "tool.flaky",
-      severity: "danger",
-      timestamp: expect.any(Number),
-      clusterSize: 3,
-      clusterWindow: 10,
-    });
+
+    expect(snapshot.anomalySignals.filter((s) => s.kind === "latency-drift")).toEqual([
+      {
+        kind: "latency-drift",
+        toolId: "tool.a",
+        tier: "action",
+        severity: "danger",
+        timestamp: rawDrift[0]!.timestamp,
+        zScore: rawDrift[0]!.zScore,
+        durationMs: 5000,
+        baselineMedianMs: 12,
+      },
+    ]);
+    expect(snapshot.anomalySignals.filter((s) => s.kind === "failure-cluster")).toEqual([
+      {
+        kind: "failure-cluster",
+        toolId: "tool.flaky",
+        severity: "danger",
+        timestamp: rawCluster[0]!.timestamp,
+        clusterSize: 3,
+        clusterWindow: rawCluster[0]!.clusterWindow,
+      },
+    ]);
 
     const serialized = JSON.stringify(snapshot);
     expect(serialized).not.toContain("ARGS_SENTINEL");
@@ -1844,17 +1935,69 @@ describe("AuditService.getDiagnosticsSnapshot (#12508)", () => {
     expect(serialized).not.toContain('"id"');
   });
 
-  it("caps exported signals to the newest 200 while reporting the full count", () => {
+  it("projects p95 z-score signals with their p95", () => {
+    // Five tools with steady, distinct latencies; one is far above the rest.
+    const log = [10, 11, 12, 13, 1000].flatMap((durationMs, t) =>
+      Array.from({ length: 10 }, (_, i) =>
+        persisted(t * 10 + i, `tool.t${t}`, "success", durationMs)
+      )
+    );
+    const { service } = makeFixture({}, log);
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const [raw] = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "p95-z-score");
+    expect(snapshot.anomalySignals.filter((s) => s.kind === "p95-z-score")).toEqual([
+      {
+        kind: "p95-z-score",
+        toolId: "tool.t4",
+        severity: "danger",
+        timestamp: raw!.timestamp,
+        zScore: raw!.zScore,
+        p95Ms: 1000,
+      },
+    ]);
+  });
+
+  it("replaces tool ids outside the MCP tool-name grammar with a placeholder", () => {
+    const { service } = makeFixture();
+    for (let i = 0; i < 50; i++) append(service);
+    service.getAuditStats(); // seed the baseline
+    const prose = "please summarise the quarterly numbers for ACME";
+    append(service, { toolId: prose, outcome: { kind: "unauthorized" } });
+    append(service, { toolId: `x${"y".repeat(128)}`, outcome: { kind: "unauthorized" } });
+
+    const snapshot = service.getDiagnosticsSnapshot();
+    const serialized = JSON.stringify(snapshot);
+    expect(serialized).not.toContain("quarterly");
+    expect(serialized).not.toContain("yyyy");
+    const unrecognized = snapshot.perTool.filter((t) => t.toolId !== "tool.a");
+    expect(unrecognized).toHaveLength(1);
+    expect(unrecognized[0]).toMatchObject({ callCount: 2, failureCount: 2 });
+    const firstSeen = snapshot.anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstSeen).toHaveLength(2);
+    expect(new Set(firstSeen.map((s) => s.toolId))).toEqual(new Set([unrecognized[0]!.toolId]));
+  });
+
+  it("caps exported signals to the newest 200 while reporting the full counts", () => {
     const { service } = makeFixture({ auditMaxRecords: 1000 });
     // 399 fast calls (median 12ms, MAD 2ms) plus 201 slow outliers: each slow
     // call is its own latency-drift signal.
-    for (let i = 0; i < 399; i++) append(service, { durationMs: i % 2 === 0 ? 10 : 12 });
-    for (let i = 0; i < 201; i++) append(service, { durationMs: 1000 });
+    withSequentialClock(() => {
+      for (let i = 0; i < 399; i++) append(service, { durationMs: i % 2 === 0 ? 10 : 12 });
+      for (let i = 0; i < 201; i++) append(service, { durationMs: 1000 });
+    });
 
     const snapshot = service.getDiagnosticsSnapshot();
+    const outlierTimestamps = service
+      .getRecords()
+      .filter((r) => r.durationMs === 1000)
+      .map((r) => r.timestamp);
     expect(snapshot.anomalySignalCount).toBe(201);
-    expect(snapshot.anomalySignals).toHaveLength(200);
-    const timestamps = snapshot.anomalySignals.map((s) => s.timestamp);
-    expect(timestamps).toEqual([...timestamps].sort((a, b) => b - a));
+    expect(snapshot.anomalySignalCountsByKind).toEqual({ "latency-drift": 201 });
+    expect(snapshot.anomalySignals.map((s) => s.timestamp)).toEqual(
+      [...outlierTimestamps].sort((a, b) => b - a).slice(0, 200)
+    );
   });
 });

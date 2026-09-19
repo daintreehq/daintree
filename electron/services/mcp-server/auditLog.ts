@@ -83,8 +83,17 @@ function evidenceExpiry(timestamps: readonly number[], minCount: number): number
 }
 
 // Latency drift emits one signal per outlier record, so a full 10k ring could
-// otherwise balloon a bundle that leaves the machine. The total is kept.
+// otherwise balloon a bundle that leaves the machine. Totals are kept.
 const DIAGNOSTICS_MAX_SIGNALS = 200;
+// A rejected CallTool is audited under whatever `params.name` the client sent,
+// so `toolId` can be arbitrary client text. Only names in the MCP tool-name
+// grammar (which every action and plugin id satisfies) leave the machine.
+const DIAGNOSTICS_TOOL_ID_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/;
+const DIAGNOSTICS_UNRECOGNIZED_TOOL_ID = "<unrecognized>";
+
+function diagnosticsToolId(toolId: string): string {
+  return DIAGNOSTICS_TOOL_ID_PATTERN.test(toolId) ? toolId : DIAGNOSTICS_UNRECOGNIZED_TOOL_ID;
+}
 
 /**
  * An anomaly signal as it appears in the diagnostics bundle. An explicit
@@ -125,6 +134,7 @@ export interface McpAuditDiagnosticsSnapshot {
   anomalySuppressed: boolean;
   auth401Count: number;
   anomalySignalCount: number;
+  anomalySignalCountsByKind: Partial<Record<McpAnomalySignal["kind"], number>>;
   anomalySignals: McpAuditDiagnosticsSignal[];
   perTool: McpAuditDiagnosticsToolCounts[];
 }
@@ -136,7 +146,7 @@ function isDispatchFailure(result: McpAuditResult): boolean {
 function projectDiagnosticsSignal(signal: McpAnomalySignal): McpAuditDiagnosticsSignal {
   const out: McpAuditDiagnosticsSignal = {
     kind: signal.kind,
-    toolId: signal.toolId,
+    toolId: diagnosticsToolId(signal.toolId),
     severity: signal.severity,
     timestamp: signal.timestamp,
   };
@@ -521,10 +531,11 @@ export class AuditService {
     const byTool = new Map<string, McpAuditDiagnosticsToolCounts>();
     for (const r of this.records) {
       if (isGrantRecord(r)) continue;
-      let counts = byTool.get(r.toolId);
+      const toolId = diagnosticsToolId(r.toolId);
+      let counts = byTool.get(toolId);
       if (!counts) {
-        counts = { toolId: r.toolId, callCount: 0, failureCount: 0 };
-        byTool.set(r.toolId, counts);
+        counts = { toolId, callCount: 0, failureCount: 0 };
+        byTool.set(toolId, counts);
       }
       counts.callCount += 1;
       if (isDispatchFailure(r.result)) counts.failureCount += 1;
@@ -533,6 +544,10 @@ export class AuditService {
       a.toolId < b.toolId ? -1 : a.toolId > b.toolId ? 1 : 0
     );
 
+    const anomalySignalCountsByKind: McpAuditDiagnosticsSnapshot["anomalySignalCountsByKind"] = {};
+    for (const s of stats.anomalySignals) {
+      anomalySignalCountsByKind[s.kind] = (anomalySignalCountsByKind[s.kind] ?? 0) + 1;
+    }
     const anomalySignals = [...stats.anomalySignals]
       .sort((a, b) => b.timestamp - a.timestamp)
       .slice(0, DIAGNOSTICS_MAX_SIGNALS)
@@ -547,6 +562,7 @@ export class AuditService {
       anomalySuppressed: stats.anomalySuppressed,
       auth401Count: stats.auth401Count,
       anomalySignalCount: stats.anomalySignals.length,
+      anomalySignalCountsByKind,
       anomalySignals,
       perTool,
     };

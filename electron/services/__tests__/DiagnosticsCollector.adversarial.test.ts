@@ -998,16 +998,30 @@ describe("DiagnosticsCollector adversarial", () => {
 
     it("MCP_AUDIT_SECTION_GOES_THROUGH_REDACTION", async () => {
       const audit = await createAuditService();
+      for (let i = 0; i < 50; i++) append(audit, "files.search");
+      audit.getAuditStats(); // seed the first-seen baseline
+      // Grammar-valid ids still get the payload-wide scrub, in both the
+      // per-tool counts and the anomaly signals.
       append(audit, "plugin.ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef0123456");
-      append(audit, "plugin./Users/alice/tool");
+      // Client text outside the tool-name grammar never leaves at all.
+      append(audit, "/Users/alice/notes please summarise");
       installService(audit);
 
       const payload = (await diagnostics.collectDiagnostics(createDeps())) as {
-        mcpAudit: { perTool: Array<{ toolId: string }> };
+        mcpAudit: {
+          perTool: Array<{ toolId: string }>;
+          anomalySignals: Array<{ kind: string; toolId: string }>;
+        };
       };
-      const toolIds = payload.mcpAudit.perTool.map((t) => t.toolId).join(" ");
-      expect(toolIds).not.toContain("ghp_");
-      expect(toolIds).not.toContain("/Users/alice");
+      const firstSeen = payload.mcpAudit.anomalySignals.filter(
+        (s) => s.kind === "first-seen-combination"
+      );
+      expect(firstSeen).toHaveLength(2);
+      expect(payload.mcpAudit.perTool).toHaveLength(3);
+      const serialized = JSON.stringify(payload.mcpAudit);
+      expect(serialized).not.toContain("ghp_");
+      expect(serialized).not.toContain("alice");
+      expect(serialized).not.toContain("summarise");
     });
 
     it("MCP_AUDIT_SECTION_REPORTS_UNINITIALIZED_SERVICE", async () => {

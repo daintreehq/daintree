@@ -532,6 +532,10 @@ describe("McpServerService", () => {
         .getAuditStats()
         .anomalySignals.filter((s) => s.kind === "first-seen-combination");
       expect(firstSeen.map((s) => s.toolId)).toEqual(["tool.new"]);
+
+      // The server never started, so afterEach won't stop it: settle the
+      // pending debounce flush here instead of letting it land in a later test.
+      audit.flushNow();
     });
 
     it("records a successful dispatch with redacted args and a non-empty session id", async () => {
