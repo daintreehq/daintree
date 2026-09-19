@@ -70,10 +70,11 @@ export function useKeepAwakeSync(): void {
       }, UI_DOHERTY_THRESHOLD);
     });
 
-    // A state that landed while nothing was subscribed — a remount — is already
-    // under way, so it shows without the gate.
+    // A state that landed while nothing was subscribed — a remount — describes
+    // where things already stand, so it applies without the gate either way.
     const initial = useKeepAwakeStore.getState();
-    if (initial.state?.isBlocking && !initial.visible) initial.setVisible(true);
+    const initiallyBlocking = initial.state?.isBlocking ?? false;
+    if (initial.visible !== initiallyBlocking) initial.setVisible(initiallyBlocking);
 
     const offPush = keepAwakeClient.onStateChanged((state) => {
       useKeepAwakeStore.getState().applyState(state);

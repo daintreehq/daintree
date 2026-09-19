@@ -4,6 +4,7 @@ import { events } from "./events.js";
 import { store } from "../store.js";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
+import { watchLinuxPowerSource } from "./linuxPowerSource.js";
 import type { AgentState } from "../../shared/types/agent.js";
 import type { KeepAwakeConfig, KeepAwakeState } from "../../shared/types/ipc/keepAwake.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -56,11 +57,15 @@ function readStoredConfig(): KeepAwakeConfig {
   return { enabled: stored.enabled !== false, onBattery: stored.onBattery === true };
 }
 
-function readOnBattery(): boolean {
+/**
+ * A failed read keeps what was last known rather than assuming AC, which would
+ * let a laptop known to be unplugged take the blocker back.
+ */
+function readOnBattery(fallback: boolean): boolean {
   try {
     return powerMonitor.isOnBatteryPower();
   } catch {
-    return false;
+    return fallback;
   }
 }
 
@@ -73,7 +78,7 @@ export class PowerSaveBlockerService {
   private terminalRegistry: TerminalRegistry | null = null;
   private unsubscribers: Array<() => void> = [];
   private config: KeepAwakeConfig = readStoredConfig();
-  private onBatteryPower = readOnBattery();
+  private onBatteryPower = readOnBattery(false);
   private revision = 0;
   private published: { enabled: boolean; onBattery: boolean; isBlocking: boolean } | null = null;
 
@@ -113,20 +118,28 @@ export class PowerSaveBlockerService {
       })
     );
 
+    const setPowerSource = (onBattery: boolean) => {
+      this.onBatteryPower = onBattery;
+      this.recompute(onBattery ? "power-battery" : "power-ac");
+    };
+    // Electron reports AC forever on Linux and fires neither event there, so
+    // sysfs stands in for both.
+    const linuxSource = process.platform === "linux" ? watchLinuxPowerSource(setPowerSource) : null;
+    if (linuxSource) this.unsubscribers.push(() => linuxSource.dispose());
+
     // Both events can repeat around sleep and wake; recompute is a function of
     // current state, so a repeat changes nothing.
-    const onBattery = () => {
-      this.onBatteryPower = true;
-      this.recompute("power-battery");
-    };
-    const onAc = () => {
-      this.onBatteryPower = false;
-      this.recompute("power-ac");
-    };
+    const onBattery = () => setPowerSource(true);
+    const onAc = () => setPowerSource(false);
+
     // The source can change while the machine sleeps without either event
     // firing on wake, so it is read again.
     const onResume = () => {
-      this.onBatteryPower = readOnBattery();
+      if (linuxSource) {
+        linuxSource.refresh();
+        return;
+      }
+      this.onBatteryPower = readOnBattery(this.onBatteryPower);
       this.recompute("resume");
     };
     powerMonitor.on("on-battery", onBattery);
@@ -178,7 +191,7 @@ export class PowerSaveBlockerService {
   }
 
   private armSafetyTimer(delayMs: number): void {
-    this.checkpointAt = Date.now() + delayMs;
+    this.checkpointAt = performance.now() + delayMs;
     this.safetyTimer = setTimeout(() => this.onSafetyTimeout(), delayMs);
   }
 
@@ -199,7 +212,7 @@ export class PowerSaveBlockerService {
   private suspendBlocker(): void {
     const episode = this.episode!;
     if (this.checkpointAt !== null) {
-      episode.remainingMs = Math.max(0, this.checkpointAt - Date.now());
+      episode.remainingMs = Math.max(0, this.checkpointAt - performance.now());
     }
     this.stopBlocker(this.releaseReason());
   }
@@ -336,8 +349,17 @@ export class PowerSaveBlockerService {
 }
 
 let instance: PowerSaveBlockerService | null = null;
+let disposed = false;
 
+/**
+ * For IPC, which can still be answering renderers while shutdown disposes the
+ * service. A call then must not build a replacement: it would re-attach every
+ * listener and could take the blocker again on the way out.
+ */
 export function getPowerSaveBlockerService(): PowerSaveBlockerService {
+  if (disposed) {
+    throw new Error("Keep-awake is unavailable while Daintree shuts down");
+  }
   if (!instance) {
     instance = new PowerSaveBlockerService();
   }
@@ -368,6 +390,7 @@ export function getPowerSaveBlockerService(): PowerSaveBlockerService {
 export function initializePowerSaveBlockerService(
   terminalRegistry?: TerminalRegistry
 ): PowerSaveBlockerService {
+  disposed = false;
   if (!instance) {
     instance = new PowerSaveBlockerService();
   }
@@ -378,6 +401,7 @@ export function initializePowerSaveBlockerService(
 }
 
 export function disposePowerSaveBlockerService(): void {
+  disposed = true;
   if (instance) {
     instance.dispose();
     instance = null;

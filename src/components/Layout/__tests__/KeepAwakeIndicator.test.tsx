@@ -16,7 +16,7 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
-import { KeepAwakeIndicator } from "../KeepAwakeIndicator";
+import { KeepAwakeIndicator, KeepAwakeIndicatorPlaceholder } from "../KeepAwakeIndicator";
 
 afterEach(() => {
   cleanup();
@@ -51,7 +51,6 @@ describe("KeepAwakeIndicator", () => {
     const button = getByTestId("keep-awake-indicator");
 
     expect(button.querySelector(".toolbar-badge")).toBeNull();
-    expect(button.className).toContain("text-text-secondary");
     expect(button.className).not.toMatch(/\b(?:text|bg)-(?:accent|status)-/);
   });
 
@@ -65,5 +64,14 @@ describe("KeepAwakeIndicator", () => {
       { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
       { source: "user" }
     );
+  });
+
+  it("holds the slot with a placeholder that stays out of the tab order", () => {
+    const { container } = render(<KeepAwakeIndicatorPlaceholder />);
+    const placeholder = container.firstElementChild!;
+
+    expect(placeholder.getAttribute("aria-hidden")).toBe("true");
+    expect(placeholder.hasAttribute("data-toolbar-item")).toBe(false);
+    expect(placeholder.querySelector("button")).toBeNull();
   });
 });

@@ -3,24 +3,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { KeepAwakeConfig, KeepAwakeState } from "@shared/types";
 
-interface ToastArgs {
-  type: string;
-  title: string;
-  actions: Array<{ label: string; onClick: () => void }>;
-}
-
-const { clientMock, notifyMock, loadMock } = vi.hoisted(() => ({
+const { clientMock, loadMock } = vi.hoisted(() => ({
   clientMock: {
     getState: vi.fn(),
     updateConfig: vi.fn(),
     onStateChanged: vi.fn(),
   },
-  notifyMock: vi.fn<(toast: ToastArgs) => void>(),
   loadMock: vi.fn(() => Promise.resolve()),
 }));
 
 vi.mock("@/clients/keepAwakeClient", () => ({ keepAwakeClient: clientMock }));
-vi.mock("@/lib/notify", () => ({ notify: notifyMock }));
 vi.mock("@/hooks/useKeepAwakeSync", () => ({ loadKeepAwakeState: loadMock }));
 vi.mock("@/utils/logger", () => ({
   logError: vi.fn(),
@@ -46,8 +38,22 @@ function switchFor(container: HTMLElement, label: string): HTMLButtonElement {
   return el;
 }
 
-const MASTER = "Keep Awake While Agents Work Toggle";
-const BATTERY = "Keep Awake On Battery Toggle";
+const MASTER = "Keep awake while agents work";
+const BATTERY = "Keep awake on battery";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+function retryButton(container: HTMLElement): HTMLButtonElement | undefined {
+  return [...container.querySelectorAll("button")].find((b) => b.textContent === "Retry");
+}
 
 beforeEach(() => {
   useKeepAwakeStore.setState({ state: null, loadError: null, visible: false });
@@ -59,10 +65,17 @@ afterEach(() => {
 });
 
 describe("KeepAwakeSection", () => {
-  it("renders nothing until a state or an error lands", () => {
+  it("shows the defaults locked until main's state lands", () => {
     const { container } = render(<KeepAwakeSection />);
 
-    expect(container.innerHTML).toBe("");
+    expect(container.querySelector("#general-keep-awake")).not.toBeNull();
+    expect(switchFor(container, MASTER).getAttribute("aria-checked")).toBe("true");
+    expect(switchFor(container, MASTER).disabled).toBe(true);
+    expect(switchFor(container, BATTERY).disabled).toBe(true);
+    expect(container.textContent).toContain(
+      "Whether Daintree keeps this machine awake while agents work"
+    );
+    expect(container.textContent).not.toContain("isn't keeping");
   });
 
   it("shows both switches with the stored values", () => {
@@ -85,12 +98,12 @@ describe("KeepAwakeSection", () => {
   it("describes what main is doing rather than what the switches ask for", () => {
     useKeepAwakeStore.setState({ state: makeState({}, true) });
     const { container } = render(<KeepAwakeSection />);
-    expect(container.textContent).toContain("Daintree is keeping this machine awake right now.");
+    expect(container.textContent).toContain("Daintree is keeping this machine awake right now");
 
     act(() => {
       useKeepAwakeStore.getState().applyState(makeState({}, false, 2));
     });
-    expect(container.textContent).toContain("Daintree isn't keeping this machine awake right now.");
+    expect(container.textContent).toContain("Daintree isn't keeping this machine awake right now");
   });
 
   it("sends only the toggled field and applies the state main returns", async () => {
@@ -109,12 +122,8 @@ describe("KeepAwakeSection", () => {
 
   it("shows the requested value and locks both switches while saving", async () => {
     useKeepAwakeStore.setState({ state: makeState() });
-    let resolve!: (state: KeepAwakeState) => void;
-    clientMock.updateConfig.mockReturnValue(
-      new Promise<KeepAwakeState>((r) => {
-        resolve = r;
-      })
-    );
+    const save = deferred<KeepAwakeState>();
+    clientMock.updateConfig.mockReturnValue(save.promise);
     const { container } = render(<KeepAwakeSection />);
 
     act(() => {
@@ -125,13 +134,50 @@ describe("KeepAwakeSection", () => {
     expect(switchFor(container, BATTERY).disabled).toBe(true);
 
     await act(async () => {
-      resolve(makeState({ enabled: false }, false, 2));
+      save.resolve(makeState({ enabled: false }, false, 2));
     });
     expect(switchFor(container, MASTER).disabled).toBe(false);
     expect(switchFor(container, MASTER).getAttribute("aria-checked")).toBe("false");
   });
 
-  it("rolls back and offers to resend the same change when saving fails", async () => {
+  it("sends one request however often the switch is hit while one is in flight", () => {
+    useKeepAwakeStore.setState({ state: makeState() });
+    clientMock.updateConfig.mockReturnValue(deferred<KeepAwakeState>().promise);
+    const { container } = render(<KeepAwakeSection />);
+    const master = switchFor(container, MASTER);
+
+    act(() => {
+      master.click();
+      master.click();
+    });
+
+    expect(clientMock.updateConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps showing another window's change to the field not being saved", async () => {
+    useKeepAwakeStore.setState({ state: makeState() });
+    const save = deferred<KeepAwakeState>();
+    clientMock.updateConfig.mockReturnValue(save.promise);
+    const { container } = render(<KeepAwakeSection />);
+
+    act(() => {
+      fireEvent.click(switchFor(container, BATTERY));
+    });
+    act(() => {
+      useKeepAwakeStore.getState().applyState(makeState({ enabled: false }, false, 2));
+    });
+
+    expect(switchFor(container, MASTER).getAttribute("aria-checked")).toBe("false");
+    expect(switchFor(container, BATTERY).getAttribute("aria-checked")).toBe("true");
+
+    // The save's own reply was computed before the other window's change.
+    await act(async () => {
+      save.resolve(makeState({ onBattery: true }, false, 1));
+    });
+    expect(useKeepAwakeStore.getState().state?.revision).toBe(2);
+  });
+
+  it("rolls back and offers to resend the same change inline when saving fails", async () => {
     useKeepAwakeStore.setState({ state: makeState() });
     clientMock.updateConfig.mockRejectedValueOnce(new Error("store write failed"));
     const { container } = render(<KeepAwakeSection />);
@@ -141,18 +187,16 @@ describe("KeepAwakeSection", () => {
     });
 
     expect(switchFor(container, MASTER).getAttribute("aria-checked")).toBe("true");
-    expect(notifyMock).toHaveBeenCalledTimes(1);
-    const toast = notifyMock.mock.calls[0]![0];
-    expect(toast.type).toBe("error");
-    expect(toast.title).toBe("Couldn't save setting");
-    expect(toast.actions.map((a) => a.label)).toEqual(["Try again"]);
+    expect(container.textContent).toContain("Couldn't save keep-awake setting");
+    expect(container.textContent).toContain("store write failed");
 
     clientMock.updateConfig.mockResolvedValueOnce(makeState({ enabled: false }, false, 2));
     await act(async () => {
-      toast.actions[0]!.onClick();
+      retryButton(container)!.click();
     });
     expect(clientMock.updateConfig).toHaveBeenLastCalledWith({ enabled: false });
     expect(useKeepAwakeStore.getState().state?.config.enabled).toBe(false);
+    expect(container.textContent).not.toContain("Couldn't save keep-awake setting");
   });
 
   it("shows a load failure with a retry that reads again", () => {

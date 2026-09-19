@@ -143,7 +143,7 @@ import { ResumeSessionsToolbarButton } from "./ResumeSessionsToolbarButton";
 import { ToolbarSettingsButton } from "./ToolbarSettingsButton";
 import { ToolbarProblemsButton } from "./ToolbarProblemsButton";
 import { HostMemoryPauseIndicator } from "./HostMemoryPauseIndicator";
-import { KeepAwakeIndicator } from "./KeepAwakeIndicator";
+import { KeepAwakeIndicator, KeepAwakeIndicatorPlaceholder } from "./KeepAwakeIndicator";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 import { useHostMemoryPauseStore } from "@/store/hostMemoryPauseStore";
 import { ToolbarPortalButton } from "./ToolbarPortalButton";
@@ -647,6 +647,7 @@ export function Toolbar({
   // the toolbar and the roving tab-stop sync below sees the item list change.
   const hostMemoryPauseVisible = useHostMemoryPauseStore((state) => state.visible);
   const keepAwakeVisible = useKeepAwakeStore((state) => state.visible);
+  const keepAwakeEnabled = useKeepAwakeStore((state) => state.state?.config.enabled ?? false);
 
   // Per-item state for the overflow menu, so evicted buttons keep the signal
   // they carry on the visible toolbar (issue #9821). Reads mirror the
@@ -2573,11 +2574,12 @@ export function Toolbar({
                 </div>
               )}
 
-              {/* Fixed chrome for the same reason: it exists only while the
-                  machine is being held awake (#12516). */}
-              {keepAwakeVisible && (
+              {/* Fixed chrome too (#12516), but it comes and goes with every
+                  agent turn, so its slot is held for as long as the setting is
+                  on rather than shifting the buttons beside it each time. */}
+              {(keepAwakeVisible || keepAwakeEnabled) && (
                 <div className="app-no-drag shrink-0">
-                  <KeepAwakeIndicator />
+                  {keepAwakeVisible ? <KeepAwakeIndicator /> : <KeepAwakeIndicatorPlaceholder />}
                 </div>
               )}
 

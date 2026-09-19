@@ -112,12 +112,17 @@ describe("useKeepAwakeSync", () => {
   it("never shows a hold released inside the gate", async () => {
     renderHook(() => useKeepAwakeSync());
     await resolveRead(0, makeState(false, 1));
+    const seen: boolean[] = [];
+    const off = useKeepAwakeStore.subscribe((s) => seen.push(s.visible));
 
     push(makeState(true, 2));
-    push(makeState(false, 3));
-    advance(UI_DOHERTY_THRESHOLD);
-
+    advance(UI_DOHERTY_THRESHOLD - 1);
     expect(useKeepAwakeStore.getState().visible).toBe(false);
+    push(makeState(false, 3));
+    advance(UI_DOHERTY_THRESHOLD * 2);
+
+    off();
+    expect(seen).not.toContain(true);
   });
 
   it("hides at once when the hold is released", async () => {
@@ -174,6 +179,20 @@ describe("useKeepAwakeSync", () => {
     advance(UI_DOHERTY_THRESHOLD);
 
     expect(pushListeners.size).toBe(0);
+    expect(useKeepAwakeStore.getState().visible).toBe(false);
+  });
+
+  it("hides on remount a hold that was released while unmounted", async () => {
+    const first = renderHook(() => useKeepAwakeSync());
+    await resolveRead(0, makeState(true, 1));
+    expect(useKeepAwakeStore.getState().visible).toBe(true);
+    first.unmount();
+
+    act(() => {
+      useKeepAwakeStore.getState().applyState(makeState(false, 2));
+    });
+    renderHook(() => useKeepAwakeSync());
+
     expect(useKeepAwakeStore.getState().visible).toBe(false);
   });
 

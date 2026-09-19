@@ -22,6 +22,12 @@ const storeMock = vi.hoisted(() => ({
 
 const broadcastToRenderer = vi.hoisted(() => vi.fn());
 
+const linuxSource = vi.hoisted(() => ({
+  onChange: null as ((onBattery: boolean) => void) | null,
+  refresh: vi.fn(),
+  dispose: vi.fn(),
+}));
+
 vi.mock("electron", () => {
   let nextId = 1;
   const activeBlockers = new Set<number>();
@@ -65,9 +71,17 @@ vi.mock("../../store.js", () => ({
 
 vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer }));
 
+vi.mock("../linuxPowerSource.js", () => ({
+  watchLinuxPowerSource: vi.fn((onChange: (onBattery: boolean) => void) => {
+    linuxSource.onChange = onChange;
+    return { refresh: linuxSource.refresh, dispose: linuxSource.dispose };
+  }),
+}));
+
 import { powerSaveBlocker } from "electron";
 import {
   PowerSaveBlockerService,
+  getPowerSaveBlockerService,
   initializePowerSaveBlockerService,
   disposePowerSaveBlockerService,
   type TerminalRegistry,
@@ -93,11 +107,25 @@ function emitStateChanged(
   });
 }
 
+const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+function setPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+}
+
+// Linux reads sysfs instead of powerMonitor, and CI runs on Linux, so each test
+// names the platform it means.
 beforeEach(() => {
+  setPlatform("darwin");
   power.onBattery = false;
   power.throwOnQuery = false;
   storeMock.data = {};
   storeMock.failSet = false;
+  linuxSource.onChange = null;
+});
+
+afterEach(() => {
+  Object.defineProperty(process, "platform", realPlatform);
 });
 
 describe("PowerSaveBlockerService", () => {
@@ -627,6 +655,52 @@ describe("PowerSaveBlockerService", () => {
       expect(service.isBlocking()).toBe(false);
     });
 
+    it("keeps a known battery reading when the query fails on resume", () => {
+      power.onBattery = true;
+      restart();
+      emitStateChanged("term-1", "working");
+
+      power.throwOnQuery = true;
+      power.emit("resume");
+
+      expect(service.isBlocking()).toBe(false);
+    });
+
+    describe("on Linux", () => {
+      beforeEach(() => {
+        setPlatform("linux");
+        restart();
+      });
+
+      it("follows the sysfs reading, since Electron reports AC there regardless", () => {
+        emitStateChanged("term-1", "working");
+        expect(service.isBlocking()).toBe(true);
+
+        linuxSource.onChange!(true);
+        expect(service.isBlocking()).toBe(false);
+
+        linuxSource.onChange!(false);
+        expect(service.isBlocking()).toBe(true);
+      });
+
+      it("reads sysfs again on resume instead of trusting powerMonitor", () => {
+        power.onBattery = false;
+        linuxSource.onChange!(true);
+        emitStateChanged("term-1", "working");
+
+        power.emit("resume");
+
+        expect(linuxSource.refresh).toHaveBeenCalledTimes(1);
+        expect(service.isBlocking()).toBe(false);
+      });
+
+      it("stops reading sysfs when disposed", () => {
+        service.dispose();
+
+        expect(linuxSource.dispose).toHaveBeenCalledTimes(1);
+      });
+    });
+
     it("releases at once when disabled and resumes when enabled again", () => {
       emitStateChanged("term-1", "working");
 
@@ -730,6 +804,18 @@ describe("PowerSaveBlockerService", () => {
         vi.advanceTimersByTime(1);
         expect(service.isBlocking()).toBe(false);
         expect(service.getActiveCount()).toBe(0);
+      });
+
+      it("does not refill a period when the wall clock moves back", () => {
+        emitStateChanged("term-1", "working");
+        vi.advanceTimersByTime(3 * HOUR);
+
+        vi.setSystemTime(Date.now() - 3 * HOUR);
+        power.emit("on-battery");
+        power.emit("on-ac");
+
+        vi.advanceTimersByTime(HOUR);
+        expect(service.isBlocking()).toBe(false);
       });
 
       it("does not refill a period that was about to run out", () => {
@@ -915,6 +1001,14 @@ describe("initializePowerSaveBlockerService", () => {
       afterFirst
     );
     onSpy.mockRestore();
+  });
+
+  it("refuses to build a replacement once shutdown has disposed it", () => {
+    initializePowerSaveBlockerService();
+    disposePowerSaveBlockerService();
+
+    expect(() => getPowerSaveBlockerService()).toThrow(/shuts down/);
+    expect(power.count("on-battery")).toBe(0);
   });
 
   it("adds no power listeners on a second initialize", () => {
