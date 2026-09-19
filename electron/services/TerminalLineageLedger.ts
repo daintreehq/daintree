@@ -466,6 +466,10 @@ export class TerminalLineageLedger {
     return this.roots.size > 0;
   }
 
+  isRoot(pid: number): boolean {
+    return this.roots.has(pid);
+  }
+
   /** Total tracked PIDs across every root. Exposed for tests and diagnostics. */
   getTrackedCount(): number {
     return this.trackedCount;

@@ -8,7 +8,10 @@ import {
   type IdentityWatcherDelegate,
 } from "../IdentityWatcher.js";
 import type { ProcessDetector } from "../../ProcessDetector.js";
-import { INITIAL_FOREGROUND_SENTINEL } from "../ForegroundProcessGroupProbe.js";
+import {
+  FOREGROUND_SNAPSHOT_MAX_AGE_MS,
+  INITIAL_FOREGROUND_SENTINEL,
+} from "../ForegroundProcessGroupProbe.js";
 
 interface FakeDelegateState {
   isExited: boolean;
@@ -1866,38 +1869,46 @@ describe("IdentityWatcher", () => {
       watcher.dispose();
     });
 
+    // Long enough for a read that is guaranteed to post-date the evidence.
+    const VERIFY_MS = FOREGROUND_SNAPSHOT_MAX_AGE_MS + 2 * SHELL_IDENTITY_FALLBACK_POLL_MS;
+
+    function showAgentPromptLookalike(state: FakeDelegateState) {
+      // The agent leaves a shell-prompt-looking line on screen while it still
+      // owns the foreground.
+      state.visibleLines = ["Codex ready", "user@host:~/repo$ "];
+      state.cursorLine = "user@host:~/repo$ ";
+    }
+
     it("re-probes an unchanged refuted candidate once per refutation window", async () => {
       const { state, probe, watcher, clear } = makeCommittedAgent();
       await commit(watcher);
+      showAgentPromptLookalike(state);
+      await vi.advanceTimersByTimeAsync(VERIFY_MS);
+      expect(probe).toHaveBeenCalled();
+
+      // Refuted: the rest of the window asks nothing...
       probe.mockClear();
-
-      // The agent leaves a shell-prompt-looking line on screen while it still
-      // owns the foreground. A fresh reading refutes the candidate; it is not
-      // asked again on every tick.
-      state.visibleLines = ["Codex ready", "user@host:~/repo$ "];
-      state.cursorLine = "user@host:~/repo$ ";
-      const ticks = 3 * (FOREGROUND_PROBE_REFUTATION_MS / SHELL_IDENTITY_FALLBACK_POLL_MS);
-      await vi.advanceTimersByTimeAsync(ticks * SHELL_IDENTITY_FALLBACK_POLL_MS);
-
-      expect(probe.mock.calls.length).toBeGreaterThan(0);
-      expect(probe.mock.calls.length).toBeLessThanOrEqual(3);
+      await vi.advanceTimersByTimeAsync(
+        FOREGROUND_PROBE_REFUTATION_MS - 2 * SHELL_IDENTITY_FALLBACK_POLL_MS
+      );
+      expect(probe).not.toHaveBeenCalled();
+      // ...and the next window costs one read, since the evidence is old.
+      await vi.advanceTimersByTimeAsync(2 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(probe).toHaveBeenCalledTimes(1);
       expect(clear).not.toHaveBeenCalledWith("prompt-return");
 
       // A change in the tree reopens the candidate on the next tick.
-      const readsBefore = probe.mock.calls.length;
       state.ptyDescendantCount = 2;
       await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
-      expect(probe.mock.calls.length).toBe(readsBefore + 1);
+      expect(probe).toHaveBeenCalledTimes(2);
       watcher.dispose();
     });
 
     it("demotes promptly when a refuted candidate turns into a real exit", async () => {
       const { state, watcher, clear } = makeCommittedAgent();
       await commit(watcher);
-
-      state.visibleLines = ["Codex ready", "user@host:~/repo$ "];
-      state.cursorLine = "user@host:~/repo$ ";
-      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      showAgentPromptLookalike(state);
+      await vi.advanceTimersByTimeAsync(VERIFY_MS);
 
       // The agent exits inside the refutation window: its child leaves the
       // tree and the shell takes the foreground back.
@@ -1911,10 +1922,8 @@ describe("IdentityWatcher", () => {
     it("reopens a refuted candidate when the shell prompt is printed again", async () => {
       const { state, probe, watcher, clear } = makeCommittedAgent({ ptyDescendantCount: 2 });
       await commit(watcher);
-
-      state.visibleLines = ["Codex ready", "user@host:~/repo$ "];
-      state.cursorLine = "user@host:~/repo$ ";
-      await vi.advanceTimersByTimeAsync(SHELL_IDENTITY_FALLBACK_POLL_MS);
+      showAgentPromptLookalike(state);
+      await vi.advanceTimersByTimeAsync(VERIFY_MS);
 
       // A background helper keeps the tree non-empty, so only the printed
       // prompt can reopen the candidate inside the window. Its own read lands
@@ -1929,6 +1938,88 @@ describe("IdentityWatcher", () => {
 
       await vi.advanceTimersByTimeAsync(2 * SHELL_IDENTITY_FALLBACK_POLL_MS);
       expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("does not let a cached busy reading re-arm the hold after the prompt returns", async () => {
+      const { state, watcher, clear } = makeCommittedAgent({ ptyDescendantCount: 2 });
+      await commit(watcher);
+      showAgentPromptLookalike(state);
+      await vi.advanceTimersByTimeAsync(VERIFY_MS);
+
+      // The agent exits (a helper lingers, so the tree does not move) and the
+      // shell prompt prints — but the probe keeps serving its cached busy
+      // reading for a few reads before the refresh lands.
+      watcher.observeOutput("user@host:~/repo$ ");
+      await vi.advanceTimersByTimeAsync(2 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      await vi.advanceTimersByTimeAsync(3 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("keeps the child it saw before recovering the identity late (POSIX)", async () => {
+      const { state, watcher, clear } = makeCommittedAgent({
+        visibleLines: ["", ""],
+        cursorLine: "",
+        lastCommand: undefined,
+      });
+      // History recall: the submit carried no text, so the identity has to be
+      // recovered from the command line once output arrives.
+      watcher.onShellSubmit(undefined);
+      await vi.advanceTimersByTimeAsync(4 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+      expect(watcher.pendingFallbackIdentity).toBeNull();
+
+      // The agent has already exited by the time its command line is parsed:
+      // the shell owns the foreground, the tree is empty, no prompt is drawn.
+      state.ptyDescendantCount = 0;
+      state.foreground = { shellPgid: 123, foregroundPgid: 123 };
+      state.lastCommand = "codex";
+      state.lastOutputTime = Date.now();
+      await vi.advanceTimersByTimeAsync(6 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("keeps the child it saw before recovering the identity late (no probe)", async () => {
+      const { state, watcher, clear } = makeCommittedAgent({
+        visibleLines: ["", ""],
+        cursorLine: "",
+        lastCommand: undefined,
+        // Without a probe the shell shows up as a descendant of its own, so
+        // only a count above one is a child.
+        ptyDescendantCount: 2,
+        foreground: null,
+      });
+      watcher.onShellSubmit(undefined);
+      await vi.advanceTimersByTimeAsync(4 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      state.ptyDescendantCount = 1;
+      state.lastCommand = "codex";
+      state.lastOutputTime = Date.now();
+      await vi.advanceTimersByTimeAsync(6 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(clear).toHaveBeenCalledWith("prompt-return");
+    });
+
+    it("does not count the shell itself as a child when there is no probe", async () => {
+      const { state, watcher, clear } = makeCommittedAgent({
+        visibleLines: ["", ""],
+        cursorLine: "",
+        lastCommand: undefined,
+        ptyDescendantCount: 1,
+        foreground: null,
+      });
+      watcher.onShellSubmit(undefined);
+      await vi.advanceTimersByTimeAsync(4 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      state.lastCommand = "codex";
+      state.lastOutputTime = Date.now();
+      await vi.advanceTimersByTimeAsync(4 * SHELL_IDENTITY_FALLBACK_POLL_MS);
+
+      expect(watcher.pendingFallbackIdentity).toMatchObject({ agentType: "codex" });
+      expect(clear).not.toHaveBeenCalledWith("prompt-return");
+      watcher.dispose();
     });
   });
 });

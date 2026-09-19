@@ -7,7 +7,7 @@ const execFileAsync = promisify(execFile);
 // older than this. Hard-max: callers receive null past this age and fall back
 // to the legacy prompt path.
 const FOREGROUND_SNAPSHOT_SOFT_STALE_MS = 500;
-const FOREGROUND_SNAPSHOT_MAX_AGE_MS = 1500;
+export const FOREGROUND_SNAPSHOT_MAX_AGE_MS = 1500;
 const FOREGROUND_SNAPSHOT_PROBE_TIMEOUT_MS = 750;
 
 // Sentinel returned on POSIX before the first probe resolves. Returning null

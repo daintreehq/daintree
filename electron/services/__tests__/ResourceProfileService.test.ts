@@ -832,11 +832,12 @@ describe("ResourceProfileService", () => {
     pty.setResourceProfile.mockImplementation(() => {
       throw new Error("host gone");
     });
-    const pvm = deps.getAllProjectViewManagers()[0] as unknown as MockProjectViewManager;
     const service = new ResourceProfileService(deps);
 
     expect(() => service.start()).not.toThrow();
-    expect(pvm.setMemoryPressurePolicy).toHaveBeenCalledTimes(1);
+    expect(pty.setResourceProfile).toHaveBeenCalledWith(service.getProfile());
+    // Startup carried on past the rejected push to the lag monitor it arms last.
+    expect((service as unknown as { lagInterval: unknown }).lagInterval).toBeTruthy();
 
     service.stop();
   });

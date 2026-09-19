@@ -865,6 +865,28 @@ describe("ProcessTreeCache command/env construction", () => {
       expect(await internals.refreshUnix()).toBe(true);
     });
 
+    it("counts a registered terminal root while it has no children", async () => {
+      const bareShell = `  200 ${process.pid} 0.0 1000 zsh zsh`;
+      queueCensuses(
+        bareShell,
+        `${bareShell}\n  991 ${process.pid} 0.0 900 ps ps -o pgid=,tpgid= -p 200`,
+        ""
+      );
+      const cache = new ProcessTreeCache(2500);
+      cache.attachLineageLedger({
+        hasRoots: () => true,
+        isRoot: (pid) => pid === 200,
+        reconcile: () => {},
+      });
+      const internals = cache as unknown as { refreshUnix: () => Promise<boolean> };
+
+      // A new terminal is a change the lineage ledger needs swept promptly,
+      // even before anything runs in it; the probe beside it still is not.
+      expect(await internals.refreshUnix()).toBe(true);
+      expect(await internals.refreshUnix()).toBe(false);
+      expect(await internals.refreshUnix()).toBe(true);
+    });
+
     it("counts a shell losing its last child as a change", async () => {
       queueCensuses(shellWithAgent, `  200 ${process.pid} 0.0 1000 zsh zsh`);
       const cache = new ProcessTreeCache(2500);
