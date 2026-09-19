@@ -1062,10 +1062,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
      * {@link ownedRecordFor}'s does.
      */
     const adoptedRecordFor = (
-      kind: OwnedResourceKind,
+      resourceKind: OwnedResourceKind,
       resourceId: string
     ): OwnedResourceRecord | undefined => {
-      if (kind !== "terminal") return undefined;
+      if (resourceKind !== "terminal") return undefined;
       const adoption = sessionStore.terminalAdoption.get(ownershipOwner, resourceId);
       if (adoption === undefined) return undefined;
       if (
@@ -1076,7 +1076,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         return undefined;
       }
       return {
-        kind,
+        kind: resourceKind,
         id: resourceId,
         ...(adoption.workspaceId !== undefined ? { workspaceId: adoption.workspaceId } : {}),
       };
@@ -1324,10 +1324,10 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       );
       // A creation under an id that was handed over names a new terminal, and
       // the hand-over was of the old one (#12490). Left in place, the id would
-      // have two drivers: its creator and the pane it was handed to.
-      for (const record of recorded) {
-        if (record.kind === "terminal") sessionStore.terminalAdoption.release(record.id);
-      }
+      // have two drivers: its creator and the pane it was handed to. Every
+      // recorded id is offered: only terminals are ever handed over, and a
+      // worktree id is an absolute path no panel id can equal.
+      for (const record of recorded) sessionStore.terminalAdoption.release(record.id);
     };
 
     // Layered authorization (#8442):
