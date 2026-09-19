@@ -278,15 +278,26 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
  * re-verification between proving readiness and submitting.
  *
  * `agentId` is the terminal's detected agent, falling back to what it was
- * launched as, so a plain shell is `null` and refused. `spawnedAt` is the pty
- * generation: a restart mints a new one. Together they are the strongest claim
- * this surface can make. They are not a claim about the *process* inside the
- * pty — an agent that exits leaving its shell keeps both — which is why the
- * host still treats every submission as text typed at whatever is listening.
+ * launched as, so a plain shell is `null` and refused. `spawnedAt` is the
+ * stamp the panel takes when a pty starts under it, and every restart path
+ * re-stamps it (`panelRegistry/restart.ts`), so it is the pty generation for
+ * every generation there is one for. A slot holding no pty at all — a
+ * recovery hold, which `addPanel.ts` deliberately leaves unstamped — has no
+ * generation to name, and is refused rather than compared: two absent stamps
+ * are equal to each other, and that equality would be the whole check passing
+ * on nothing.
+ *
+ * Together they are the strongest claim this surface can make, and they are
+ * still not a claim about the *process* inside the pty. An agent that exits
+ * leaving its shell keeps both, and so does the `claude` a user then types
+ * into that shell — a different session with the same slot, the same pty and
+ * the same launch id, invisible to anything observable from here. That gap is
+ * why the host treats every submission as text typed at whatever is listening
+ * rather than as a message delivered to a known conversation.
  */
 interface DestinationIdentity {
   agentId: string;
-  spawnedAt: number | undefined;
+  spawnedAt: number;
 }
 
 /** The identity an entry supports, or `null` when it supports none. */
@@ -294,6 +305,9 @@ function identityOf(entry: TerminalStatusEntry | undefined): DestinationIdentity
   if (entry === undefined || entry.error !== undefined) return null;
   // An exit code is the process being gone, not a slow prompt.
   if (entry.exitCode !== undefined && entry.exitCode !== null) return null;
+  // Explicitly false is the pty-host saying this slot has nothing to write to;
+  // absent is a surface that does not report the field, which is not the same.
+  if (entry.hasPty === false) return null;
   // `exited` is the agent leaving its own pty behind — the shell that was
   // underneath it is now what reads stdin. The pty did not restart, so
   // `spawnedAt` is unchanged, and `agentId` falls back to what the terminal was
@@ -304,6 +318,9 @@ function identityOf(entry: TerminalStatusEntry | undefined): DestinationIdentity
   // Tested for a string rather than against `null`: a surface that could not
   // observe the field leaves it out, and "unobserved" is not "an agent".
   if (typeof entry.agentId !== "string" || entry.agentId === "") return null;
+  // Same reading applied to the generation stamp: unobserved is not "a session
+  // that started at no time", and it must not compare equal to the next one.
+  if (typeof entry.spawnedAt !== "number") return null;
   return { agentId: entry.agentId, spawnedAt: entry.spawnedAt };
 }
 
@@ -332,12 +349,18 @@ function sessionChanged(title: string, now: DestinationIdentity | null): string 
 /**
  * Why a destination could not be bound. Kept apart from {@link sessionChanged}
  * because this one is about never having had a session to bind to: a slot with
- * no readable status, or one holding a plain shell. Reached when the user says
- * "send anyway", which waives waiting, not proof of where the words go.
+ * no readable status, one holding no process at all, or one holding a plain
+ * shell. Reached when the user says "send anyway", which waives waiting, not
+ * proof of where the words go.
  */
 function unbindable(title: string, entry: TerminalStatusEntry | undefined): string {
   if (entry === undefined || entry.error !== undefined) {
     return `${title} isn't reporting a status — the request wasn't sent`;
+  }
+  // A pane restored without its process: named separately because "isn't an
+  // agent session" reads as the wrong thing being there, and nothing is.
+  if (entry.hasPty === false || typeof entry.spawnedAt !== "number") {
+    return `${title} has no session running — the request wasn't sent`;
   }
   return `${title} isn't an agent session — the request wasn't sent`;
 }

@@ -22,7 +22,8 @@ function terminal(agentState: string | null = null) {
   // and which pty generation. A restart changes `spawnedAt`; a demotion to a
   // plain shell clears `agentId`.
   let agentId: string | null = "claude";
-  let spawnedAt = 1_000;
+  let spawnedAt: number | undefined = 1_000;
+  let hasPty: boolean | undefined = undefined;
   let waitingReason: string | null = null;
   dispatch.mockImplementation(async (id: string, args: Record<string, unknown>) => {
     if (id === "agent.launch") {
@@ -37,7 +38,8 @@ function terminal(agentState: string | null = null) {
             {
               terminalId: "t1",
               agentId,
-              spawnedAt,
+              ...(spawnedAt === undefined ? {} : { spawnedAt }),
+              ...(hasPty === undefined ? {} : { hasPty }),
               agentState: state,
               ...(waitingReason === null ? {} : { waitingReason }),
               submission: args.submissionToken ? { phase: "pty_written" } : undefined,
@@ -65,8 +67,19 @@ function terminal(agentState: string | null = null) {
     },
     /** A pane that was never an agent at all. */
     beNonAgent: () => (agentId = null),
+    /**
+     * A pane restored without its process: `addPanel` leaves a recovery hold
+     * unstamped and marks it `hasPty: false`, so it reports a launch agent id
+     * and nothing that says which session, because there is none.
+     */
+    beRecoveryHold: () => {
+      spawnedAt = undefined;
+      hasPty = false;
+    },
+    /** A surface that reports no spawn stamp at all, process or no process. */
+    hideSpawnedAt: () => (spawnedAt = undefined),
     setWaitingReason: (next: string) => (waitingReason = next),
-    restart: () => (spawnedAt += 1),
+    restart: () => (spawnedAt = (spawnedAt ?? 0) + 1),
   };
 }
 
@@ -240,6 +253,55 @@ describe("deliverAgentRequest", () => {
     expect(last(states)?.state).toEqual({
       status: "failed",
       message: "Claude restarted before the request went out — nothing was sent",
+    });
+  });
+
+  it("does not bind to a pane restored without its process", async () => {
+    // Both halves of the identity are absent here, and absent compares equal to
+    // absent — the session check would pass on nothing at all.
+    const agent = terminal("waiting");
+    agent.beRecoveryHold();
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude has no session running — the request wasn't sent",
+    });
+  });
+
+  it("does not bind on an unstamped session even when 'send anyway' waived readiness", async () => {
+    // "Send anyway" waives the readiness signal, not the proof of where the
+    // words go: an unnameable session is still unnameable under force.
+    const agent = terminal(null);
+    agent.hideSpawnedAt();
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+    });
+    forceAgentRequest("owner-1\nwt-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude has no session running — the request wasn't sent",
     });
   });
 

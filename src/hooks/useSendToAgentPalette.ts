@@ -6,7 +6,10 @@ import { useSearchablePalette } from "./useSearchablePalette";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
-import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import {
+  formatWithBracketedPaste,
+  neutralizeControlCharacters,
+} from "@shared/utils/terminalInputProtocol";
 import { usePaletteStore } from "@/store/paletteStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { useWorktreeStoreOptional } from "./useWorktreeStore";
@@ -101,7 +104,14 @@ function sendSelectionToTarget(targetId: string): void {
     if (managed.terminal.modes.bracketedPasteMode) {
       terminalClient.write(targetId, formatWithBracketedPaste(text));
     } else {
-      terminalClient.write(targetId, text.replace(/\r?\n/g, "\r"));
+      // Terminal selection text carries whatever the source pane printed. The
+      // wrapper neutralises for the other branch; this one has to do it for
+      // itself, and `\r` means something different here — it submits. Fold
+      // every line ending to `\n`, neutralise, then re-encode the submits.
+      terminalClient.write(
+        targetId,
+        neutralizeControlCharacters(text.replace(/\r\n|\r/g, "\n")).replace(/\n/g, "\r")
+      );
     }
     terminalInstanceService.notifyUserInput(targetId);
   } else {
