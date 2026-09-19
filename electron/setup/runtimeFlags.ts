@@ -19,6 +19,7 @@ export const E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG =
 export const E2E_CRASH_DUMPS_DIR_ARG = "--daintree-e2e-crash-dumps-dir=";
 export const E2E_SIDELOAD_PLUGIN_DIR_ARG = "--daintree-e2e-sideload-plugin-dir=";
 export const FREEZE_HARNESS_ARG = "--daintree-freeze-harness";
+export const IDLE_HARNESS_ARG = "--daintree-idle-harness";
 
 function hasArg(flag: string): boolean {
   return process.argv.includes(flag);
@@ -93,6 +94,16 @@ export function getIsFreezeHarness(): boolean {
   return !isPackaged && hasArg(FREEZE_HARNESS_ARG);
 }
 
+/**
+ * Idle harness mode (#12521). Boots the real app with GPU compositing, opens a
+ * fixture of projects and terminals through the production paths and measures
+ * what the whole process tree costs while nothing is happening. Never
+ * packaged, for the same reason as the freeze harness.
+ */
+export function getIsIdleHarness(): boolean {
+  return !isPackaged && hasArg(IDLE_HARNESS_ARG);
+}
+
 export const isE2EMode = getIsE2EMode();
 export const isE2ESkipFirstRunDialogs = getIsE2ESkipFirstRunDialogs();
 export const isE2EFaultMode = getIsE2EFaultMode();
@@ -101,4 +112,5 @@ export const isE2EDisableCachedViewCpuThrottle = getIsE2EDisableCachedViewCpuThr
 export const e2eCrashDumpsDir = getE2ECrashDumpsDir();
 export const e2eSideloadPluginDir = getE2ESideloadPluginDir();
 export const isFreezeHarness = getIsFreezeHarness();
+export const isIdleHarness = getIsIdleHarness();
 export const smokeTestStart = isSmokeTest ? Date.now() : 0;

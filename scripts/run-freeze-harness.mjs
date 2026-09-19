@@ -197,7 +197,7 @@ function runTreeKill(child, { force, rootExited, sync = false }) {
  * that explains a failure. The timer is the backstop for a blocked pipe whose
  * write callback never fires, and is unref'd so it cannot itself hold us open.
  */
-function exitAfterFlush(code) {
+export function exitAfterFlush(code) {
   let exited = false;
   const done = () => {
     if (exited) return;
@@ -249,7 +249,7 @@ export function validateHarnessOutput(runIndex, runCount, result) {
   }
 }
 
-async function assertBuildArtifacts() {
+export async function assertBuildArtifacts() {
   for (const relativePath of BUILD_ARTIFACTS) {
     const fullPath = path.join(ROOT, relativePath);
     try {
@@ -261,25 +261,44 @@ async function assertBuildArtifacts() {
 }
 
 function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
+  return launchHarnessRun({
+    runIndex,
+    runCount,
+    timeoutMs,
+    harnessArgs: ["--daintree-freeze-harness", "--disable-gpu", "--disable-software-rasterizer"],
+  });
+}
+
+/**
+ * Launch the built app once in a harness mode and collect its output. Shared
+ * with `run-idle-harness.mjs` (#12521), which needs the same supervision with
+ * different flags. `baseEnv` is the environment before the harness's own
+ * additions; `tag` prefixes this runner's own log lines; `shouldEcho` picks
+ * which child output is echoed live (all of it is captured).
+ */
+export function launchHarnessRun({
+  runIndex,
+  runCount,
+  timeoutMs,
+  harnessArgs,
+  baseEnv = process.env,
+  extraEnv = {},
+  tag = "FREEZE-RUNNER",
+  shouldEcho = (text) => text.includes("[FREEZE-HARNESS]"),
+  userDataPrefix = "daintree-freeze-harness-run-",
+}) {
   const electronPath = require("electron");
   return new Promise((resolve, reject) => {
-    mkdtemp(path.join(os.tmpdir(), "daintree-freeze-harness-run-"))
+    mkdtemp(path.join(os.tmpdir(), userDataPrefix))
       .then((userDataDir) => {
-        const args = [
-          ".",
-          "--daintree-freeze-harness",
-          "--disable-gpu",
-          "--disable-software-rasterizer",
-          "--noerrdialogs",
-          `--user-data-dir=${userDataDir}`,
-        ];
+        const args = [".", ...harnessArgs, "--noerrdialogs", `--user-data-dir=${userDataDir}`];
         if (process.platform === "linux") {
           args.push("--no-sandbox");
         }
 
-        console.log(`[FREEZE-RUNNER] Run ${runIndex}/${runCount}: launching Electron`);
+        console.log(`[${tag}] Run ${runIndex}/${runCount}: launching Electron`);
 
-        const env = { ...process.env, NODE_ENV: "production" };
+        const env = { ...baseEnv, NODE_ENV: "production", ...extraEnv };
         delete env.ELECTRON_RUN_AS_NODE;
         delete env.ATOM_SHELL_INTERNAL_RUN_AS_NODE;
 
@@ -334,7 +353,7 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
             rm(userDataDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }).catch(
               (removeError) => {
                 console.error(
-                  `[FREEZE-RUNNER] Could not remove ${userDataDir}: ${
+                  `[${tag}] Could not remove ${userDataDir}: ${
                     removeError instanceof Error ? removeError.message : String(removeError)
                   }`
                 );
@@ -346,14 +365,12 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
             }),
           ]);
           if (error) reject(error);
-          else resolve(result);
+          else resolve({ ...result, pid: child.pid });
         };
 
         const timeoutTimer = setTimeout(() => {
           timedOut = true;
-          console.error(
-            `[FREEZE-RUNNER] Run ${runIndex}/${runCount}: timed out after ${timeoutMs}ms`
-          );
+          console.error(`[${tag}] Run ${runIndex}/${runCount}: timed out after ${timeoutMs}ms`);
           runTreeKill(child, { force: false, rootExited });
           hardKillTimer = setTimeout(
             () => runTreeKill(child, { force: true, rootExited }),
@@ -372,7 +389,7 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
         const capture = (chunk, stream) => {
           const text = chunk.toString();
           output += text;
-          if (text.includes("[FREEZE-HARNESS]")) stream.write(text);
+          if (shouldEcho(text)) stream.write(text);
         };
         child.stdout?.on("data", (chunk) => capture(chunk, process.stdout));
         child.stderr?.on("data", (chunk) => capture(chunk, process.stderr));
@@ -383,9 +400,7 @@ function runHarnessOnce({ runIndex, runCount, timeoutMs }) {
             // deliver. Settling on it here would report the wrong cause and
             // disarm the escalation that is still mid-flight.
             console.error(
-              `[FREEZE-RUNNER] Teardown error: ${
-                error instanceof Error ? error.message : String(error)
-              }`
+              `[${tag}] Teardown error: ${error instanceof Error ? error.message : String(error)}`
             );
             return;
           }

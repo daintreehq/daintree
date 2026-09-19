@@ -118,6 +118,7 @@
     "fix": "npm run format && npm run lint:fix",
     "test:smoke": "node scripts/run-smoke.mjs",
     "test:freeze-harness": "node scripts/run-freeze-harness.mjs",
+    "test:idle-harness": "node scripts/run-idle-harness.mjs",
     "test:smoke:packaged": "node scripts/run-packaged-smoke.mjs",
     "theme:text-contrast": "tsx scripts/theme-text-contrast.ts",
     "theme:text-ramp": "tsx scripts/theme-text-ramp.ts",

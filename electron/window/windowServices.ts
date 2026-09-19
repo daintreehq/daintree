@@ -45,7 +45,7 @@ import {
   queuePendingOpenDirPath,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
-import { isE2EFaultMode, isFreezeHarness } from "../setup/runtimeFlags.js";
+import { isE2EFaultMode, isFreezeHarness, isIdleHarness } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
   hasCliPathFlag,
@@ -647,7 +647,10 @@ export async function setupWindowServices(
     const processArgvCli = !getProcessArgvCliHandled()
       ? extractCliPath(process.argv, process.cwd())
       : null;
+    // The idle harness measures a fixture it builds itself; an extra login
+    // shell in the home directory would be unowned cost in every reading.
     const skipDefaultSpawn =
+      isIdleHarness ||
       opts.initialProjectPath ||
       processArgvCli ||
       getPendingCliPath() ||

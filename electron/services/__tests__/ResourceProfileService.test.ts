@@ -2288,4 +2288,59 @@ describe("ResourceProfileService", () => {
       service.stop();
     });
   });
+
+  describe("onProfileChanged", () => {
+    it("reports every applied transition in order", () => {
+      const service = new ResourceProfileService(createDeps());
+      const seen: Array<{ from: string; to: string }> = [];
+      service.onProfileChanged((change) => seen.push(change));
+
+      service._forceProfileForTesting("efficiency");
+      service._forceProfileForTesting("balanced");
+
+      expect(seen).toEqual([
+        { from: "balanced", to: "efficiency" },
+        { from: "efficiency", to: "balanced" },
+      ]);
+      service.stop();
+    });
+
+    it("stays silent for a no-op transition", () => {
+      const service = new ResourceProfileService(createDeps());
+      const listener = vi.fn();
+      service.onProfileChanged(listener);
+
+      service._forceProfileForTesting("balanced");
+
+      expect(listener).not.toHaveBeenCalled();
+      service.stop();
+    });
+
+    it("stops reporting after unsubscribe", () => {
+      const service = new ResourceProfileService(createDeps());
+      const listener = vi.fn();
+      const unsubscribe = service.onProfileChanged(listener);
+
+      unsubscribe();
+      service._forceProfileForTesting("efficiency");
+
+      expect(listener).not.toHaveBeenCalled();
+      service.stop();
+    });
+
+    it("applies the transition even when a listener throws", () => {
+      const service = new ResourceProfileService(createDeps());
+      const after = vi.fn();
+      service.onProfileChanged(() => {
+        throw new Error("observer bug");
+      });
+      service.onProfileChanged(after);
+
+      service._forceProfileForTesting("efficiency");
+
+      expect(service.getProfile()).toBe("efficiency");
+      expect(after).toHaveBeenCalledWith({ from: "balanced", to: "efficiency" });
+      service.stop();
+    });
+  });
 });
