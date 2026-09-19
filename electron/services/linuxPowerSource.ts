@@ -18,9 +18,14 @@ async function readAttribute(dir: string, name: string): Promise<string | null> 
  * so the kernel's power_supply class is read instead.
  *
  * On battery means a system battery is present and no external supply is
- * online. A peripheral's battery — a wireless mouse — reports scope "Device"
- * and is ignored, or every desktop with one would read as unplugged. Null when
- * the class can't be read at all.
+ * online, or a UPS reports it is discharging. A peripheral's battery — a
+ * wireless mouse — reports scope "Device" and is ignored, or every desktop with
+ * one would read as unplugged. Where a laptop exposes no external supply at
+ * all, the battery's own status decides.
+ *
+ * Null when the answer can't be known: the class is unreadable, a supply's
+ * type is, or nothing says which way a battery is going. A caller keeps its
+ * last answer then rather than guessing either way.
  */
 export async function readLinuxOnBattery(root = POWER_SUPPLY_DIR): Promise<boolean | null> {
   let names: string[];
@@ -30,57 +35,76 @@ export async function readLinuxOnBattery(root = POWER_SUPPLY_DIR): Promise<boole
     return null;
   }
 
-  let hasBattery = false;
+  const batteryStatuses: Array<string | null> = [];
+  let externalOffline = 0;
+  let externalUnknown = false;
   let externalOnline = false;
+  let upsDischarging = false;
+
   for (const name of names) {
     const dir = path.join(root, name);
     const [type, scope] = await Promise.all([
       readAttribute(dir, "type"),
       readAttribute(dir, "scope"),
     ]);
-    if (type === null || scope === "Device") continue;
+    if (type === null) return null;
+    if (scope === "Device") continue;
+
     if (type === "Battery") {
-      hasBattery = true;
-    } else if ((await readAttribute(dir, "online")) === "1") {
-      externalOnline = true;
+      batteryStatuses.push(await readAttribute(dir, "status"));
+    } else if (type === "UPS") {
+      if ((await readAttribute(dir, "status")) === "Discharging") upsDischarging = true;
+    } else {
+      // 1 is online, 2 is an online programmable supply (USB PD).
+      const online = await readAttribute(dir, "online");
+      if (online === null) externalUnknown = true;
+      else if (online === "0") externalOffline++;
+      else externalOnline = true;
     }
   }
-  return hasBattery && !externalOnline;
+
+  if (upsDischarging) return true;
+  if (batteryStatuses.length === 0 || externalOnline) return false;
+  if (externalOffline > 0 && !externalUnknown) return true;
+  if (batteryStatuses.includes("Discharging")) return true;
+  return batteryStatuses.some((status) => status !== null && status !== "Unknown") ? false : null;
 }
 
 export interface LinuxPowerSourceWatch {
   /** Reads the source now rather than at the next poll. */
-  refresh(): void;
+  refresh(): Promise<void>;
   dispose(): void;
 }
 
 /**
  * Polls, since sysfs attributes raise no change notification a watcher could
- * rely on. `onChange` runs for the first successful read and then only when the
- * answer changes; a read that fails leaves the last answer standing.
+ * rely on. `onChange` runs for the first conclusive read and then only when the
+ * answer changes; an inconclusive read leaves the last answer standing, and a
+ * read overtaken by a later one is dropped.
  */
 export function watchLinuxPowerSource(
   onChange: (onBattery: boolean) => void,
   intervalMs = POLL_INTERVAL_MS,
-  root = POWER_SUPPLY_DIR
+  read: () => Promise<boolean | null> = () => readLinuxOnBattery()
 ): LinuxPowerSourceWatch {
   let disposed = false;
+  let latest = 0;
   let last: boolean | null = null;
 
-  const refresh = () => {
-    void readLinuxOnBattery(root)
-      .then((onBattery) => {
-        if (disposed || onBattery === null || onBattery === last) return;
-        last = onBattery;
-        onChange(onBattery);
-      })
-      .catch((error: unknown) => {
-        console.warn("[PowerSaveBlocker] Linux power source listener threw:", error);
-      });
+  const refresh = async () => {
+    const generation = ++latest;
+    const onBattery = await read().catch(() => null);
+    if (disposed || generation !== latest || onBattery === null || onBattery === last) return;
+    last = onBattery;
+    try {
+      onChange(onBattery);
+    } catch (error) {
+      console.warn("[PowerSaveBlocker] Linux power source listener threw:", error);
+    }
   };
 
-  refresh();
-  const timer = setInterval(refresh, intervalMs);
+  void refresh();
+  const timer = setInterval(() => void refresh(), intervalMs);
   timer.unref?.();
 
   return {

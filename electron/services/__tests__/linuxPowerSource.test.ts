@@ -2,10 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readLinuxOnBattery, watchLinuxPowerSource } from "../linuxPowerSource.js";
-
-/** Long enough for a refresh's reads against a temp dir to have settled. */
-const READ_SETTLE_MS = 20;
+import {
+  readLinuxOnBattery,
+  watchLinuxPowerSource,
+  type LinuxPowerSourceWatch,
+} from "../linuxPowerSource.js";
 
 let root: string;
 
@@ -17,15 +18,15 @@ async function supply(name: string, attributes: Record<string, string>): Promise
   }
 }
 
-beforeEach(async () => {
-  root = await mkdtemp(path.join(os.tmpdir(), "power-supply-"));
-});
-
-afterEach(async () => {
-  await rm(root, { recursive: true, force: true });
-});
-
 describe("readLinuxOnBattery", () => {
+  beforeEach(async () => {
+    root = await mkdtemp(path.join(os.tmpdir(), "power-supply-"));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
   it("reads a laptop with its adapter unplugged as on battery", async () => {
     await supply("BAT0", { type: "Battery", scope: "System", status: "Discharging" });
     await supply("AC", { type: "Mains", online: "0" });
@@ -40,9 +41,9 @@ describe("readLinuxOnBattery", () => {
     await expect(readLinuxOnBattery(root)).resolves.toBe(false);
   });
 
-  it("counts a USB-C supply that is online as external power", async () => {
-    await supply("BAT0", { type: "Battery" });
-    await supply("ucsi-source-psy-USBC000:001", { type: "USB", online: "1" });
+  it("counts a USB supply as online for any non-zero value", async () => {
+    await supply("BAT0", { type: "Battery", status: "Charging" });
+    await supply("ucsi-source-psy-USBC000:001", { type: "USB", online: "2" });
 
     await expect(readLinuxOnBattery(root)).resolves.toBe(false);
   });
@@ -59,45 +60,116 @@ describe("readLinuxOnBattery", () => {
     await expect(readLinuxOnBattery(root)).resolves.toBe(false);
   });
 
+  it("reads a desktop whose UPS is discharging as on battery", async () => {
+    await supply("ups", { type: "UPS", status: "Discharging" });
+
+    await expect(readLinuxOnBattery(root)).resolves.toBe(true);
+  });
+
+  it("falls back to the battery's status when there is no adapter to read", async () => {
+    await supply("BAT0", { type: "Battery", status: "Charging" });
+    await expect(readLinuxOnBattery(root)).resolves.toBe(false);
+
+    await supply("BAT0", { status: "Discharging" });
+    await expect(readLinuxOnBattery(root)).resolves.toBe(true);
+
+    await supply("BAT0", { status: "Unknown" });
+    await expect(readLinuxOnBattery(root)).resolves.toBeNull();
+  });
+
+  it("reports nothing when a supply's type cannot be read", async () => {
+    await supply("BAT0", { status: "Discharging" });
+    await supply("AC", { type: "Mains", online: "1" });
+
+    await expect(readLinuxOnBattery(root)).resolves.toBeNull();
+  });
+
   it("reports nothing when the class cannot be read", async () => {
     await expect(readLinuxOnBattery(path.join(root, "missing"))).resolves.toBeNull();
   });
 });
 
 describe("watchLinuxPowerSource", () => {
-  it("reports the first reading and then only changes", async () => {
-    await supply("BAT0", { type: "Battery" });
-    await supply("AC", { type: "Mains", online: "1" });
-    const onChange = vi.fn();
-    const watch = watchLinuxPowerSource(onChange, 60_000, root);
+  const INTERVAL_MS = 30_000;
+  let watch: LinuxPowerSourceWatch | null = null;
+  let reads: Array<(value: boolean | null) => void>;
+  const read = () =>
+    new Promise<boolean | null>((resolve) => {
+      reads.push(resolve);
+    });
 
-    await vi.waitFor(() => expect(onChange).toHaveBeenCalledWith(false));
-
-    watch.refresh();
-    await supply("AC", { online: "0" });
-    watch.refresh();
-    await vi.waitFor(() => expect(onChange).toHaveBeenLastCalledWith(true));
-    expect(onChange).toHaveBeenCalledTimes(2);
-
-    watch.dispose();
+  beforeEach(() => {
+    vi.useFakeTimers();
+    reads = [];
   });
 
-  it("keeps the last reading when a read fails, and reports nothing after dispose", async () => {
-    await supply("BAT0", { type: "Battery" });
-    await supply("AC", { type: "Mains", online: "0" });
+  afterEach(() => {
+    watch?.dispose();
+    watch = null;
+    vi.useRealTimers();
+  });
+
+  async function settle(index: number, value: boolean | null) {
+    reads[index]!(value);
+    await vi.advanceTimersByTimeAsync(0);
+  }
+
+  it("reports the first reading and then only changes", async () => {
     const onChange = vi.fn();
-    const watch = watchLinuxPowerSource(onChange, 60_000, root);
-    await vi.waitFor(() => expect(onChange).toHaveBeenCalledWith(true));
+    watch = watchLinuxPowerSource(onChange, INTERVAL_MS, read);
 
-    await rm(root, { recursive: true, force: true });
-    watch.refresh();
-    await new Promise((resolve) => setTimeout(resolve, READ_SETTLE_MS));
-    expect(onChange).toHaveBeenCalledTimes(1);
+    await settle(0, false);
+    expect(onChange).toHaveBeenCalledWith(false);
 
-    await supply("AC", { type: "Mains", online: "1" });
+    void watch.refresh();
+    await settle(1, false);
+    void watch.refresh();
+    await settle(2, true);
+
+    expect(onChange.mock.calls).toEqual([[false], [true]]);
+  });
+
+  it("reads again on every poll", async () => {
+    watch = watchLinuxPowerSource(vi.fn(), INTERVAL_MS, read);
+
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS * 2);
+
+    expect(reads).toHaveLength(3);
+  });
+
+  it("drops a read that a later one overtook", async () => {
+    const onChange = vi.fn();
+    watch = watchLinuxPowerSource(onChange, INTERVAL_MS, read);
+    await settle(0, false);
+
+    void watch.refresh();
+    void watch.refresh();
+    await settle(2, true);
+    await settle(1, false);
+
+    expect(onChange.mock.calls).toEqual([[false], [true]]);
+  });
+
+  it("keeps the last reading when a read is inconclusive or fails", async () => {
+    const onChange = vi.fn();
+    watch = watchLinuxPowerSource(onChange, INTERVAL_MS, () =>
+      reads.length === 0 ? read() : Promise.reject(new Error("EIO"))
+    );
+    await settle(0, true);
+
+    await watch.refresh();
+    expect(onChange.mock.calls).toEqual([[true]]);
+  });
+
+  it("reports nothing once disposed", async () => {
+    const onChange = vi.fn();
+    watch = watchLinuxPowerSource(onChange, INTERVAL_MS, read);
+
     watch.dispose();
-    watch.refresh();
-    await new Promise((resolve) => setTimeout(resolve, READ_SETTLE_MS));
-    expect(onChange).toHaveBeenCalledTimes(1);
+    await settle(0, true);
+    await vi.advanceTimersByTimeAsync(INTERVAL_MS * 2);
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(reads).toHaveLength(1);
   });
 });

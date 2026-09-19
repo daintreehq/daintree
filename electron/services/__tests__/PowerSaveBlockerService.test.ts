@@ -24,7 +24,7 @@ const broadcastToRenderer = vi.hoisted(() => vi.fn());
 
 const linuxSource = vi.hoisted(() => ({
   onChange: null as ((onBattery: boolean) => void) | null,
-  refresh: vi.fn(),
+  refresh: vi.fn(async () => {}),
   dispose: vi.fn(),
 }));
 

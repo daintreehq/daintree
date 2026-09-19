@@ -33,25 +33,31 @@ export function KeepAwakeSection() {
   const savingRef = useRef(false);
 
   // The patch holds absolute values, so a retry resends exactly what failed
-  // rather than flipping whatever the switch shows by then.
-  const save = async (patch: Partial<KeepAwakeConfig>) => {
-    if (savingRef.current || !useKeepAwakeStore.getState().state) return;
+  // rather than flipping whatever the switch shows by then. Promise chaining
+  // rather than try/finally, which the React Compiler can't lower.
+  const save = (patch: Partial<KeepAwakeConfig>): Promise<void> => {
+    if (savingRef.current || !useKeepAwakeStore.getState().state) return Promise.resolve();
     savingRef.current = true;
     setPendingPatch(patch);
     setSaveFailure(null);
-    try {
-      const next = await keepAwakeClient.updateConfig(patch);
-      useKeepAwakeStore.getState().applyState(next);
-    } catch (error) {
-      logError("Failed to update keep-awake config", error);
-      setSaveFailure({
-        patch,
-        message: formatErrorMessage(error, "The setting couldn't be written."),
+    return Promise.resolve()
+      .then(() => keepAwakeClient.updateConfig(patch))
+      .then(
+        (next) => {
+          useKeepAwakeStore.getState().applyState(next);
+        },
+        (error: unknown) => {
+          logError("Failed to update keep-awake config", error);
+          setSaveFailure({
+            patch,
+            message: formatErrorMessage(error, "The setting couldn't be written."),
+          });
+        }
+      )
+      .finally(() => {
+        savingRef.current = false;
+        setPendingPatch(null);
       });
-    } finally {
-      savingRef.current = false;
-      setPendingPatch(null);
-    }
   };
 
   // Only the field being saved is overridden, so a change another window makes

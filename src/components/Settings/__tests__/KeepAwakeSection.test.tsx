@@ -140,13 +140,13 @@ describe("KeepAwakeSection", () => {
     expect(switchFor(container, MASTER).getAttribute("aria-checked")).toBe("false");
   });
 
-  it("sends one request however often the switch is hit while one is in flight", () => {
+  it("sends one request however often the switch is hit while one is in flight", async () => {
     useKeepAwakeStore.setState({ state: makeState() });
     clientMock.updateConfig.mockReturnValue(deferred<KeepAwakeState>().promise);
     const { container } = render(<KeepAwakeSection />);
     const master = switchFor(container, MASTER);
 
-    act(() => {
+    await act(async () => {
       master.click();
       master.click();
     });

@@ -136,7 +136,7 @@ export class PowerSaveBlockerService {
     // firing on wake, so it is read again.
     const onResume = () => {
       if (linuxSource) {
-        linuxSource.refresh();
+        void linuxSource.refresh();
         return;
       }
       this.onBatteryPower = readOnBattery(this.onBatteryPower);
