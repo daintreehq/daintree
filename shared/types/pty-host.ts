@@ -240,6 +240,8 @@ export type PtyHostRequest =
       guard?: TerminalSubmitGuard;
     }
   | { type: "stage"; id: string; text: string }
+  /** Take back a guarded submission before its Enter (#12491). Ordinary ones are unaffected. */
+  | { type: "withdraw-submission"; id: string; submissionToken: string }
   | { type: "batch-double-escape"; ids: string[] }
   | { type: "kill"; id: string; reason?: string; escalationDelayMs?: number }
   | { type: "trash"; id: string }

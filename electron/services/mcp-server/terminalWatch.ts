@@ -75,6 +75,8 @@ export interface TerminalWatchPtyClient {
     handbackCode?: string,
     guard?: TerminalSubmitGuard
   ): void;
+  /** Take back a wake that has not reached its Enter; see `WriteQueue.withdrawGuardedSubmission`. */
+  withdrawGuardedSubmission(id: string, submissionToken: string): void;
   on(event: "exit", listener: (id: string, exitCode: number) => void): unknown;
   off(event: "exit", listener: (id: string, exitCode: number) => void): unknown;
 }
@@ -95,6 +97,11 @@ export interface TerminalWatchServiceDeps {
   getPtyClient: () => TerminalWatchPtyClient | null;
   onStateChanged: (listener: (payload: WatchStateChange) => void) => () => void;
   onKilled: (listener: (terminalId: string) => void) => () => void;
+  /**
+   * A pane closed to the trash. Its PTY lives on for the undo window, but it
+   * is closed as far as the user can see, so it is neither woken nor watched.
+   */
+  onTrashed: (listener: (terminalId: string) => void) => () => void;
   /** Whether the user has turned pane wakes on. Read on every decision. */
   isEnabled: () => boolean;
   /** Push a pane's chrome state to the views of its project. */
@@ -126,7 +133,7 @@ export const WATCH_VALIDATION_ERROR = "VALIDATION_ERROR";
  */
 const DELIVERY_CONFIRM_DELAYS_MS = [500, 1_000, 1_500, 7_000, 20_000] as const;
 
-/** Exit epochs kept for the "did it exit while I was checking" test. */
+/** Entries kept in each of the service's recency maps: exits, teardowns, wakes. */
 const MAX_REMEMBERED_EXITS = 512;
 
 /** The one line a wake submits. Fixed wording plus server-minted ids only. */
@@ -195,7 +202,20 @@ export class TerminalWatchService {
   private readonly watchersByTarget = new Map<string, Set<PaneOwner>>();
   /** terminal id → exit epoch, for exits that land while a registration awaits. */
   private readonly exitEpochs = new Map<string, number>();
-  private exitEpoch = 0;
+  /**
+   * A user stop (by terminal) or a revocation (by key) → its epoch, so a
+   * registration that was reading while its pane was torn down does not bring
+   * the watches back.
+   */
+  private readonly teardownEpochs = new Map<string, number>();
+  private globalTeardownEpoch = 0;
+  private epoch = 0;
+  private disposed = false;
+  /**
+   * Own terminal id → when it was last woken. Outlives the owner record, so
+   * dropping the last watch and adding another cannot skip the interval.
+   */
+  private readonly lastWakeAt = new Map<string, number>();
   private revision = 0;
   /** Registrations between subscribing and recording their watch. */
   private pendingRegistrations = 0;
@@ -209,6 +229,9 @@ export class TerminalWatchService {
 
   async register(pane: OwnPane, args: TerminalWatchArgs): Promise<TerminalWatchResult> {
     if (!this.deps.isEnabled()) throw disabledError();
+    if (this.disposed) {
+      throw new TerminalWatchError(WATCH_NOT_ELIGIBLE, "Terminal watches are shutting down.");
+    }
     if (args.terminalIds.includes(pane.terminalId)) {
       throw new TerminalWatchError(WATCH_VALIDATION_ERROR, "A pane cannot watch its own terminal.");
     }
@@ -219,7 +242,7 @@ export class TerminalWatchService {
     // Subscribed before anything is read, so an exit landing during the reads
     // below is recorded and caught by the epoch check after them.
     this.ensureSubscribed(client);
-    const epochBefore = this.exitEpoch;
+    const epochBefore = this.epoch;
 
     this.pendingRegistrations++;
     try {
@@ -242,6 +265,12 @@ export class TerminalWatchService {
     ]);
 
     if (!this.deps.isEnabled()) throw disabledError();
+    if (this.torndownSince(pane, epochBefore)) {
+      throw new TerminalWatchError(
+        WATCH_NOT_ELIGIBLE,
+        "This pane's watches were stopped while this one was being set up."
+      );
+    }
     if (
       own === null ||
       own.hasPty === false ||
@@ -406,24 +435,39 @@ export class TerminalWatchService {
 
   /** The user's "stop" on the pane: every watch the pane holds goes. */
   stopPane(terminalId: string): void {
+    this.markTeardown(`terminal\u0000${terminalId}`);
     const owner = this.ownersByTerminal.get(terminalId);
     if (owner !== undefined) this.disposeOwner(owner);
   }
 
   /** A pane bearer was revoked: its watches go with its authority. */
   revokeOwner(key: string): void {
+    this.markTeardown(`key\u0000${key}`);
     const owner = this.ownersByKey.get(key);
     if (owner !== undefined) this.disposeOwner(owner);
   }
 
   /** The setting was turned off, or the service is shutting down. */
   disposeAll(): void {
+    this.globalTeardownEpoch = ++this.epoch;
     for (const owner of [...this.ownersByKey.values()]) this.disposeOwner(owner);
   }
 
   dispose(): void {
+    this.disposed = true;
     this.disposeAll();
     this.unsubscribe();
+  }
+
+  private markTeardown(mark: string): void {
+    remember(this.teardownEpochs, mark, ++this.epoch);
+  }
+
+  private torndownSince(pane: OwnPane, epoch: number): boolean {
+    if (this.disposed || this.globalTeardownEpoch > epoch) return true;
+    const byTerminal = this.teardownEpochs.get(`terminal\u0000${pane.terminalId}`);
+    const byKey = this.teardownEpochs.get(`key\u0000${pane.key}`);
+    return (byTerminal ?? 0) > epoch || (byKey ?? 0) > epoch;
   }
 
   private existingOwner(pane: OwnPane): PaneOwner | undefined {
@@ -455,6 +499,10 @@ export class TerminalWatchService {
       attempting: false,
       disposed: false,
     };
+    const lastWake = this.lastWakeAt.get(pane.terminalId);
+    if (lastWake !== undefined && this.now() - lastWake < MIN_WAKE_INTERVAL_MS) {
+      owner.delivery.lastDeliveredAt = lastWake;
+    }
     this.ownersByKey.set(owner.key, owner);
     this.ownersByTerminal.set(owner.terminalId, owner);
     return owner;
@@ -463,6 +511,16 @@ export class TerminalWatchService {
   private disposeOwner(owner: PaneOwner): void {
     if (owner.disposed) return;
     owner.disposed = true;
+    // A wake still in the host's lane is taken back, so stopping or disabling
+    // means nothing more is typed. One already written cannot be recalled.
+    const { status, token, confirmed } = owner.delivery;
+    if (status === "outstanding" && token !== undefined && confirmed !== true) {
+      try {
+        this.deps.getPtyClient()?.withdrawGuardedSubmission(owner.terminalId, token);
+      } catch (err) {
+        console.error("[MCP] terminal watch: withdrawing a wake failed:", err);
+      }
+    }
     if (owner.timer !== undefined) clearTimeout(owner.timer);
     owner.timer = undefined;
     if (this.ownersByKey.get(owner.key) === owner) this.ownersByKey.delete(owner.key);
@@ -517,6 +575,7 @@ export class TerminalWatchService {
       () => client.off("exit", onExit),
       this.deps.onStateChanged((payload) => this.handleStateChanged(payload)),
       this.deps.onKilled((terminalId) => this.handleExit(terminalId, "untracked")),
+      this.deps.onTrashed((terminalId) => this.handleExit(terminalId, "untracked")),
     ];
   }
 
@@ -577,6 +636,7 @@ export class TerminalWatchService {
         }
       }
       this.schedule(owner);
+      this.publish(owner);
     }
   }
 
@@ -615,12 +675,9 @@ export class TerminalWatchService {
   }
 
   private handleExit(terminalId: string, kind: "exit" | "untracked", exitCode?: number): void {
-    this.exitEpochs.delete(terminalId);
-    this.exitEpochs.set(terminalId, ++this.exitEpoch);
-    if (this.exitEpochs.size > MAX_REMEMBERED_EXITS) {
-      const oldest = this.exitEpochs.keys().next().value;
-      if (oldest !== undefined) this.exitEpochs.delete(oldest);
-    }
+    remember(this.exitEpochs, terminalId, ++this.epoch);
+    // The pane itself is gone, so a new one under this id starts fresh.
+    this.lastWakeAt.delete(terminalId);
 
     const own = this.ownersByTerminal.get(terminalId);
     if (own !== undefined) this.disposeOwner(own);
@@ -791,6 +848,7 @@ export class TerminalWatchService {
 
     const token = randomUUID();
     const deliveredAt = this.now();
+    remember(this.lastWakeAt, owner.terminalId, deliveredAt);
     owner.delivery = { status: "outstanding", lastDeliveredAt: deliveredAt, token };
     // The host re-checks the gate when the line reaches the lane, and drops
     // its Enter if anyone types before it lands.
@@ -878,6 +936,16 @@ export class TerminalWatchService {
     if (owner.disposed) return;
     this.revision++;
     this.deps.publish(owner.projectId, this.paneState(owner));
+  }
+}
+
+/** Insert as newest, dropping the oldest entry once the map holds too many. */
+function remember<V>(map: Map<string, V>, key: string, value: V): void {
+  map.delete(key);
+  map.set(key, value);
+  if (map.size > MAX_REMEMBERED_EXITS) {
+    const oldest = map.keys().next().value;
+    if (oldest !== undefined) map.delete(oldest);
   }
 }
 

@@ -246,6 +246,7 @@ export class McpServerService {
         events.on("agent:killed", (payload) => {
           if (payload.terminalId) listener(payload.terminalId);
         }),
+      onTrashed: (listener) => events.on("terminal:trashed", (payload) => listener(payload.id)),
       isEnabled: () => this.isEnabled() && this.isPaneWakeEnabled(),
       publish: (projectId, state) =>
         broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {

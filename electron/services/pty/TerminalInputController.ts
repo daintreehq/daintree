@@ -295,7 +295,11 @@ export class TerminalInputController {
     // state transitions before the async write sequence in performSubmit().
     // Without this, the split between body write and Enter write causes the
     // character-by-character detection in onInput() to miss the submission.
-    if (this.host.analysis.hasMonitor() && text.trim().length > 0) {
+    //
+    // Not for a guarded submission (#12491): marking the agent working here
+    // would fail its own admission check. performSubmit notifies at execution
+    // time, which for a guarded line is only once it has been admitted.
+    if (guard === undefined && this.host.analysis.hasMonitor() && text.trim().length > 0) {
       this.host.analysis.notifySubmission();
     }
 
@@ -436,6 +440,11 @@ export class TerminalInputController {
       ctx?.abandonEnterOnInput === true &&
       this.host.terminalInfo.lastTypedInputAt !== typedAtBodyWrite
     ) {
+      return;
+    }
+    // Its requester took it back — the user stopped the watches, or turned
+    // pane wakes off — while the body waited for its Enter.
+    if (ctx?.isWithdrawn?.() === true) {
       return;
     }
 

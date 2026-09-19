@@ -107,6 +107,8 @@ export function McpServerSettingsTab() {
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [auditEnabled, setAuditEnabled] = useState(true);
   const [paneWakeEnabled, setPaneWakeEnabled] = useState(false);
+  // Until main has answered, "off" would be a guess rather than the setting.
+  const [paneWakeLoaded, setPaneWakeLoaded] = useState(false);
   const [auditMaxRecords, setAuditMaxRecords] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS);
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
   const [auditLoading, setAuditLoading] = useState(true);
@@ -475,7 +477,9 @@ export function McpServerSettingsTab() {
     window.electron.mcpServer
       .getPaneWakeEnabled()
       .then((enabled) => {
-        if (!cancelled) setPaneWakeEnabled(enabled);
+        if (cancelled) return;
+        setPaneWakeEnabled(enabled);
+        setPaneWakeLoaded(true);
       })
       .catch((err) => {
         logError("Failed to load MCP pane wake setting", err);
@@ -983,6 +987,7 @@ export function McpServerSettingsTab() {
                 isEnabled={paneWakeEnabled}
                 onChange={handlePaneWakeToggle}
                 ariaLabel="Wake agents from terminal watches"
+                disabled={!paneWakeLoaded}
               />
             </div>
           </SettingsSection>

@@ -51,6 +51,11 @@ export interface SubmitExecutionContext {
    * never submitted as part of a line they did not write.
    */
   abandonEnterOnInput?: boolean;
+  /**
+   * True once the requester of a guarded submission has withdrawn it (#12491).
+   * Checked before the Enter, so a withdrawn line is never submitted.
+   */
+  isWithdrawn?: () => boolean;
 }
 
 /** One queued submission plus the caller's optional correlation token. */
@@ -153,8 +158,30 @@ export class WriteQueue {
    * (which pass no token) cost nothing.
    */
   private readonly finalizedSubmissions: TerminalSubmissionRecord[] = [];
+  /** The guarded submission currently holding the lane, by token (#12491). */
+  private inFlightGuardedToken: string | undefined;
+  /** Whether its requester has withdrawn it since it took the lane. */
+  private inFlightGuardedWithdrawn = false;
 
   constructor(private readonly options: WriteQueueOptions) {}
+
+  /**
+   * Withdraw a guarded submission (#12491): dropped as `cancelled` if it is
+   * still queued, and its Enter abandoned if its body is already in the
+   * composer. Only guarded submissions can be withdrawn — an ordinary one is
+   * the user's or an agent's own and is never taken back from here.
+   */
+  withdrawGuardedSubmission(token: string): void {
+    const index = this.submitQueue.findIndex(
+      (job) => job.token === token && job.admit !== undefined
+    );
+    if (index !== -1) {
+      this.submitQueue.splice(index, 1);
+      this.finalizeIfPending(token, "cancelled");
+      return;
+    }
+    if (this.inFlightGuardedToken === token) this.inFlightGuardedWithdrawn = true;
+  }
 
   /**
    * Serialise an async submit. The first caller wins the in-flight slot and
@@ -444,6 +471,11 @@ export class WriteQueue {
           continue;
         }
         if (token !== undefined) this.advanceSubmission(token, "writing");
+        const guarded = next.admit !== undefined;
+        if (guarded) {
+          this.inFlightGuardedToken = token;
+          this.inFlightGuardedWithdrawn = false;
+        }
         try {
           // Await the submit itself — never a race against the timer. The timer
           // reports; it does not release the lane (#11875).
@@ -453,7 +485,13 @@ export class WriteQueue {
               if (token !== undefined) this.finalizeIfPending(token, "pty_written");
               next.onPtyWritten?.();
             },
-            ...(next.admit !== undefined ? { abandonEnterOnInput: true } : {}),
+            ...(guarded
+              ? {
+                  abandonEnterOnInput: true,
+                  isWithdrawn: () =>
+                    this.inFlightGuardedToken === token && this.inFlightGuardedWithdrawn,
+                }
+              : {}),
           });
           this.armSlowSubmitReporting(startedAt);
           await work;
@@ -475,6 +513,10 @@ export class WriteQueue {
           this.options.onWriteError?.(error, { operation: "performSubmit" });
         } finally {
           this.clearSubmitStatusTimer();
+          if (guarded) {
+            this.inFlightGuardedToken = undefined;
+            this.inFlightGuardedWithdrawn = false;
+          }
         }
       }
     } finally {

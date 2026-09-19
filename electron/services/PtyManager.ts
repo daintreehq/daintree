@@ -670,6 +670,11 @@ export class PtyManager extends EventEmitter {
    * both "no such terminal" and "this terminal has no record" — the read
    * surfaces already distinguish those, having resolved the terminal first.
    */
+  /** Withdraw a guarded submission (#12491); a terminal that is gone has nothing to withdraw. */
+  withdrawGuardedSubmission(id: string, submissionToken: string): void {
+    this.registry.get(id)?.withdrawGuardedSubmission(submissionToken);
+  }
+
   getSubmission(id: string, submissionToken: string): TerminalSubmissionRecord | undefined {
     return this.registry.get(id)?.getSubmission(submissionToken);
   }

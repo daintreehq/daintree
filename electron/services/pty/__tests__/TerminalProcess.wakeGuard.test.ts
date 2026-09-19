@@ -80,6 +80,9 @@ describe("isTerminalReportOnly (#12491)", () => {
     ["secondary device attributes", "\x1b[>0;276;0c"],
     ["OSC colour reply (BEL)", "\x1b]11;rgb:0000/0000/0000\x07"],
     ["OSC colour reply (ST)", "\x1b]10;rgb:ffff/ffff/ffff\x1b\\"],
+    ["device status reply", "\x1b[0n"],
+    ["colour-scheme report", "\x1b[?997;1n"],
+    ["DEC-private cursor position report", "\x1b[?24;80R"],
     ["two reports back to back", "\x1b[O\x1b[I"],
   ])("treats %s as a report, not typing", (_label, data) => {
     expect(isTerminalReportOnly(data)).toBe(true);
@@ -194,6 +197,82 @@ describe("TerminalProcess typed-input stamp and settled-prompt guard (#12491)", 
 
     expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["wake", "h"]);
     expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("is not refused by the working transition its own submission causes", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+    // In-thread analysis flips the agent to working the moment a submission is
+    // announced. Announced before admission, the line would refuse itself.
+    const analysis = (
+      terminal as unknown as {
+        analysis: { hasMonitor(): boolean; notifySubmission(): void };
+      }
+    ).analysis;
+    vi.spyOn(analysis, "hasMonitor").mockReturnValue(true);
+    const notify = vi.spyOn(analysis, "notifySubmission").mockImplementation(() => {
+      info(terminal).agentState = "working";
+    });
+
+    terminal.submit("wake", "tok-1", undefined, "settled-prompt");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["wake", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "pty_written" });
+    // Announced once, as it executes; an unguarded submit still announces at enqueue too.
+    expect(notify).toHaveBeenCalledTimes(1);
+  });
+
+  it("withdraws a guarded submission that has not reached the lane", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+
+    terminal.submit("user prompt");
+    terminal.submit("wake", "tok-1", undefined, "settled-prompt");
+    terminal.withdrawGuardedSubmission("tok-1");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["user prompt", "\r"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("drops the Enter of a guarded submission withdrawn after its body was written", async () => {
+    const terminal = createTerminal();
+    settleAtPrompt(terminal, Date.now() - 5_000);
+
+    terminal.submit("wake", "tok-1", undefined, "settled-prompt");
+    expect(ptyWriteMock).toHaveBeenLastCalledWith("wake");
+    terminal.withdrawGuardedSubmission("tok-1");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["wake"]);
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+  });
+
+  it("never withdraws an ordinary submission", async () => {
+    const terminal = createTerminal();
+
+    terminal.submit("first");
+    terminal.submit("second", "tok-2");
+    terminal.withdrawGuardedSubmission("tok-2");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["first", "\r", "second", "\r"]);
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "pty_written" });
+  });
+
+  it("frees the lane after refusing a guarded submission", async () => {
+    const terminal = createTerminal();
+    info(terminal).agentState = "working";
+
+    terminal.submit("wake", "tok-1", undefined, "settled-prompt");
+    await vi.advanceTimersByTimeAsync(3_000);
+    terminal.submit("next", "tok-2");
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    expect(terminal.getSubmission("tok-1")).toMatchObject({ phase: "cancelled" });
+    expect(ptyWriteMock.mock.calls.map((c) => c[0])).toEqual(["next", "\r"]);
+    expect(terminal.getSubmission("tok-2")).toMatchObject({ phase: "pty_written" });
   });
 
   it("leaves unguarded submissions exactly as they were", async () => {

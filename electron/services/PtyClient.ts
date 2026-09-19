@@ -1725,6 +1725,14 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
+   * Withdraw a guarded submission this client queued (#12491): dropped if it
+   * has not reached the lane, its Enter abandoned if its body already has.
+   */
+  withdrawGuardedSubmission(id: string, submissionToken: string): void {
+    this.shardForTerminal(id).send({ type: "withdraw-submission", id, submissionToken });
+  }
+
+  /**
    * Stage text into a terminal's input without submitting it (no Enter). The
    * no-execute counterpart to {@link submit}; see {@link TerminalProcess.stage}.
    */

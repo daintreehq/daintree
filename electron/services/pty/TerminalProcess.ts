@@ -1322,6 +1322,11 @@ export class TerminalProcess {
    * One tracked submission's correlation record, by the token its caller minted
    * (#12337). `undefined` means this incarnation holds no record for it.
    */
+  /** Withdraw a guarded submission this terminal holds (#12491). */
+  withdrawGuardedSubmission(token: string): void {
+    this.writeQueue.withdrawGuardedSubmission(token);
+  }
+
   getSubmission(token: string): TerminalSubmissionRecord | undefined {
     return this.writeQueue.getSubmission(token);
   }

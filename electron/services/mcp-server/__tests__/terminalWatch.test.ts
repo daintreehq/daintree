@@ -57,6 +57,11 @@ class FakePtyClient implements TerminalWatchPtyClient {
     this.submitted.push({ id, text, token, guard });
   }
 
+  withdrawn: Array<{ id: string; token: string }> = [];
+  withdrawGuardedSubmission(id: string, token: string) {
+    this.withdrawn.push({ id, token });
+  }
+
   on(_event: "exit", listener: (id: string, exitCode: number) => void) {
     this.exitListeners.add(listener);
   }
@@ -93,6 +98,7 @@ function setup(options: { enabled?: boolean } = {}) {
   const client = new FakePtyClient();
   const stateListeners = new Set<(payload: WatchStateChange) => void>();
   const killListeners = new Set<(terminalId: string) => void>();
+  const trashListeners = new Set<(terminalId: string) => void>();
   const published: PaneWatchState[] = [];
   let enabled = options.enabled ?? true;
   const service = new TerminalWatchService({
@@ -104,6 +110,10 @@ function setup(options: { enabled?: boolean } = {}) {
     onKilled: (listener) => {
       killListeners.add(listener);
       return () => killListeners.delete(listener);
+    },
+    onTrashed: (listener) => {
+      trashListeners.add(listener);
+      return () => trashListeners.delete(listener);
     },
     isEnabled: () => enabled,
     publish: (_projectId, state) => published.push(state),
@@ -128,16 +138,21 @@ function setup(options: { enabled?: boolean } = {}) {
   const kill = (terminalId: string) => {
     for (const listener of [...killListeners]) listener(terminalId);
   };
+  const trash = (terminalId: string) => {
+    for (const listener of [...trashListeners]) listener(terminalId);
+  };
   return {
     client,
     service,
     published,
     stateChange,
     kill,
+    trash,
     setEnabled: (value: boolean) => {
       enabled = value;
     },
-    listenerCount: () => stateListeners.size + killListeners.size + client.exitListenerCount,
+    listenerCount: () =>
+      stateListeners.size + killListeners.size + trashListeners.size + client.exitListenerCount,
   };
 }
 
@@ -240,6 +255,31 @@ describe("TerminalWatchService (#12491)", () => {
       await expect(h.service.register(PANE, { terminalIds: [ids.at(-1)!] })).rejects.toMatchObject({
         code: WATCH_LIMIT_REACHED,
       });
+    });
+
+    it.each([
+      ["the user stops the pane", (h: ReturnType<typeof setup>) => h.service.stopPane(OWN)],
+      ["its bearer is revoked", (h: ReturnType<typeof setup>) => h.service.revokeOwner(PANE.key)],
+      ["the server stops", (h: ReturnType<typeof setup>) => h.service.disposeAll()],
+    ])("does not bring watches back when %s mid-registration", async (_label, teardown) => {
+      const h = setup();
+      const read = h.client.getTerminalAsync.bind(h.client);
+      let release: () => void = () => {};
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      h.client.getTerminalAsync = async (id, token) => {
+        await gate;
+        return read(id, token);
+      };
+
+      const pending = h.service.register(PANE, { terminalIds: ["t-a"] });
+      teardown(h);
+      release();
+
+      await expect(pending).rejects.toMatchObject({ code: WATCH_NOT_ELIGIBLE });
+      expect(h.service.getPaneState(OWN)).toBeNull();
+      expect(h.listenerCount()).toBe(0);
     });
 
     it("does not leave an owner behind when the first registration is refused", async () => {
@@ -506,6 +546,63 @@ describe("TerminalWatchService (#12491)", () => {
       expect(h.client.submitted).toHaveLength(1);
     });
 
+    it("keeps the interval when the last watch is dropped and another added", async () => {
+      const h = setup();
+      await h.service.register(PANE, { terminalIds: ["t-a"], maxDeliveries: 1 });
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+      // Reading the stopped watch's last observations drops the pane's record.
+      h.service.readEvents(PANE, {});
+      expect(h.service.getPaneState(OWN)).toBeNull();
+
+      await h.service.register(PANE, { terminalIds: ["t-b"] });
+      h.stateChange({ terminalId: "t-b" });
+      await flushWake();
+      expect(h.client.submitted).toHaveLength(1);
+      expect(h.service.list(PANE).delivery).toMatchObject({ status: "held", reason: "interval" });
+
+      await vi.advanceTimersByTimeAsync(MIN_WAKE_INTERVAL_MS);
+      expect(h.client.submitted).toHaveLength(2);
+    });
+
+    it("takes back a wake the host has not written when the user stops the pane", async () => {
+      const h = setup();
+      h.client.submissionPhase = "queued";
+      await h.service.register(PANE, { terminalIds: ["t-a"] });
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+      const token = h.client.submitted[0]!.token!;
+
+      h.service.stopPane(OWN);
+
+      expect(h.client.withdrawn).toEqual([{ id: OWN, token }]);
+    });
+
+    it("leaves a wake alone once it is confirmed written", async () => {
+      const h = setup();
+      await h.service.register(PANE, { terminalIds: ["t-a"] });
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      h.service.stopPane(OWN);
+
+      expect(h.client.withdrawn).toEqual([]);
+    });
+
+    it("publishes each observation, not only changes in where the wake stands", async () => {
+      const h = setup();
+      await h.service.register(PANE, { terminalIds: ["t-a"] });
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+      const before = h.published.length;
+
+      h.stateChange({ terminalId: "t-a", state: "working" });
+
+      expect(h.published.length).toBe(before + 1);
+      expect(h.published.at(-1)).toMatchObject({ pendingEvents: 2 });
+    });
+
     it("bounds the observations it holds and counts what it dropped", async () => {
       const h = setup();
       h.client.terminals.set(OWN, running());
@@ -549,6 +646,30 @@ describe("TerminalWatchService (#12491)", () => {
         "untracked",
         "stopped",
       ]);
+    });
+  });
+
+  describe("the trash", () => {
+    it("stops the watches of a pane closed to the trash", async () => {
+      const h = setup();
+      await h.service.register(PANE, { terminalIds: ["t-a"] });
+      h.trash(OWN);
+      h.stateChange({ terminalId: "t-a" });
+      await flushWake();
+
+      expect(h.client.submitted).toEqual([]);
+      expect(h.service.getPaneState(OWN)).toBeNull();
+    });
+
+    it("treats a watched terminal closed to the trash as untracked", async () => {
+      const h = setup();
+      await h.service.register(PANE, { terminalIds: ["t-a", "t-b"] });
+      h.trash("t-a");
+
+      expect(h.service.readEvents(PANE, {}).events).toEqual([
+        expect.objectContaining({ kind: "untracked", terminalId: "t-a" }),
+      ]);
+      expect(h.service.list(PANE).watches[0]!.terminalIds).toEqual(["t-b"]);
     });
   });
 
@@ -629,7 +750,8 @@ describe("TerminalWatchService (#12491)", () => {
       h.stateChange({ terminalId: "t-a" });
       await flushWake();
       const revisions = h.published.map((s) => s.revision);
-      expect([...revisions].sort((a, b) => a - b)).toEqual(revisions);
+      expect(revisions.length).toBeGreaterThan(1);
+      revisions.slice(1).forEach((revision, i) => expect(revision).toBeGreaterThan(revisions[i]!));
     });
   });
 });

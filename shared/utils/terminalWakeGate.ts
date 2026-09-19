@@ -14,6 +14,8 @@ export interface WakeGateSnapshot {
   detectedAgentId?: string;
   isExited?: boolean;
   hasPty?: boolean;
+  /** Closed to the trash: the PTY lives on for undo, but nobody is looking at it. */
+  isTrashed?: boolean;
 }
 
 /** Why a wake is held: it goes out at the pane's next settle. */
@@ -37,7 +39,7 @@ export type WakeGateVerdict =
  * never qualifies. A missing reading is never read as safe.
  */
 export function evaluateWakeGate(snapshot: WakeGateSnapshot): WakeGateVerdict {
-  if (snapshot.isExited === true || snapshot.hasPty === false) {
+  if (snapshot.isExited === true || snapshot.hasPty === false || snapshot.isTrashed === true) {
     return { kind: "blocked", reason: "no-agent" };
   }
   if (snapshot.detectedAgentId === undefined) {
