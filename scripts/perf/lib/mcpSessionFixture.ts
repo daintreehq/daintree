@@ -809,8 +809,9 @@ export function forbiddenCallSample(
 
 /**
  * Tools that refuse a call for a reason of their own, before the tier gate has
- * anything to say: every `*Owned` tool checks the ownership ledger, and
- * `help.displayImage` requires a help-session binding. None belongs in a
+ * anything to say: every `*Owned` tool checks the ownership ledger,
+ * `help.displayImage` requires a help-session binding, and the terminal-watch
+ * tools require a pane of the caller's own. None belongs in a
  * battery whose oracle is "every permitted call is admitted" — PERF-283 grades
  * them in both directions instead.
  *
@@ -826,6 +827,13 @@ export const SELF_GATED_TOOLS: ReadonlySet<string> = new Set([
   "terminal.readLastMessageOwned",
   "worktree.deleteOwned",
   "help.displayImage",
+  // Terminal watches (#12491) answer only a caller with a pane of its own,
+  // which no perf session has. Their admit/refuse grading lives in
+  // `sessionServer.test.ts` rather than PERF-283.
+  "terminal.registerWatch",
+  "terminal.listWatches",
+  "terminal.getWatchEvents",
+  "terminal.cancelWatch",
 ]);
 
 /** The workspace a bound session is pinned to in these scenarios. */
