@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { EventEmitter } from "events";
+import os from "os";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
@@ -672,6 +673,95 @@ describe("WorkspaceService forge-remote detection (#11155)", () => {
 
       expect(sysRemoteChanged).toHaveBeenCalledTimes(1);
       expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+    });
+  });
+
+  describe("while backgrounded (#12519)", () => {
+    beforeEach(() => {
+      vi.spyOn(os, "setPriority").mockImplementation(() => {});
+      // Stands in for a load that initialized PR detection, so resume() starts it.
+      service["prService"]["initializedForPath"] = "/test/root";
+    });
+
+    it("drops the backstop while paused — a retained host must not tick for hours", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+
+      service.pause();
+      touchConfigFile();
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      mockStat.mockClear();
+      await vi.advanceTimersByTimeAsync(30 * 60 * 1000);
+
+      expect(mockStat).not.toHaveBeenCalled();
+      expect(mockSimpleGit.getRemotes).not.toHaveBeenCalled();
+      expect(sysRemoteChanged).not.toHaveBeenCalled();
+    });
+
+    it("catches a remote added while paused before PR polling restarts", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+
+      touchConfigFile();
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      // PR polling waits for the remotes to settle.
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sysRemoteChanged).toHaveBeenCalledTimes(1);
+      expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+      // The invalidation lands before the poller restarts on its cached provider.
+      expect(sysRemoteChanged.mock.invocationCallOrder[0]).toBeLessThan(
+        mockPullRequestService.start.mock.invocationCallOrder[0]
+      );
+    });
+
+    it("costs one stat and no git on resume when nothing moved", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockSimpleGit.getRemotes).not.toHaveBeenCalled();
+      expect(sysRemoteChanged).not.toHaveBeenCalled();
+      expect(mockPullRequestService.start).toHaveBeenCalledWith(0);
+    });
+
+    it("re-arms the backstop on resume", async () => {
+      const main = registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      service.resume();
+      await vi.advanceTimersByTimeAsync(0);
+
+      touchConfigFile();
+      mockSimpleGit.getRemotes.mockResolvedValue([ORIGIN_GITHUB]);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      await vi.advanceTimersByTimeAsync(300);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(sysRemoteChanged).toHaveBeenCalledTimes(1);
+      expect(main.getSnapshot().matchedForgeProviderId).toBe(GITHUB_PROVIDER_ID);
+    });
+
+    it("does not restart PR polling when paused again before the reprobe lands", async () => {
+      registerMonitor("/test/main", { isMainWorktree: true });
+      await seedBaseline([]);
+      service.pause();
+      mockPullRequestService.start.mockClear();
+
+      service.resume();
+      service.pause();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(mockPullRequestService.start).not.toHaveBeenCalled();
     });
   });
 

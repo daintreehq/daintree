@@ -123,6 +123,18 @@ vi.mock("../events.js", () => ({
   },
 }));
 
+// Project ids that currently have a live (active or cached) view in some
+// window — the residency signal that keeps a dormant host past its grace.
+const { liveViewProjectIds, liveViewsFor, getWebContentsForProject } = vi.hoisted(() => {
+  const liveViewProjectIds = new Set<string>();
+  const liveViewsFor = (projectId: string) =>
+    liveViewProjectIds.has(projectId) ? [{ id: 1 }] : [];
+  const getWebContentsForProject = vi.fn(liveViewsFor);
+  return { liveViewProjectIds, liveViewsFor, getWebContentsForProject };
+});
+
+vi.mock("../../window/webContentsRegistry.js", () => ({ getWebContentsForProject }));
+
 // `WorkspaceHostPool` reads forge settings via `projectStore` to plumb into
 // the `load-project` payload (#8316). Stub it so importing the pool doesn't
 // fire ProjectStore's eager `app.getPath("userData")` constructor.
@@ -2524,6 +2536,182 @@ describe("WorkspaceClient multi-process manager", () => {
       // Make project-0 dormant — now 1 dormant + 3 active, under cap
       client.unregisterWindow(1);
       expect(h(0).dispose).not.toHaveBeenCalled();
+    });
+
+    describe("view-backed retention (#12519)", () => {
+      const projectIdFor = (p: string) => `id-for-${path.resolve(p)}`;
+
+      afterEach(() => {
+        liveViewProjectIds.clear();
+        getWebContentsForProject.mockReset();
+        getWebContentsForProject.mockImplementation(liveViewsFor);
+      });
+
+      async function loadOn(projectPath: string, windowId: number, hostIndex: number) {
+        const load = client.loadProject(projectPath, windowId);
+        await readyAndResolveLoadFake(hostIndex);
+        await load;
+      }
+
+      it("keeps a switched-away host past the grace while its view is cached, and reuses it", async () => {
+        await loadOn("/project-a", 1, 0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        await loadOn("/project-b", 1, 1);
+
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(h(0).dispose).not.toHaveBeenCalled();
+
+        const kind = await client.loadProject("/project-a", 1);
+        expect(kind).toBe("warm");
+        expect(mockHosts).toHaveLength(2);
+        expect(h(0).send).toHaveBeenLastCalledWith({ type: "foreground" });
+      });
+
+      it("reaps the host within one grace period of its last view going away", async () => {
+        await loadOn("/project-a", 1, 0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        client.unregisterWindow(1);
+
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(h(0).dispose).not.toHaveBeenCalled();
+
+        liveViewProjectIds.delete(projectIdFor("/project-a"));
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(h(0).dispose).toHaveBeenCalledTimes(1);
+        expect(h(0).dispose).toHaveBeenCalledWith("idle-grace");
+      });
+
+      it("still counts view-backed hosts against the warm cap", async () => {
+        for (let i = 0; i < 4; i++) {
+          await loadOn(`/project-${i}`, i + 1, i);
+          liveViewProjectIds.add(projectIdFor(`/project-${i}`));
+        }
+        for (let i = 1; i <= 4; i++) client.unregisterWindow(i);
+
+        expect(h(0).dispose).toHaveBeenCalledWith("warm-cap");
+        expect(h(1).dispose).not.toHaveBeenCalled();
+        expect(h(2).dispose).not.toHaveBeenCalled();
+        expect(h(3).dispose).not.toHaveBeenCalled();
+      });
+
+      it("evicts a view-less dormant host before an older view-backed one at the cap", async () => {
+        for (let i = 0; i < 4; i++) {
+          await loadOn(`/project-${i}`, i + 1, i);
+        }
+        // project-0 is the LRU dormant host but its view is still cached;
+        // project-1's view is gone, so it is the host the cap should take.
+        liveViewProjectIds.add(projectIdFor("/project-0"));
+        liveViewProjectIds.add(projectIdFor("/project-2"));
+        liveViewProjectIds.add(projectIdFor("/project-3"));
+        for (let i = 1; i <= 4; i++) client.unregisterWindow(i);
+
+        expect(h(0).dispose).not.toHaveBeenCalled();
+        expect(h(1).dispose).toHaveBeenCalledWith("warm-cap");
+        expect(h(2).dispose).not.toHaveBeenCalled();
+        expect(h(3).dispose).not.toHaveBeenCalled();
+      });
+
+      it("pauses a host whose last window closed", async () => {
+        await loadOn("/project-a", 1, 0);
+        h(0).send.mockClear();
+
+        client.unregisterWindow(1);
+
+        expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+      });
+
+      it("does not pause a host another window still holds", async () => {
+        await loadOn("/project-a", 1, 0);
+        await client.loadProject("/project-a", 2);
+        h(0).send.mockClear();
+
+        client.unregisterWindow(1);
+
+        expect(h(0).send).not.toHaveBeenCalledWith({ type: "background" });
+      });
+
+      it("pauses a view-backed prewarm nobody attached to once it outlives the grace", async () => {
+        client.prewarmProject("/project-a");
+        await readyAndResolveLoadFake(0);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        expect(h(0).send).not.toHaveBeenCalledWith({ type: "background" });
+
+        await vi.advanceTimersByTimeAsync(180_000);
+
+        expect(h(0).dispose).not.toHaveBeenCalled();
+        expect(h(0).send).toHaveBeenCalledWith({ type: "background" });
+      });
+
+      it("reclaims every dormant host — view-backed included — and spares attached ones", async () => {
+        await loadOn("/project-a", 1, 0);
+        await loadOn("/project-b", 2, 1);
+        await loadOn("/project-c", 3, 2);
+        liveViewProjectIds.add(projectIdFor("/project-a"));
+        client.unregisterWindow(1);
+        client.unregisterWindow(2);
+
+        expect(client.reclaimDormantHosts()).toBe(2);
+        expect(h(0).dispose).toHaveBeenCalledWith("memory-pressure");
+        expect(h(1).dispose).toHaveBeenCalledWith("memory-pressure");
+        expect(h(2).dispose).not.toHaveBeenCalled();
+
+        // Reclaimed hosts leave no timer behind to fire a second dispose.
+        await vi.advanceTimersByTimeAsync(10 * 60 * 1000);
+        expect(h(0).dispose).toHaveBeenCalledTimes(1);
+        expect(h(1).dispose).toHaveBeenCalledTimes(1);
+      });
+
+      describe("app-wide focus and wake passes skip dormant hosts", () => {
+        async function oneAttachedOneDormant(): Promise<void> {
+          await loadOn("/project-a", 1, 0);
+          liveViewProjectIds.add(projectIdFor("/project-a"));
+          await loadOn("/project-b", 1, 1);
+          h(0).send.mockClear();
+          h(0).sendWithResponse.mockClear();
+          h(1).send.mockClear();
+          h(1).sendWithResponse.mockClear();
+        }
+
+        const requestTypes = (host: MockHost) =>
+          host.sendWithResponse.mock.calls.map(([req]: any) => req.type);
+
+        it("re-enables polling only on attached hosts, but disables it everywhere", async () => {
+          await oneAttachedOneDormant();
+
+          client.setPollingEnabled(true);
+          expect(h(0).send).not.toHaveBeenCalled();
+          expect(h(1).send).toHaveBeenCalledWith({ type: "set-polling-enabled", enabled: true });
+
+          client.setPollingEnabled(false);
+          expect(h(0).send).toHaveBeenCalledWith({ type: "set-polling-enabled", enabled: false });
+          expect(h(1).send).toHaveBeenCalledWith({ type: "set-polling-enabled", enabled: false });
+        });
+
+        it("refresh, refreshOnWake and refreshPullRequests reach only attached hosts", async () => {
+          await oneAttachedOneDormant();
+
+          void client.refresh();
+          void client.refreshOnWake();
+          void client.refreshPullRequests();
+          await vi.advanceTimersByTimeAsync(0);
+
+          expect(requestTypes(h(0))).toEqual([]);
+          expect(requestTypes(h(1))).toEqual(
+            expect.arrayContaining(["refresh", "refresh-on-wake", "refresh-prs"])
+          );
+        });
+      });
+
+      it("falls back to the plain grace when the residency read throws", async () => {
+        await loadOn("/project-a", 1, 0);
+        getWebContentsForProject.mockImplementation(() => {
+          throw new Error("registry unavailable");
+        });
+        client.unregisterWindow(1);
+
+        await vi.advanceTimersByTimeAsync(180_000);
+        expect(h(0).dispose).toHaveBeenCalledWith("idle-grace");
+      });
     });
 
     it("dispose clears pending grace timers — no delayed disposals fire", async () => {

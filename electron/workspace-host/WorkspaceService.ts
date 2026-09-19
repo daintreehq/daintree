@@ -504,6 +504,12 @@ export class WorkspaceService {
   // interval; the git subprocess runs only when the fingerprint actually moved.
   private forgeConfigPollTimer: NodeJS.Timeout | null = null;
   private forgeConfigFingerprint: string | null = null;
+  // Detection runs for the loaded project; the backstop timer only while the
+  // host is foregrounded. Tracked apart so a pause can drop the timer without
+  // letting a later load mistake the missing timer for "never started".
+  private forgeRemoteDetectionActive = false;
+  // Set by `pause()`, cleared by `resume()`.
+  private backgrounded = false;
   private git: SimpleGit | null = null;
   /**
    * Whether the loaded folder is a git repository, as observed by `loadProject`.
@@ -2394,9 +2400,10 @@ export class WorkspaceService {
    * this slower read.
    */
   private startForgeRemoteDetection(): void {
-    if (this.forgeConfigPollTimer) return;
+    if (this.forgeRemoteDetectionActive) return;
     const rootPath = this.projectRootPath;
     if (!rootPath) return;
+    this.forgeRemoteDetectionActive = true;
 
     const seq = this.forgeRemoteProbeSeq;
     const epoch = this.forgeConfigEpoch;
@@ -2421,6 +2428,11 @@ export class WorkspaceService {
       this.forgeConfigFingerprint ??= after;
     })();
 
+    if (!this.backgrounded) this.armForgeConfigBackstop();
+  }
+
+  private armForgeConfigBackstop(): void {
+    if (this.forgeConfigPollTimer) return;
     // The backstop only has to WAKE the reprobe — the reprobe itself stats the
     // config and skips the git spawn when nothing moved, so an idle tick costs
     // one stat.
@@ -2430,11 +2442,16 @@ export class WorkspaceService {
     this.forgeConfigPollTimer.unref?.();
   }
 
-  private stopForgeRemoteDetection(): void {
+  private disarmForgeConfigBackstop(): void {
     if (this.forgeConfigPollTimer) {
       clearInterval(this.forgeConfigPollTimer);
       this.forgeConfigPollTimer = null;
     }
+  }
+
+  private stopForgeRemoteDetection(): void {
+    this.forgeRemoteDetectionActive = false;
+    this.disarmForgeConfigBackstop();
     if (this.forgeReselectTimer) {
       clearTimeout(this.forgeReselectTimer);
       this.forgeReselectTimer = null;
@@ -5277,9 +5294,17 @@ ${lines.map((l) => "+" + l).join("\n")}`;
   }
 
   pause(): void {
-    console.log("[WorkspaceService] Pausing (backgrounded)");
+    // The pool re-asserts a retained host's pause every grace period, so only
+    // the transition is worth a line; the stops below stay idempotent.
+    if (!this.backgrounded) console.log("[WorkspaceService] Pausing (backgrounded)");
+    this.backgrounded = true;
     this.setPollingEnabled(false);
     this.prService.pause();
+    // The pool keeps a backgrounded host for as long as its project's view is
+    // cached (#12519), so the config backstop would otherwise tick for hours in
+    // a host nothing is looking at. Nothing else watches `.git/config` while
+    // paused either — `resume()` reprobes once to catch what it missed.
+    this.disarmForgeConfigBackstop();
     try {
       os.setPriority(process.pid, os.constants.priority.PRIORITY_LOW);
     } catch {
@@ -5294,8 +5319,23 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     } catch {
       // Sandboxed environments may deny setpriority — non-fatal
     }
+    const wasBackgrounded = this.backgrounded;
+    this.backgrounded = false;
     this.setPollingEnabled(true);
-    this.prService.resume();
+    if (!wasBackgrounded || !this.forgeRemoteDetectionActive) {
+      this.prService.resume();
+      return;
+    }
+    this.armForgeConfigBackstop();
+    // Settle the remotes before the PR poller restarts on the provider it
+    // resolved before the pause: nothing watched `.git/config` meanwhile.
+    // Stat-gated, so an unchanged config costs one stat and no git; a changed
+    // one emits `sys:forge:remote-changed`, which drops that resolution first.
+    void this.reprobeForgeRemoteAsync()
+      .catch(() => {})
+      .finally(() => {
+        if (!this.backgrounded) this.prService.resume();
+      });
   }
 
   getPRStatus(requestId: string): void {

@@ -20,10 +20,11 @@ const CLEANUP_GRACE_MS = 180_000;
 // GiB). The old fixed 3 meant cycling 5+ projects evicted/respawned a host on
 // nearly every switch (utility-process fork + a full git rescan each time) —
 // churn that shows up as workspace-host spawn storms. Switch-away hosts are
-// paused (background: polling/PR/fetch timers stopped) and every dormant host
-// still expires after CLEANUP_GRACE_MS, so a larger pool mainly avoids
-// respawns on switch-back. The cost is bounded-resident (a few more paused
-// utility processes + their health checks), not steady-state polling.
+// paused (background: polling/PR/fetch timers stopped) and a dormant host
+// expires within one CLEANUP_GRACE_MS of the last view of its project going
+// away, so a larger pool mainly avoids respawns on switch-back. The cost is
+// bounded-resident (a few more paused utility processes + their health
+// checks), not steady-state polling.
 //
 // The ladder lives in computeDefaultWarmWorkspaceHosts rather than being
 // borrowed from computeDefaultCachedViews, which it used to call: see that
@@ -82,6 +83,11 @@ export interface WorkspaceHostPoolDeps {
   config: WorkspaceClientConfig;
   emit: EmitFn;
   onProjectSwitch?: (windowId: number) => void;
+  /**
+   * Whether any window still holds a live (active or cached) view of the
+   * project. A dormant host backed by one outlives the idle grace (#12519).
+   */
+  hasLiveProjectView?: (projectId: string) => boolean;
 }
 
 export class WorkspaceHostPool {
@@ -120,6 +126,7 @@ export class WorkspaceHostPool {
 
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
+  private hasLiveProjectView: (projectId: string) => boolean;
   private routeHostEventFn: RouteHostEventFn | null = null;
 
   constructor(deps: WorkspaceHostPoolDeps) {
@@ -135,6 +142,7 @@ export class WorkspaceHostPool {
       Number.isFinite(cap) && cap >= 0 ? Math.floor(cap) : DEFAULT_CONFIG.maxWarmEntries;
     this.emit = deps.emit;
     this.onProjectSwitch = deps.onProjectSwitch;
+    this.hasLiveProjectView = deps.hasLiveProjectView ?? (() => false);
   }
 
   setRouteHostEvent(fn: RouteHostEventFn): void {
@@ -431,6 +439,7 @@ export class WorkspaceHostPool {
     }
 
     if (entry.refCount <= 0) {
+      this.backgroundIfDormant(projectPath, entry);
       this.scheduleDormantCleanup(projectPath, entry);
     }
   }
@@ -539,34 +548,100 @@ export class WorkspaceHostPool {
     this.entries.delete(projectPath);
   }
 
-  private enforceDormantCap(): void {
-    let dormantCount = 0;
-    for (const entry of this.entries.values()) {
-      if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
-        dormantCount++;
-      }
-    }
-
-    while (dormantCount > this.config.maxWarmEntries) {
-      for (const [path, entry] of this.entries) {
-        if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
-          this.evictEntry(path, entry, "warm-cap");
-          dormantCount--;
-          break;
-        }
-      }
+  private isViewBacked(entry: ProcessEntry): boolean {
+    try {
+      return this.hasLiveProjectView(entry.projectId);
+    } catch {
+      // Unknown residency must not pin a host: fall back to the plain grace.
+      return false;
     }
   }
 
+  private enforceDormantCap(): void {
+    const dormant: Array<[string, ProcessEntry]> = [];
+    for (const [path, entry] of this.entries) {
+      if (entry.refCount <= 0 && entry.cleanupTimeout !== null) {
+        dormant.push([path, entry]);
+      }
+    }
+
+    const excess = dormant.length - this.config.maxWarmEntries;
+    if (excess <= 0) return;
+
+    // LRU within each group (Map order is re-attach order), but a host whose
+    // project no longer has a view goes before one that does: a switch back
+    // to a cached view is the reveal a warm host exists to serve.
+    const viewBacked = dormant.map(([, entry]) => this.isViewBacked(entry));
+    const ordered = [
+      ...dormant.filter((_, i) => !viewBacked[i]),
+      ...dormant.filter((_, i) => viewBacked[i]),
+    ];
+    for (const [path, entry] of ordered.slice(0, excess)) {
+      this.evictEntry(path, entry, "warm-cap");
+    }
+  }
+
+  /**
+   * A released host is paused (`background`) and then kept for at least
+   * CLEANUP_GRACE_MS. While any window still caches a view of the project it
+   * is kept past that too, re-checking once per grace period (#12519): the
+   * view is the likeliest switch-back, and reaping its host bought a fork, a
+   * native reload and a full worktree rescan for a paused process's memory.
+   * Retention stays bounded: the warm cap still counts these hosts, view
+   * eviction (LRU, or pressure) hands a host back to the plain grace, and the
+   * pressure ladder's forced tier reclaims them outright (`reclaimDormantHosts`).
+   */
   private scheduleDormantCleanup(projectPath: string, entry: ProcessEntry): void {
     if (entry.cleanupTimeout) {
       clearTimeout(entry.cleanupTimeout);
     }
+    this.armDormantTimer(projectPath, entry);
+    this.enforceDormantCap();
+  }
+
+  private armDormantTimer(projectPath: string, entry: ProcessEntry): void {
     entry.cleanupTimeout = setTimeout(() => {
+      entry.cleanupTimeout = null;
+      if (this.entries.get(projectPath) !== entry || entry.refCount > 0) return;
+      if (this.isViewBacked(entry)) {
+        // Re-asserted each period rather than trusted: a prewarm nobody
+        // attached to was never paused, and neither is a process that
+        // restarted after its last pause.
+        this.backgroundIfDormant(projectPath, entry);
+        this.armDormantTimer(projectPath, entry);
+        return;
+      }
       entry.host.dispose("idle-grace");
       this.entries.delete(projectPath);
     }, CLEANUP_GRACE_MS);
-    this.enforceDormantCap();
+  }
+
+  /**
+   * Dispose every host no window holds, view-backed or not — the pool's lever
+   * for the memory-pressure ladder's forced tier (#12519). Deliberately not
+   * reached from any reading of its own: that ladder is the one authority for
+   * "pressure is real" (#11477). A dormant host is paused and fully
+   * re-derivable, so dropping it costs a cold start and nothing else.
+   */
+  reclaimDormantHosts(): number {
+    let reclaimed = 0;
+    for (const [path, entry] of [...this.entries]) {
+      if (entry.refCount > 0) continue;
+      this.evictEntry(path, entry, "memory-pressure");
+      reclaimed++;
+    }
+    return reclaimed;
+  }
+
+  /**
+   * Pause a host that is dormant. A switch-away does this inline; the other
+   * ways in (window close, a prewarm nobody attached to, a crash restart) go
+   * through here, since a view-backed host can sit dormant for hours and must
+   * not poll meanwhile. `pause()` is idempotent host-side.
+   */
+  private backgroundIfDormant(projectPath: string, entry: ProcessEntry): void {
+    if (this.entries.get(projectPath) !== entry || entry.refCount > 0) return;
+    entry.host.send({ type: "background" });
   }
 
   // ── Direct port management ──
@@ -626,6 +701,9 @@ export class WorkspaceHostPool {
         entry.directPortViews.delete(wcId);
       }
     }
+
+    // A restarted process comes back foregrounded.
+    this.backgroundIfDormant(entry.projectPath, entry);
 
     this.emit("host-restarted", {
       projectPath: entry.projectPath,
@@ -724,6 +802,16 @@ export class WorkspaceHostPool {
     for (const entry of this.entries.values()) {
       fn(entry);
     }
+  }
+
+  /**
+   * Hosts some window currently holds. App-wide focus and wake passes must not
+   * reach the rest: a dormant host is paused, and waking it on every focus
+   * would undo the pause for as long as its cached view keeps it resident
+   * (#12519). It catches up when a window re-attaches and foregrounds it.
+   */
+  attachedEntries(): ProcessEntry[] {
+    return [...this.entries.values()].filter((entry) => entry.refCount > 0);
   }
 
   // ── Disposal ──

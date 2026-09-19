@@ -1640,6 +1640,42 @@ describe("ProcessMemoryMonitor", () => {
       );
     });
 
+    it("reclaims dormant workspace hosts at tier 2, after the view collapse (#12519)", async () => {
+      mockGetAppMetrics.mockReturnValue(underPressure);
+      mockActions.evictCachedProjectViews = vi.fn().mockResolvedValue(2);
+      mockActions.reclaimDormantWorkspaceHosts = vi.fn().mockReturnValue(3);
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceToTier2();
+
+      expect(mockActions.reclaimDormantWorkspaceHosts).toHaveBeenCalledTimes(1);
+      const viewsOrder = vi.mocked(mockActions.evictCachedProjectViews!).mock
+        .invocationCallOrder[0];
+      const hostsOrder = vi.mocked(mockActions.reclaimDormantWorkspaceHosts!).mock
+        .invocationCallOrder[0];
+      expect(viewsOrder).toBeLessThan(hostsOrder);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier2-reclaim",
+        expect.objectContaining({ viewsEvicted: 2, workspaceHostsReclaimed: 3 })
+      );
+    });
+
+    it("keeps pulling tier-2 levers when the host reclaim throws", async () => {
+      mockGetAppMetrics.mockReturnValue(underPressure);
+      mockActions.reclaimDormantWorkspaceHosts = vi.fn().mockImplementation(() => {
+        throw new Error("workspace client gone");
+      });
+
+      stop = startAppMetricsMonitor(mockActions);
+      await advanceToTier2();
+
+      expect(mockActions.hibernateIdleProjects).toHaveBeenCalledTimes(1);
+      expect(logInfo).toHaveBeenCalledWith(
+        "memory-pressure-tier2-reclaim",
+        expect.objectContaining({ workspaceHostsReclaimed: 0 })
+      );
+    });
+
     it("logs tier-2 escalation inputs instead of a no-action delta", async () => {
       // The mitigation line used to carry `deltaMb` from a before/after pair
       // sampled back-to-back with nothing acting between them — ~0 by

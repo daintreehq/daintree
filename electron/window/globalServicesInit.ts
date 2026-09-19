@@ -635,6 +635,10 @@ export async function initGlobalServices(
             }
             return viewsEvicted;
           },
+          // After the view collapse above: a dormant host is otherwise kept for
+          // as long as its project's view is cached (#12519), and views the
+          // collapse spares (a live assistant's, say) would keep theirs.
+          reclaimDormantWorkspaceHosts: () => getWorkspaceClientRef()?.reclaimDormantHosts() ?? 0,
           trimPtyHostState: async () => {
             const client = getPtyClient();
             if (!client) return { trimmed: 0, skipped: 0, shardsTotal: 0, shardsFailed: 0 };

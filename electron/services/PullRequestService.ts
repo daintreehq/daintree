@@ -748,8 +748,29 @@ class PullRequestService {
     });
   }
 
+  /**
+   * Whether the cached resolution must be (re)derived — the same test
+   * `checkForPRs()` applies. Both definitive answers (a provider, or "no-match")
+   * stay valid until one of their inputs moves, and each input has its own
+   * invalidation: `setForgeSettings()` (override, default, selected remote),
+   * `sys:forge:remote-changed` (the remote URL on disk) and
+   * `notifyForgeProviderRegistryUpdated()` (registry contents).
+   */
+  private needsProviderResolution(): boolean {
+    return (
+      (!this.providerNamespacedId || !this.repoRef) && this.providerResolutionStatus !== "no-match"
+    );
+  }
+
   private runInitialCheck(): Promise<void> {
-    return this.resolveProvider().then(() =>
+    // Every project switch-away/back is a stop()/start() pair that invalidates
+    // nothing, so re-resolving here unconditionally redid the git-config read
+    // and the registry round trip on each return to a warm host (#12519). Still
+    // resolved eagerly rather than left to `checkForPRs()`, which returns
+    // before resolving when there are no candidates yet — and
+    // `getProviderContext()` is read at worktree-create time (#8888).
+    const resolution = this.needsProviderResolution() ? this.resolveProvider() : Promise.resolve();
+    return resolution.then(() =>
       this.checkForPRs().finally(() => {
         this.scheduleNextPoll();
         this.scheduleRevalidation();
@@ -850,13 +871,14 @@ class PullRequestService {
     // semantics of a manual refresh.
     this.resolvedWorktrees.clear();
     this.issueTitleFetchedWorktrees.clear();
-    // Re-resolve the forge provider on manual refresh so token changes
-    // and provider installs/uninstalls take effect immediately.
-    // `invalidateProvider()` disposes the request coalescers, rejecting any
-    // in-flight lookup so a stale promise from the previous provider can't bind
-    // a wrong-repo PR to a worktree after refresh.
-    this.invalidateProvider();
-    await this.resolveProvider();
+    // Reuse the cached resolution. This pass also runs on every app focus, and
+    // re-deriving an answer none of whose inputs moved cost a git-config read
+    // and a registry round trip each time (#12519). Each input invalidates on
+    // its own — settings, `.git/config` remotes, registry installs and removals
+    // — and credentials were never one: they're read in main per call.
+    if (this.needsProviderResolution()) {
+      await this.resolveProvider();
+    }
     await this.clearProviderPullRequestCaches();
     // Manual refresh is an explicit "I want fresh data now" — bypass the 5s
     // floor by clearing the throttle clock before the direct checkForPRs().
@@ -1760,10 +1782,7 @@ class PullRequestService {
     // provider, or a "no-match" miss, which would otherwise re-spawn
     // `resolveProvider()`'s git-config reads on every debounced worktree
     // update (#9997).
-    if (
-      (!this.providerNamespacedId || !this.repoRef) &&
-      this.providerResolutionStatus !== "no-match"
-    ) {
+    if (this.needsProviderResolution()) {
       await this.resolveProvider();
     }
 
