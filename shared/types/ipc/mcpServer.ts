@@ -605,6 +605,13 @@ export interface McpAnomalySignal {
   severity: McpAnomalySeverity;
   timestamp: number;
   recordIds: string[];
+  /**
+   * When the signal stops being emitted if no further calls arrive — its
+   * evidence ages out of the detector's recency window — so a held snapshot can
+   * drop it without refetching. Absent on `first-seen-combination`, which
+   * stands until acknowledged.
+   */
+  expiresAt?: number;
   zScore?: number;
   durationMs?: number;
   baselineMedianMs?: number;

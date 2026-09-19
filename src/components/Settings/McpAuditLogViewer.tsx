@@ -77,23 +77,25 @@ const ANOMALY_SEVERITY_VISUAL: Record<
   McpAnomalySeverity,
   { label: string; banner: string; text: string; mark: string }
 > = {
+  // Info is drawn hollow: forced-colors paints every `.status-mark` fill the
+  // same CanvasText, but a border-only diamond stays distinct from a filled one.
   info: {
     label: "Anomaly (info)",
     banner: "bg-overlay-soft border-border-default",
     text: "text-text-secondary",
-    mark: "bg-text-secondary",
+    mark: "border border-text-secondary",
   },
   warning: {
     label: "Anomaly (warning)",
     banner: "bg-status-warning/10 border-status-warning/20",
     text: "text-status-warning",
-    mark: "bg-status-warning",
+    mark: "status-mark bg-status-warning",
   },
   danger: {
     label: "Anomaly (error)",
     banner: "bg-status-danger/10 border-status-danger/20",
     text: "text-status-danger",
-    mark: "bg-status-danger",
+    mark: "status-mark bg-status-danger",
   },
 };
 
@@ -109,7 +111,7 @@ function AnomalyMark({ severity }: { severity: McpAnomalySeverity | undefined })
       role="img"
       aria-label={label}
       title={label}
-      className={cn("status-mark h-2 w-2 rounded-sm rotate-45 shrink-0", mark)}
+      className={cn("h-2 w-2 rounded-sm rotate-45 shrink-0", mark)}
     />
   );
 }
@@ -413,10 +415,12 @@ export function McpAuditLogViewer({
 
   const showCopyAll = filteredRecords.length === visibleRecords.length;
 
-  const visibleSignals = useMemo(
-    () => (anomalySuppressed ? [] : anomalySignals),
-    [anomalySignals, anomalySuppressed]
-  );
+  // Stats are a snapshot fetched on mount/refresh; `expiresAt` lets a view left
+  // open drop signals the detector has since stopped emitting.
+  const visibleSignals = useMemo(() => {
+    if (anomalySuppressed) return [];
+    return anomalySignals.filter((s) => s.expiresAt === undefined || s.expiresAt > now);
+  }, [anomalySignals, anomalySuppressed, now]);
 
   const signalSeverityByRecordId = useMemo(() => {
     const map = new Map<string, McpAnomalySeverity>();

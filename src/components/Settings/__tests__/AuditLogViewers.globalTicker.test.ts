@@ -59,9 +59,10 @@ describe("audit-log viewers — shared minute-ticker wiring (issue #9582)", () =
     expect(source).not.toContain("nowTick");
   });
 
-  // Anomaly signals expire on recency in the detector (#12507), which made the
-  // viewer's "Ignore last hour" cutoff permanently empty; it must not return as
-  // a fresh-clock filter either.
+  // Statistical anomaly signals expire on recency in the detector (#12507), so
+  // the viewer's "Ignore last hour" cutoff could only ever show unacknowledged
+  // first-seen combos; expiry now rides each signal's `expiresAt` against the
+  // ticker-derived `now`, never a fresh-clock filter.
   it("McpAuditLogViewer leaves anomaly expiry to the detector", () => {
     const source = sources.get("McpAuditLogViewer.tsx")!;
     expect(source).not.toContain("Ignore last hour");

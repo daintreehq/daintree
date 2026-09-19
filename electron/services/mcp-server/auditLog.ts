@@ -75,6 +75,13 @@ function isRecent(timestamp: number, now: number): boolean {
   return age >= 0 && age < ANOMALY_RECENCY_WINDOW_MS;
 }
 
+// A signal needing `minCount` pieces of recent evidence stops qualifying, absent
+// new calls, once the `minCount`-th newest of them ages out.
+function evidenceExpiry(timestamps: readonly number[], minCount: number): number {
+  const newestFirst = [...timestamps].sort((a, b) => b - a);
+  return newestFirst[minCount - 1]! + ANOMALY_RECENCY_WINDOW_MS;
+}
+
 export interface McpAuditLogStore {
   read(): unknown;
   write(records: McpLogRecord[], options?: { sync?: boolean }): void;
@@ -440,15 +447,16 @@ export class AuditService {
    * `markSeen` (default `true`) governs the one stateful signal kind,
    * `first-seen-combination`: when `true`, each newly-observed `toolId+tier`
    * combo is recorded in `knownCombinations` so it fires exactly once. A passive
-   * caller passes `false` to read the same signals without acknowledging them,
-   * leaving the "fire once" acknowledgment to the user-facing audit log. The
-   * baseline is taken when the ring reaches the detection floor, not here (see
-   * `seedKnownCombinations`),
-   * so no read — passive or not — decides what counts as pre-existing. The
+   * caller passes `false` to read the same signals without acknowledging them —
+   * so a background poll never consumes a combo before the user-facing audit
+   * log has shown it (#10022). The baseline is taken when the ring reaches the
+   * detection floor, not here (see `seedKnownCombinations`), so no read —
+   * passive or not — decides what counts as pre-existing. The
    * other three kinds (latency drift, failure clustering, p95 z-score) are
    * stateless recomputations and are unaffected by `markSeen`. They only count
    * evidence whose own `timestamp` is within `ANOMALY_RECENCY_WINDOW_MS`, so
-   * they expire on recency; first-seen signals persist until acknowledged.
+   * they expire on recency (each carries `expiresAt`); first-seen signals
+   * persist until acknowledged.
    */
   getSignals(markSeen = true): McpAnomalySignal[] {
     this.hydrate();
@@ -501,8 +509,9 @@ export class AuditService {
    * Per tool, the last `LATENCY_DRIFT_WINDOW` successful calls are scored
    * against the successful calls before them (median/MAD modified z-score).
    * One signal per tool when at least `LATENCY_DRIFT_MIN_OUTLIERS` of that
-   * window are recent outliers, anchored on the newest; the baseline excludes
-   * the window so sustained drift can't raise its own bar.
+   * window are recent outliers, anchored on the newest. The calls being judged
+   * are kept out of the baseline so they don't dilute it; drift that persists
+   * past the window is absorbed into the baseline and stops reading as drift.
    */
   private computeLatencyDrift(records: readonly McpAuditRecord[], now: number): McpAnomalySignal[] {
     const signals: McpAnomalySignal[] = [];
@@ -539,6 +548,10 @@ export class AuditService {
         severity: ANOMALY_SEVERITY["latency-drift"],
         timestamp: anchor.record.timestamp,
         recordIds: outliers.map((o) => o.record.id),
+        expiresAt: evidenceExpiry(
+          outliers.map((o) => o.record.timestamp),
+          LATENCY_DRIFT_MIN_OUTLIERS
+        ),
         zScore: Math.round(anchor.zScore * 100) / 100,
         durationMs: anchor.record.durationMs,
         baselineMedianMs: Math.round(median),
@@ -576,6 +589,10 @@ export class AuditService {
           severity: ANOMALY_SEVERITY["failure-cluster"],
           timestamp: latest.timestamp,
           recordIds: toolFailures.map((r) => r.id),
+          expiresAt: evidenceExpiry(
+            toolFailures.map((r) => r.timestamp),
+            FAILURE_CLUSTER_MIN_FAILURES
+          ),
           clusterSize: toolFailures.length,
           clusterWindow: FAILURE_CLUSTER_WINDOW,
         });
@@ -601,12 +618,25 @@ export class AuditService {
     }
     if (byTool.size < P95_Z_SCORE_MIN_TOOLS) return signals;
 
-    const toolP95s: { toolId: string; p95: number; latestRecord: McpAuditRecord }[] = [];
+    const toolP95s: {
+      toolId: string;
+      p95: number;
+      latestRecord: McpAuditRecord;
+      expiresAt: number;
+    }[] = [];
     for (const [toolId, toolRecords] of byTool) {
       if (toolRecords.length < P95_Z_SCORE_MIN_SAMPLES) continue;
       const sorted = toolRecords.map((r) => r.durationMs).sort((a, b) => a - b);
       const p95 = percentile(sorted, 0.95);
-      toolP95s.push({ toolId, p95, latestRecord: toolRecords[toolRecords.length - 1]! });
+      toolP95s.push({
+        toolId,
+        p95,
+        latestRecord: toolRecords[toolRecords.length - 1]!,
+        expiresAt: evidenceExpiry(
+          toolRecords.map((r) => r.timestamp),
+          P95_Z_SCORE_MIN_SAMPLES
+        ),
+      });
     }
     if (toolP95s.length < P95_Z_SCORE_MIN_TOOLS) return signals;
 
@@ -626,6 +656,7 @@ export class AuditService {
           severity: ANOMALY_SEVERITY["p95-z-score"],
           timestamp: entry.latestRecord.timestamp,
           recordIds: [entry.latestRecord.id],
+          expiresAt: entry.expiresAt,
           zScore: Math.round(zScore * 100) / 100,
           p95Ms: Math.round(entry.p95),
         });

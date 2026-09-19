@@ -1249,6 +1249,49 @@ describe("McpServerSettingsTab", () => {
     expect(container.textContent).not.toContain("Ignore last hour");
   });
 
+  it("drops signals whose expiresAt has passed but keeps unexpiring first-seen ones", async () => {
+    const now = Date.now();
+    installMcpApi({
+      getAuditStats: vi.fn().mockResolvedValue({
+        auth401Count: 0,
+        anomalySignals: [
+          {
+            id: "failure-cluster:flaky.tool:r1",
+            kind: "failure-cluster",
+            toolId: "flaky.tool",
+            severity: "danger",
+            timestamp: now - 20 * 60_000,
+            recordIds: ["r1"],
+            expiresAt: now - 5 * 60_000,
+            clusterSize: 3,
+            clusterWindow: 10,
+          },
+          {
+            id: "first-seen:new.tool:external",
+            kind: "first-seen-combination",
+            toolId: "new.tool",
+            tier: "external",
+            severity: "info",
+            timestamp: now - 20 * 60_000,
+            recordIds: ["r2"],
+          },
+        ],
+        anomalySuppressed: false,
+        anomalyRecordFloor: 50,
+      }),
+    });
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <McpServerSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "1 anomaly signal");
+    expect(container.textContent).not.toContain("failure-cluster");
+    const banner = container.querySelector("[data-anomaly-severity]");
+    expect(banner?.getAttribute("data-anomaly-severity")).toBe("info");
+  });
+
   it("renders an info-toned banner when only first-seen signals are present", async () => {
     installMcpApi({
       getAuditStats: vi.fn().mockResolvedValue({

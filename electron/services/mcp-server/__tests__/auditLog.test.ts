@@ -888,6 +888,32 @@ describe("AuditService anomaly detection", () => {
     expect(afterAck).toHaveLength(0);
   });
 
+  it("first-seen: stands past the recency window until acknowledged, as info", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const service = makeRecords(50, () => ({ toolId: "tool.a", tier: "action" }));
+    service.getAuditStats(); // seed baseline known combos
+    service.appendRecord({
+      toolId: "tool.new",
+      sessionId: "sess-1",
+      tier: "external",
+      args: {},
+      durationMs: 5,
+      outcome: successOutcome,
+      argsSummary: "{}",
+    });
+
+    vi.setSystemTime(t0 + 2 * RECENCY_WINDOW_MS);
+    const firstSeen = service
+      .getAuditStats(false)
+      .anomalySignals.filter((s) => s.kind === "first-seen-combination");
+    expect(firstSeen).toHaveLength(1);
+    expect(firstSeen[0]!.severity).toBe("info");
+    expect(firstSeen[0]!.expiresAt).toBeUndefined();
+  });
+
   it("first-seen: knownCombinations survives clear()", () => {
     const service = makeRecords(50, () => ({
       toolId: "tool.a",
@@ -1013,9 +1039,14 @@ describe("AuditService anomaly detection", () => {
     const signal = drift[0]!;
     expect(signal.severity).toBe("warning");
     expect(signal.toolId).toBe("test.tool");
-    expect(signal.recordIds).toHaveLength(3);
+    const outlierIds = service
+      .getLogRecords()
+      .filter((r) => isAuditRecord(r) && r.durationMs >= 5000)
+      .map((r) => r.id)
+      .reverse();
+    expect(signal.recordIds).toEqual(outlierIds);
     // Anchored on the newest outlier.
-    expect(signal.id).toBe(`latency-drift:test.tool:${signal.recordIds[2]}`);
+    expect(signal.id).toBe(`latency-drift:test.tool:${outlierIds[2]}`);
     expect(signal.durationMs).toBe(7000);
     expect(signal.baselineMedianMs).toBe(14);
     expect(signal.zScore).toBeGreaterThanOrEqual(3);
@@ -1038,6 +1069,56 @@ describe("AuditService anomaly detection", () => {
     const drift = signalsOfKind(service, "latency-drift");
     expect(drift).toHaveLength(1);
     expect(drift[0]!.toolId).toBe("test.tool");
+  });
+
+  it("latency-drift: slow failures are not latency outliers", () => {
+    const { service } = makeFixture();
+    appendHealthy(service, 47);
+    for (let i = 0; i < 3; i++) append(service, { durationMs: 5000, failed: true });
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: aged-out outliers don't combine with a fresh one", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const { service } = makeFixture();
+    appendHealthy(service, 42);
+    append(service, { durationMs: 5000 });
+    appendHealthy(service, 3);
+    append(service, { durationMs: 5000 });
+
+    vi.setSystemTime(t0 + RECENCY_WINDOW_MS);
+    append(service, { durationMs: 5000 });
+    appendHealthy(service, 2);
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
+  });
+
+  it("latency-drift: expiresAt is when the third-newest outlier ages out", () => {
+    const t0 = new Date("2026-09-19T10:00:00Z").getTime();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(t0);
+
+    const { service } = makeFixture();
+    appendHealthy(service, 44);
+    append(service, { durationMs: 5000 });
+    vi.setSystemTime(t0 + 60_000);
+    append(service, { durationMs: 5000 });
+    vi.setSystemTime(t0 + 120_000);
+    append(service, { durationMs: 5000 });
+    vi.setSystemTime(t0 + 180_000);
+    append(service, { durationMs: 5000 });
+    appendHealthy(service, 2);
+
+    const [signal] = signalsOfKind(service, "latency-drift");
+    expect(signal?.recordIds).toHaveLength(4);
+    expect(signal?.expiresAt).toBe(t0 + 60_000 + RECENCY_WINDOW_MS);
+
+    vi.setSystemTime(t0 + 60_000 + RECENCY_WINDOW_MS - 1);
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(1);
+    vi.setSystemTime(t0 + 60_000 + RECENCY_WINDOW_MS);
+    expect(signalsOfKind(service, "latency-drift")).toHaveLength(0);
   });
 
   it("latency-drift: a tool needs a baseline before its calls are judged", () => {
@@ -1193,13 +1274,17 @@ describe("AuditService anomaly detection", () => {
   });
 
   it("p95-z-score: skipped when fewer than 5 distinct tools", () => {
-    const service = makeRecords(50, (i) => ({
-      toolId: `tool.${i % 3}`,
-      durationMs: 10 + i,
-    }));
-    const stats = service.getAuditStats();
-    const p95 = stats.anomalySignals.filter((s) => s.kind === "p95-z-score");
-    expect(p95).toHaveLength(0);
+    const { service } = makeFixture();
+    // Enough samples per tool, and one extreme tool, but only four tools.
+    for (const [toolId, base] of [
+      ["tool.a", 10],
+      ["tool.b", 30],
+      ["tool.c", 50],
+      ["tool.e", 5000],
+    ] as const) {
+      for (let i = 0; i < 25; i++) append(service, { toolId, durationMs: base + i });
+    }
+    expect(signalsOfKind(service, "p95-z-score")).toHaveLength(0);
   });
 
   it("p95-z-score: emits signal for tool with extreme p95", () => {
@@ -1244,7 +1329,11 @@ describe("AuditService anomaly detection", () => {
     expect(p95[0]!.severity).toBe("warning");
   });
 
-  function appendP95Fixture(service: AuditService, toolE: (i: number) => number) {
+  function appendP95Fixture(
+    service: AuditService,
+    toolE: (i: number) => number,
+    samplesPerTool = 25
+  ) {
     const toolBases: [string, number][] = [
       ["tool.a", 10],
       ["tool.b", 30],
@@ -1253,10 +1342,24 @@ describe("AuditService anomaly detection", () => {
       ["tool.f", 90],
     ];
     for (const [toolId, base] of toolBases) {
-      for (let i = 0; i < 25; i++) append(service, { toolId, durationMs: base + i });
+      for (let i = 0; i < samplesPerTool; i++) append(service, { toolId, durationMs: base + i });
     }
-    for (let i = 0; i < 25; i++) append(service, { toolId: "tool.e", durationMs: toolE(i) });
+    for (let i = 0; i < samplesPerTool; i++) {
+      append(service, { toolId: "tool.e", durationMs: toolE(i) });
+    }
   }
+
+  it("p95-z-score: a tool needs 21 recent samples before its p95 is compared", () => {
+    const below = makeFixture().service;
+    appendP95Fixture(below, (i) => 5000 + i * 50, 20);
+    expect(signalsOfKind(below, "p95-z-score")).toHaveLength(0);
+
+    const at = makeFixture().service;
+    appendP95Fixture(at, (i) => 5000 + i * 50, 21);
+    const p95 = signalsOfKind(at, "p95-z-score");
+    expect(p95).toHaveLength(1);
+    expect(p95[0]!.toolId).toBe("tool.e");
+  });
 
   it("p95-z-score: a single spike can't set a tool's p95", () => {
     const { service } = makeFixture();
@@ -1276,7 +1379,11 @@ describe("AuditService anomaly detection", () => {
     appendP95Fixture(service, (i) => 5000 + i * 50);
 
     const kinds = ["latency-drift", "failure-cluster", "p95-z-score"];
-    for (const kind of kinds) expect(signalsOfKind(service, kind).length).toBeGreaterThan(0);
+    for (const kind of kinds) {
+      const signals = signalsOfKind(service, kind);
+      expect(signals.length).toBeGreaterThan(0);
+      for (const signal of signals) expect(signal.expiresAt).toBe(t0 + RECENCY_WINDOW_MS);
+    }
 
     vi.setSystemTime(t0 + RECENCY_WINDOW_MS - 1);
     for (const kind of kinds) expect(signalsOfKind(service, kind).length).toBeGreaterThan(0);
