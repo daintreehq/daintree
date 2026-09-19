@@ -98,6 +98,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `devPreview.restart` | Restart dev server | safe | `panelId?`, `projectId?` |
 | `devPreview.restartAndClearCache` | Restart and clear cache | confirm | `panelId?`, `projectId?` |
 | `devPreview.stop` | Stop Dev Server | safe | — |
+| `devPreview.toggleTool` | Toggle Dev Preview Tool | safe | `toolId`, `panelId?` |
 | `devServer.start` | Open Dev Preview | safe | `activateDockOnCreate?`, `location?` |
 
 ## diagnostics

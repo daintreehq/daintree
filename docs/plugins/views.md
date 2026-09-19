@@ -171,6 +171,60 @@ Closing and reopening the project replaces the document; switching back to a cac
 
 Custom elements are the strict case because registration is irreversible. Other globals are name-keyed but not permanent — `window.*` singletons can be reassigned, stylesheets removed, service workers unregistered — so give each an explicit lifetime. A per-view stylesheet or listener belongs to the mount disposer; a shared loader such as Monaco’s belongs to its document package. Shared package initialization must not capture one plugin’s host bridge, credentials, or panel state.
 
+## Working with a live dev preview
+
+`window.electron.sitePreview` lets a view attach to one of the project's running dev-preview panels and receive structured observations from the page inside it — which element was hovered or clicked, and what the page reported about it. The SvelteKit Site Builder is built on it; nothing about it is Svelte-specific.
+
+| Call | What it does |
+| --- | --- |
+| `listCandidates()` | The dev-preview panels this project could bind to, with any existing binding |
+| `bind({ panelId, adapterId, mode })` | Installs the named host-registered guest runtime into the page and returns a binding with a host-issued session id |
+| `setMode({ sessionId, mode })` | Switches between `browse` (the page behaves normally) and `select` |
+| `getState({ sessionId })`, `detach({ sessionId })` | Read or release the binding |
+| `onEvent(cb)` | Guest events with a host-validated envelope, epoch advances, origin-policy suspensions, and detaches |
+
+Things that shape how you use it:
+
+- **It is renderer IPC.** A plugin's main side cannot reach it. The view owns the binding and forwards what it learns to main over its own channels.
+- **You name a runtime; you do not supply one.** `adapterId` selects a guest adapter main registered at startup, and main loads that adapter's asset itself. Nothing a view sends becomes script in the page. Adapters are host-owned today: a plugin that wants its own runtime needs one registered in main, not a body on the wire.
+- **There is no "evaluate in the page" call, on purpose.** The runtime is installed by the host on every document the preview shows, and the host wraps it in a prelude that addresses and numbers each message. A general evaluate method would hand every renderer-side caller a standing arbitrary-execution channel into whatever site the user is previewing.
+- **The host validates the envelope; you validate the payload.** Core checks protocol version, session, epoch, sequence and size, and that the event carries a `type` — plus the shape of the one lifecycle event it acts on, `documentReady`. Everything else in an event is forwarded uninterpreted, so parse `payload.event` against your adapter's own schema before you read a field of it, and drop what fails. That is also why a new adapter needs no change in core: the event union belongs to the adapter, not to `shared/types/ipc/sitePreview.ts`.
+- **An adapter runs only where it was declared to.** Every registered adapter carries an origin policy, `local-preview` unless it says otherwise: loopback, `*.localhost`, `*.local` and private-network addresses. The host checks the guest's URL on every install — at bind and after each navigation — and when the preview shows a page outside the policy it withholds the runtime, removes what the previous document left behind, and pushes `{ kind: "origin-policy", suspended: true }`; the binding survives, and the next document back inside the policy installs on its own and pushes `suspended: false`. Show that as an observation, not a fault.
+- **Everything from the page is an observation, never an instruction.** The page is an application under development, and it shares the main world with your runtime, so it can forge messages for its own binding. That reaches nothing beyond that binding's observations — the host validates session, epoch, sequence and size — but never act on a file path, range or revision a page supplied without resolving it yourself.
+- **Key state on each event's `documentEpoch`, not on arrival order.** The new runtime's own ready event for a document can arrive before the host's epoch-advance notice for it. A hot-module update that does not navigate does not advance the epoch at all, so "the page reloaded" and "the page shows your latest source" are different claims.
+
+The mechanism — CDP binding, prelude, validation — is described in [`docs/architecture/sveltekit-site-builder.md`](../architecture/sveltekit-site-builder.md).
+
+## Built-in plugin views
+
+A built-in plugin's view is compiled into the host bundle, so some of this page reads differently for it. [Architecture → Built-in plugin views](./architecture.md#built-in-plugin-views) covers registration; these are the practical differences once it renders:
+
+- **It may import host modules.** `@/store/...` and `@/components/ui/...` resolve normally. Follow the host's store rules: cross-store reads go through `src/store/storeAccessors.ts`, and nothing imports a partner store at module evaluation.
+- **Finding your worktree.** `PanelViewProps` gives you `panelId`, not a worktree. Read the panel's `worktreeId` from the panel store and its path from the worktree store. A plugin view is not guaranteed to sit under the worktree store's provider, so use the optional accessor (`useWorktreeStoreOptional`) with `getWorktreePathIndex()` as a fallback — the non-optional hook throws there. The project id comes from the project store.
+- **Styling is the host's Tailwind.** The per-plugin runtime stylesheet described above does not run for a built-in; you get the host's full design system and must follow its rules — `.claude/rules/design-system.md` in the repo.
+- **Registering a `lazy()` view is fine.** The host wraps every built-in view in its own `lazy()` for activation; it renders yours from a plain component so React never sees a lazy resolving to a lazy (error #306).
+- **Never alias a lowercase component binding to a capitalised name for JSX.** The React Compiler folds `const View = component; return <View />` back into `jsx("component")`, which renders an unknown `<component>` DOM element — no error, just an empty panel. Use `createElement(component, props)`.
+- **Extending the dev preview.** A built-in can add a toolbar toggle, a strip and a drawer to every dev preview with `registerDevPreviewTool` (`src/registry/devPreviewToolRegistry.ts`) instead of contributing a panel. The host mounts them with the preview's panel, project, worktree, URL and readiness; the tool decides whether its button applies to that preview. [Dev preview tools](#dev-preview-tools) below is the lifecycle.
+- **React Compiler applies to you.** A bailout is silent at runtime and reddens the compiler budget. Two traps specific to controller-style views: never call a method that reads mutable controller state during render — pass a `useSyncExternalStore` snapshot to a pure function instead — and do not write a `try`/`finally` without a `catch` in a component.
+
+## Dev preview tools
+
+A dev preview tool is one registration — `registerDevPreviewTool({ id, pluginId, label, Button, isAvailable?, unavailableReason?, createSession?, Toolbar?, Drawer? })` — and one entry in `useDevPreviewToolStore.activeByPanel`, which holds the tool a preview has switched on, one at a time per panel.
+
+**The manifest admits it.** The registration supplies the components (they are host-bundled, so nothing else can), but the tool only reaches the toolbar when its plugin's manifest declares the same id under [`contributes.previewTools`](./contribution-points.md#preview-tools--shipped-built-in-only). A registered tool no manifest names stays hidden and logs once, so a renamed id is diagnosable rather than a button that silently disappeared. Built-in plugins only, for now.
+
+**One availability answer.** `isAvailable(context)` decides whether the tool applies to a preview at all, and it may be async. The host hides the toolbar toggle where it says no and refuses `devPreview.toggleTool` there with your `unavailableReason`, so a palette entry or an agent can never switch on what the toolbar is hiding. It is asked again whenever the preview's worktree, page or readiness changes — a project that grows an app while the preview is open starts offering the tool — and cache your own lookups if they are expensive. Two things the host guarantees: a tool already switched on keeps its toggle while the predicate is unanswered, so the one control that turns it off never vanishes; and switching a tool **off** is never refused. A command runs away from the pane, so the context it evaluates carries the panel's last recorded URL and `isWebviewReady: false` — answer on the worktree, not the live page.
+
+**The host owns the session.** Declare `createSession(context)` and the host calls it when the tool is switched on for a preview — before any surface mounts — and hands the result to the surfaces as `props.session`. It may return a promise, which is how a tool keeps its real implementation in a lazy chunk; the surfaces are not mounted until the session exists. Check `context.signal.aborted` before building anything expensive: a promise that resolves after the preview let go is disposed immediately, and a factory that throws switches the tool back off. The session is what holds the tool's state for that preview: a binding, a workspace, a selection, a draft.
+
+**What the session is told.** The context is live: `panelId`, `projectId`, `worktreeId`, `worktreePath`, `url`, `isWebviewReady`, `visible` (whether any of the tool's surfaces are mounted), and an `AbortSignal` aborted on disposal. Changes arrive through `update(context)` for as long as the session lives. The page and worktree half comes from the preview's pane, so a fully unmounted preview holds the last of it rather than fresh news; what a session sees while nothing is mounted is that snapshot plus `visible: false`.
+
+**What ends it.** `dispose()` runs when the tool is switched off, the preview is trashed or removed, or the owning plugin is disabled — the last two also clear the active entry, so a restored preview comes back plain. Nothing else does: a surface unmounting is not one of them, because a hidden dock tab, a maximised sibling and a grid remount all unmount surfaces without ending anything the user started. Put every teardown in `dispose()` and treat it as the only teardown.
+
+**The drawer's chrome is the host's.** Your `Drawer` fills a host-owned frame (`src/components/DevPreview/DevPreviewToolDrawerChrome.tsx`) and declares nothing about its own width: no width classes, no `@container` — the chrome declares `@container/drawer`, so your rows still answer to the drawer's real width. The frame is 360px by default and drag-resizable between 280px and 560px from its page-facing edge (the width is shared by every preview for the session); in a preview too narrow to share it floats over the page instead, capped so a strip of the page always stays clear, which can render it below the nominal minimum. It hides itself entirely while your drawer renders nothing, which is how a tool stays shut until it has something to say. The policy for a cramped preview is the host's too: while docking the drawer would leave the page under 480px, the drawer floats over the page instead of squeezing it — a page pushed through its own responsive breakpoints stops being the thing the user is building. Closing a tool from inside one of its surfaces returns focus to the toolbar toggle that opened it.
+
+**What the surfaces are for.** Rendering the session and calling it. They may not own its lifetime, and they should not reconstruct host events from the panel store or the tool store — the session hears those from the host. `src/services/devPreviewTools/sessionManager.ts` is the implementation, and the SvelteKit Site Builder is the worked example.
+
 ## What doesn't work inline
 
 - Bare npm imports in a raw view. Only the five React specifiers above resolve through the host import map; everything else must be a relative module you ship in `dist/`, or you bundle.

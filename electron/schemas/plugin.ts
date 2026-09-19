@@ -628,6 +628,108 @@ export const FileEditorContributionSchema = z
   .strict();
 
 /**
+ * Ids the host does NOT namespace. Everywhere else the manifest declares a bare
+ * id and the host prefixes it with the plugin name; a preview tool's id is the
+ * literal its renderer entry hands `registerDevPreviewTool`, and a guest
+ * adapter's id is the literal the page runtime binds with over IPC, so both
+ * travel exactly as written. The manifest therefore declares the qualified
+ * form, and the manifest-level refinement checks it is prefixed with the
+ * plugin's own name so one plugin cannot declare another's tool.
+ */
+const QUALIFIED_CONTRIBUTION_ID_PATTERN =
+  /^[a-z0-9]+(?:-[a-z0-9]+)*(?:\.[a-z0-9]+(?:-[a-z0-9]+)*)+$/;
+
+/** Source extensions the guest bundler accepts as an entry. */
+const GUEST_ENTRY_EXTENSIONS = [".ts", ".tsx", ".js", ".mjs"] as const;
+
+/**
+ * Reserved output directory for built guest bundles, mirroring `GUEST_ASSET_DIR`
+ * in `electron/services/sitePreview/guestAdapterAssets.ts`. Restated rather than
+ * imported so this schema does not pull the asset module into its graph.
+ */
+const GUEST_ASSET_OUTPUT_DIR = "guest";
+
+/**
+ * A plugin-relative POSIX source path the build may hand to a bundler. The
+ * value is joined onto the plugin directory by `scripts/build-main.mjs`, so a
+ * `..` segment, a Windows separator, an absolute path or a NUL would let a
+ * manifest name a file outside its own plugin. Rejected here so the failure is
+ * a loud manifest error rather than a build that quietly bundles a sibling's
+ * source. No `./` prefix: unlike an agent `command` there is no PATH-lookup
+ * form to disambiguate from.
+ *
+ * `guest/` is refused as the first segment: that directory is where the bundler
+ * WRITES (`guestAdapterAssetPath`), and the plugin asset copy runs after the
+ * bundle is emitted, so a source file there would be copied over the compiled
+ * asset the host reads back. `PLUGIN_EXTRA_ASSET_SKIP_DIRS` skips the directory
+ * for the same reason; this is the half that tells the author.
+ */
+function isSafeGuestEntryPath(value: string): boolean {
+  if (value.includes("\\") || value.includes("\0")) return false;
+  // A colon is a drive or stream separator on Windows, where `C:/x.ts` is not
+  // the relative path `path.isAbsolute` calls it on POSIX. Rejected everywhere
+  // so one manifest cannot mean two things depending on the build host.
+  if (value.includes(":")) return false;
+  if (value.startsWith("/") || path.isAbsolute(value)) return false;
+  if (!GUEST_ENTRY_EXTENSIONS.some((ext) => value.endsWith(ext))) return false;
+  const segments = value.split("/");
+  // Case-insensitively: on the case-insensitive filesystems macOS and Windows
+  // default to, `Guest/` is the same directory the bundler writes into.
+  if (segments[0]?.toLowerCase() === GUEST_ASSET_OUTPUT_DIR) return false;
+  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+/**
+ * One `contributes.guestAdapters` entry: a browser bundle the host reads back as
+ * text and installs into a previewed page through the site-preview bridge
+ * (`electron/services/sitePreview/guestAdapters.ts`).
+ *
+ * `entry` is the plugin-relative TypeScript source; the built asset's path is
+ * DERIVED from the id (`guestAdapterAssetPath`), never declared, so the build
+ * and the startup registration cannot disagree about where the bundle landed.
+ *
+ * Built-in plugins only — the asset is bundled by the app's own build, and the
+ * body runs with full DOM access inside whatever site the user is previewing.
+ */
+export const GuestAdapterContributionSchema = z
+  .object({
+    id: z.string().min(1).max(200).regex(QUALIFIED_CONTRIBUTION_ID_PATTERN),
+    entry: z
+      .string()
+      .min(1)
+      .max(256)
+      .refine(isSafeGuestEntryPath, {
+        message: `entry must be a plugin-relative POSIX path ending in ${GUEST_ENTRY_EXTENSIONS.join("/")} with no "..", absolute or Windows segments, outside the reserved "${GUEST_ASSET_OUTPUT_DIR}/" output directory`,
+      }),
+  })
+  .strict();
+
+/**
+ * One `contributes.previewTools` entry: a tool the dev-preview panel offers in
+ * its toolbar, with the host owning the chrome and the session lifecycle
+ * (`src/registry/devPreviewToolRegistry.ts`).
+ *
+ * The renderer entry still registers the components — they are host-bundled, so
+ * nothing but the host's own bundle can supply them. This declaration is what
+ * makes the tool *admissible*: the registry hides a tool whose plugin's manifest
+ * does not name it, so a renderer entry alone can no longer put a tool in the
+ * toolbar.
+ *
+ * Built-in plugins only, for the same reason as `fileEditors` — the components
+ * resolve out of the host bundle, which an installed plugin's renderer never
+ * reaches.
+ */
+export const PreviewToolContributionSchema = z
+  .object({
+    id: z.string().min(1).max(200).regex(QUALIFIED_CONTRIBUTION_ID_PATTERN),
+    title: z.string().trim().min(1).max(64),
+    iconId: z.string().min(1).max(64).optional(),
+    /** A `guestAdapters` id declared by the SAME manifest; checked at the manifest level. */
+    guestAdapter: z.string().min(1).max(200).regex(QUALIFIED_CONTRIBUTION_ID_PATTERN).optional(),
+  })
+  .strict();
+
+/**
  * One `contributes.agents` entry (#9560). `id` and `command` use the shared
  * safe-id pattern (no shell metacharacters); a contribution whose `id` collides
  * with a built-in agent is rejected by the manifest-level `superRefine`. Strict
@@ -1204,6 +1306,8 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   forgeProviders: 20,
   fileDecorationProviders: 50,
   fileEditors: 10,
+  previewTools: 10,
+  guestAdapters: 10,
   agents: 50,
   processTools: 100,
   settings: 200,
@@ -1535,6 +1639,14 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
               .array(FileEditorContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.fileEditors)
               .default([]),
+            previewTools: z
+              .array(PreviewToolContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.previewTools)
+              .default([]),
+            guestAdapters: z
+              .array(GuestAdapterContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.guestAdapters)
+              .default([]),
             agents: z
               .array(AgentContributionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.agents)
@@ -1572,6 +1684,8 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
             forgeProviders: [],
             fileDecorationProviders: [],
             fileEditors: [],
+            previewTools: [],
+            guestAdapters: [],
             agents: [],
             processTools: [],
             settings: [],
@@ -1688,6 +1802,74 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
           params: { errorCode: "namespace_reserved" },
         });
       }
+
+      // Preview tools and guest adapters are built-in only, and unlike
+      // `fileEditors` the refusal lives here rather than at load: the origin IS
+      // known to this schema (it is built per discovery root), and the build's
+      // own manifest validation runs through the same schema, so a declaration
+      // in a sample or project manifest fails `check:plugin-manifests` instead
+      // of only at runtime.
+      //
+      // A preview tool's components resolve out of the host bundle, which an
+      // installed plugin's renderer never reaches — the `fileEditors` reason. A
+      // guest adapter is more than that: its body is bundled by the app's own
+      // build and then executed with full DOM access inside whatever site the
+      // user is previewing, and the site-preview bridge exists precisely so that
+      // only main, from an asset it shipped, chooses that code.
+      for (const group of ["previewTools", "guestAdapters"] as const) {
+        if (origin === "builtin" || manifest.contributes[group].length === 0) continue;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", group],
+          message:
+            group === "previewTools"
+              ? "contributes.previewTools is only available to built-in plugins — the tool's toolbar button, drawer and session resolve out of the host bundle, which an installed plugin's renderer cannot register into."
+              : "contributes.guestAdapters is only available to built-in plugins — the adapter's body is bundled by Daintree's own build and runs with full DOM access inside the previewed site, so only a first-party asset may back one.",
+          params: { errorCode: `${group}_builtin_only` },
+        });
+      }
+
+      // Neither id is namespaced by the host (see
+      // QUALIFIED_CONTRIBUTION_ID_PATTERN), so the prefix is the only thing
+      // keeping one plugin from declaring — and thereby admitting — a tool or
+      // adapter that belongs to another.
+      //
+      // Exactly ONE segment past the plugin's own name, because that segment is
+      // also the filename a guest adapter's asset is derived to
+      // (`guestAdapterAssetPath`): `<plugin>.a.b` and `<plugin>.a-b` would
+      // otherwise be two adapters competing for one bundle. An id equal to the
+      // plugin name is refused for the same reason — it leaves no segment to
+      // name a file with, and the derivation would skip it silently.
+      for (const group of ["previewTools", "guestAdapters"] as const) {
+        manifest.contributes[group].forEach((entry, index) => {
+          const suffix = entry.id.startsWith(`${manifest.name}.`)
+            ? entry.id.slice(manifest.name.length + 1)
+            : null;
+          if (suffix !== null && !suffix.includes(".")) return;
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["contributes", group, index, "id"],
+            message: `contributes.${group}[].id must be the plugin's own name plus exactly one segment — "${entry.id}" is not "${manifest.name}.<name>".`,
+            params: { errorCode: `${group}_id_not_namespaced` },
+          });
+        });
+      }
+
+      // A tool that names a guest adapter no manifest declares would bind to
+      // nothing: the bridge refuses an unregistered adapter id, and main only
+      // registers what a built-in manifest declares. Cross-plugin references
+      // are refused too — the adapter's owner is recorded on every binding it
+      // backs, and borrowing another plugin's runtime would misattribute it.
+      const declaredAdapterIds = new Set(manifest.contributes.guestAdapters.map((a) => a.id));
+      manifest.contributes.previewTools.forEach((tool, index) => {
+        if (tool.guestAdapter === undefined || declaredAdapterIds.has(tool.guestAdapter)) return;
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["contributes", "previewTools", index, "guestAdapter"],
+          message: `contributes.previewTools[].guestAdapter must name a guest adapter this manifest declares — "${tool.guestAdapter}" is not in contributes.guestAdapters.`,
+          params: { errorCode: "preview_tool_guest_adapter_undeclared" },
+        });
+      });
 
       // `contributes.agents` registers a launchable agent CLI — gate it behind
       // the explicit `agent:register` capability so the contribution is
@@ -1876,6 +2058,12 @@ function buildPluginManifestSchema(origin: PluginOrigin) {
       reportDuplicateIds("forgeProviders", manifest.contributes.forgeProviders);
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
       reportDuplicateIds("fileEditors", manifest.contributes.fileEditors);
+      // Both of these key a registry the same way: a duplicate preview-tool id
+      // would declare one admission twice, and a duplicate guest-adapter id two
+      // sources for one derived asset — the build would emit one bundle over the
+      // other and `registerGuestAdapter` would keep whichever registered last.
+      reportDuplicateIds("previewTools", manifest.contributes.previewTools);
+      reportDuplicateIds("guestAdapters", manifest.contributes.guestAdapters);
       reportDuplicateIds("agents", manifest.contributes.agents);
       reportDuplicateIds("settings", manifest.contributes.settings);
       reportDuplicateIds("recipes", manifest.contributes.recipes);

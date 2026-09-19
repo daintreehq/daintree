@@ -45,6 +45,44 @@ export interface FileEditorContribution {
   maxBytes?: number;
 }
 
+/**
+ * One `contributes.previewTools` entry: a tool the dev-preview panel offers in
+ * its toolbar, with the host owning the chrome and the session lifecycle.
+ *
+ * The components stay a renderer-side registration (`registerDevPreviewTool`) —
+ * they are host-bundled, so nothing else can supply them. This declaration is
+ * what makes the tool admissible: `src/registry/devPreviewToolRegistry.ts`
+ * hides a registered tool whose plugin's manifest does not name its id, so a
+ * module side effect alone can no longer put a tool in the toolbar. Built-in
+ * plugins only.
+ */
+export interface PreviewToolContribution {
+  /** Fully qualified and prefixed with the plugin name — the host does not namespace it. */
+  id: string;
+  /** User-facing name for the tool. */
+  title: string;
+  /** Lucide icon id for the toolbar toggle. */
+  iconId?: string;
+  /** A {@link PluginGuestAdapterContribution} id this same manifest declares. */
+  guestAdapter?: string;
+}
+
+/**
+ * One `contributes.guestAdapters` entry: a browser bundle the host reads back as
+ * text and installs into a previewed page through the site-preview bridge.
+ *
+ * `entry` is the plugin-relative source; the built asset's path is derived from
+ * the id rather than declared, so the build and the startup registration cannot
+ * disagree about where the bundle landed. Built-in plugins only — the body runs
+ * with full DOM access inside the previewed site.
+ */
+export interface PluginGuestAdapterContribution {
+  /** Fully qualified and prefixed with the plugin name; the renderer binds by this literal. */
+  id: string;
+  /** Plugin-relative POSIX path to the bundle's source entry. */
+  entry: string;
+}
+
 export interface PanelContribution {
   id: string;
   name: string;
@@ -968,6 +1006,25 @@ export interface PluginManifest {
      * plugin ships an editor.
      */
     fileEditors: FileEditorContribution[];
+    /**
+     * Dev-preview tools this plugin offers (built-in only). The renderer
+     * registry admits a registered tool only when its plugin's manifest names
+     * the tool id here, so the manifest — not a module side effect — is what
+     * puts a tool in the preview toolbar.
+     *
+     * Optional in the type but always materialized by the manifest schema's
+     * `.default([])`, for the same reason as `agentMcp` — the hand-built
+     * manifest literals in tests and tooling predate the field.
+     */
+    previewTools?: PreviewToolContribution[];
+    /**
+     * Guest runtimes this plugin ships as standalone browser assets (built-in
+     * only). Main registers one site-preview guest adapter per entry at
+     * startup; the build derives the bundle's entry and output from the same
+     * declaration. Optional in the type for the same reason as
+     * `previewTools`.
+     */
+    guestAdapters?: PluginGuestAdapterContribution[];
     /**
      * Plugin-contributed launchable agents (#9560). Each entry registers an
      * {@link PluginAgentContribution} into the effective agent registry at load
@@ -3375,6 +3432,47 @@ export interface PluginHostApi extends PluginActivationApi {
    * NOT revoke-guarded — same membership lifetime as {@link fs}.
    */
   readonly system: PluginSystemApi;
+}
+
+/**
+ * The project and worktree a built-in plugin's filesystem handle is pinned to
+ * for the life of that handle — see {@link BuiltinPluginHostApi.fsForWorkspace}.
+ */
+export interface PluginWorkspaceScope {
+  readonly projectId: string;
+  readonly worktreeId: string;
+}
+
+/**
+ * The host as a BUILT-IN plugin sees it. Deliberately absent from
+ * `shared/types/plugin-sdk.ts`: it is not part of `@daintreehq/plugin-sdk`, and
+ * the out-of-process host proxy third-party plugins talk to never carries it.
+ *
+ * A built-in is app-global — it has no project binding of its own — so its
+ * `host.fs` resolves `${project}` / `${worktree}` from whichever window is
+ * focused at each call. That is right for a plugin acting on "the project the
+ * user is looking at" and wrong for one holding long-lived state about a named
+ * worktree: the roots move under it the moment focus does.
+ */
+export interface BuiltinPluginHostApi extends PluginHostApi {
+  /**
+   * A {@link PluginFsApi} whose `${project}` / `${worktree}` roots are pinned
+   * to `scope` instead of the focused window: `${worktree}` is the worktree
+   * with that id, `${project}` that project's main worktree. Every gate
+   * `host.fs` applies still applies — capability class, realpath containment,
+   * the implicit data dir, the write audit trail. A project that is not open
+   * contributes no token roots at all; an id matching none of its worktrees
+   * drops `${worktree}` alone (`${project}` still names that project's main
+   * worktree, as the manifest asked for). Nothing falls back to focus.
+   *
+   * A caller must only name a scope it was invoked for: the workspace scope is
+   * supplied by a renderer, so validate it against the handler's
+   * {@link PluginIpcContext} (`args.projectId === ctx.projectId`) before asking.
+   *
+   * Watchers taken through the returned handle are torn down on unload exactly
+   * like `host.fs.watch` ones.
+   */
+  fsForWorkspace(scope: PluginWorkspaceScope): PluginFsApi;
 }
 
 /**

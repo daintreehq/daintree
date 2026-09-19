@@ -55,6 +55,9 @@ import type {
   PluginIpcHandler,
   PluginIpcContext,
   PluginHostApi,
+  BuiltinPluginHostApi,
+  PluginWorkspaceScope,
+  PluginFsApi,
   PluginActivate,
   PluginActionContribution,
   PluginActionDescriptor,
@@ -108,6 +111,7 @@ import {
   ProjectPluginController,
   type ProjectPluginControllerDeps,
 } from "./plugin/ProjectPluginController.js";
+import { peekSitePreviewBridge } from "./SitePreviewBridge.js";
 import { discoverProjectPlugins } from "./plugin/projectPluginDiscovery.js";
 import { ProjectPluginWatcher } from "./plugin/ProjectPluginWatcher.js";
 import { PluginDevArtifactWatcher } from "./plugin/PluginDevArtifactWatcher.js";
@@ -155,6 +159,7 @@ import {
 } from "./plugin/pluginDangerLattice.js";
 import {
   createHost as createPluginHost,
+  buildScopedFsApi,
   type PluginHostFactoryDeps,
   type PluginWorktreeEventPayload,
   type PluginWorktreeSnapshotFetchResult,
@@ -426,6 +431,28 @@ function safeArgsHash(args: unknown[]): string {
     return stableArgsSha256(args);
   } catch {
     return "";
+  }
+}
+
+/**
+ * Shape-check a workspace scope before it is used to root a filesystem handle.
+ * A malformed scope must fail loudly here rather than expand to nothing and
+ * look like an out-of-scope path to the plugin that asked. Whether the caller
+ * is ENTITLED to the scope is the plugin's own check against its handler
+ * context — the host has no per-call sender to verify it against.
+ */
+function assertWorkspaceScope(pluginId: string, scope: PluginWorkspaceScope): void {
+  const ok =
+    scope !== null &&
+    typeof scope === "object" &&
+    typeof scope.projectId === "string" &&
+    scope.projectId.length > 0 &&
+    typeof scope.worktreeId === "string" &&
+    scope.worktreeId.length > 0;
+  if (!ok) {
+    throw new Error(
+      `Plugin "${pluginId}" fsForWorkspace: scope must name a projectId and a worktreeId`
+    );
   }
 }
 
@@ -2392,7 +2419,10 @@ export class PluginService {
       };
       if (typeof mod.activate === "function") {
         const activate = mod.activate as PluginActivate;
-        const { host, revoke } = this.createHost(pluginId);
+        // A built-in gets the built-in host: the same object plus the
+        // workspace-scoped `fsForWorkspace`, which only this in-process path
+        // ever hands out.
+        const { host, revoke } = this.createBuiltinHost(pluginId);
 
         // Pre-register a rollback that undoes activate-time imperative
         // registrations — channels, imperative actions, and every disposer
@@ -3193,6 +3223,34 @@ export class PluginService {
   }
 
   /**
+   * The host for a BUILT-IN plugin: {@link createHost}'s object plus
+   * `fsForWorkspace`, the workspace-scoped filesystem handle
+   * (`BuiltinPluginHostApi` in `shared/types/plugin.ts`).
+   *
+   * Only the in-process loader calls this, which is what keeps the method off
+   * the utility-process bridge: a user plugin's host is built by
+   * {@link createHost} and proxied method by method, so a third-party plugin
+   * cannot reach a surface its own host object never had — and has no need to,
+   * since a project-owned plugin's tokens already resolve against its binding.
+   */
+  private createBuiltinHost(pluginId: string): { host: BuiltinPluginHostApi; revoke: () => void } {
+    const { host, revoke } = this.createHost(pluginId);
+    const builtin: BuiltinPluginHostApi = Object.assign(Object.create(host) as PluginHostApi, {
+      fsForWorkspace: (scope: PluginWorkspaceScope): PluginFsApi => {
+        assertWorkspaceScope(pluginId, scope);
+        // Copy the ids: the caller keeps a reference to the object it passed,
+        // and a handle that is "pinned for its life" must not be redirectable
+        // by mutating that object afterwards.
+        return buildScopedFsApi(this.hostFactoryDeps, pluginId, {
+          projectId: scope.projectId,
+          worktreeId: scope.worktreeId,
+        });
+      },
+    });
+    return { host: builtin, revoke };
+  }
+
+  /**
    * Lazily construct the managed-process manager, wiring its stream sink to the
    * plugin's `postToPanel` transport and its audit hook to the plugin audit
    * trail. Single instance per service so the per-plugin concurrency cap and
@@ -3326,6 +3384,11 @@ export class PluginService {
     return this.createHost(pluginId, binding).host;
   }
 
+  /** The built-in host shape (`fsForWorkspace` included) the in-process loader hands a built-in. */
+  _createBuiltinHostForTests(pluginId: string): BuiltinPluginHostApi {
+    return this.createBuiltinHost(pluginId).host;
+  }
+
   /** The capabilities a loaded plugin declared, as a Set. Empty when unloaded. */
   private declaredCapabilities(pluginId: string): Set<BuiltInPluginCapability> {
     return new Set<BuiltInPluginCapability>(
@@ -3425,18 +3488,29 @@ export class PluginService {
    * dir is prepended as a `user-data` root so every plugin always has a private
    * scratch space. Literal absolute paths are classified by home-dir membership.
    *
+   * `opts.scope` names the project and worktree the tokens resolve against
+   * instead of the plugin's binding (or, unbound, the focused window) — the
+   * expansion behind a built-in host's `fsForWorkspace`. Only the snapshot set
+   * and the `${worktree}` selector change; the declared list, the classes and
+   * the fail-closed drop are the same, so a scope can never reach a path the
+   * ambient expansion of the same manifest could not.
+   *
    * The caller is responsible for `requireLoaded()` re-checks around the await
    * (the plugin may unload mid-call — #9533).
    */
   private async expandAllowedPathEntries(
     pluginId: string,
-    opts: { includeDataDir: boolean }
+    opts: { includeDataDir: boolean; scope?: PluginWorkspaceScope }
   ): Promise<ExpandedFsPath[]> {
     const declared = this.declaredAllowedPaths(pluginId);
     const needsSnapshots = declared.some(
       (entry) => entry.startsWith("${project}") || entry.startsWith("${worktree}")
     );
-    const snapshots = needsSnapshots ? await this.allowedPathSnapshots(pluginId) : [];
+    const snapshots = !needsSnapshots
+      ? []
+      : opts.scope
+        ? await this.workspaceScopeSnapshots(opts.scope)
+        : await this.allowedPathSnapshots(pluginId);
 
     const entries: ExpandedFsPath[] = [];
     if (opts.includeDataDir) {
@@ -3449,7 +3523,7 @@ export class PluginService {
     }
     for (const raw of declared) {
       try {
-        entries.push(this.expandAllowedPathEntry(pluginId, raw, snapshots));
+        entries.push(this.expandAllowedPathEntry(pluginId, raw, snapshots, opts.scope?.worktreeId));
       } catch (err) {
         // Fail-closed on a token with no live worktree: drop just that entry
         // (it contributes no root, so a path that only matched it is still
@@ -3483,11 +3557,49 @@ export class PluginService {
     return this.fetchWorktreeSnapshotsForProject(binding.projectId, binding.projectRoot);
   }
 
-  /** Expand a single `allowedPaths` entry (token or literal) into a typed root. */
+  /**
+   * The worktree set a workspace-scoped `${project}` / `${worktree}` expansion
+   * reads, for a project named by the scope rather than by a binding.
+   *
+   * Goes through the same per-project read a bound host uses, so it consults no
+   * window and no focus. A project that is not open (or whose id no longer
+   * matches the path it was opened at) has no root here and resolves `[]`,
+   * which drops the token entries and leaves containment closed — never a
+   * fallback to the ambient aggregate, which is the whole point of the scope.
+   */
+  private async workspaceScopeSnapshots(scope: PluginWorkspaceScope): Promise<WorktreeSnapshot[]> {
+    // A throwing store read degrades like any other failed read — no roots,
+    // containment denies — rather than rejecting a plugin's fs call with a
+    // store error it cannot act on.
+    let projectRoot: string | undefined;
+    try {
+      const row = projectStore.getProjectById(scope.projectId);
+      // A closed project keeps its persisted row, path and all. Reading `.path`
+      // alone would leave a still-warm (or later prewarmed) workspace host
+      // answering with snapshots for a project the user has closed, so closure
+      // is checked here rather than inferred from the pool.
+      projectRoot = row?.status === "closed" ? undefined : row?.path;
+    } catch {
+      return [];
+    }
+    if (typeof projectRoot !== "string" || projectRoot.length === 0) return [];
+    return this.fetchWorktreeSnapshotsForProject(scope.projectId, projectRoot);
+  }
+
+  /**
+   * Expand a single `allowedPaths` entry (token or literal) into a typed root.
+   *
+   * `worktreeId`, when given, replaces "the current worktree" as what
+   * `${worktree}` means: a workspace-scoped expansion names its worktree, and
+   * the named one is frequently NOT the current one — that is the case the
+   * scope exists for. An id matching no live snapshot resolves to nothing and
+   * the entry is dropped, exactly as an absent current worktree is.
+   */
   private expandAllowedPathEntry(
     pluginId: string,
     raw: string,
-    snapshots: readonly WorktreeSnapshot[]
+    snapshots: readonly WorktreeSnapshot[],
+    worktreeId?: string
   ): ExpandedFsPath {
     const token = raw.startsWith("${worktree}")
       ? "worktree"
@@ -3504,7 +3616,9 @@ export class PluginService {
     }
     const base =
       token === "worktree"
-        ? snapshots.find((s) => s.isCurrent === true)?.path
+        ? worktreeId === undefined
+          ? snapshots.find((s) => s.isCurrent === true)?.path
+          : snapshots.find((s) => s.id === worktreeId)?.path
         : snapshots.find((s) => s.isMainWorktree === true)?.path;
     if (typeof base !== "string" || base.length === 0) {
       throw new PluginPathNotAllowedError(pluginId, raw);
@@ -4991,6 +5105,15 @@ export class PluginService {
     // are idempotent — already-cleared keys are silent no-ops. Provider and
     // impl steps are split so a throw in the descriptor unregister doesn't
     // strand the impl unregister and vice versa.
+    // Before the registries clear: a guest runtime is code of this plugin's
+    // running inside the user's previewed site, reading its DOM over a live CDP
+    // binding. The bind-time enablement check keeps it out of the next
+    // document; nothing but this takes it out of the one on screen.
+    runUnloadStep(pluginId, "disposeSitePreviewBindings", () => {
+      void peekSitePreviewBridge()
+        ?.disposeForPlugin(pluginId)
+        .catch(() => undefined);
+    });
     runUnloadStep(pluginId, "removeHandlers", () => this.removeHandlers(pluginId));
     runUnloadStep(pluginId, "unregisterPluginActions", () =>
       this.unregisterPluginActions(pluginId)

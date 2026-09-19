@@ -1,0 +1,11 @@
+{
+  "name": "custom-routes-site",
+  "private": true,
+  "type": "module",
+  "devDependencies": {
+    "@sveltejs/kit": "^2.5.0",
+    "svelte": "^5.0.0",
+    "tailwindcss": "^4.0.0",
+    "vite": "^7.0.0"
+  }
+}

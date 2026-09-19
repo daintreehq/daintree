@@ -514,6 +514,7 @@ export const BUILT_IN_ACTION_IDS = [
   // -- devServerActions --
   "devServer.start",
   "devPreview.stop",
+  "devPreview.toggleTool",
 
   // -- devPreviewActions --
   "devPreview.reloadPreview",

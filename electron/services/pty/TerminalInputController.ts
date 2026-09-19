@@ -12,13 +12,12 @@ import {
   isBracketedPaste,
   isFocusReport,
   delay,
-  BRACKETED_PASTE_START,
-  BRACKETED_PASTE_END,
   PASTE_THRESHOLD_CHARS,
   OUTPUT_SETTLE_DEBOUNCE_MS,
   OUTPUT_SETTLE_MAX_WAIT_MS,
   OUTPUT_SETTLE_POLL_INTERVAL_MS,
 } from "./terminalInput.js";
+import { formatWithBracketedPaste } from "../../../shared/utils/terminalInputProtocol.js";
 
 export interface TerminalInputControllerHost {
   readonly id: string;
@@ -299,8 +298,10 @@ export class TerminalInputController {
     terminal.lastInputTime = Date.now();
     const useBracketedPaste = body.includes("\n") || body.length > PASTE_THRESHOLD_CHARS;
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {
-      const pasteBody = body.replace(/\n/g, "\r");
-      this.write(`${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`);
+      // The shared formatter, not a hand-built wrapper: it neutralises ESC in
+      // the body, so text carrying its own `ESC[201~` cannot end the paste
+      // early and hand the rest to the program as typed input.
+      this.write(formatWithBracketedPaste(body.replace(/\n/g, "\r")));
     } else if (body.includes("\n")) {
       this.write(body.replace(/\n/g, getSoftNewlineSequence(terminal)));
     } else {
@@ -357,8 +358,10 @@ export class TerminalInputController {
 
     let bodyWritten: boolean;
     if (useBracketedPaste && supportsBracketedPaste(terminal)) {
-      const pasteBody = body.replace(/\n/g, "\r");
-      const payload = `${BRACKETED_PASTE_START}${pasteBody}${BRACKETED_PASTE_END}`;
+      // See `stage`: an unsanitised body could close the paste itself, and
+      // whatever follows would reach the agent as keystrokes, submits included.
+      // Page-derived text (DOM ids, labels) reaches here from the Site Builder.
+      const payload = formatWithBracketedPaste(body.replace(/\n/g, "\r"));
       bodyWritten = this.writeStrict(payload);
     } else if (body.includes("\n") && !supportsBracketedPaste(terminal)) {
       const softNewline = getSoftNewlineSequence(terminal);

@@ -105,6 +105,122 @@ function discoverBuiltInPluginMainEntries() {
 }
 
 /**
+ * Mirrors `isSafeGuestEntryPath` / `guestAdapterAssetPath` in
+ * `electron/services/sitePreview/guestAdapterAssets.ts`, which is the module
+ * the running app uses to read these assets back.
+ *
+ * Restated rather than imported: this script runs under plain `node`, which
+ * cannot import the TypeScript module, and that module deliberately avoids the
+ * manifest schema so it stays off the eager main graph. Two halves of one rule,
+ * so `scripts/__tests__/plugin-build-assets.test.mjs` feeds both the same
+ * inputs and fails when they disagree.
+ */
+function isSafeGuestEntryPath(value) {
+  if (value.includes("\\") || value.includes("\0")) return false;
+  // Windows drive/stream separator — `C:/x.ts` is not relative there.
+  if (value.includes(":")) return false;
+  if (value.startsWith("/") || path.isAbsolute(value)) return false;
+  if (!/\.(ts|tsx|js|mjs)$/.test(value)) return false;
+  const segments = value.split("/");
+  // The bundler's own output directory — see PLUGIN_EXTRA_ASSET_SKIP_DIRS.
+  // Case-insensitively, as the copy step below compares.
+  if (segments[0]?.toLowerCase() === "guest") return false;
+  return segments.every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+function guestAdapterAssetPath(pluginName, adapterId) {
+  if (!adapterId.startsWith(`${pluginName}.`)) return null;
+  const suffix = adapterId.slice(pluginName.length + 1);
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(suffix)) return null;
+  return `guest/${suffix}.js`;
+}
+
+/**
+ * Guest runtimes a built-in plugin ships as a standalone browser asset: code
+ * the host reads back as text and installs into a previewed page through a
+ * registered guest adapter (`electron/services/sitePreview/guestAdapters.ts`).
+ * Each is neither a main entry (it never runs in the host) nor part of the
+ * renderer bundle (nothing imports it), and the asset copy skips `renderer/`,
+ * so each one is emitted straight to its derived path under the plugin's dist
+ * dir.
+ *
+ * Discovered from `contributes.guestAdapters` in every built-in `plugin.json`,
+ * the way `discoverBuiltInPluginMainEntries` discovers main entries — the array
+ * this replaced was hand-maintained, so a second built-in guest runtime meant
+ * editing this file. The output path is derived from the adapter id by
+ * `guestAdapterAssetPath`, which is the same function the startup registration
+ * uses to read the asset back, so the two cannot disagree.
+ *
+ * Pure and parameterized on the repo root so it is unit testable. A declaration
+ * whose `entry` names a file that does not exist is kept, so esbuild reports the
+ * missing entry by name; one whose id or entry breaks a structural rule is
+ * skipped, because the manifest validation step has already refused it.
+ */
+export function discoverGuestRuntimeAssets(rootDir) {
+  const pluginsRoot = path.join(rootDir, "plugins/builtin");
+  if (!fs.existsSync(pluginsRoot)) return [];
+  const assets = [];
+  for (const dirent of fs.readdirSync(pluginsRoot, { withFileTypes: true })) {
+    if (!dirent.isDirectory()) continue;
+    let manifest;
+    try {
+      manifest = JSON.parse(
+        fs.readFileSync(path.join(pluginsRoot, dirent.name, "plugin.json"), "utf8")
+      );
+    } catch {
+      // The dedicated manifest validation step reports unreadable manifests.
+      continue;
+    }
+    const pluginId = manifest?.name;
+    const declared = manifest?.contributes?.guestAdapters;
+    if (typeof pluginId !== "string" || !Array.isArray(declared)) continue;
+    for (const entry of declared) {
+      if (typeof entry?.id !== "string" || typeof entry?.entry !== "string") continue;
+      if (!isSafeGuestEntryPath(entry.entry)) continue;
+      const assetPath = guestAdapterAssetPath(pluginId, entry.id);
+      if (assetPath === null) continue;
+      assets.push({
+        adapterId: entry.id,
+        entry: `plugins/builtin/${dirent.name}/${entry.entry}`,
+        outfile: `dist-electron/plugins/builtin/${dirent.name}/${assetPath}`,
+      });
+    }
+  }
+  return assets;
+}
+
+/**
+ * Guest build entries for this repo. Eager so the esbuild configs and the
+ * exported surface the plugin's own asset tests build against are one list.
+ */
+export const GUEST_RUNTIME_ASSETS = discoverGuestRuntimeAssets(root);
+
+/**
+ * Pure so it is unit testable. The wrapping banner is what keeps the emitted
+ * IIFE strict: esbuild puts its own `"use strict"` at file scope, and the host
+ * splices the asset inside a `try` block, where a directive prologue no longer
+ * applies. `keepNames` is deliberately absent — it is the class of transform
+ * that broke the serialised runtime this asset replaced.
+ */
+export function guestRuntimeBuildConfig(asset, options = {}) {
+  return {
+    entryPoints: [asset.entry],
+    outfile: asset.outfile,
+    bundle: true,
+    format: "iife",
+    platform: "browser",
+    // The asset only ever runs in a Chromium 148 guest.
+    target: "es2022",
+    minify: options.minify === true,
+    sourcemap: false,
+    logLevel: "info",
+    banner: { js: "(() => {" },
+    footer: { js: "})();" },
+    ...(options.absWorkingDir ? { absWorkingDir: options.absWorkingDir } : {}),
+  };
+}
+
+/**
  * Discover each sample plugin's main entry (`plugins/sample/<name>/main/index.ts`)
  * so adding a new sample plugin needs no build-config edit. Mirrors
  * `discoverBuiltInPluginMainEntries` and `copySamplePluginManifests`. A
@@ -159,11 +275,25 @@ function copyBuiltInWorkflows() {
  * consumed by the host's Vite renderer build (not loaded by the plugin at
  * runtime), `shared/` holds `import type`-only siblings esbuild erases (never
  * loaded at runtime — same compile-time category as `main`/`renderer`), and
- * `__tests__/` is dev-only. Every other subdirectory a plugin bundles (`bin/`,
+ * `__tests__/` and `__fixtures__/` are dev-only. Every other subdirectory a plugin bundles (`bin/`,
  * `mcp/`, `view/`, …) is shipped as-is so `./`-relative `command`/`args` paths
  * resolve at runtime instead of ENOENT-ing (#10579).
+ *
+ * `guest/` is in the set because it is the OUTPUT directory the guest bundler
+ * writes to (`guestAdapterAssetPath`), and the copy runs after that build — a
+ * plugin with a `guest/` source dir would overwrite its own compiled bundle
+ * with a same-named source file, and the host would read that instead. The
+ * manifest schema refuses an `entry` under `guest/` for the same reason, so the
+ * directory is host-owned in both trees.
  */
-export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set(["main", "renderer", "shared", "__tests__"]);
+export const PLUGIN_EXTRA_ASSET_SKIP_DIRS = new Set([
+  "main",
+  "renderer",
+  "shared",
+  "guest",
+  "__tests__",
+  "__fixtures__",
+]);
 
 /**
  * True when `child` resolves to a path strictly inside `parent` — guards the
@@ -208,7 +338,9 @@ export function copyPluginExtraAssets(srcPluginDir, destPluginDir) {
   fs.mkdirSync(destPluginDir, { recursive: true });
   for (const entry of fs.readdirSync(srcPluginDir, { withFileTypes: true })) {
     if (!entry.isDirectory()) continue;
-    if (PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(entry.name)) continue;
+    // Lower-cased: on a case-insensitive filesystem `Guest/` would be copied
+    // over the bundle the guest build just emitted into `guest/`.
+    if (PLUGIN_EXTRA_ASSET_SKIP_DIRS.has(entry.name.toLowerCase())) continue;
     const src = path.join(srcPluginDir, entry.name);
     const dest = path.join(destPluginDir, entry.name);
     fs.cpSync(src, dest, { recursive: true });
@@ -342,6 +474,51 @@ export function findMissingPluginAssets(distPluginsRoot) {
     }
   }
   return missing;
+}
+
+/**
+ * Report every declared guest adapter whose built asset is absent from the
+ * output. `findMissingPluginAssets` cannot cover these: a guest asset's path is
+ * derived from the adapter id rather than named in the manifest, and it is
+ * emitted by esbuild rather than copied. Without this check a manifest could
+ * declare an adapter whose bundle never built, and the only symptom would be a
+ * preview that fails to bind at runtime. Pure and parameterized on both roots so
+ * it is unit testable.
+ */
+export function findMissingGuestAssets(rootDir, distPluginsRoot) {
+  const missing = [];
+  for (const asset of discoverGuestRuntimeAssets(rootDir)) {
+    // `outfile` is already repo-relative under dist-electron/plugins; re-root it
+    // so a test can point the check at a temporary output tree.
+    const relToPlugins = asset.outfile.replace("dist-electron/plugins/", "");
+    const resolved = path.resolve(distPluginsRoot, relToPlugins);
+    if (!isInsideDir(resolved, distPluginsRoot)) {
+      missing.push(`${asset.adapterId}: "${asset.outfile}" escapes the plugins output directory`);
+      continue;
+    }
+    if (!fs.existsSync(resolved)) {
+      missing.push(`${asset.adapterId}: "${asset.outfile}" not found in built output`);
+    }
+  }
+  return missing;
+}
+
+/**
+ * Same severity model as `validateCopiedPluginAssets`: a warning under watch,
+ * where a cold build may not have emitted the bundle yet, and a hard failure
+ * otherwise.
+ */
+function validateGuestAssets() {
+  const missing = findMissingGuestAssets(root, path.join(root, "dist-electron/plugins"));
+  if (missing.length === 0) return;
+
+  const detail = missing.map((m) => `  - ${m}`).join("\n");
+  if (isWatch) {
+    console.warn(`[Build] Declared guest runtimes missing from output:\n${detail}`);
+    return;
+  }
+  console.error(`[Build] Declared guest runtimes missing from output:\n${detail}`);
+  process.exit(1);
 }
 
 /**
@@ -560,23 +737,37 @@ async function run() {
     plugins: isWatch ? [createReadyMarkerPlugin()] : [],
   };
 
+  const guestConfigs = GUEST_RUNTIME_ASSETS.map((asset) =>
+    guestRuntimeBuildConfig(asset, { minify: isProd, absWorkingDir: root })
+  );
+
   try {
     if (isWatch) {
       const ctxEsm = await context(esmConfig);
       const ctxCjs = await context(cjsConfig);
+      const ctxGuests = await Promise.all(guestConfigs.map((config) => context(config)));
 
-      await Promise.all([ctxEsm.watch(), ctxCjs.watch()]);
+      // Every discovered guest bundle gets its own watch context, so editing a
+      // guest's SOURCE rebuilds its asset in place. What a running watcher does
+      // NOT pick up is a manifest edit: `contributes.guestAdapters` is read once
+      // here, exactly as `discoverBuiltInPluginMainEntries` and the manifest copy
+      // are, so adding or renaming a declaration needs the watcher restarted.
+      // That is the pre-existing model for every manifest-derived build input,
+      // not something guest adapters introduce.
+      await Promise.all([ctxEsm.watch(), ctxCjs.watch(), ...ctxGuests.map((c) => c.watch())]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();
       validateCopiedPluginAssets();
+      validateGuestAssets();
       console.log("[Build] Watching for changes...");
     } else {
-      await Promise.all([build(esmConfig), build(cjsConfig)]);
+      await Promise.all([build(esmConfig), build(cjsConfig), ...guestConfigs.map(build)]);
       copyBuiltInWorkflows();
       copyBuiltInPluginManifests();
       copySamplePluginManifests();
       validateCopiedPluginAssets();
+      validateGuestAssets();
       writeBuildReadyMarker();
       console.log("[Build] Complete.");
     }

@@ -15,6 +15,7 @@ const debuggerMock = vi.hoisted(() => ({
 }));
 
 const mockWebContents = vi.hoisted(() => ({
+  id: 42,
   isDestroyed: vi.fn(() => false),
   debugger: debuggerMock,
   executeJavaScript: vi.fn().mockResolvedValue([]),
@@ -95,6 +96,7 @@ vi.mock("../../utils.js", () => ({
 }));
 
 import { registerWebviewHandlers } from "../webview.js";
+import { __resetCdpLeasesForTests } from "../../../services/cdp/WebContentsCdpService.js";
 import { sendToRenderer, broadcastToRenderer } from "../../utils.js";
 import type { HandlerDependencies } from "../../types.js";
 import { MAX_CONSOLE_ROWS } from "../../../../shared/config/devPreviewConsole.js";
@@ -144,6 +146,10 @@ describe("registerWebviewHandlers", () => {
       cleanup = null;
     }
     vi.clearAllMocks();
+    // The lease registry is module state keyed by the guest's id, which every
+    // test here reuses; a leftover entry would hand the next test a session
+    // whose domains are already on.
+    __resetCdpLeasesForTests();
     // clearAllMocks resets calls but not implementations, so a suite that
     // stubs an unregistered guest would otherwise leak that into every test
     // declared after it.
@@ -994,7 +1000,9 @@ describe("registerWebviewHandlers", () => {
 
       const stopping = getHandler("webview:stop-console-capture")(null, 42, "pane-1");
       // Let the stop drop its pane and reach the pending Runtime.disable.
-      for (let i = 0; i < 10; i++) await Promise.resolve();
+      await vi.waitFor(() => {
+        expect(debuggerMock.sendCommand).toHaveBeenCalledWith("Runtime.disable");
+      });
 
       // A new pane arrives mid-teardown. Interleaved, it would see the domain
       // still enabled, skip enabling, and then be silently switched off by the
@@ -1136,13 +1144,18 @@ describe("registerWebviewHandlers", () => {
     it("does not rebind listeners across a stop/start cycle", async () => {
       cleanup = registerWebviewHandlers(deps);
       await getHandler("webview:start-console-capture")(null, 42, "pane-1");
+      const listener = getMessageListener();
       await getHandler("webview:stop-console-capture")(null, 42, "pane-1");
       await getHandler("webview:start-console-capture")(null, 42, "pane-1");
 
-      const messageBinds = debuggerMock.on.mock.calls.filter(
-        ([event]: string[]) => event === "message"
+      // Counting binds no longer isolates this session — the CDP lease service
+      // binds its own context tracker per lease cycle — so assert on the
+      // session's own listener instead: bound exactly once, never unbound.
+      const binds = debuggerMock.on.mock.calls.filter(
+        ([event, bound]: unknown[]) => event === "message" && bound === listener
       );
-      expect(messageBinds).toHaveLength(1);
+      expect(binds).toHaveLength(1);
+      expect(debuggerMock.off).not.toHaveBeenCalledWith("message", listener);
     });
 
     it("unbinds listeners when Runtime.enable fails for the only pane", async () => {
@@ -1361,9 +1374,10 @@ describe("registerWebviewHandlers", () => {
 
       cleanup = registerWebviewHandlers(deps);
       await getHandler("webview:start-console-capture")(null, 42, "pane-1");
-      expect(destroyCallbacks).toHaveLength(1);
+      // The session's own hook, plus the CDP lease service's.
+      expect(destroyCallbacks).toHaveLength(2);
 
-      destroyCallbacks[0]!();
+      for (const callback of destroyCallbacks) callback();
 
       // Disposal detached the listeners, so the next start has to bind fresh
       // ones rather than reuse a session for a guest that is gone.

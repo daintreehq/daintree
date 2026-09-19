@@ -28,6 +28,17 @@ There are three discovery roots, and which one a manifest was found under is its
 
 `discoverProjectPlugins` (`electron/services/plugin/projectPluginDiscovery.ts`) is the project-root scan. It deliberately does not compare the directory name against the manifest `name`: identity comes from the manifest, and the shipping `plugins/builtin/github` directory already declares `daintree.github`, so making the rule hard for one root alone would leave the roots disagreeing about what a plugin folder is.
 
+### Built-in plugins
+
+A built-in plugin is Daintree code that happens to use the plugin contract. It differs from an installed plugin in ways that decide what it can do:
+
+- **Discovery is a build-time glob, not a registry.** `scripts/build-main.mjs` bundles every `plugins/builtin/*/main/index.ts`, and `src/registry/builtinPluginRenderers.ts` eagerly globs every `plugins/builtin/*/renderer/index.{ts,tsx}` for its registration side effects. The renderer glob only survives tree-shaking because `package.json` lists that path under `sideEffects`. Adding a built-in needs no registry edit.
+- **It loads in-process.** Main code runs inside Electron main, not in a worker. That is why built-ins can offer synchronous host methods, and why a built-in must never execute code it did not ship — see [Dependencies a built-in plugin owns](#dependencies-a-built-in-plugin-owns).
+- **The `daintree.*` namespace is reserved to it.** A manifest outside `plugins/builtin/` may not claim that namespace. There is currently no shipping path for a first-party _installed_ plugin, so a plugin Daintree ships is a built-in.
+- **It can be off by default.** `shared/config/pluginDefaults.ts` lists built-ins that need an explicit enable choice before their first activation.
+- **Its renderer lives in the host bundle.** There is no `plugin://` module for it, which changes how its panel views resolve — see [Built-in plugin views](#built-in-plugin-views).
+- **Activation failures are swallowed.** Main reports a built-in's activation as successful even when `activate()` throws, so a built-in's panel can still render against handlers that never registered. Handle missing handlers in the view rather than assuming activation succeeded.
+
 ### Manifest validation
 
 Validation is strict. The manifest is parsed by `PluginManifestSchema` (Zod) in strict mode, which rejects unknown top-level keys and unknown keys inside `contributes` (both the inner object itself and contributions whose individual entry schemas opt into `.strict()`). The reason is conservative: unknown keys are almost always typos, and silently dropping typo'd contributions is a bad debugging experience.
@@ -114,6 +125,19 @@ On plugin unload, `PluginService.unloadPlugin()` first revokes every agent MCP c
 8. MCP subprocess lifecycle (`PluginMcpSupervisor.shutdown({ pluginId })`, with execa's kill escalation — see [MCP supervisor → Process lifecycle](#process-lifecycle))
 
 For a user-installed plugin the disposal cascade is followed by killing its worker, which reclaims the plugin's entire module realm — module-scope state never survives a reload. For a built-in (which runs in-process) the module is merely orphaned: Node's module cache still holds it but no live references point to it, and since built-ins are never uninstalled that residue never accumulates.
+
+## Dependencies a built-in plugin owns
+
+An installed plugin is its own npm package: it declares dependencies in its own `package.json` and `@daintreehq/plugin-vite` bundles them into a self-contained `dist/`. A built-in plugin has no such boundary — its main code is bundled by `scripts/build-main.mjs` and its renderer by the host Vite build — so where a dependency lives needs a deliberate choice.
+
+**Put it in a workspace package under `packages/`.** The package declares the dependency; the built-in imports the package. This is the repo's existing mechanism, and it keeps the dependency out of Daintree's root manifest. Adding a package means appending it to `typecheck:projects` and `packages:build` in the root `package.json`, and giving it the house `tsconfig.json` and `tsup.config.ts`. Mark a large dependency `external` in the package's `tsup` config and `await import()` it from the plugin, so it never sits on the eager main-process path — activation has a 5-second budget. npm still hoists the dependency physically into the root `node_modules` and records it in the root lockfile; what moves is ownership of the declaration.
+
+Two approaches that look reasonable and are not:
+
+- **A `package.json` directly under `plugins/builtin/<name>/`.** The root `workspaces` array does not include it, so a root `npm install` — and CI's `npm ci` — never installs it, and tests that depend on it cannot run in CI. Worse, `build-main.mjs` copies the built-in's directory into the app, `node_modules` included, and the packaging allowlist lets it through: the dependency ships inside the packaged app by accident.
+- **Resolving the user's own copy at runtime** — for example `createRequire(projectRoot)("svelte/compiler")` to parse a project with the exact compiler it uses. Built-ins run in-process in Electron main, so this executes project-controlled JavaScript inside the trusted process. Pin and bundle your own copy, and handle version skew with an explicit support check against the project's installed version instead.
+
+**A workspace package's `dist/` goes stale locally.** Its `prepare` script builds `dist/` when `npm install` runs, and imports by package name resolve to that `dist/`. After that the build does not track `src/`, so code importing the package by name can load an old build — including throwing stubs from before the implementation existed. CI's fresh install hides this entirely. Rebuild with `npm run build --workspace=packages/<name>` after changing the package, before testing anything that imports it by name.
 
 ## Project-local plugins
 
@@ -224,6 +248,18 @@ Plugin view modules are loaded via Daintree's `plugin://` privileged protocol. W
 **The URL authority is opaque, not the plugin id.** Every load mints an authority — `pi-` plus 32 hex characters from a CSPRNG — and host-built URLs use it: `plugin://pi-{token}/__dtv-{n}/dist/panel.js`. The authority is never reissued, so a URL captured before an unload 404s forever rather than resolving into whatever next occupies that plugin id, and two projects shipping the same manifest id get separate authorities and separate trees. `mintPluginAuthority` seeds a second key into the same resolver map as an **alias**: the plugin's host-side id, which is the manifest id for an installed plugin and the instance key for a project-local one. That alias is what keeps a hand-written `plugin://{pluginId}/…` URL working (`contribution-points.md` documents the form, and the `pluginId` a view is handed is exactly this key). It is rebound on every reload and dropped on unload. Treat the authority as the real addressing unit — nothing should assume the hostname is a bare manifest id — and do not treat it as a secret. It is a namespace, not a capability.
 
 The resolved URL travels through the renderer over the existing panel-kinds IPC broadcast — no separate channel is required. `location: "sidebar"` and an unsafe `componentPath` (absolute paths, URL schemes, `..` segments) are rejected at manifest validation, so the whole plugin fails to load loudly rather than silently dropping the view. A view that targets a panel id with no matching `contributes.panels` entry is likewise rejected at manifest validation (#10620) — an orphaned view would otherwise never render, so the whole plugin fails to load rather than silently dropping it.
+
+### Built-in plugin views
+
+A built-in plugin's renderer is compiled into the host bundle, so the `plugin://` flow above has nothing to import. Built-in panel views resolve in-process instead, through `src/registry/builtinRendererRegistry.ts`.
+
+- The renderer entry calls `registerBuiltinView(slotId, Component, { pluginId, label })` at module load, where **`slotId` is the runtime panel kind id `{pluginId}.{panelId}`**. Use literal ids: `src/registry/__tests__/builtinViewRegistrations.test.ts` reads each built-in's renderer entry as text and fails when a manifest panel view has no registration under its kind id, or is registered under a different plugin id.
+- `PluginViewContent` takes the in-process path when a slot is registered under the kind id **and** its `pluginId` matches the kind's plugin. Otherwise it falls back to `plugin://` — which for a built-in fails as an import error or a timeout rather than a clear message, so a typo'd id shows up as a broken panel, not a helpful one.
+- The in-process path keeps the lifecycle that matters: `activateForView`, the activation timeout, the diagnostics error boundary with Try again, `disposeSignal` and `panelRemovedSignal`, and the newer-state-version refusal. It skips style preparation, document runtime registration and the import itself; styling comes from the host's own Tailwind build.
+- Registration can arrive after the panel mounted. The attempt is replaced and the old `disposeSignal` aborts.
+- `contributes.views[].componentPath` must still be present to satisfy the schema; it is never imported for a built-in.
+- **A failed chunk load cannot be retried in place.** Chromium makes a rejected dynamic import permanent for its specifier, and a built-in's view chunk has a fixed, host-bundled URL, so there is no fresh generation to fall back to the way `plugin://` views get one (`requestRecoveryPath`). Try again recovers a view that _threw_, not one whose chunk failed to load; that needs the project view reloaded. Keep the view's first chunk small so this stays rare, and don't wrap it in a module-level `React.lazy` expecting retry to re-import it.
+- **`disposeSignal` also fires for temporary unmounts** — a sibling panel maximised, a dock tab left. State that must survive those (a preview binding, an undo history) belongs in a controller keyed by `panelId` that subscribes to `panelRemovedSignal` itself; a listener registered by the view is lost when the panel is removed while the view is unmounted. Plugin deactivation is a third boundary distinct from both: the panel record survives it, but main-side state does not.
 
 ### Hot reload — dev only
 

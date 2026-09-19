@@ -120,10 +120,22 @@ describe("installLinuxPrimarySelectionListeners", () => {
     });
 
     it("normalizes newlines to carriage returns when bracketed paste is off", async () => {
-      readSelection.mockResolvedValueOnce({ text: "line1\nline2\r\nline3" });
+      // Every line-ending shape a screen selection can carry: LF, CRLF and the
+      // bare CR some TUIs leave behind.
+      readSelection.mockResolvedValueOnce({ text: "line1\nline2\r\nline3\rline4" });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
-      expect(writeToPty).toHaveBeenCalledWith("term-1", "line1\rline2\rline3");
+      expect(writeToPty).toHaveBeenCalledWith("term-1", "line1\rline2\rline3\rline4");
+    });
+
+    it("neutralizes control characters a selection picked up off the screen", async () => {
+      // PRIMARY is whatever was on screen, which can include a program's own
+      // output. The unwrapped branch writes it straight at the parser, so an
+      // ESC sequence in the selection would be acted on rather than pasted.
+      readSelection.mockResolvedValueOnce({ text: "npm run \x1b[Dbuild\x03" });
+      hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+      await flush();
+      expect(writeToPty).toHaveBeenCalledWith("term-1", "npm run \u241b[Dbuild\u2403");
     });
 
     it("skips PTY write when PRIMARY is empty", async () => {
