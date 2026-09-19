@@ -326,6 +326,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["hibernation:update-config"]["args"]
     ): Promise<IpcInvokeMap["hibernation:update-config"]["result"]>;
   };
+  keepAwake: {
+    getState(
+      ...args: IpcInvokeMap["keep-awake:get-state"]["args"]
+    ): Promise<IpcInvokeMap["keep-awake:get-state"]["result"]>;
+    updateConfig(
+      ...args: IpcInvokeMap["keep-awake:update-config"]["args"]
+    ): Promise<IpcInvokeMap["keep-awake:update-config"]["result"]>;
+  };
   mcpServer: {
     adoptTerminal(
       ...args: IpcInvokeMap["mcp-server:adopt-terminal"]["args"]

@@ -1,5 +1,33 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from "vitest";
 
+const power = vi.hoisted(() => {
+  const listeners = new Map<string, Set<() => void>>();
+  return {
+    onBattery: false,
+    throwOnQuery: false,
+    listeners,
+    emit(event: string) {
+      for (const listener of [...(listeners.get(event) ?? [])]) listener();
+    },
+    count(event: string) {
+      return listeners.get(event)?.size ?? 0;
+    },
+  };
+});
+
+const storeMock = vi.hoisted(() => ({
+  data: {} as Record<string, unknown>,
+  failSet: false,
+}));
+
+const broadcastToRenderer = vi.hoisted(() => vi.fn());
+
+const linuxSource = vi.hoisted(() => ({
+  onChange: null as ((onBattery: boolean) => void) | null,
+  refresh: vi.fn(async () => {}),
+  dispose: vi.fn(),
+}));
+
 vi.mock("electron", () => {
   let nextId = 1;
   const activeBlockers = new Set<number>();
@@ -15,17 +43,52 @@ vi.mock("electron", () => {
       }),
       isStarted: vi.fn((id: number) => activeBlockers.has(id)),
     },
+    powerMonitor: {
+      isOnBatteryPower: vi.fn(() => {
+        if (power.throwOnQuery) throw new Error("power source unavailable");
+        return power.onBattery;
+      }),
+      on: vi.fn((event: string, listener: () => void) => {
+        if (!power.listeners.has(event)) power.listeners.set(event, new Set());
+        power.listeners.get(event)!.add(listener);
+      }),
+      removeListener: vi.fn((event: string, listener: () => void) => {
+        power.listeners.get(event)?.delete(listener);
+      }),
+    },
   };
 });
+
+vi.mock("../../store.js", () => ({
+  store: {
+    get: vi.fn((key: string) => storeMock.data[key]),
+    set: vi.fn((key: string, value: unknown) => {
+      if (storeMock.failSet) throw new Error("store write failed");
+      storeMock.data[key] = value;
+    }),
+  },
+}));
+
+vi.mock("../../ipc/utils.js", () => ({ broadcastToRenderer }));
+
+vi.mock("../linuxPowerSource.js", () => ({
+  watchLinuxPowerSource: vi.fn((onChange: (onBattery: boolean) => void) => {
+    linuxSource.onChange = onChange;
+    return { refresh: linuxSource.refresh, dispose: linuxSource.dispose };
+  }),
+}));
 
 import { powerSaveBlocker } from "electron";
 import {
   PowerSaveBlockerService,
+  getPowerSaveBlockerService,
   initializePowerSaveBlockerService,
   disposePowerSaveBlockerService,
   type TerminalRegistry,
 } from "../PowerSaveBlockerService.js";
 import { events } from "../events.js";
+import { store } from "../../store.js";
+import { CHANNELS } from "../../ipc/channels.js";
 import type { AgentState } from "../../../shared/types/agent.js";
 
 function emitStateChanged(
@@ -43,6 +106,27 @@ function emitStateChanged(
     confidence: 1.0,
   });
 }
+
+const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+function setPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+}
+
+// Linux reads sysfs instead of powerMonitor, and CI runs on Linux, so each test
+// names the platform it means.
+beforeEach(() => {
+  setPlatform("darwin");
+  power.onBattery = false;
+  power.throwOnQuery = false;
+  storeMock.data = {};
+  storeMock.failSet = false;
+  linuxSource.onChange = null;
+});
+
+afterEach(() => {
+  Object.defineProperty(process, "platform", realPlatform);
+});
 
 describe("PowerSaveBlockerService", () => {
   let service: PowerSaveBlockerService;
@@ -480,6 +564,346 @@ describe("PowerSaveBlockerService", () => {
     });
   });
 
+  describe("keep-awake setting and power source", () => {
+    const HOUR = 60 * 60 * 1000;
+
+    function restart() {
+      service.dispose();
+      service = new PowerSaveBlockerService();
+    }
+
+    it("defaults to holding on AC and not on battery", () => {
+      expect(service.getState().config).toEqual({ enabled: true, onBattery: false });
+    });
+
+    it("reads a stored setting and ignores values that are not exactly the opt-out", () => {
+      storeMock.data.keepAwake = { enabled: false, onBattery: true };
+      restart();
+      expect(service.getState().config).toEqual({ enabled: false, onBattery: true });
+
+      storeMock.data.keepAwake = { enabled: "false", onBattery: "true" };
+      restart();
+      expect(service.getState().config).toEqual({ enabled: true, onBattery: false });
+
+      storeMock.data.keepAwake = null;
+      restart();
+      expect(service.getState().config).toEqual({ enabled: true, onBattery: false });
+    });
+
+    it("tracks a working agent without holding when it starts on battery", () => {
+      power.onBattery = true;
+      restart();
+
+      emitStateChanged("term-1", "working");
+
+      expect(powerSaveBlocker.start).not.toHaveBeenCalled();
+      expect(service.isBlocking()).toBe(false);
+      expect(service.getActiveCount()).toBe(1);
+    });
+
+    it("treats a power source it cannot read as AC", () => {
+      power.throwOnQuery = true;
+      restart();
+
+      emitStateChanged("term-1", "working");
+
+      expect(service.isBlocking()).toBe(true);
+    });
+
+    it("releases on unplug and takes the blocker back on replug with no agent event", () => {
+      emitStateChanged("term-1", "working");
+      expect(service.isBlocking()).toBe(true);
+
+      power.emit("on-battery");
+      expect(service.isBlocking()).toBe(false);
+      expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+      expect(service.getActiveCount()).toBe(1);
+
+      power.emit("on-ac");
+      expect(service.isBlocking()).toBe(true);
+      expect(powerSaveBlocker.start).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps holding through an unplug when battery is allowed", () => {
+      service.updateConfig({ onBattery: true });
+      emitStateChanged("term-1", "working");
+
+      power.emit("on-battery");
+
+      expect(service.isBlocking()).toBe(true);
+      expect(powerSaveBlocker.stop).not.toHaveBeenCalled();
+    });
+
+    it("ignores repeated power events", () => {
+      emitStateChanged("term-1", "working");
+
+      power.emit("on-battery");
+      power.emit("on-battery");
+      expect(powerSaveBlocker.stop).toHaveBeenCalledTimes(1);
+
+      power.emit("on-ac");
+      power.emit("on-ac");
+      expect(powerSaveBlocker.start).toHaveBeenCalledTimes(2);
+    });
+
+    it("reads the power source again on resume", () => {
+      emitStateChanged("term-1", "working");
+
+      power.onBattery = true;
+      power.emit("resume");
+
+      expect(service.isBlocking()).toBe(false);
+    });
+
+    it("keeps a known battery reading when the query fails on resume", () => {
+      power.onBattery = true;
+      restart();
+      emitStateChanged("term-1", "working");
+
+      power.throwOnQuery = true;
+      power.emit("resume");
+
+      expect(service.isBlocking()).toBe(false);
+    });
+
+    describe("on Linux", () => {
+      beforeEach(() => {
+        setPlatform("linux");
+        restart();
+      });
+
+      it("follows the sysfs reading, since Electron reports AC there regardless", () => {
+        emitStateChanged("term-1", "working");
+        expect(service.isBlocking()).toBe(true);
+
+        linuxSource.onChange!(true);
+        expect(service.isBlocking()).toBe(false);
+
+        linuxSource.onChange!(false);
+        expect(service.isBlocking()).toBe(true);
+      });
+
+      it("reads sysfs again on resume instead of trusting powerMonitor", () => {
+        power.onBattery = false;
+        linuxSource.onChange!(true);
+        emitStateChanged("term-1", "working");
+
+        power.emit("resume");
+
+        expect(linuxSource.refresh).toHaveBeenCalledTimes(1);
+        expect(service.isBlocking()).toBe(false);
+      });
+
+      it("stops reading sysfs when disposed", () => {
+        service.dispose();
+
+        expect(linuxSource.dispose).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    it("releases at once when disabled and resumes when enabled again", () => {
+      emitStateChanged("term-1", "working");
+
+      service.updateConfig({ enabled: false });
+      expect(service.isBlocking()).toBe(false);
+      expect(store.set).toHaveBeenCalledWith("keepAwake", { enabled: false, onBattery: false });
+
+      service.updateConfig({ enabled: true });
+      expect(service.isBlocking()).toBe(true);
+    });
+
+    it("never holds while disabled, on AC or on battery", () => {
+      storeMock.data.keepAwake = { enabled: false, onBattery: true };
+      restart();
+
+      emitStateChanged("term-1", "working");
+      expect(service.isBlocking()).toBe(false);
+
+      power.emit("on-battery");
+      power.emit("on-ac");
+      expect(powerSaveBlocker.start).not.toHaveBeenCalled();
+    });
+
+    it("follows the battery setting while unplugged", () => {
+      power.onBattery = true;
+      restart();
+      emitStateChanged("term-1", "working");
+
+      service.updateConfig({ onBattery: true });
+      expect(service.isBlocking()).toBe(true);
+
+      service.updateConfig({ onBattery: false });
+      expect(service.isBlocking()).toBe(false);
+    });
+
+    it("does not hold for a power or setting change with no working agent", () => {
+      power.emit("on-battery");
+      power.emit("on-ac");
+      service.updateConfig({ enabled: false });
+      service.updateConfig({ enabled: true });
+
+      expect(powerSaveBlocker.start).not.toHaveBeenCalled();
+    });
+
+    it("leaves the live policy alone when the setting cannot be saved", () => {
+      emitStateChanged("term-1", "working");
+      storeMock.failSet = true;
+
+      expect(() => service.updateConfig({ enabled: false })).toThrow("store write failed");
+
+      expect(service.isBlocking()).toBe(true);
+      expect(service.getState().config.enabled).toBe(true);
+    });
+
+    it("writes nothing for a patch that changes nothing", () => {
+      service.updateConfig({ enabled: true, onBattery: false });
+
+      expect(store.set).not.toHaveBeenCalled();
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
+    });
+
+    it("pushes a state only when the hold or the setting changes", () => {
+      emitStateChanged("term-1", "working");
+      expect(broadcastToRenderer).toHaveBeenLastCalledWith(CHANNELS.KEEP_AWAKE_STATE_CHANGED, {
+        config: { enabled: true, onBattery: false },
+        isBlocking: true,
+        revision: 1,
+      });
+
+      emitStateChanged("term-2", "working");
+      emitStateChanged("term-2", "waiting");
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+
+      service.updateConfig({ onBattery: true });
+      expect(broadcastToRenderer).toHaveBeenLastCalledWith(CHANNELS.KEEP_AWAKE_STATE_CHANGED, {
+        config: { enabled: true, onBattery: true },
+        isBlocking: true,
+        revision: 2,
+      });
+
+      emitStateChanged("term-1", "waiting");
+      expect(broadcastToRenderer).toHaveBeenLastCalledWith(CHANNELS.KEEP_AWAKE_STATE_CHANGED, {
+        config: { enabled: true, onBattery: true },
+        isBlocking: false,
+        revision: 3,
+      });
+      expect(service.getState().revision).toBe(3);
+    });
+
+    describe("safety budget across a release", () => {
+      it("carries the unused part of a period instead of granting a new one", () => {
+        emitStateChanged("term-1", "working");
+        vi.advanceTimersByTime(3 * HOUR);
+
+        power.emit("on-battery");
+        vi.advanceTimersByTime(10 * HOUR);
+        power.emit("on-ac");
+
+        vi.advanceTimersByTime(HOUR - 1);
+        expect(service.isBlocking()).toBe(true);
+        vi.advanceTimersByTime(1);
+        expect(service.isBlocking()).toBe(false);
+        expect(service.getActiveCount()).toBe(0);
+      });
+
+      it("does not refill a period when the wall clock moves back", () => {
+        emitStateChanged("term-1", "working");
+        vi.advanceTimersByTime(3 * HOUR);
+
+        vi.setSystemTime(Date.now() - 3 * HOUR);
+        power.emit("on-battery");
+        power.emit("on-ac");
+
+        vi.advanceTimersByTime(HOUR);
+        expect(service.isBlocking()).toBe(false);
+      });
+
+      it("does not refill a period that was about to run out", () => {
+        emitStateChanged("term-1", "working");
+        vi.advanceTimersByTime(4 * HOUR - 1);
+
+        service.updateConfig({ enabled: false });
+        vi.advanceTimersByTime(HOUR);
+        service.updateConfig({ enabled: true });
+        expect(service.isBlocking()).toBe(true);
+
+        vi.advanceTimersByTime(1);
+        expect(service.isBlocking()).toBe(false);
+      });
+
+      it("keeps renewals already spent when the blocker comes back", () => {
+        const registry = { hasTerminal: vi.fn(() => true) };
+        service.setTerminalRegistry(registry);
+        emitStateChanged("term-1", "working");
+
+        vi.advanceTimersByTime(5 * HOUR);
+        power.emit("on-battery");
+        vi.advanceTimersByTime(10 * HOUR);
+        power.emit("on-ac");
+
+        // Five hours held before the gap: the second checkpoint is three more
+        // hours away, and the release four hours after that.
+        vi.advanceTimersByTime(3 * HOUR);
+        expect(service.isBlocking()).toBe(true);
+        vi.advanceTimersByTime(4 * HOUR - 1);
+        expect(service.isBlocking()).toBe(true);
+        vi.advanceTimersByTime(1);
+        expect(service.isBlocking()).toBe(false);
+        expect(service.getActiveCount()).toBe(0);
+      });
+
+      it("does not let another agent starting while released reset the budget", () => {
+        emitStateChanged("term-1", "working");
+        vi.advanceTimersByTime(3 * HOUR);
+        power.emit("on-battery");
+
+        emitStateChanged("term-2", "working");
+        power.emit("on-ac");
+
+        vi.advanceTimersByTime(HOUR);
+        expect(service.isBlocking()).toBe(false);
+      });
+
+      it("gives a fresh budget once the released episode has ended", () => {
+        emitStateChanged("term-1", "working");
+        vi.advanceTimersByTime(3 * HOUR);
+        power.emit("on-battery");
+        emitStateChanged("term-1", "waiting");
+        power.emit("on-ac");
+
+        emitStateChanged("term-1", "working");
+        vi.advanceTimersByTime(4 * HOUR - 1);
+        expect(service.isBlocking()).toBe(true);
+      });
+
+      it("keeps a safety release final through later power and setting changes", () => {
+        emitStateChanged("term-1", "working");
+        vi.advanceTimersByTime(4 * HOUR);
+        expect(service.isBlocking()).toBe(false);
+
+        power.emit("on-battery");
+        power.emit("on-ac");
+        service.updateConfig({ enabled: false });
+        service.updateConfig({ enabled: true });
+
+        expect(service.isBlocking()).toBe(false);
+        expect(powerSaveBlocker.start).toHaveBeenCalledTimes(1);
+      });
+
+      it("runs no checkpoint while released", () => {
+        const registry = { hasTerminal: vi.fn(() => true) };
+        service.setTerminalRegistry(registry);
+        emitStateChanged("term-1", "working");
+        power.emit("on-battery");
+
+        vi.advanceTimersByTime(24 * HOUR);
+
+        expect(registry.hasTerminal).not.toHaveBeenCalled();
+        expect(service.getActiveCount()).toBe(1);
+      });
+    });
+  });
+
   describe("dispose", () => {
     it("releases blocker and clears state", () => {
       emitStateChanged("term-1", "working", { agentId: "agent-1" });
@@ -497,6 +921,18 @@ describe("PowerSaveBlockerService", () => {
 
       expect(powerSaveBlocker.start).not.toHaveBeenCalled();
       expect(service.isBlocking()).toBe(false);
+    });
+
+    it("removes its power listeners", () => {
+      expect(power.count("on-battery")).toBe(1);
+      expect(power.count("on-ac")).toBe(1);
+      expect(power.count("resume")).toBe(1);
+
+      service.dispose();
+
+      expect(power.count("on-battery")).toBe(0);
+      expect(power.count("on-ac")).toBe(0);
+      expect(power.count("resume")).toBe(0);
     });
 
     it("double dispose is safe", () => {
@@ -565,6 +1001,23 @@ describe("initializePowerSaveBlockerService", () => {
       afterFirst
     );
     onSpy.mockRestore();
+  });
+
+  it("refuses to build a replacement once shutdown has disposed it", () => {
+    initializePowerSaveBlockerService();
+    disposePowerSaveBlockerService();
+
+    expect(() => getPowerSaveBlockerService()).toThrow(/shuts down/);
+    expect(power.count("on-battery")).toBe(0);
+  });
+
+  it("adds no power listeners on a second initialize", () => {
+    initializePowerSaveBlockerService();
+    initializePowerSaveBlockerService();
+
+    expect(power.count("on-battery")).toBe(1);
+    expect(power.count("on-ac")).toBe(1);
+    expect(power.count("resume")).toBe(1);
   });
 
   it("leaves the instance an earlier caller is holding still subscribed and counting once", () => {

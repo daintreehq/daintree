@@ -8,6 +8,7 @@ import { useParkReleaseNotifications } from "../hooks/useParkReleaseNotification
 import { useDiskSpaceWarnings } from "../hooks/useDiskSpaceWarnings";
 import { useSystemMemoryPressureNotice } from "../hooks/useSystemMemoryPressureNotice";
 import { useHostMemoryPauseSync } from "../hooks/useHostMemoryPauseSync";
+import { useKeepAwakeSync } from "../hooks/useKeepAwakeSync";
 import { useForgeTokenHealth } from "../hooks/useForgeTokenHealth";
 import { useForgeRateLimit } from "../hooks/useForgeRateLimit";
 import { useStoreUpdateListener } from "../hooks/useStoreUpdateListener";
@@ -23,7 +24,7 @@ import { useRecipeFocusReload, useWorktreeDevServerStateSync } from "../hooks/ap
  *
  * Every hook here was audited to tolerate a late mount: the notification hooks
  * carry module-scope re-attach guards, the forge/store hooks and the host
- * memory pause sync pull current state on mount, and the rest are poll-backed
+ * memory pause and keep-awake syncs pull current state on mount, and the rest are poll-backed
  * or react to events that cannot fire before the window is interactive. Hooks
  * that must subscribe before first paint (focus-intent, OS DND, plugin
  * deep-link, keybindings, action registry, MCP/plugin bridges) deliberately
@@ -37,6 +38,7 @@ export function PostHydrationListeners() {
   useDiskSpaceWarnings();
   useSystemMemoryPressureNotice();
   useHostMemoryPauseSync();
+  useKeepAwakeSync();
   useForgeTokenHealth();
   useForgeRateLimit();
   useRecipeFocusReload();

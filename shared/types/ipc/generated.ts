@@ -860,6 +860,14 @@ export interface GeneratedIpcInvokeMap {
     args: [config: Partial<import("./idleTerminals.js").IdleTerminalNotifyConfig>];
     result: import("./idleTerminals.js").IdleTerminalNotifyConfig;
   };
+  "keep-awake:get-state": {
+    args: [];
+    result: import("./keepAwake.js").KeepAwakeState;
+  };
+  "keep-awake:update-config": {
+    args: [config: Partial<import("./keepAwake.js").KeepAwakeConfig>];
+    result: import("./keepAwake.js").KeepAwakeState;
+  };
   "logs:get-default-level": {
     args: [];
     result: string;
