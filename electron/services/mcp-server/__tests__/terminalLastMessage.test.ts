@@ -56,7 +56,8 @@ async function seedStore(name: string, reply: string): Promise<string> {
   return projectsRoot;
 }
 
-const read = () => handleTerminalReadLastMessageOwned(TERMINAL, new AbortController().signal);
+const read = (options: Parameters<typeof handleTerminalReadLastMessageOwned>[1] = {}) =>
+  handleTerminalReadLastMessageOwned(TERMINAL, options, new AbortController().signal);
 
 describe("handleTerminalReadLastMessageOwned", () => {
   it("reads the reply from the store the pane was launched against", async () => {
@@ -86,6 +87,27 @@ describe("handleTerminalReadLastMessageOwned", () => {
 
     rememberClaudePaneStore(TERMINAL, null);
     expect(await read()).toEqual({ status: "unavailable", reason: "store-unknown" });
+  });
+
+  // The caller chooses how much of which message; where the transcript is
+  // still comes from the host alone (#12496).
+  it("reads as much of the reply as the caller asked for, from the pane's own store", async () => {
+    rememberClaudePaneStore(TERMINAL, await seedStore("pane", "y".repeat(4096) + " END"));
+    getTerminalAsync.mockResolvedValue(claudeTerminal());
+
+    const result = await read({ maxBytes: 1024 });
+
+    expect(result).toMatchObject({
+      status: "ok",
+      message: { truncated: true, nextCursor: expect.any(String) },
+    });
+    const text = result.status === "ok" ? result.message?.text : undefined;
+    expect(text?.length).toBe(1024);
+    expect(text?.endsWith(" END")).toBe(true);
+    expect(await read({ messageIndex: 1 })).toEqual({
+      status: "unavailable",
+      reason: "message-not-found",
+    });
   });
 
   it("reports an unknown terminal", async () => {
@@ -120,7 +142,9 @@ describe("handleTerminalReadLastMessageOwned", () => {
     const controller = new AbortController();
     controller.abort();
 
-    await expect(handleTerminalReadLastMessageOwned(TERMINAL, controller.signal)).rejects.toThrow();
+    await expect(
+      handleTerminalReadLastMessageOwned(TERMINAL, {}, controller.signal)
+    ).rejects.toThrow();
     expect(getTerminalAsync).not.toHaveBeenCalled();
   });
 });

@@ -488,7 +488,15 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // would otherwise get wrong: that the marker is an observation rather than a
   // finish verdict, that its message is the agent's own lossy claim, that its
   // absence never means the agent is still working, and where it is refused.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 61_350;
+  // 61_350 → 61_950 for #12496, measured at 61_940 B: `maxBytes`, `messageIndex`
+  // and `cursor` on `terminal.readLastMessageOwned`, `message.nextCursor` on its
+  // result, and the `message-not-found` reason. Without them an orchestrator
+  // cannot reach the head of a long report or the report before a short reply,
+  // and falls back to asking the agent to re-print it. The bounds are in the
+  // descriptions because the wire strips `minimum`/`maximum`, and a caller that
+  // misses them is refused rather than clamped. The tool description is
+  // untouched.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 61_950;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -596,7 +604,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // 218_100 → 219_950 for #12488, measured at 219_927 B: the external raise
   // above plus the same argument on `terminal.sendCommand`, which is in-app
   // only.
-  const MAX_COHORT_PAYLOAD_BYTES = 219_950;
+  // 219_950 → 220_600 for #12496, measured at 220_561 B: the same spend as the
+  // external raise above, on a tool that is on both surfaces.
+  const MAX_COHORT_PAYLOAD_BYTES = 220_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

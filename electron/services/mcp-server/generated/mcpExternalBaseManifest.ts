@@ -2022,6 +2022,25 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
           description:
             "The agent panel to read, as an `id` this session got when it created the panel. Required: there is no focus fallback.",
         },
+        maxBytes: {
+          description: "Text budget in escaped bytes, 1024 to 49152; default 24576.",
+          type: "integer",
+          minimum: 1024,
+          maximum: 49152,
+        },
+        messageIndex: {
+          description:
+            "Replies back from the latest with text: 0 (default) to 20. Not with `cursor`.",
+          type: "integer",
+          minimum: 0,
+          maximum: 20,
+        },
+        cursor: {
+          description: "A result's `message.nextCursor`, unchanged, for the text before that page.",
+          type: "string",
+          minLength: 1,
+          maxLength: 1024,
+        },
       },
       required: ["terminalId"],
     },
@@ -2060,7 +2079,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                     text: {
                       type: "string",
                       description:
-                        "Its text blocks in order, cut to 24 KiB once escaped, keeping the end.",
+                        "Its text blocks in order, cut to `maxBytes` once escaped, keeping the end.",
                     },
                     truncated: {
                       type: "boolean",
@@ -2088,8 +2107,20 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                       description:
                         "Raw from the transcript, not a verdict on whether the turn ended.",
                     },
+                    nextCursor: {
+                      anyOf: [
+                        {
+                          type: "string",
+                        },
+                        {
+                          type: "null",
+                        },
+                      ],
+                      description:
+                        "Pass as `cursor` for the text before this. Null once nothing earlier is in reach.",
+                    },
                   },
-                  required: ["id", "text", "truncated", "recordedAt", "stopReason"],
+                  required: ["id", "text", "truncated", "recordedAt", "stopReason", "nextCursor"],
                   additionalProperties: false,
                 },
                 {
@@ -2166,9 +2197,10 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                 "store-unknown",
                 "no-message",
                 "search-cap-reached",
+                "message-not-found",
               ],
               description:
-                "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted.",
+                "'provider-mismatch': an agent this cannot read yet. 'store-unknown': the pane's own store is uncertain, so nothing was read. 'search-cap-reached': no reply within the bounded read; an older one is not substituted. 'message-not-found': no reply at that index, or the cursor's message changed.",
             },
           },
           required: ["status", "reason"],

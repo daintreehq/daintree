@@ -1,4 +1,7 @@
-import type { AgentLastMessageResult } from "../../../shared/types/agentLastMessage.js";
+import type {
+  AgentLastMessageReadOptions,
+  AgentLastMessageResult,
+} from "../../../shared/types/agentLastMessage.js";
 import { readClaudeLastMessage } from "../claude/ClaudeSessionReader.js";
 import { getClaudePaneProjectsRoot } from "../claude/ClaudeSessionStore.js";
 import { resolveClaudeTerminal } from "../claude/ClaudeSubagentService.js";
@@ -7,9 +10,10 @@ import { resolveClaudeTerminal } from "../claude/ClaudeSubagentService.js";
  * Main-process execution for `terminal.readLastMessageOwned` (#12479), reached
  * only once the session's ownership of the panel has been checked.
  *
- * The caller supplies a terminal id and nothing else. Which agent it runs, its
- * session id, its cwd and the store its transcript lives in all come from the
- * host: the pty-host record for the first three, and the store remembered at the
+ * The caller supplies a terminal id and how much of which message to read
+ * (#12496), validated in `sessionServer` before this runs. Which agent it runs,
+ * its session id, its cwd and the store its transcript lives in all come from
+ * the host: the pty-host record for the first three, and the store remembered at the
  * pane's own spawn for the last. Where that store was never certain — Windows,
  * a shell the startup probe did not see, a pane-level `CLAUDE_CONFIG_DIR` — the
  * answer is that it is unknown. Daintree's own `~/.claude` is never a fallback:
@@ -21,6 +25,7 @@ import { resolveClaudeTerminal } from "../claude/ClaudeSubagentService.js";
  */
 export async function handleTerminalReadLastMessageOwned(
   terminalId: string,
+  options: AgentLastMessageReadOptions,
   signal: AbortSignal
 ): Promise<AgentLastMessageResult> {
   signal.throwIfAborted();
@@ -30,6 +35,6 @@ export async function handleTerminalReadLastMessageOwned(
   if (!projectsRoot) return { status: "unavailable", reason: "store-unknown" };
   return readClaudeLastMessage(
     { projectsRoot, cwd: resolved.cwd, sessionId: resolved.parentSessionId },
-    { signal }
+    { ...options, signal }
   );
 }

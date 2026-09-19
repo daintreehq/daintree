@@ -12,6 +12,12 @@ import {
   fitTerminalOutputResult,
 } from "@shared/utils/terminalOutputBudget";
 import { MCP_RESPONSE_TEXT_MAX_BYTES } from "@shared/config/mcpLimits";
+import {
+  LAST_MESSAGE_CURSOR_MAX_CHARS,
+  LAST_MESSAGE_INDEX_MAX,
+  LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES,
+  LAST_MESSAGE_TEXT_REQUEST_MIN_BYTES,
+} from "@shared/types/agentLastMessage";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { terminalClient } from "@/clients";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
@@ -695,6 +701,26 @@ export function registerTerminalQueryActions(
         .describe(
           "The agent panel to read, as an `id` this session got when it created the panel. Required: there is no focus fallback."
         ),
+      maxBytes: z
+        .number()
+        .int()
+        .min(LAST_MESSAGE_TEXT_REQUEST_MIN_BYTES)
+        .max(LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES)
+        .optional()
+        .describe("Text budget in escaped bytes, 1024 to 49152; default 24576."),
+      messageIndex: z
+        .number()
+        .int()
+        .min(0)
+        .max(LAST_MESSAGE_INDEX_MAX)
+        .optional()
+        .describe("Replies back from the latest with text: 0 (default) to 20. Not with `cursor`."),
+      cursor: z
+        .string()
+        .min(1)
+        .max(LAST_MESSAGE_CURSOR_MAX_CHARS)
+        .optional()
+        .describe("A result's `message.nextCursor`, unchanged, for the text before that page."),
     }),
     resultSchema: TerminalLastMessageResultSchema,
     mcpOutputSchema: true,

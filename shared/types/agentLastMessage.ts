@@ -25,7 +25,12 @@ export type AgentLastMessageUnavailableReason =
    * line can hide the latest one, and an older reply is not handed back as if
    * it were current.
    */
-  | "search-cap-reached";
+  | "search-cap-reached"
+  /**
+   * No reply at the requested index, or the message a cursor named has changed
+   * or is out of reach (#12496). Another message is never substituted for it.
+   */
+  | "message-not-found";
 
 export const AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS = [
   "provider-mismatch",
@@ -39,6 +44,7 @@ export const AGENT_LAST_MESSAGE_UNAVAILABLE_REASONS = [
   "store-unknown",
   "no-message",
   "search-cap-reached",
+  "message-not-found",
 ] as const satisfies readonly AgentLastMessageUnavailableReason[];
 
 export interface AgentLastMessage {
@@ -51,6 +57,11 @@ export interface AgentLastMessage {
   recordedAt: number | null;
   /** Raw from the transcript; not a verdict on whether the turn finished. */
   stopReason: string | null;
+  /**
+   * Hands back the text before `text` when passed as the next call's cursor.
+   * Null once `text` reaches the start of what the read could see.
+   */
+  nextCursor: string | null;
 }
 
 export interface AgentUnansweredToolUse {
@@ -85,8 +96,32 @@ export interface AgentLastMessageUnavailable {
 
 export type AgentLastMessageResult = AgentLastMessageOk | AgentLastMessageUnavailable;
 
-/** Cap on `message.text`, measured as the bytes it costs once JSON-escaped, keeping the tail. */
+/** Default cap on `message.text`, measured as the bytes it costs once JSON-escaped, keeping the tail. */
 export const LAST_MESSAGE_TEXT_MAX_BYTES = 24 * 1024;
+
+/**
+ * The range a caller may ask for instead (#12496). The ceiling leaves the rest
+ * of the result room under the 50 KiB response cap; the floor guarantees every
+ * page makes progress, since no code point escapes to more than six bytes.
+ */
+export const LAST_MESSAGE_TEXT_REQUEST_MIN_BYTES = 1024;
+export const LAST_MESSAGE_TEXT_REQUEST_MAX_BYTES = 48 * 1024;
+
+/** How far back `messageIndex` reaches; 0 is the latest reply with text. */
+export const LAST_MESSAGE_INDEX_MAX = 20;
+
+/** Longest cursor accepted — far past any this reader mints, whose id is capped at 256 characters. */
+export const LAST_MESSAGE_CURSOR_MAX_CHARS = 1024;
+
+/**
+ * What a caller may ask of the read beyond the terminal, once main has
+ * validated it (#12496). `cursor` and `messageIndex` never arrive together.
+ */
+export interface AgentLastMessageReadOptions {
+  maxBytes?: number;
+  messageIndex?: number;
+  cursor?: string;
+}
 
 /** Unanswered tool uses returned, newest kept. */
 export const LAST_MESSAGE_TOOL_USE_LIMIT = 8;

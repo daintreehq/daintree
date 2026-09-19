@@ -323,6 +323,7 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
       truncated: false,
       recordedAt: 1_767_225_600_000,
       stopReason: "end_turn",
+      nextCursor: null,
     },
     unansweredToolUses: [{ id: "toolu_b", name: "Bash" }],
     newerRecordsFollow: false,
@@ -398,6 +399,11 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
       OK_QUESTION_ONLY,
       { status: "unavailable", reason: "store-unknown" },
       { status: "unavailable", reason: "search-cap-reached" },
+      { status: "unavailable", reason: "message-not-found" },
+      {
+        ...OK_WITH_MESSAGE,
+        message: { ...OK_WITH_MESSAGE.message, truncated: true, nextCursor: "eyJ2IjoxfQ" },
+      },
     ]) {
       expect(validate(payload), JSON.stringify(validate.errors)).toBe(true);
     }
@@ -447,8 +453,27 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
         await writeFile(path.join(dir, `${sessionId}.jsonl`), `${lines.join("\n")}\n`);
         results.push(await read());
       }
+      // The widest page a caller may ask for, the page before it by cursor, and
+      // an earlier message that is not there (#12496).
+      const location = { projectsRoot, cwd, sessionId };
+      const widest = await readClaudeLastMessage(location, { maxBytes: 49152 });
+      const cursor = widest.status === "ok" ? widest.message?.nextCursor : null;
+      if (!cursor) throw new Error("expected the widest page to leave text before it");
+      results.push(
+        widest,
+        await readClaudeLastMessage(location, { cursor }),
+        await readClaudeLastMessage(location, { messageIndex: 1 })
+      );
 
-      expect(results.map((result) => result.status)).toEqual(["unavailable", "ok", "ok", "ok"]);
+      expect(results.map((result) => result.status)).toEqual([
+        "unavailable",
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+        "ok",
+        "unavailable",
+      ]);
       const validate = validator();
       for (const result of results) {
         const response = buildToolCallResult(result, { structuredContent: { ...result } });
@@ -469,6 +494,7 @@ describe("terminal.readLastMessageOwned (#12479)", () => {
       { status: "unavailable", reason: "subagent-not-found" },
       { ...OK_WITH_MESSAGE, extra: true },
       { ...OK_WITH_MESSAGE, message: { ...OK_WITH_MESSAGE.message, text: undefined } },
+      { ...OK_WITH_MESSAGE, message: { ...OK_WITH_MESSAGE.message, nextCursor: undefined } },
     ]) {
       expect(validate(payload)).toBe(false);
     }
