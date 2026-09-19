@@ -893,8 +893,10 @@ export function registerTerminalLifecycleHandlers(deps: HandlerDependencies): ()
             // the fail-closed `getPinnedWebContents` → `SessionBindingError`
             // primitive, which is exactly the structured tool error we want —
             // revoking the token here would degrade that into a 401 instead.
+            // Wired whatever the sender: an unpinned assistant bearer is still a
+            // pane token whose ownership should follow it (#12487).
+            wirePaneTokenResolvers(mcpServerService);
             if (Number.isInteger(ctx.webContentsId) && ctx.webContentsId > 0) {
-              wirePaneTokenResolvers(mcpServerService);
               mcpPaneConfigService.registerAssistantPaneBearer(
                 token,
                 ctx.webContentsId,

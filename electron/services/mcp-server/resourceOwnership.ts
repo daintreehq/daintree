@@ -203,11 +203,23 @@ export class ResourceOwnershipLedger {
    * else prunes it: a terminal the *user* closed leaves a stale entry, which
    * costs two short strings and fails honestly at the delegated action ("no
    * panel with id …") rather than pretending to close something.
+   *
+   * With `expected`, only that record is dropped. Every creation writes a new
+   * record, so a cleanup that finishes after the id was recorded again — by
+   * another session on the same bearer — leaves the newer resource's record
+   * alone.
    */
-  release(owner: string, kind: OwnedResourceKind, id: string): void {
+  release(
+    owner: string,
+    kind: OwnedResourceKind,
+    id: string,
+    expected?: OwnedResourceRecord
+  ): void {
     const key = resourceKey(kind, id);
     const owned = this.byOwner.get(owner);
-    if (owned?.delete(key) !== true) return;
+    if (owned === undefined) return;
+    if (expected !== undefined && owned.get(key) !== expected) return;
+    if (!owned.delete(key)) return;
     if (owned.size === 0) this.byOwner.delete(owner);
     if (this.ownerByResource.get(key) === owner) this.ownerByResource.delete(key);
   }

@@ -2597,6 +2597,9 @@ describe("terminal spawn handler - daintree-assistant MCP env injection (#10639)
 
     // Degrade to generic pane-token behaviour rather than pinning to nothing.
     expect(mockRegisterAssistantPaneBearer).not.toHaveBeenCalled();
+    // Ownership still follows the unpinned bearer (#12487).
+    expect(mockSetPaneOwnershipPrincipalResolver).toHaveBeenCalled();
+    expect(mockSetOwnershipPrincipalRevokedListener).toHaveBeenCalled();
     const spawnArgs = ptyClient.spawn.mock.calls[0][1];
     expect(spawnArgs.env?.DAINTREE_MCP_TOKEN).toBe("assistant-token");
     expect(spawnArgs.env?.DAINTREE_MCP_URL).toBe("http://127.0.0.1:45454/mcp");

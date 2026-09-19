@@ -107,6 +107,21 @@ describe("ResourceOwnershipLedger", () => {
     expect(ledger.owns("session-a", "terminal", "terminal-1")).toBe(true);
   });
 
+  it("release against an expected record leaves a newer record under the same id alone", () => {
+    const ledger = new ResourceOwnershipLedger();
+    const [checked] = ledger.record("owner", [{ kind: "terminal", id: "terminal-1" }]);
+    // The id is created again before the cleanup that checked the first
+    // record completes.
+    ledger.record("owner", [{ kind: "terminal", id: "terminal-1" }]);
+
+    ledger.release("owner", "terminal", "terminal-1", checked);
+    expect(ledger.owns("owner", "terminal", "terminal-1")).toBe(true);
+
+    const current = ledger.get("owner", "terminal", "terminal-1");
+    ledger.release("owner", "terminal", "terminal-1", current);
+    expect(ledger.owns("owner", "terminal", "terminal-1")).toBe(false);
+  });
+
   it("clearSession revokes one session's authority and frees its ids, leaving others alone", () => {
     const ledger = new ResourceOwnershipLedger();
     ledger.record("session-a", [

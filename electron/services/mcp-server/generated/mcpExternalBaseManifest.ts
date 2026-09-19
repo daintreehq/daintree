@@ -1825,7 +1825,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
         },
         owned: {
           description:
-            "MCP only: true keeps just the terminals this session created; false or omitted applies no ownership filter. A session that reconnected owns none.",
+            "MCP only: true keeps just the terminals you created; false or omitted applies no ownership filter. An agent pane keeps them across reconnects.",
           type: "boolean",
         },
         terminalId: {

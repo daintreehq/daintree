@@ -8607,6 +8607,79 @@ describe("session-scoped resource ownership (#11909)", () => {
       ).toBe(false);
     });
 
+    it("lists exactly what the owned tools accept, workspace check included", async () => {
+      const store = makeStore();
+      const dispatchAction = vi.fn().mockImplementation((actionId: string) =>
+        Promise.resolve(
+          actionId === "terminal.list"
+            ? {
+                result: {
+                  ok: true,
+                  result: { terminals: [{ id: "terminal-elsewhere" }, { id: "terminal-here" }] },
+                },
+              }
+            : { result: { ok: true, result: { closedIds: ["terminal-elsewhere"] } } }
+        )
+      );
+      const server = paneSession(store, "s-pane", dispatchAction);
+      store.sessionWorkspaceMap.set("s-pane", "ws-here");
+      const owner = store.resourceOwnership.ownerOf("s-pane");
+      store.resourceOwnership.record(owner, [{ kind: "terminal", id: "terminal-elsewhere" }], "ws-x");
+      store.resourceOwnership.record(owner, [{ kind: "terminal", id: "terminal-here" }], "ws-here");
+
+      const listed = await callTool(server, {
+        name: "terminal.list",
+        arguments: { owned: true },
+      });
+      const refused = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-elsewhere" },
+      });
+
+      expect(listedIds(listed)).toEqual(["terminal-here"]);
+      expect(refused.isError).toBe(true);
+      expect(errorText(refused)).toContain("RESOURCE_NOT_OWNED");
+    });
+
+    it("keeps a record the same bearer re-created while a close was in flight", async () => {
+      const store = makeStore();
+      let releaseClose: (() => void) | undefined;
+      const dispatchAction = vi.fn().mockImplementation((actionId: string) => {
+        if (actionId === "terminal.close") {
+          return new Promise((resolve) => {
+            releaseClose = () =>
+              resolve({ result: { ok: true, result: { closedIds: ["terminal-1"] } } });
+          });
+        }
+        return Promise.resolve({ result: { ok: true, result: { terminalId: "terminal-1" } } });
+      });
+      const first = paneSession(store, "s-pane-1", dispatchAction);
+      const second = paneSession(store, "s-pane-2", dispatchAction);
+      await callTool(first, { name: "terminal.new", arguments: {} });
+
+      const closing = callTool(first, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      for (let i = 0; i < 50 && !releaseClose; i++) await Promise.resolve();
+      // The other session on this bearer creates a panel under the same id
+      // before the close reports back.
+      await callTool(second, {
+        name: "terminal.new",
+        arguments: { spawnedBy: { kind: "user" } },
+      });
+      releaseClose!();
+      await closing;
+
+      expect(
+        store.resourceOwnership.owns(
+          store.resourceOwnership.ownerOf("s-pane-2"),
+          "terminal",
+          "terminal-1"
+        )
+      ).toBe(true);
+    });
+
     it("still drops an api-key session's creation that completes after it ended", async () => {
       const store = makeStore();
       const held = heldCreation();
