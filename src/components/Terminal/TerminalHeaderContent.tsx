@@ -11,6 +11,7 @@ import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
 import { TerminalDrivenByBadge } from "./TerminalHandOver";
+import { TerminalWatchChip } from "./TerminalWatchChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 export interface TerminalHeaderContentProps {
@@ -265,6 +266,11 @@ export function TerminalHeaderContent({
           so it sits ahead of the ambient glyph and telemetry that a narrow
           pane's header clips first (#12374). */}
       <SubagentChip terminalId={id} />
+
+      {/* Terminal watches (#12491) — self-gating; shown only while an agent in
+          this pane holds watches that may wake it, and the one place the user
+          can stop them. */}
+      {hasPtyKind && <TerminalWatchChip terminalId={id} />}
 
       {/* Input locked indicator — bare ambient glyph. */}
       {isInputLocked && (

@@ -112,6 +112,7 @@ import type {
   TrimStateResult,
   TrimStateScope,
   TrimStateSummary,
+  TerminalSubmitGuard,
 } from "../../shared/types/pty-host.js";
 import type { TerminalSnapshot } from "./PtyManager.js";
 import type { AgentStateChangeTrigger } from "../types/index.js";
@@ -147,6 +148,8 @@ interface TerminalInfoResponse {
   /** Last visible-content change, ignoring spinner and timer redraws (#12428). */
   lastOutputChangeAt?: number;
   lastInputTime?: number;
+  /** Last input that could have put text in the composer, ignoring xterm's own reports (#12491). */
+  lastTypedInputAt?: number;
   lastOutputTime?: number;
   spawnedAt: number;
   isTrashed?: boolean;
@@ -1704,8 +1707,21 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "write", id, data, traceId });
   }
 
-  submit(id: string, text: string, submissionToken?: string, handbackCode?: string): void {
-    this.shardForTerminal(id).send({ type: "submit", id, text, submissionToken, handbackCode });
+  submit(
+    id: string,
+    text: string,
+    submissionToken?: string,
+    handbackCode?: string,
+    guard?: TerminalSubmitGuard
+  ): void {
+    this.shardForTerminal(id).send({
+      type: "submit",
+      id,
+      text,
+      submissionToken,
+      handbackCode,
+      ...(guard !== undefined ? { guard } : {}),
+    });
   }
 
   /**

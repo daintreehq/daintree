@@ -129,6 +129,18 @@ export type PaneWorkspaceBindingResolver = (token: string) => PaneWorkspaceBindi
  */
 export type PaneOwnershipPrincipalResolver = (token: string) => string | null;
 /**
+ * Resolver consulted at MCP handshake for the terminal a per-pane bearer was
+ * minted for (#12491): the pane a terminal watch may wake. Null for every
+ * other bearer.
+ */
+export type PaneTerminalResolver = (token: string) => string | null;
+/**
+ * The terminal a help session is bound to (#12491), read when a watch tool is
+ * called rather than at handshake: the binding lands when the PTY spawns and
+ * goes when it is displaced.
+ */
+export type HelpSessionTerminalResolver = (helpSessionId: string) => string | null;
+/**
  * What an agent pane's workspace-bound dispatch carries beyond an external
  * session's (#12486). Every field is optional, so an external bound session
  * passes nothing and dispatches exactly as it always has.

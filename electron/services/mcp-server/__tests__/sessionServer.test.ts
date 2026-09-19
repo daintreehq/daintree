@@ -798,6 +798,127 @@ describe("skills.search / skills.load short-circuit (#10892)", () => {
   });
 });
 
+describe("terminal watch short-circuit (#12491)", () => {
+  const OWN_PANE = { key: "pane\u0000principal-1", terminalId: "own-pane" };
+
+  function watchDeps(overrides?: Partial<SessionServerDeps>) {
+    const terminalWatch = {
+      register: vi.fn().mockResolvedValue({
+        watchId: "w_12345678",
+        terminalIds: ["t-a"],
+        conditions: ["state"],
+        maxDeliveries: 25,
+      }),
+      list: vi.fn(() => ({ watches: [], pendingEvents: 0, delivery: { status: "idle" as const } })),
+      readEvents: vi.fn(() => ({ events: [], droppedEvents: 0, remainingEvents: 0 })),
+      cancel: vi.fn((_pane: unknown, watchId: string) => ({ watchId, cancelled: false })),
+    };
+    const dispatchAction = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: fakeSessionStore("action"),
+      terminalWatch,
+      resolveOwnPane: () => OWN_PANE,
+      dispatchAction,
+      ...overrides,
+    });
+    return { deps, terminalWatch, dispatchAction };
+  }
+
+  it("registers a watch in main for the caller's own pane, never through a renderer", async () => {
+    const { deps, terminalWatch, dispatchAction } = watchDeps();
+    const server = createSessionServer("session-watch", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.registerWatch",
+      arguments: { terminalIds: ["t-a"], conditions: ["state"] },
+    });
+
+    expect(result.isError).not.toBe(true);
+    expect(terminalWatch.register).toHaveBeenCalledWith(OWN_PANE, {
+      terminalIds: ["t-a"],
+      conditions: ["state"],
+    });
+    expect(result.structuredContent).toMatchObject({ watchId: "w_12345678" });
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ toolId: "terminal.registerWatch" })
+    );
+  });
+
+  it.each([
+    ["terminal.listWatches", {}, "list"],
+    ["terminal.getWatchEvents", { clear: false }, "readEvents"],
+    ["terminal.cancelWatch", { watchId: "w_1" }, "cancel"],
+  ] as const)("routes %s to the watch service", async (name, args, handler) => {
+    const { deps, terminalWatch } = watchDeps();
+    const server = createSessionServer("session-watch-route", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name, arguments: { ...args } });
+
+    expect(result.isError).not.toBe(true);
+    expect(terminalWatch[handler]).toHaveBeenCalledTimes(1);
+    expect(terminalWatch[handler].mock.calls[0]?.[0]).toEqual(OWN_PANE);
+  });
+
+  it("refuses a connection with no pane of its own", async () => {
+    const { deps, terminalWatch } = watchDeps({ resolveOwnPane: () => null });
+    const server = createSessionServer("session-watch-no-pane", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.registerWatch",
+      arguments: { terminalIds: ["t-a"] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("WATCH_NOT_ELIGIBLE");
+    expect(terminalWatch.register).not.toHaveBeenCalled();
+  });
+
+  it("keeps the tools from an api-key session altogether", async () => {
+    const { deps, terminalWatch } = watchDeps({ sessionStore: fakeSessionStore("external") });
+    const server = createSessionServer("session-watch-external", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, { name: "terminal.listWatches", arguments: {} });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe(TIER_NOT_PERMITTED_CODE);
+    expect(terminalWatch.list).not.toHaveBeenCalled();
+  });
+
+  it("returns a refusal under its own code", async () => {
+    const { TerminalWatchError } = await import("../terminalWatch.js");
+    const { deps } = watchDeps();
+    (deps.terminalWatch!.register as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new TerminalWatchError("WATCH_WAKE_DISABLED", "Turned off.")
+    );
+    const server = createSessionServer("session-watch-disabled", deps);
+    await server.connect(makeMockTransport());
+
+    const result = await callTool(server, {
+      name: "terminal.registerWatch",
+      arguments: { terminalIds: ["t-a"] },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(toolErrorPayload(result).code).toBe("WATCH_WAKE_DISABLED");
+  });
+
+  it("rejects malformed arguments before the service sees them", async () => {
+    const { deps, terminalWatch } = watchDeps();
+    const server = createSessionServer("session-watch-invalid", deps);
+    await server.connect(makeMockTransport());
+
+    await expect(
+      callTool(server, { name: "terminal.registerWatch", arguments: { terminalIds: [] } })
+    ).rejects.toThrow(/terminal\.registerWatch/);
+    expect(terminalWatch.register).not.toHaveBeenCalled();
+  });
+});
+
 describe("project.runCheck short-circuit (#11548)", () => {
   const passingResult = {
     projectId: "proj-1",
@@ -5607,6 +5728,11 @@ describe("workspace-bound external sessions (#11789)", () => {
           handler: "handleTerminalReadLastMessageOwned",
           ownsTerminal: "t-1",
         },
+        // Executed through the injected watch service rather than a named dep.
+        "terminal.registerWatch": { args: { terminalIds: ["t-1"] } },
+        "terminal.listWatches": { args: {} },
+        "terminal.getWatchEvents": { args: {} },
+        "terminal.cancelWatch": { args: { watchId: "w_00000000" } },
       };
 
       function viewlessDepsFor(name: string): SessionServerDeps {

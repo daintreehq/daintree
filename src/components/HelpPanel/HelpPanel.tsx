@@ -37,6 +37,7 @@ import { HelpPanelBanners } from "./HelpPanelBanners";
 import { HelpPanelVersionGate } from "./HelpPanelVersionGate";
 import { HelpLaunchingState } from "./HelpLaunchingState";
 import { McpActivityStrip } from "./McpActivityStrip";
+import { TerminalWatchChip } from "@/components/Terminal/TerminalWatchChip";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { TurnOutcomePip } from "./TurnOutcomePip";
 import { FigureRail } from "./FigureRail";
@@ -1719,6 +1720,9 @@ export function HelpPanel({
           <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
             <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
+            {/* This lane's terminal watches (#12491): self-gating, and where the
+                user stops Daintree from waking the assistant. */}
+            {terminalId && <TerminalWatchChip terminalId={terminalId} />}
           </span>
           <span className="flex items-center gap-2 min-w-0 shrink-0 max-w-[70%]">
             {pinnedContext &&

@@ -31,6 +31,7 @@ vi.mock("@/components/icons", () => {
   const stub = () => null;
   return {
     McpServerIcon: stub,
+    Radar: stub,
     DaintreeIcon: stub,
     SpinnerCircle: stub,
     HollowCircle: stub,
@@ -105,6 +106,8 @@ function createMcpApi(overrides: Partial<typeof window.electron.mcpServer> = {})
     listActiveBearers: vi.fn().mockResolvedValue([]),
     listHelpSessionBearers: vi.fn().mockResolvedValue([]),
     disconnectBearer: vi.fn().mockResolvedValue({ tokenHash: "", disconnected: true }),
+    getPaneWakeEnabled: vi.fn().mockResolvedValue(false),
+    setPaneWakeEnabled: vi.fn().mockImplementation(async (enabled: boolean) => enabled),
     ...overrides,
   };
 }

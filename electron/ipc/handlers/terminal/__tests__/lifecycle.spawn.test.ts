@@ -179,6 +179,8 @@ const {
   mockRevokeOwnershipPrincipal,
   mockGetOwnershipPrincipalForToken,
   mockSetOwnershipPrincipalRevokedListener,
+  mockSetPaneTerminalResolver,
+  mockGetPaneIdForToken,
   mockEnsureReady,
 } = vi.hoisted(() => ({
   mockValidateToken: vi.fn<(token: string) => "workbench" | "action" | "system" | false>(),
@@ -198,6 +200,9 @@ const {
   mockGetOwnershipPrincipalForToken: vi.fn<(token: string) => string | null>(),
   mockSetOwnershipPrincipalRevokedListener:
     vi.fn<(listener: ((principal: string) => void) | null) => void>(),
+  mockSetPaneTerminalResolver:
+    vi.fn<(resolver: ((token: string) => string | null) | null) => void>(),
+  mockGetPaneIdForToken: vi.fn<(token: string) => string | null>(),
   mockEnsureReady: vi.fn<() => Promise<boolean>>(),
 }));
 
@@ -268,6 +273,8 @@ vi.mock("../../../../services/McpServerService.js", () => ({
       mockSetPaneWorkspaceBindingResolver(...args),
     setPaneOwnershipPrincipalResolver: (resolver: ((token: string) => string | null) | null) =>
       mockSetPaneOwnershipPrincipalResolver(resolver),
+    setPaneTerminalResolver: (resolver: ((token: string) => string | null) | null) =>
+      mockSetPaneTerminalResolver(resolver),
     revokeOwnershipPrincipal: (principal: string) => mockRevokeOwnershipPrincipal(principal),
   },
 }));
@@ -281,6 +288,7 @@ vi.mock("../../../../services/McpPaneConfigService.js", () => ({
     registerPaneWorkspaceBinding: (token: string, binding: unknown) =>
       mockRegisterPaneWorkspaceBinding(token, binding),
     getOwnershipPrincipalForToken: (token: string) => mockGetOwnershipPrincipalForToken(token),
+    getPaneIdForToken: (token: string) => mockGetPaneIdForToken(token),
     setOwnershipPrincipalRevokedListener: (listener: ((principal: string) => void) | null) =>
       mockSetOwnershipPrincipalRevokedListener(listener),
   },
@@ -2878,6 +2886,21 @@ describe("terminal spawn handler - Claude pane launch-workspace binding (#12486)
     expect(mockGetOwnershipPrincipalForToken).toHaveBeenCalledWith("pane-token");
     listener!("principal-1");
     expect(mockRevokeOwnershipPrincipal).toHaveBeenCalledWith("principal-1");
+  });
+
+  it("wires the pane bearer's own terminal before the PTY starts (#12491)", async () => {
+    await launchClaude({ sender: { id: 42 }, projectId: "p1" });
+
+    // The pane a terminal watch may wake is resolved from the bearer at
+    // handshake, so it has to be reachable before the CLI can connect.
+    const resolver = mockSetPaneTerminalResolver.mock.calls.at(-1)?.[0];
+    expect(resolver).toBeTypeOf("function");
+    expect(mockSetPaneTerminalResolver.mock.invocationCallOrder[0]).toBeLessThan(
+      ptyClient.spawn.mock.invocationCallOrder[0]!
+    );
+    mockGetPaneIdForToken.mockReturnValueOnce("pane-7");
+    expect(resolver!("pane-token")).toBe("pane-7");
+    expect(mockGetPaneIdForToken).toHaveBeenCalledWith("pane-token");
   });
 
   it("binds to the pane's own project even when another project is globally current", async () => {

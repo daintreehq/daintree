@@ -13,7 +13,7 @@ import {
   ChevronRight,
   Sparkles,
 } from "lucide-react";
-import { McpServerIcon } from "@/components/icons";
+import { McpServerIcon, Radar } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
@@ -106,6 +106,7 @@ export function McpServerSettingsTab() {
   const [turnRecords, setTurnRecords] = useState<AssistantTurnRecord[]>([]);
   const [auditStats, setAuditStats] = useState<McpAuditStats | null>(null);
   const [auditEnabled, setAuditEnabled] = useState(true);
+  const [paneWakeEnabled, setPaneWakeEnabled] = useState(false);
   const [auditMaxRecords, setAuditMaxRecords] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS);
   const [maxRecordsInput, setMaxRecordsInput] = useState(MCP_AUDIT_DEFAULT_MAX_RECORDS.toString());
   const [auditLoading, setAuditLoading] = useState(true);
@@ -464,6 +465,33 @@ export function McpServerSettingsTab() {
       }
       setError(formatErrorMessage(err, "Failed to copy API key"));
       logError("Failed to copy MCP API key", err);
+    }
+  };
+
+  // Loaded apart from the status batch so a failure here costs only this
+  // toggle, which stays at its safe default of off.
+  useEffect(() => {
+    let cancelled = false;
+    window.electron.mcpServer
+      .getPaneWakeEnabled()
+      .then((enabled) => {
+        if (!cancelled) setPaneWakeEnabled(enabled);
+      })
+      .catch((err) => {
+        logError("Failed to load MCP pane wake setting", err);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handlePaneWakeToggle = async () => {
+    try {
+      setError(null);
+      setPaneWakeEnabled(await window.electron.mcpServer.setPaneWakeEnabled(!paneWakeEnabled));
+    } catch (err) {
+      setError(formatErrorMessage(err, "Failed to update pane wakes"));
+      logError("Failed to toggle MCP pane wakes", err);
     }
   };
 
@@ -939,6 +967,24 @@ export function McpServerSettingsTab() {
                 </div>
               </div>
             )}
+          </SettingsSection>
+
+          {/* Pane wakes (#12491) */}
+          <SettingsSection
+            icon={Radar}
+            title="Pane wakes"
+            description="An agent supervising other terminals can ask to hear when they change instead of polling. Daintree then types one line into that agent's own prompt once it's idle there — never into an approval, a question or an error, and never over your typing."
+          >
+            <div className="contents">
+              <SettingsSwitchCard
+                variant="compact"
+                title="Wake agents from terminal watches"
+                subtitle="A pane that may be woken shows a radar chip; use it to stop the watches"
+                isEnabled={paneWakeEnabled}
+                onChange={handlePaneWakeToggle}
+                ariaLabel="Wake agents from terminal watches"
+              />
+            </div>
           </SettingsSection>
 
           {/* Audit Log */}

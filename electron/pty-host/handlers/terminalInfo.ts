@@ -67,6 +67,7 @@ export function mapTerminalInfo(
     lastStateChange: t.lastStateChange,
     lastOutputChangeAt: t.lastOutputChangeAt,
     lastInputTime: t.lastInputTime,
+    lastTypedInputAt: t.lastTypedInputAt,
     lastOutputTime: t.lastOutputTime,
     spawnedAt: t.spawnedAt,
     isTrashed: ctx.ptyManager.isInTrash(t.id),

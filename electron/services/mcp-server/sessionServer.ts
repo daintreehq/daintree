@@ -117,6 +117,18 @@ import {
   type OwnedResourceRecord,
 } from "./resourceOwnership.js";
 import type { TerminalAdoptionRecord } from "./terminalAdoption.js";
+import {
+  TERMINAL_CANCEL_WATCH_TOOL,
+  TERMINAL_GET_WATCH_EVENTS_TOOL,
+  TERMINAL_LIST_WATCHES_TOOL,
+  TERMINAL_WATCH_TOOL,
+  TERMINAL_WATCH_TOOLS,
+  TerminalWatchError,
+  WATCH_NOT_ELIGIBLE,
+  runTerminalWatchTool,
+  type OwnPane,
+  type TerminalWatchHandlers,
+} from "./terminalWatch.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -172,6 +184,12 @@ export const VIEWLESS_MAIN_PROCESS_TOOLS: ReadonlySet<string> = new Set([
   // agent wrote and dispatches nothing, so a closed workspace is no reason to
   // refuse it.
   TERMINAL_READ_LAST_MESSAGE_OWNED_TOOL,
+  // Terminal watches (#12491) live in main and read the pty-host. A pane whose
+  // project view was evicted still has to be able to read what woke it.
+  TERMINAL_WATCH_TOOL,
+  TERMINAL_LIST_WATCHES_TOOL,
+  TERMINAL_GET_WATCH_EVENTS_TOOL,
+  TERMINAL_CANCEL_WATCH_TOOL,
 ]);
 /**
  * The main-process executors an owned tool can name. Kept apart from the rest
@@ -647,6 +665,17 @@ export interface SessionServerDeps extends OwnedMainExecutors {
    * session's creation while the original shell keeps running under it.
    */
   isTerminalIdInUse: (terminalId: string) => boolean;
+  /**
+   * Terminal watches (#12491). Optional so fixtures that never exercise them
+   * need not stub them; absent, every watch tool answers not-eligible.
+   */
+  terminalWatch?: TerminalWatchHandlers;
+  /**
+   * The caller's own pane, from its credential: a pane bearer's terminal, or
+   * the terminal a help session is bound to. Null for everything else — an
+   * api-key client has no pane to wake.
+   */
+  resolveOwnPane?: () => OwnPane | null;
   appendAuditRecord: (input: {
     toolId: string;
     sessionId: string;
@@ -835,6 +864,8 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyToolCallSettled,
     notifyDisplayImage,
     workspaceBinding,
+    terminalWatch,
+    resolveOwnPane,
   } = deps;
 
   /**
@@ -2125,6 +2156,44 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
               structuredContent: result as unknown as Record<string, unknown>,
             });
           } catch (err) {
+            outcome = { kind: "throw", error: err };
+            if (err instanceof McpError) throw err;
+            return buildToolError({
+              code: EXECUTION_ERROR_CODE,
+              message: formatErrorMessage(err, `${actionId} failed`),
+            });
+          }
+        }
+
+        // Short-circuit: terminal watches (#12491) are session state in main —
+        // which pane a call comes from is known only from its credential, and
+        // the watch it registers outlives the call. Never `danger: "confirm"`;
+        // registering types nothing, and the wake it may later cause is gated
+        // by the user's setting. Audit + strip-settle unify via the shared
+        // `finally`.
+        if (TERMINAL_WATCH_TOOLS.has(actionId)) {
+          emitToolCallStarted(false);
+          const refuse = (code: string, message: string) => {
+            outcome = { kind: "result", value: { ok: false, error: { code, message } } };
+            return buildToolError({ code, message });
+          };
+          // An api-key client has no pane of its own. The external allowlist
+          // already withholds these tools; this keeps it true if that drifts.
+          const pane = tier === "external" ? null : (resolveOwnPane?.() ?? null);
+          if (pane === null || terminalWatch === undefined) {
+            return refuse(
+              WATCH_NOT_ELIGIBLE,
+              "Terminal watches wake the caller's own pane, and this connection has none: only an agent pane or an assistant session bound to its terminal can hold one."
+            );
+          }
+          try {
+            const result = await runTerminalWatchTool(actionId, args, pane, terminalWatch);
+            outcome = { kind: "result", value: { ok: true, result } };
+            return buildToolCallResult(result, {
+              structuredContent: result as unknown as Record<string, unknown>,
+            });
+          } catch (err) {
+            if (err instanceof TerminalWatchError) return refuse(err.code, err.message);
             outcome = { kind: "throw", error: err };
             if (err instanceof McpError) throw err;
             return buildToolError({

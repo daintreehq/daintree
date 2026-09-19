@@ -750,6 +750,13 @@ export const CHANNELS = {
    * key rotation (revoke-all) stays a separate action (#8778).
    */
   MCP_SERVER_DISCONNECT_BEARER: "mcp-server:disconnect-bearer",
+  /** Whether terminal watches may wake the watching pane (#12491). */
+  MCP_SERVER_GET_PANE_WAKE_ENABLED: "mcp-server:get-pane-wake-enabled",
+  MCP_SERVER_SET_PANE_WAKE_ENABLED: "mcp-server:set-pane-wake-enabled",
+  /** One pane's terminal-watch state, for its chrome to hydrate on mount (#12491). */
+  MCP_SERVER_GET_PANE_WATCH_STATE: "mcp-server:get-pane-watch-state",
+  /** The pane chrome's "stop": every watch the pane holds goes (#12491). */
+  MCP_SERVER_STOP_PANE_WATCHES: "mcp-server:stop-pane-watches",
   /**
    * Hand a running terminal to an orchestrating agent pane, or take it back
    * (#12490). Renderer-only by construction: no action or MCP tool reaches

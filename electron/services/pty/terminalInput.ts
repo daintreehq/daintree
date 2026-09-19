@@ -80,3 +80,21 @@ export function isBracketedPaste(data: string): boolean {
 export function isFocusReport(data: string): boolean {
   return data === "\x1b[I" || data === "\x1b[O";
 }
+
+// Sequences xterm writes on its own behalf: focus and mouse reports, and the
+// replies to cursor-position, device-attribute, mode, window, OSC and DCS
+// queries. None of them puts text in a composer.
+const TERMINAL_REPORT_SEQUENCE =
+  // eslint-disable-next-line no-control-regex -- matching escape sequences is the point
+  /\x1b\[(?:[IO]|M[\s\S]{3}|<\d+;\d+;\d+[Mm]|\d+;\d+R|[?>][\d;]*c|\??[\d;]*\$y|[\d;]*t)|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1bP[^\x1b]*\x1b\\/g;
+
+/**
+ * True when `data` consists only of terminal-generated reports (#12491).
+ *
+ * Deliberately narrow: anything it does not recognise counts as typing, so an
+ * unfamiliar key sequence errs toward "the composer may hold something".
+ */
+export function isTerminalReportOnly(data: string): boolean {
+  if (data.length === 0) return true;
+  return data.replace(TERMINAL_REPORT_SEQUENCE, "").length === 0;
+}

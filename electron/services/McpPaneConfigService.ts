@@ -497,6 +497,16 @@ export class McpPaneConfigService {
   }
 
   /**
+   * Resolver consulted at MCP handshake for the terminal a pane bearer was
+   * minted for (#12491) — the pane its terminal watches may wake. Null once
+   * the token is revoked.
+   */
+  getPaneIdForToken(token: string): string | null {
+    if (!token) return null;
+    return this.tokens.get(token)?.paneId ?? null;
+  }
+
+  /**
    * Told the principal of every bearer {@link revokePaneConfig} revokes, in
    * the same synchronous step, so the MCP server drops its ownership records
    * before anything can be dispatched under them.

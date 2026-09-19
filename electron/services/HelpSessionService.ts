@@ -672,6 +672,18 @@ export class HelpSessionService {
   }
 
   /**
+   * The terminal an unrevoked help session is bound to, or null (#12491). The
+   * MCP server reads this when a terminal-watch tool is called, so the pane a
+   * watch may wake is always the PTY currently serving the session.
+   */
+  getTerminalIdForSession(sessionId: string): string | null {
+    if (!sessionId) return null;
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return null;
+    return this.terminalBySessionId.get(sessionId) ?? null;
+  }
+
+  /**
    * Renderer-safe sibling of `getActionContextForToken`, keyed on the public
    * `sessionId` (persisted in `helpPanelStore`) instead of the bearer token.
    * The HelpPanel footer uses this to surface the pinned worktree/terminal
@@ -1982,6 +1994,9 @@ export class HelpSessionService {
     );
     mcpServerService.setHelpSessionIdResolver((token) => this.getSessionIdForToken(token));
     mcpServerService.setSessionIdResolver((terminalId) => this.getSessionIdForTerminal(terminalId));
+    mcpServerService.setHelpSessionTerminalResolver((sessionId) =>
+      this.getTerminalIdForSession(sessionId)
+    );
     // Eager MCP-session teardown on revoke (#9151). Idempotent re-set.
     this.setOnMcpSessionRevoked((token) => mcpServerService.disconnectHelpBearer(token));
     if (!mcpServerService.isEnabled()) {

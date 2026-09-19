@@ -22,6 +22,8 @@ import type {
   PaneWorkspaceBinding,
   PaneWorkspaceBindingResolver,
   PaneOwnershipPrincipalResolver,
+  PaneTerminalResolver,
+  HelpSessionTerminalResolver,
   WorkspaceDispatchOptions,
   McpTier,
   McpSessionOrigin,
@@ -57,6 +59,7 @@ import { computeMcpAuditSeverity } from "../../../shared/types/ipc/mcpServer.js"
 import { buildMcpClientConfig } from "../../../shared/config/mcpClientConfigs.js";
 import { isGenericNativeGrantEligible } from "../../../shared/config/nativeGrantUsePolicies.js";
 import type { TurnOutcomeService } from "./turnOutcomeLog.js";
+import { helpWatchKey, paneWatchKey } from "./terminalWatch.js";
 import type { AbusePolicy } from "./abusePolicy.js";
 import {
   DEFAULT_PORT,
@@ -174,6 +177,8 @@ export interface HttpLifecycleDeps {
   ) => Promise<import("../../../shared/types/terminalStatus.js").TerminalStatusResult>;
   handleTerminalReadLastMessageOwned: import("./sessionServer.js").OwnedMainExecutors["handleTerminalReadLastMessageOwned"];
   isTerminalIdInUse: (terminalId: string) => boolean;
+  /** Terminal watches (#12491). Absent, every watch tool answers not-eligible. */
+  terminalWatch?: import("./terminalWatch.js").TerminalWatchHandlers;
   getCachedManifest: () => import("../../../shared/types/actions.js").ActionManifestEntry[] | null;
   // Per-WebContents manifest cache read for pinned help sessions (#9887). Lets
   // the pinned `getCachedManifest` closure return the session's own window's
@@ -308,6 +313,8 @@ export class HttpLifecycle {
   private assistantPaneActionContextResolver: AssistantPaneActionContextResolver | null = null;
   private paneWorkspaceBindingResolver: PaneWorkspaceBindingResolver | null = null;
   private paneOwnershipPrincipalResolver: PaneOwnershipPrincipalResolver | null = null;
+  private paneTerminalResolver: PaneTerminalResolver | null = null;
+  private helpSessionTerminalResolver: HelpSessionTerminalResolver | null = null;
   private lastError: string | null = null;
   private intentionalStop = false;
   private restartAttempts = 0;
@@ -410,6 +417,14 @@ export class HttpLifecycle {
     this.paneOwnershipPrincipalResolver = resolver;
   }
 
+  setPaneTerminalResolver(resolver: PaneTerminalResolver | null): void {
+    this.paneTerminalResolver = resolver;
+  }
+
+  setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
+    this.helpSessionTerminalResolver = resolver;
+  }
+
   /**
    * Parses a Bearer header and asks the help-session resolver — then the
    * assistant-pane resolver (#10647) — which renderer minted it, keeping *which*
@@ -471,6 +486,22 @@ export class HttpLifecycle {
     const token = extractBearerToken(authHeader);
     if (!token) return null;
     return this.paneOwnershipPrincipalResolver?.(token) ?? null;
+  }
+
+  /**
+   * The pane a pane bearer's watches may wake (#12491): its own terminal,
+   * keyed by the ownership principal so a reconnect finds the same watches.
+   * Null for every other bearer, and for a pane bearer without a principal.
+   */
+  private resolveOwnPane(
+    authHeader: string,
+    ownershipPrincipal: string | null
+  ): import("./terminalWatch.js").OwnPane | null {
+    if (ownershipPrincipal === null) return null;
+    const token = extractBearerToken(authHeader);
+    if (!token) return null;
+    const terminalId = this.paneTerminalResolver?.(token) ?? null;
+    return terminalId === null ? null : { key: paneWatchKey(ownershipPrincipal), terminalId };
   }
 
   /**
@@ -1350,7 +1381,8 @@ export class HttpLifecycle {
       const deps = this.buildSessionServerDeps(
         sessionId,
         workspaceBinding ?? undefined,
-        paneBinding ?? undefined
+        paneBinding ?? undefined,
+        this.resolveOwnPane(authHeader, ownershipPrincipal)
       );
       const server = createSessionServer(sessionId, deps);
 
@@ -1590,7 +1622,8 @@ export class HttpLifecycle {
     const deps = this.buildSessionServerDeps(
       newSessionId,
       workspaceBinding ?? undefined,
-      paneBinding ?? undefined
+      paneBinding ?? undefined,
+      this.resolveOwnPane(authHeader, ownershipPrincipal)
     );
     const server = createSessionServer(newSessionId, deps);
     const allowedHosts = [`127.0.0.1:${this.port}`, `localhost:${this.port}`];
@@ -1743,7 +1776,8 @@ export class HttpLifecycle {
   private buildSessionServerDeps(
     sessionId: string,
     workspaceBinding?: McpWorkspaceBinding,
-    paneBinding?: PaneWorkspaceBinding
+    paneBinding?: PaneWorkspaceBinding,
+    ownPane?: import("./terminalWatch.js").OwnPane | null
   ): import("./sessionServer.js").SessionServerDeps {
     const pinnedDispatch = this.deps.dispatchActionForWebContents;
     const pinnedManifest = this.deps.requestManifestForWebContents;
@@ -2087,6 +2121,16 @@ export class HttpLifecycle {
       handleTerminalGetStatusViewless: this.deps.handleTerminalGetStatusViewless,
       handleTerminalReadLastMessageOwned: this.deps.handleTerminalReadLastMessageOwned,
       isTerminalIdInUse: this.deps.isTerminalIdInUse,
+      ...(this.deps.terminalWatch !== undefined ? { terminalWatch: this.deps.terminalWatch } : {}),
+      // A pane bearer's own terminal is fixed for the bearer's life and was
+      // resolved at handshake; a help lane's is read per call, because its
+      // binding follows the PTY that currently serves it.
+      resolveOwnPane: () => {
+        if (ownPane) return ownPane;
+        if (helpSessionId === null) return null;
+        const terminalId = this.helpSessionTerminalResolver?.(helpSessionId) ?? null;
+        return terminalId === null ? null : { key: helpWatchKey(helpSessionId), terminalId };
+      },
       appendAuditRecord: (input) => {
         // Scrub structural secrets BEFORE the truncation step inside
         // `summarizeMcpArgs` — running the scrubber after truncation would

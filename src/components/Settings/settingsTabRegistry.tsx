@@ -1482,6 +1482,15 @@ export const SETTINGS_REGISTRY = [
         keywords: ["mcp", "api", "key", "auth", "token", "bearer", "security", "password"],
         requiresEnabled: MCP_REQUIRES_ENABLED,
       },
+      {
+        id: "mcp-server-pane-wakes",
+        section: "Pane wakes",
+        title: "Wake agents from terminal watches",
+        description:
+          "Let an agent that watches other terminals be woken with one line typed into its own idle prompt, instead of polling",
+        keywords: ["mcp", "watch", "wake", "orchestrator", "notify", "poll", "idle", "agent"],
+        requiresEnabled: MCP_REQUIRES_ENABLED,
+      },
     ],
   } satisfies LazySettingsTabEntry,
 

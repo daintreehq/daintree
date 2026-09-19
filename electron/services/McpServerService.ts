@@ -39,6 +39,9 @@ import { handleSkillsSearch, handleSkillsLoad } from "./mcp-server/skills.js";
 import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { handleTerminalGetStatusViewless } from "./mcp-server/terminalStatus.js";
 import { handleTerminalReadLastMessageOwned } from "./mcp-server/terminalLastMessage.js";
+import { TerminalWatchService, paneWatchKey } from "./mcp-server/terminalWatch.js";
+import type { PaneWatchState } from "../../shared/types/terminalWatch.js";
+import { broadcastToProjectRenderers } from "../ipc/utils.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
@@ -57,6 +60,8 @@ import type {
   AssistantPaneActionContextResolver,
   PaneWorkspaceBindingResolver,
   PaneOwnershipPrincipalResolver,
+  PaneTerminalResolver,
+  HelpSessionTerminalResolver,
 } from "./mcp-server/shared.js";
 import type { ActionManifestEntry } from "../../shared/types/actions.js";
 import { events } from "./events.js";
@@ -90,6 +95,8 @@ export class McpServerService {
   private readonly auditService: AuditService;
   private readonly turnOutcomeService: TurnOutcomeService;
   private readonly httpLifecycle: HttpLifecycle;
+  /** Terminal watches and the pane wakes they cause (#12491). */
+  private readonly terminalWatch: TerminalWatchService;
   /**
    * Resolver injected by `HelpSessionService` after construction. Returns
    * the help-session id bound to a terminal id, or null when the terminal
@@ -230,6 +237,23 @@ export class McpServerService {
       this.viewLeases
     );
 
+    // Subscribes to the bus and the pty-host only while a pane holds a watch.
+    this.terminalWatch = new TerminalWatchService({
+      getPtyClient: () => getPtyClient(),
+      onStateChanged: (listener) =>
+        events.on("agent:state-changed", (payload) => listener(payload)),
+      onKilled: (listener) =>
+        events.on("agent:killed", (payload) => {
+          if (payload.terminalId) listener(payload.terminalId);
+        }),
+      isEnabled: () => this.isEnabled() && this.isPaneWakeEnabled(),
+      publish: (projectId, state) =>
+        broadcastToProjectRenderers(projectId, CHANNELS.EVENTS_PUSH, {
+          name: "terminal:watch-state",
+          payload: state,
+        }),
+    });
+
     this.httpLifecycle = new HttpLifecycle({
       sessionStore: this.sessionStore,
       auditService: this.auditService,
@@ -307,6 +331,7 @@ export class McpServerService {
       // The pty-host's own spawn tracking spans every view, which is what a
       // collision check needs: a panel store only knows its own (#12407).
       isTerminalIdInUse: (terminalId) => getPtyClient()?.hasTerminal(terminalId) ?? false,
+      terminalWatch: this.terminalWatch,
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
       getCachedManifestForWorkspace: (workspaceId, preferredWebContentsId) =>
@@ -402,15 +427,26 @@ export class McpServerService {
     this.httpLifecycle.setPaneOwnershipPrincipalResolver(resolver);
   }
 
+  setPaneTerminalResolver(resolver: PaneTerminalResolver | null): void {
+    this.httpLifecycle.setPaneTerminalResolver(resolver);
+  }
+
+  setHelpSessionTerminalResolver(resolver: HelpSessionTerminalResolver | null): void {
+    this.httpLifecycle.setHelpSessionTerminalResolver(resolver);
+  }
+
   /**
-   * Drop every ownership record a revoked pane bearer held (#12487). Called by
-   * `McpPaneConfigService` in the same step as the revocation itself.
+   * Drop every ownership record a revoked pane bearer held (#12487), the
+   * hand-overs it held (#12490), and the watches it registered (#12491).
+   * Called by `McpPaneConfigService` in the same step as the revocation
+   * itself.
    */
   revokeOwnershipPrincipal(principal: string): void {
     this.sessionStore.resourceOwnership.revokePrincipal(principal);
     // A relaunched pane gets a new bearer, so a terminal handed to the old one
     // is not silently handed to the new one (#12490).
     this.sessionStore.terminalAdoption.revokePrincipal(principal);
+    this.terminalWatch.revokeOwner(paneWatchKey(principal));
   }
 
   /**
@@ -544,6 +580,31 @@ export class McpServerService {
     });
   }
 
+  /**
+   * Whether the user lets watches wake their panes (#12491). Off unless the
+   * stored value is exactly `true`: a missing or malformed setting never types
+   * into anyone's prompt.
+   */
+  isPaneWakeEnabled(): boolean {
+    return this.getConfig().paneWakeEnabled === true;
+  }
+
+  setPaneWakeEnabled(enabled: boolean): boolean {
+    this.persistConfig({ paneWakeEnabled: enabled });
+    // Turning it off stops every watch now, not at its next wake.
+    if (!enabled) this.terminalWatch.disposeAll();
+    return this.isPaneWakeEnabled();
+  }
+
+  getPaneWatchState(terminalId: string): PaneWatchState | null {
+    return this.terminalWatch.getPaneState(terminalId);
+  }
+
+  /** The pane's own "stop": every watch it holds goes, and nothing more is typed. */
+  stopPaneWatches(terminalId: string): void {
+    this.terminalWatch.stopPane(terminalId);
+  }
+
   private emitStatusChange(): void {
     const running = this.isRunning;
     for (const listener of this.statusListeners) {
@@ -625,6 +686,7 @@ export class McpServerService {
         this.emitRuntimeStateChange();
       }
     } else if (!enabled && (this.isRunning || this.httpLifecycle.isStartInFlight)) {
+      this.terminalWatch.disposeAll();
       // `stop()` awaits any in-flight `start()` before closing, so a disable
       // that races a slow start still tears the server down instead of
       // leaving it listening after the user turned it off.
@@ -692,6 +754,8 @@ export class McpServerService {
   }
 
   async stop(): Promise<void> {
+    // Nothing could read the observations a wake would point at.
+    this.terminalWatch.disposeAll();
     await this.httpLifecycle.stop();
     // The stop rejects every pending request, so the leases those requests own
     // have no one left to release them. Holding them would pin their views

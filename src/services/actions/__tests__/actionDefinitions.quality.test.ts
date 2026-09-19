@@ -426,7 +426,15 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // 54_593 → 54_956 for #12479's `terminal.readLastMessageOwned`, carried at the
   // workbench floor for the same subset invariant. Its 363 B is the whole of the
   // increase, so this stays the measured total rather than an allowance.
-  const MAX_COHORT_TOTAL_BYTES = 54_956;
+  // 54_956 → 56_057 for #12491's terminal watches — `terminal.registerWatch` (339 B),
+  // `terminal.listWatches` (289 B), `terminal.getWatchEvents` (301 B) and
+  // `terminal.cancelWatch` (172 B) on the action tier, and off the external
+  // surface, so the external total does not move. What the prose has to carry
+  // is that the wake is a line typed into the caller's own prompt, that it
+  // needs the user's setting, and that a read is what lets the next one go
+  // out; a caller missing any of those reads the silence as a bug. The 1_101 B
+  // is exactly their four descriptions.
+  const MAX_COHORT_TOTAL_BYTES = 56_057;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -1330,14 +1338,17 @@ describe("plugin-dispatch injection guard (#10558)", () => {
     }
     // Valid args so dispatch reaches the plugin-dispatch gate rather than
     // short-circuiting on VALIDATION_ERROR (terminal.sendCommand requires both;
-    // project.runCheck requires projectId + runnerId). Schemas are non-strict,
-    // so the union satisfies every denied action.
+    // project.runCheck requires projectId + runnerId; the terminal-watch tools
+    // take terminalIds or a watchId). Schemas are non-strict, so the union
+    // satisfies every denied action.
     const args = {
       terminalId: "t-placeholder",
       command: "noop",
       url: "https://example.com",
       projectId: "p-placeholder",
       runnerId: "r-placeholder",
+      terminalIds: ["t-placeholder"],
+      watchId: "w-placeholder",
     };
     // ...except where a schema is strict, which the union above cannot satisfy:
     // the extra keys are themselves a VALIDATION_ERROR, so dispatch would never
