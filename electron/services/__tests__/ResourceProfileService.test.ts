@@ -819,8 +819,8 @@ describe("ResourceProfileService", () => {
         FOCUS_THROTTLE_MULTIPLIER
     );
     // The profile push resets the host's cadence, so the throttle must land after it.
-    expect(pty.setResourceProfile.mock.invocationCallOrder[0]).toBeLessThan(
-      pty.setProcessTreePollInterval.mock.invocationCallOrder[0]
+    expect(pty.setResourceProfile.mock.invocationCallOrder[0]!).toBeLessThan(
+      pty.setProcessTreePollInterval.mock.invocationCallOrder[0]!
     );
 
     service.stop();
