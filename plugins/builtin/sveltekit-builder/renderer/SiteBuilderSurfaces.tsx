@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useRef,
+  useState,
   useSyncExternalStore,
   type ComponentType,
   type ReactNode,
@@ -543,37 +544,6 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
     state,
     composer.deliveries.length > 0 || composer.draft.trim() !== ""
   );
-  const resolving = state.selection.status === "resolving";
-  // Both halves of the loading contract, owned here rather than inside
-  // `ResolvingHeader`: the onset gate suppresses a skeleton for a resolve that
-  // beats 400ms, and the floor holds one that appeared for its minimum dwell.
-  // The header unmounts the instant the source lands, so a floor living in it
-  // would go with it — source resolution settles right around the gate, which
-  // is exactly the window a floorless skeleton flashes in.
-  //
-  // Gated on the drawer being on screen as well: both halves measure time the
-  // user spent looking at something, and a drawer folded away shows nothing to
-  // dwell on. Without it a resolve started behind a shut drawer opens the gate
-  // and starts the floor against a skeleton nobody can see, leaving it a few
-  // real milliseconds when the drawer is opened late.
-  const onScreen = controller !== null && open && !collapsed;
-  const gate = useDohertyGate(onScreen && resolving);
-  const floored = useSkeletonFloor(gate);
-  // `gate ||`, not the floor alone: the floor only learns its input in an
-  // effect, so on the commit the gate opens it still reads false. An answer
-  // landing in that same commit would put the identity up, spend the crumb's
-  // focus intent on it, and then have it replaced by a skeleton one commit
-  // later — the flash the floor exists to prevent, arriving backwards.
-  const resolvingSkeleton = gate || floored;
-  const selectCrumb = useSelectCrumb(
-    controller,
-    state,
-    drawerRef,
-    drawerLanding,
-    // The identity block is behind the skeleton until the floor releases, and
-    // it is where a crumb's focus lands.
-    !resolvingSkeleton
-  );
   if (!controller) return null;
   const selection = state.selection;
   if (!open || collapsed) return null;
@@ -591,19 +561,12 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
     >
       {/* Pinned. A desktop inspector always says what is selected; a form
           scrolls it away. */}
-      {resolvingSkeleton || resolving ? (
-        // The held skeleton outranks a ready identity: releasing it the frame
-        // the answer lands is the tear-down the floor exists to stop.
-        <ResolvingHeader skeleton={resolvingSkeleton} resolving={resolving} />
-      ) : selection.status === "ready" ? (
-        <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3">
-          <SelectionIdentity
-            selection={selection}
-            worktreePath={props.worktreePath}
-            onSelectComponent={selectCrumb}
-          />
-        </div>
-      ) : null}
+      <SelectionHeader
+        state={state}
+        controller={controller}
+        worktreePath={props.worktreePath}
+        drawerRef={drawerRef}
+      />
 
       {/* One inset in every state. The two used to differ because a disclosure
           header carried its own padding under the rule; with the composer
@@ -848,6 +811,84 @@ function SiteSourceBody({
 /** A ready workspace shows the section for the app switcher, or for the verdict. */
 function readyHasSomethingToSay(workspace: Extract<WorkspaceState, { status: "ready" }>): boolean {
   return workspace.appRoots.length > 1 || workspace.support.level === "untested";
+}
+
+/**
+ * How long the resolving skeleton is on screen for, as one answer.
+ *
+ * The onset gate suppresses a skeleton for a resolve that beats 400ms and the
+ * floor holds one that appeared for its minimum dwell — but the two run on
+ * their own clocks, and a second pick landing inside the first one's dwell
+ * restarts the gate while the floor is still expiring. That leaves the slot
+ * blank between two skeletons. `held` spans a run of resolves so the wait the
+ * user sees is one wait, however many picks it took.
+ */
+function useResolvingSkeleton(resolving: boolean): boolean {
+  const gate = useDohertyGate(resolving);
+  const floored = useSkeletonFloor(gate);
+  const [held, setHeld] = useState(false);
+  useEffect(() => {
+    if (gate) {
+      setHeld(true);
+      return;
+    }
+    // Not `!resolving` alone: the gap between one answer and the next pick is
+    // exactly where the run would be cut in two.
+    if (!resolving && !floored) setHeld(false);
+  }, [gate, resolving, floored]);
+  // `gate ||`, not the floor alone: the floor only learns its input in an
+  // effect, so on the commit the gate opens it still reads false. An answer
+  // landing in that same commit would put the identity up, spend a crumb's
+  // focus intent on it, and have it replaced by a skeleton one commit later —
+  // the flash the floor exists to prevent, arriving backwards.
+  return gate || floored || (held && resolving);
+}
+
+/**
+ * The drawer's pinned header: what is selected, or the shape of it while the
+ * source is being found.
+ *
+ * Its own component because the contract it answers to is measured in time on
+ * screen. Mounted with the open drawer, so folding the drawer away ends the
+ * wait rather than leaving a gate and a floor running against a skeleton
+ * nobody can see — and reopening starts a fresh one.
+ */
+function SelectionHeader({
+  state,
+  controller,
+  worktreePath,
+  drawerRef,
+}: {
+  state: InspectorState;
+  controller: InspectorController;
+  worktreePath: string | null;
+  drawerRef: RefObject<HTMLElement | null>;
+}) {
+  const selection = state.selection;
+  const resolving = selection.status === "resolving";
+  const skeleton = useResolvingSkeleton(resolving);
+  const selectCrumb = useSelectCrumb(
+    controller,
+    state,
+    drawerRef,
+    drawerLanding,
+    // The identity block is behind the skeleton until the floor releases, and
+    // it is where a crumb's focus lands.
+    !skeleton
+  );
+  // The held skeleton outranks a ready identity: releasing it the frame the
+  // answer lands is the tear-down the floor exists to stop.
+  if (skeleton || resolving) return <ResolvingHeader skeleton={skeleton} resolving={resolving} />;
+  if (selection.status !== "ready") return null;
+  return (
+    <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3">
+      <SelectionIdentity
+        selection={selection}
+        worktreePath={worktreePath}
+        onSelectComponent={selectCrumb}
+      />
+    </div>
+  );
 }
 
 /**

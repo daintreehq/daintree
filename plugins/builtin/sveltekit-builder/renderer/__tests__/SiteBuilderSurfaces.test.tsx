@@ -31,6 +31,7 @@ import {
   __resetComposerMemoryForTests,
   composerMemoryKey,
   readComposerMemory,
+  setDrawerCollapsed,
   updateComposerMemory,
 } from "../composerMemory";
 import { usePanelStore } from "@/store/panelStore";
@@ -2461,7 +2462,9 @@ describe("issue recovery", () => {
       })
     );
 
-    await waitFor(() => expect(text()).toContain("too large to send in one message"));
+    await waitFor(() => expect(text()).toContain("past a limit the builder works within"));
+    // The page's own words survive under ours, so the notice says which limit.
+    expect(text()).toContain("capped at 24 nodes");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
     // And the selection it was about is still there.
@@ -2591,6 +2594,68 @@ describe("resolving skeleton", () => {
 
     await settle(1);
     expect(skeleton()).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+  });
+
+  it("does not blank the slot between two skeletons when a second pick lands in the dwell", async () => {
+    // The gate and the floor run on their own clocks: a pick arriving inside
+    // the previous one's dwell restarts the gate while the floor expires
+    // under it, which used to put an empty header between two skeletons.
+    await mountBound();
+    let release = holdResolve();
+    vi.useFakeTimers();
+
+    await act(async () => host.select(0));
+    await settle(GATE_MS);
+    expect(skeleton()).not.toBeNull();
+
+    // First answer lands, then a fresh pick 10ms later — inside the floor.
+    release();
+    await settle(10);
+    release = holdResolve();
+    await act(async () => host.select(0));
+
+    // Across the whole window the first floor would have expired in, and the
+    // whole window the second gate would have been running in.
+    for (const step of [100, 140, 200, 200]) {
+      await settle(step);
+      expect(skeleton()).not.toBeNull();
+    }
+
+    release();
+    await settle(FLOOR_MS + 1);
+    expect(skeleton()).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+  });
+
+  it("starts the wait again when the drawer is folded away and brought back", async () => {
+    // Both halves measure time on screen. A folded drawer shows nothing to
+    // dwell on, so a floor started behind it used to expire moments after the
+    // drawer came back — a skeleton, a blank header, then a skeleton again.
+    await mountBound();
+    const release = holdResolve();
+    vi.useFakeTimers();
+
+    await act(async () => host.select(0));
+    await settle(GATE_MS);
+    expect(skeleton()).not.toBeNull();
+
+    act(() => setDrawerCollapsed("preview-1", true));
+    await settle(220);
+    expect(skeleton()).toBeNull();
+
+    act(() => setDrawerCollapsed("preview-1", false));
+    // A fresh gate, not the tail of the old floor: nothing, then the skeleton.
+    await settle(GATE_MS - 1);
+    expect(skeleton()).toBeNull();
+    await settle(1);
+    expect(skeleton()).not.toBeNull();
+    // And it is still there well past where the original floor would have run out.
+    await settle(FLOOR_MS);
+    expect(skeleton()).not.toBeNull();
+
+    release();
+    await settle(FLOOR_MS + 1);
     expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
   });
 

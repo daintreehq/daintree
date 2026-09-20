@@ -349,7 +349,7 @@ const RUNTIME_ISSUE_COPY: Record<string, string> = {
     "This page carries no Svelte source locations. Run the app with the Vite dev server to select elements.",
   "not-dev-build": "This preview is a production build, so elements can't be traced to source",
   "overlay-blocked": "The page blocked the selection overlay",
-  capacity: "Part of this was too large to send in one message, so the builder left some of it out",
+  capacity: "This was past a limit the builder works within, so part of it was left out",
   internal: "The inspector hit a problem inside the page",
   "metadata-shape":
     "This page's Svelte metadata has a shape the builder doesn't recognise, so elements can't be traced to source. Check the Svelte version against the supported baseline.",
@@ -1034,6 +1034,12 @@ export class InspectorController implements DevPreviewToolSession {
             severity: event.code === "internal" ? "error" : "warning",
             message: RUNTIME_ISSUE_COPY[event.code] ?? event.detail,
             code: event.code,
+            // The page's own words, under ours. A known code has a headline
+            // that says what kind of thing happened; the detail is the only
+            // thing that says which one.
+            ...(RUNTIME_ISSUE_COPY[event.code] === undefined || event.detail === ""
+              ? {}
+              : { detail: event.detail }),
             // The other codes name a limitation of the page itself, which
             // nothing here can lift; an internal fault is the guest runtime
             // failing, and a fresh session is what replaces it.
