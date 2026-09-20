@@ -304,9 +304,10 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
  * nothing — an agent the terminal was launched as holds its detected identity
  * through a disappearance that never looked like a prompt returning, and a
  * second one started under it is the same identity again, not a new one. The
- * window between this last look and the write is still a window, too. That residue is why the host goes on treating every submission as
- * text typed at whatever is listening rather than as a message delivered to a
- * known conversation.
+ * window between this last look and the write is still a window, too. That
+ * residue is why the host goes on treating every submission as text typed at
+ * whatever is listening rather than as a message delivered to a known
+ * conversation.
  */
 interface DestinationIdentity {
   agentId: string;
