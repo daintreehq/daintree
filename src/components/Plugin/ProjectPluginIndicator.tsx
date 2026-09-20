@@ -123,8 +123,17 @@ export function ProjectPluginIndicator() {
           <div className="flex items-center gap-2 min-w-0">
             {/* Hollow, matching the footer's idle mark: staged plugins are a
                 standing fact, not work in flight. `bg-text-primary/25` read
-                about 2:1 — under the 3:1 a state indicator owes. */}
-            <span className="inline-flex h-2 w-2 rounded-full border border-text-secondary shrink-0" />
+                about 2:1 — under the 3:1 a state indicator owes.
+
+                `status-mark` + `data-working="false"` are the forced-colors
+                hooks. Without them the blanket repaint in `index.css` skips
+                this dot while repainting the readout's one row below, so the
+                two footer marks would disagree in exactly the mode that has
+                the least to disagree with. */}
+            <span
+              className="status-mark inline-flex h-2 w-2 rounded-full border border-text-secondary shrink-0"
+              data-working="false"
+            />
             <span className="text-2xs text-text-secondary font-medium truncate">{summary}</span>
           </div>
         </button>
