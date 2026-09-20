@@ -191,6 +191,16 @@ A rendered element, the markup that defines it, and the invocation that produced
 
 What the builder can vouch for: the node, the file, the range, and the revision the bytes had when it read them. What it cannot: that a shared component change has no effect elsewhere in arbitrary application logic. The copy says the first and never implies the second.
 
+### What a mapping does not prove
+
+A selection is coordinates the page reported, resolved against the bytes on disk now. The guest never reports the revision of the source that produced its DOM — the dev runtime exposes none — so when a same-tag element has come to occupy the line and column an observation was stamped with, nothing available here tells it from the element the user clicked. It resolves cleanly. The revision recorded alongside it names the bytes the host read, and a later check can say only that a file still hashes to it at the moment of that check — never which bytes the page rendered from.
+
+Four checks narrow the window, and each rules out a different wrong answer. A resolved regular element whose tag differs from the one the page reported makes the selection stale rather than a nearest match (`main/selection.ts`). A stamp the file contradicts is re-placed by the node's shape through the template, only where the page and the source count alike, and refused where a construct is known to defeat that correspondence — which still leaves the shapes the page cannot tell apart. A selection whose file the tracker sees change goes stale and is proved again rather than followed, and an observation for a file that changed moments ago is refused while the page may still be showing the old markup. Every file a request cites about the selection is held, at send time and again before the prompt is typed, to the revision its claim was read from. None of this is evidence about revision identity: a same-tag element written into the coordinates the original was pushed out of, under the same render chain and among the same number of copies, passes all four. "Running the real thing", "Freshness" and "Keeping a selection through an edit" are the three places that case shows up concretely.
+
+The protocol's `mapping` field makes no claim about it either. `exact` distinguishes a node whose rendering invocation is known from `definition-only`, where only the defining markup is (`shared/model.ts`); it is about definition versus invocation, not about revisions, and it is not surfaced to the user.
+
+Closing the gap needs a witness the dev runtime does not offer: a revision travelling with the rendered DOM, or some other independent signal tying a node to the bytes it was rendered from. Either would have to be arranged in the user's own project's render path, and this builder injects nothing there — which is what makes production cleanliness true by construction, and what keeps it out of the user's build. The residual case is the price of that, knowingly paid.
+
 ## Traps found building it
 
 Each of these cost a debugging cycle, a failed merge, or a reproduced bug.
