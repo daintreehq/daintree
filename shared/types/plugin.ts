@@ -3443,6 +3443,56 @@ export interface PluginWorkspaceScope {
   readonly worktreeId: string;
 }
 
+/** Options for {@link BuiltinPluginFsApi.readFileBounded}. */
+export interface PluginFsBoundedReadOptions extends PluginHostCallOptions {
+  /**
+   * Byte ceiling the read itself obeys: the host stops after `limitBytes + 1`
+   * bytes and reports `too-large` rather than handing back a truncated file,
+   * so a caller never has to decide whether short bytes mean "small file" or
+   * "gave up".
+   */
+  limitBytes: number;
+}
+
+/**
+ * Outcome of {@link BuiltinPluginFsApi.readFileBounded}. A path that cannot be
+ * opened at all still rejects, exactly as {@link PluginFsApi.readFileBytes}
+ * does — the union describes files the host reached and refused, not errors.
+ */
+export type PluginFsBoundedRead =
+  | { status: "ok"; bytes: Uint8Array }
+  | { status: "too-large" }
+  /** The open descriptor is a directory, FIFO, socket or device — never read. */
+  | { status: "not-a-file" };
+
+/**
+ * The filesystem surface a BUILT-IN plugin holds through
+ * {@link BuiltinPluginHostApi.fsForWorkspace}: everything {@link PluginFsApi}
+ * offers, plus a read that refuses before it allocates.
+ *
+ * `readFileBounded` is optional so every existing {@link PluginFsApi} — the
+ * out-of-process proxy, test doubles — still satisfies this type. A caller
+ * feature-detects it and keeps a stat-then-read fallback; the in-process host
+ * always provides it.
+ */
+export interface BuiltinPluginFsApi extends PluginFsApi {
+  /**
+   * Read at most `limitBytes + 1` bytes of a regular file through one opened
+   * descriptor. The regular-file check is an `fstat` on that descriptor rather
+   * than a `stat` on the path, so nothing decided before the open can go stale
+   * between the two, and the open itself is non-blocking — a FIFO standing
+   * where a file was cannot leave the read pending.
+   *
+   * Same capability gate, realpath containment and cancellation as
+   * {@link PluginFsApi.readFileBytes}. It does not replace that method: an
+   * uncapped read stays uncapped.
+   */
+  readFileBounded?(
+    filePath: string,
+    options: PluginFsBoundedReadOptions
+  ): Promise<PluginFsBoundedRead>;
+}
+
 /**
  * The host as a BUILT-IN plugin sees it. Deliberately absent from
  * `shared/types/plugin-sdk.ts`: it is not part of `@daintreehq/plugin-sdk`, and
@@ -3472,7 +3522,7 @@ export interface BuiltinPluginHostApi extends PluginHostApi {
    * Watchers taken through the returned handle are torn down on unload exactly
    * like `host.fs.watch` ones.
    */
-  fsForWorkspace(scope: PluginWorkspaceScope): PluginFsApi;
+  fsForWorkspace(scope: PluginWorkspaceScope): BuiltinPluginFsApi;
 }
 
 /**

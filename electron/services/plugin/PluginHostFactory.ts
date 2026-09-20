@@ -94,7 +94,7 @@ import type {
   PluginDuplexProcessSpawnOptions,
   PluginPtyProcessHandle,
   PluginPtyProcessSpawnOptions,
-  PluginFsApi,
+  BuiltinPluginFsApi,
   PluginWorkspaceScope,
   PluginFsDirEntry,
   PluginFsWriteErrorCode,
@@ -2108,7 +2108,7 @@ function buildFsApi(
   deps: PluginHostFactoryDeps,
   pluginId: string,
   workspaceScope?: PluginWorkspaceScope
-): PluginFsApi {
+): BuiltinPluginFsApi {
   const requireLoaded = (op: string): void => {
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`PLUGIN_UNLOADED: plugin "${pluginId}" fs.${op}: plugin is no longer loaded`);
@@ -2186,6 +2186,59 @@ function buildFsApi(
       // backing ArrayBuffer with unrelated reads, so handing the view straight
       // to a plugin would expose whatever else the pool holds.
       return new Uint8Array(buffer);
+    },
+    readFileBounded: async (filePath, options) => {
+      options?.signal?.throwIfAborted();
+      requireLoaded("readFileBounded");
+      requireAnyReadCap("readFileBounded");
+      const limit = options?.limitBytes;
+      if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 0) {
+        throw new Error(
+          `VALIDATION: plugin "${pluginId}" fs.readFileBounded requires an integer limitBytes`
+        );
+      }
+      const { resolved, rootClass } = await containWithClass(filePath);
+      options?.signal?.throwIfAborted();
+      requireLoaded("readFileBounded");
+      requireReadCapForClass("readFileBounded", rootClass);
+      // O_NONBLOCK (undefined on Windows) so a FIFO standing where a regular
+      // file was cannot leave the open pending with no writer, and O_NOFOLLOW
+      // so the leaf cannot be swapped for a symlink after containment
+      // realpathed it. The regular-file check below is on the descriptor this
+      // open returned, not on a path that could since have become something
+      // else — a path stat is evidence about a name, not about an fd.
+      //
+      // What this does not close, and neither does any other read here: the
+      // open is still by pathname, so an ANCESTOR directory swapped for a
+      // symlink between containment and this line resolves somewhere else —
+      // O_NOFOLLOW covers only the last component. Closing that needs the
+      // whole walk opened directory by directory, which is a change to
+      // containment rather than to one read. On Windows neither flag exists,
+      // so the descriptor check is the only guard there.
+      const handle = await fs.open(
+        resolved,
+        fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
+      );
+      try {
+        const opened = await handle.stat();
+        if (!opened.isFile()) return { status: "not-a-file" as const };
+        // limit + 1: the extra byte is how an oversized file is recognised
+        // without ever holding more than the cap plus one byte of it.
+        const buffer = Buffer.allocUnsafe(limit + 1);
+        let filled = 0;
+        while (filled <= limit) {
+          options?.signal?.throwIfAborted();
+          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+          if (bytesRead === 0) break;
+          filled += bytesRead;
+        }
+        if (filled > limit) return { status: "too-large" as const };
+        // Copied out of the pooled allocator for the same reason
+        // `readFileBytes` copies: the pool's backing store holds other reads.
+        return { status: "ok" as const, bytes: new Uint8Array(buffer.subarray(0, filled)) };
+      } finally {
+        await handle.close();
+      }
     },
     writeFile: async (filePath, contents, options) => {
       requireLoaded("writeFile");
@@ -2674,7 +2727,7 @@ export function buildScopedFsApi(
   deps: PluginHostFactoryDeps,
   pluginId: string,
   scope: PluginWorkspaceScope
-): PluginFsApi {
+): BuiltinPluginFsApi {
   return buildFsApi(deps, pluginId, scope);
 }
 

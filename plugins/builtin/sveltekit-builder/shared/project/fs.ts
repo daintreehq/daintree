@@ -22,10 +22,80 @@ export interface ProjectFsStat {
   isFile: boolean;
 }
 
+/**
+ * The trailing options every read here accepts, mirroring the host's
+ * `PluginHostCallOptions` so a `PluginFsApi` still satisfies this interface
+ * unchanged. The signal is how a closed workspace stops a scan already in
+ * flight: the reader rejects, and the helpers below let that rejection through
+ * instead of reporting the file as missing.
+ */
+export interface ProjectReadOptions {
+  signal?: AbortSignal;
+}
+
+export interface ProjectBoundedReadOptions extends ProjectReadOptions {
+  limitBytes: number;
+}
+
+/**
+ * What a bounded read found. `too-large` and `not-a-file` are separate from
+ * `missing` for the same reason {@link JsonReadStatus} separates them: a
+ * resolution that climbs on absence must not climb past a file it refused.
+ */
+export type BoundedTextRead =
+  | { status: "ok"; text: string }
+  | { status: "too-large" }
+  | { status: "not-a-file" }
+  | { status: "missing" };
+
 export interface ProjectFileReader {
-  readFile(path: string): Promise<string>;
-  readdir(path: string): Promise<ProjectFsDirEntry[]>;
-  stat(path: string): Promise<ProjectFsStat>;
+  readFile(path: string, options?: ProjectReadOptions): Promise<string>;
+  readdir(path: string, options?: ProjectReadOptions): Promise<ProjectFsDirEntry[]>;
+  stat(path: string, options?: ProjectReadOptions): Promise<ProjectFsStat>;
+  /**
+   * Read a metadata file under a byte ceiling the read itself obeys, refusing
+   * anything that is not a regular file. Optional: a reader over a fixture tree
+   * has no descriptors to bound, and the text-read fallback in
+   * {@link readTextFile} covers it. Every reader main builds supplies it.
+   */
+  readBoundedText?(path: string, options: ProjectBoundedReadOptions): Promise<BoundedTextRead>;
+}
+
+/**
+ * Ceiling on one metadata or config read — `package.json`, `svelte.config.js`,
+ * a lockfile probe, an installed package's manifest.
+ *
+ * Deliberately far below the 1 MiB source cap: these are files of a few
+ * kilobytes, and unlike a source file (read when the user selects an element)
+ * discovery reads one per directory it visits, up to its 2000-directory
+ * budget. The host's own `plugin.json` cap is 512 KiB for a manifest read once
+ * per project open; half that is generous for a file read two thousand times.
+ */
+export const MAX_METADATA_BYTES = 256 * 1024;
+
+/**
+ * Ceiling on the entries one directory listing contributes. The host has no
+ * count-limited `readdir` — the whole listing is materialised there either way
+ * — but nothing past this is retained, so a directory with a million entries
+ * costs one transient array rather than a walk queue that never drains.
+ */
+export const MAX_DIRECTORY_ENTRIES = 4096;
+
+/**
+ * An aborted read is not a missing file, and every helper here reports failure
+ * as absence. Without this an abort would be swallowed silently and the scan
+ * would walk the rest of the tree reading nothing.
+ *
+ * The signal is the reliable witness: `throwIfAborted()` throws the abort
+ * *reason*, which a caller may set to any value at all, so the error itself
+ * need not look like an abort. The name check is the fallback for a reader
+ * that rejected on its own signal without telling us which one.
+ */
+function rethrowIfAborted(error: unknown, signal?: AbortSignal): void {
+  if (signal?.aborted) throw error;
+  if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
+    throw error;
+  }
 }
 
 /**
@@ -107,15 +177,55 @@ export function directoriesUpTo(start: string, stop: string): string[] {
   return chain;
 }
 
+/**
+ * A metadata file as text, bounded.
+ *
+ * Prefers the reader's bounded primitive, which stops at the cap inside the
+ * read and refuses a FIFO on the open descriptor. A reader without one falls
+ * back to a plain read and measures afterwards — bounded after allocation,
+ * which is all a fixture or a proxied host can offer.
+ */
+export async function readBoundedTextFile(
+  reader: ProjectFileReader,
+  path: string,
+  options: Partial<ProjectBoundedReadOptions> = {}
+): Promise<BoundedTextRead> {
+  const limitBytes = options.limitBytes ?? MAX_METADATA_BYTES;
+  const bounded = reader.readBoundedText;
+  if (bounded) {
+    try {
+      return await bounded.call(reader, path, { ...options, limitBytes });
+    } catch (error) {
+      rethrowIfAborted(error, options.signal);
+      return { status: "missing" };
+    }
+  }
+  try {
+    const text = await reader.readFile(path, options);
+    // UTF-16 code units, not bytes: an approximation that can only under-count
+    // a multi-byte file, and the exact bound is the bounded reader's job.
+    return text.length > limitBytes ? { status: "too-large" } : { status: "ok", text };
+  } catch (error) {
+    rethrowIfAborted(error, options.signal);
+    return { status: "missing" };
+  }
+}
+
+/**
+ * The lenient form. Note what a caller reading `null` cannot tell: a config
+ * that is absent from one that was refused for its size or its file type. A
+ * caller that treats `null` as "not configured" — `resolveBasePath`, the
+ * routes-directory resolver — reports its default for a config it never read.
+ * Fixing that means widening those callers to carry a reason, which is a
+ * change to their shape rather than to this one.
+ */
 export async function readTextFile(
   reader: ProjectFileReader,
-  path: string
+  path: string,
+  options: Partial<ProjectBoundedReadOptions> = {}
 ): Promise<string | null> {
-  try {
-    return await reader.readFile(path);
-  } catch {
-    return null;
-  }
+  const read = await readBoundedTextFile(reader, path, options);
+  return read.status === "ok" ? read.text : null;
 }
 
 /**
@@ -134,12 +244,18 @@ export interface JsonReadResult {
 
 export async function readJsonFileResult(
   reader: ProjectFileReader,
-  path: string
+  path: string,
+  options: Partial<ProjectBoundedReadOptions> = {}
 ): Promise<JsonReadResult> {
-  const text = await readTextFile(reader, path);
-  if (text === null) return { status: "missing", value: null };
+  const read = await readBoundedTextFile(reader, path, options);
+  if (read.status === "missing") return { status: "missing", value: null };
+  // A manifest too large to read, or a pipe wearing a manifest's name, is not
+  // an absent manifest: a climbing resolution must stop here.
+  if (read.status !== "ok") return { status: "malformed", value: null };
   try {
-    const parsed: unknown = JSON.parse(text);
+    // The parse itself is synchronous and uninterruptible; the byte cap above
+    // is what keeps it short, not the signal.
+    const parsed: unknown = JSON.parse(read.text);
     return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
       ? { status: "ok", value: parsed as Record<string, unknown> }
       : { status: "malformed", value: null };
@@ -155,43 +271,76 @@ export async function readJsonFileResult(
  */
 export async function readJsonFile(
   reader: ProjectFileReader,
-  path: string
+  path: string,
+  options: Partial<ProjectBoundedReadOptions> = {}
 ): Promise<Record<string, unknown> | null> {
-  const text = await readTextFile(reader, path);
-  if (text === null) return null;
+  return (await readJsonFileResult(reader, path, options)).value;
+}
+
+/**
+ * One directory's entries, capped, with whether the cap hid any. Discovery
+ * uses the flag to report an incomplete scan rather than quietly losing an app
+ * that sorted past the cutoff.
+ */
+export async function readDirectoryBounded(
+  reader: ProjectFileReader,
+  path: string,
+  options: ProjectReadOptions & { maxEntries?: number } = {}
+): Promise<{ entries: ProjectFsDirEntry[]; truncated: boolean }> {
+  const maxEntries = options.maxEntries ?? MAX_DIRECTORY_ENTRIES;
   try {
-    const parsed: unknown = JSON.parse(text);
-    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
-  } catch {
-    return null;
+    const entries = await reader.readdir(path, options);
+    return entries.length > maxEntries
+      ? { entries: entries.slice(0, maxEntries), truncated: true }
+      : { entries, truncated: false };
+  } catch (error) {
+    rethrowIfAborted(error, options.signal);
+    return { entries: [], truncated: false };
   }
 }
 
+/**
+ * The whole listing, for callers that have nowhere to report a dropped entry.
+ * Route analysis is one: a `+page.svelte` past an entry cap would vanish from
+ * the route tree with nothing to say it had been there, which is worse than
+ * the listing being large. The cap belongs where truncation is reportable —
+ * {@link readDirectoryBounded}, which discovery uses.
+ */
 export async function readDirectory(
   reader: ProjectFileReader,
-  path: string
+  path: string,
+  options: ProjectReadOptions = {}
 ): Promise<ProjectFsDirEntry[]> {
   try {
-    return await reader.readdir(path);
-  } catch {
+    return await reader.readdir(path, options);
+  } catch (error) {
+    rethrowIfAborted(error, options.signal);
     return [];
   }
 }
 
-export async function fileExists(reader: ProjectFileReader, path: string): Promise<boolean> {
+export async function fileExists(
+  reader: ProjectFileReader,
+  path: string,
+  options: ProjectReadOptions = {}
+): Promise<boolean> {
   try {
-    return (await reader.stat(path)).isFile;
-  } catch {
+    return (await reader.stat(path, options)).isFile;
+  } catch (error) {
+    rethrowIfAborted(error, options.signal);
     return false;
   }
 }
 
-export async function directoryExists(reader: ProjectFileReader, path: string): Promise<boolean> {
+export async function directoryExists(
+  reader: ProjectFileReader,
+  path: string,
+  options: ProjectReadOptions = {}
+): Promise<boolean> {
   try {
-    return (await reader.stat(path)).isDirectory;
-  } catch {
+    return (await reader.stat(path, options)).isDirectory;
+  } catch (error) {
+    rethrowIfAborted(error, options.signal);
     return false;
   }
 }
