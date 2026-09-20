@@ -54,8 +54,9 @@ const cachedViewWebContents = new Set<number>();
 
 // windowId → the WebContents CONFIRMED to hold that window's renderer-side PTY
 // MessagePort. Recorded by `distributePortsToView` only once delivery
-// succeeded: the pty-host keeps one connection per window, so this is the one
-// view its `portDeliveredWindowIds` can refer to.
+// succeeded. Used solely to derive fallback eligibility below — chunk routing
+// names its recipients by identity on the wire instead, so it never depends on
+// this map being current at the moment a chunk is routed.
 const portHolderByWindow = new Map<number, number>();
 const portHolderWebContents = new Set<number>();
 
@@ -98,20 +99,21 @@ export function getFallbackEligibleProjectIds(): string[] {
   return Array.from(projectIds);
 }
 
-/** WebContents id confirmed to hold `windowId`'s PTY MessagePort, if any. */
+/**
+ * WebContents id confirmed to hold `windowId`'s PTY MessagePort, if any. The
+ * observable for the port-handoff bookkeeping that drives eligibility.
+ */
 export function getPortHolderWebContentsId(windowId: number): number | undefined {
   return portHolderByWindow.get(windowId);
 }
 
 /**
- * The live WebContents confirmed to hold `windowId`'s PTY MessagePort. Resolved
- * here rather than by the caller so the `webContents.fromId` dependency stays
- * inside this module — every consumer already mocks electron for the registry.
+ * Resolve a WebContents id to a live instance. Lives here so the
+ * `webContents.fromId` dependency stays inside this module — every consumer
+ * already mocks electron for the registry.
  */
-export function getPortHolderWebContents(windowId: number): WebContents | null {
-  const wcId = portHolderByWindow.get(windowId);
-  if (wcId === undefined) return null;
-  const wc = webContentsModule.fromId(wcId);
+export function resolveLiveWebContents(webContentsId: number): WebContents | null {
+  const wc = webContentsModule.fromId(webContentsId);
   return wc && !wc.isDestroyed() ? wc : null;
 }
 
@@ -126,6 +128,21 @@ export function registerPortHolderWebContents(windowId: number, webContentsId: n
   if (previous !== undefined) portHolderWebContents.delete(previous);
   portHolderByWindow.set(windowId, webContentsId);
   portHolderWebContents.add(webContentsId);
+  notifyFallbackEligibleProjectsChanged();
+}
+
+/**
+ * Forget a project view whose WebContents is already gone. Reached from the
+ * read-path sweeps, which can be the first thing to notice a destroyed view —
+ * so they have to do the same cleanup and publication as an explicit
+ * unregister. Skipping the holder cleanup here would leave a project eligible
+ * for the IPC fallback with no port-less view left to receive it, and Main
+ * would keep charging the host's IPC ledger for copies it sends to nobody.
+ */
+function pruneDeadProjectView(webContentsId: number): void {
+  viewToProject.delete(webContentsId);
+  cachedViewWebContents.delete(webContentsId);
+  forgetPortHolderWebContents(webContentsId);
   notifyFallbackEligibleProjectsChanged();
 }
 
@@ -365,8 +382,7 @@ export function getAllAppWebContents(): WebContents[] {
       seen.add(wcId);
       result.push(wc);
     } else {
-      viewToProject.delete(wcId);
-      cachedViewWebContents.delete(wcId);
+      pruneDeadProjectView(wcId);
     }
   }
 
@@ -479,8 +495,7 @@ export function getWebContentsForProject(projectId: string): WebContents[] {
     if (wc && !wc.isDestroyed()) {
       result.push(wc);
     } else {
-      viewToProject.delete(wcId);
-      cachedViewWebContents.delete(wcId);
+      pruneDeadProjectView(wcId);
       invalidateAllAppWebContentsCache();
     }
   }

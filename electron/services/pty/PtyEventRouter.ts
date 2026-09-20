@@ -154,14 +154,23 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
       // a port-less view, or is recovering one window's failed port flush
       // (#12557); emitting them as trailing `undefined`s otherwise would
       // change the arity every listener sees on the ordinary path for no gain.
-      if (event.portDeliveredWindowIds !== undefined || event.portRecoveryWindowId !== undefined) {
+      if (
+        event.portDeliveredWebContentsIds !== undefined ||
+        event.portRecoveryWebContentsId !== undefined
+      ) {
         emitter.emit("data", event.id, event.data, {
-          portDeliveredWindowIds: event.portDeliveredWindowIds,
-          portRecoveryWindowId: event.portRecoveryWindowId,
+          portDeliveredWebContentsIds: event.portDeliveredWebContentsIds,
+          portRecoveryWebContentsId: event.portRecoveryWebContentsId,
         });
       } else {
         emitter.emit("data", event.id, event.data);
       }
+      return true;
+
+    // A window's renderer connection is gone — Main drops its port-holder
+    // record so that view is treated as fallback-eligible again (#12557).
+    case "port-disconnected":
+      emitter.emit("port-disconnected", event.windowId, event.reason);
       return true;
 
     // Main-process-only mirror copy (the renderer already received this chunk

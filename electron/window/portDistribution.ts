@@ -64,7 +64,7 @@ export function distributePortsToView(
   clearPortHolderWebContents(ctx.windowId);
 
   if (ptyClient) {
-    ptyClient.connectMessagePort(ctx.windowId, port2);
+    ptyClient.connectMessagePort(ctx.windowId, port2, targetWc.id);
   }
 
   if (win && !win.isDestroyed() && !targetWc.isDestroyed()) {

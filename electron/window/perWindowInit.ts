@@ -1,7 +1,11 @@
 import { session, type BrowserWindow } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
-import { getAppWebContents, setFallbackEligibleProjectsListener } from "./webContentsRegistry.js";
+import {
+  clearPortHolderWebContents,
+  getAppWebContents,
+  setFallbackEligibleProjectsListener,
+} from "./webContentsRegistry.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { resolveInitialColorSchemeId } from "./skeletonCss.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
@@ -154,6 +158,14 @@ export async function initPerWindowServices(
     // real value arrives as views register and broker their ports.
     setFallbackEligibleProjectsListener((projectIds) => {
       ptyClient?.setFallbackEligibleProjects(projectIds);
+    });
+
+    // A window whose port the host tore down has no reachable view any more.
+    // Clearing the record re-opens the IPC fallback for it; a redundant notice
+    // (the holder was already replaced) only costs an extra fallback event,
+    // because chunk routing excludes recipients by identity, not by this map.
+    ptyClient.on("port-disconnected", (windowId) => {
+      clearPortHolderWebContents(windowId);
     });
 
     const versionSvc = new AgentVersionService(cliAvailabilityService);

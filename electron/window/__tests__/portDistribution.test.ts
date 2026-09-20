@@ -105,7 +105,9 @@ describe("distributePortsToView", () => {
     const { port1, port2 } = madeChannels[0];
     expect(ctx.services.activeRendererPort).toBe(port1);
     expect(ctx.services.activePtyHostPort).toBe(port2);
-    expect(pty.connectMessagePort).toHaveBeenCalledWith(ctx.windowId, port2);
+    // The receiving view's id rides along so the host can echo it back on every
+    // chunk this port accepts, letting Main address the exact recipient (#12557).
+    expect(pty.connectMessagePort).toHaveBeenCalledWith(ctx.windowId, port2, wc.id);
 
     expect(wc.postMessage).toHaveBeenCalledTimes(2);
     const [first, second] = wc.postMessage.mock.calls;
@@ -220,7 +222,7 @@ describe("distributePortsToView", () => {
     expect(() => distributePortsToView(makeMockWin(), ctx, asWc(wc), asPty(pty))).not.toThrow();
 
     const { port1, port2 } = madeChannels[0];
-    expect(pty.connectMessagePort).toHaveBeenCalledWith(ctx.windowId, port2);
+    expect(pty.connectMessagePort).toHaveBeenCalledWith(ctx.windowId, port2, wc.id);
     expect(ctx.services.activeRendererPort).toBe(port1);
     expect(ctx.services.activePtyHostPort).toBe(port2);
     expect(port1.close).not.toHaveBeenCalled();

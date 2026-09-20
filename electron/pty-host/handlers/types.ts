@@ -22,6 +22,13 @@ export interface RendererConnection {
   closeHandler?: () => void;
   portQueueManager: PortQueueManager;
   batcher: PortBatcher;
+  /**
+   * The view Main delivered this port's renderer end to (#12557), stored
+   * opaquely and echoed on every chunk the port accepts so Main can exclude
+   * the exact recipient. Undefined for synthetic connections that own no
+   * project view (SurfacePortBroker).
+   */
+  holderWebContentsId?: number;
 }
 
 /**

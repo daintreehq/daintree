@@ -974,7 +974,10 @@ describe("pty-host adversarial", () => {
   it("flags output as echo or recent-input by its own terminal's input age (#12518)", async () => {
     const parentPort = await loadHost();
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
     parentPort.emit("message", { type: "spawn", id: "t2", options: { projectId: "project-1" } });
     await flushMicrotasks();
@@ -1023,7 +1026,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
     parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
     parentPort.emit("message", { type: "set-activity-tier", id: "t1", tier: "background" });
@@ -1064,7 +1070,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
     await flushMicrotasks();
 
@@ -1080,7 +1089,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: { projectId: "project-1" } });
     await flushMicrotasks();
 
@@ -1261,8 +1273,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
     // Main's view registry — not the host — is what knows window 2 kept a
@@ -1289,7 +1307,7 @@ describe("pty-host adversarial", () => {
         type: "data",
         id: "t1",
         data: "working... step 1\r\n",
-        portDeliveredWindowIds: [1],
+        portDeliveredWebContentsIds: [101],
       }),
     ]);
   });
@@ -1302,7 +1320,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const portA = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", {
       type: "set-fallback-eligible-projects",
@@ -1327,7 +1348,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const portA = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", {
       type: "set-fallback-eligible-projects",
@@ -1363,8 +1387,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
     parentPort.emit("message", {
@@ -1392,7 +1422,7 @@ describe("pty-host adversarial", () => {
     expect(pulses).toHaveLength(0);
     // Only window 1 took it on a port, so only window 1 is excluded downstream.
     expect(dataPayloads(parentPort)).toEqual([
-      expect.objectContaining({ type: "data", id: "t1", portDeliveredWindowIds: [1] }),
+      expect.objectContaining({ type: "data", id: "t1", portDeliveredWebContentsIds: [101] }),
     ]);
   });
 
@@ -1405,7 +1435,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", {
       type: "set-fallback-eligible-projects",
@@ -1431,7 +1464,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-2" });
     parentPort.emit("message", {
       type: "set-fallback-eligible-projects",
@@ -1457,7 +1493,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
     parentPort.emit("message", {
@@ -1493,7 +1532,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
     parentPort.emit("message", {
@@ -1522,7 +1564,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1")); // undefined projectId
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", {
       type: "set-fallback-eligible-projects",
       projectIds: ["project-1"],
@@ -1547,7 +1592,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1")); // undefined projectId
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", {
       type: "set-fallback-eligible-projects",
@@ -1563,7 +1611,7 @@ describe("pty-host adversarial", () => {
 
     const payloads = dataPayloads(parentPort);
     expect(payloads).toHaveLength(1);
-    expect(payloads[0].portDeliveredWindowIds).toBeUndefined();
+    expect(payloads[0].portDeliveredWebContentsIds).toBeUndefined();
   });
 
   it("SUSPENDED_TERMINAL_STAYS_SILENT_WITH_AN_ELIGIBLE_PROJECT (#12557)", async () => {
@@ -1573,7 +1621,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1", "project-1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
     parentPort.emit("message", {
@@ -1594,6 +1645,37 @@ describe("pty-host adversarial", () => {
     expect(dataPayloads(parentPort, "data-mirror")).toHaveLength(0);
   });
 
+  it("PORT_TEARDOWN_TELLS_MAIN_THE_VIEW_LOST_ITS_PORT (#12557)", async () => {
+    // Main's port-holder record is what decides whether a view counts as
+    // reachable by MessagePort. A teardown the host initiated is invisible to
+    // Main, so without this notice a window whose port failed stays ineligible
+    // for the fallback and a sibling's acceptance starves it.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
+    await flushMicrotasks();
+    parentPort.postMessage.mockClear();
+
+    parentPort.emit("message", { type: "disconnect-port", windowId: 1 });
+    await flushMicrotasks();
+
+    const notices = parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string; windowId: number } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as { type?: string }).type === "port-disconnected"
+      );
+    expect(notices).toHaveLength(1);
+    expect(notices[0].windowId).toBe(1);
+  });
+
   it("TIER_CHANGED_BROADCAST_RESPECTS_PROJECT_FILTER", async () => {
     // recomputeActivityTiers must push a tier-changed reconciliation message to
     // exactly the renderer ports that also receive the terminal's data — i.e.
@@ -1604,8 +1686,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     await flushMicrotasks();
 
     // Window 2 owns project-2 first so the later window-1 recompute is the one
@@ -2007,8 +2095,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     await flushMicrotasks();
 
@@ -2059,8 +2153,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     await flushMicrotasks();
 
@@ -2095,8 +2195,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     await flushMicrotasks();
 
@@ -2128,7 +2234,10 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portThrowing = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
     parentPort.emit("message", {
       data: { type: "connect-port", windowId: 2 },
       ports: [portThrowing],
@@ -2164,8 +2273,14 @@ describe("pty-host adversarial", () => {
     const portA = createRendererPort();
     const portB = createRendererPort();
     const portC = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { data: { type: "connect-port", windowId: 3 }, ports: [portC] });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     await flushMicrotasks();
@@ -2235,8 +2350,14 @@ describe("pty-host adversarial", () => {
 
     const portA = createRendererPort();
     const portB = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [portA],
+    });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 2, holderWebContentsId: 102 },
+      ports: [portB],
+    });
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
     parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
     await flushMicrotasks();
@@ -2326,7 +2447,10 @@ describe("pty-host adversarial", () => {
     hostState.terminals.set("t1", createTerminal("t1"));
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     await flushMicrotasks();
 
     const batcher = hostState.batchers[0];
@@ -2356,7 +2480,10 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     await flushMicrotasks();
 
     // Window 1's port queue pauses t1 — the pause-start rides the funnel and
@@ -2381,7 +2508,10 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "spawn", id: "t1", options: {} });
 
     const port = createRendererPort();
-    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [port],
+    });
     await flushMicrotasks();
 
     hostState.portQueueManagers[0].markPaused("t1");

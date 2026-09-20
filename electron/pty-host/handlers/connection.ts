@@ -43,6 +43,10 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       }
 
       const receivedPort = ports[0] as MessagePort;
+      // Opaque to the host — it only ever echoes this back so Main can address
+      // the exact view that read a chunk off this port (#12557).
+      const holderWebContentsId: number | undefined =
+        typeof msg.holderWebContentsId === "number" ? msg.holderWebContentsId : undefined;
       const existing = rendererConnections.get(windowId);
 
       // Duplicate port check
@@ -86,15 +90,17 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           );
           for (const batch of failedBatches) {
             if (batch.bytes <= 0) continue;
-            // Addressed to this window only (#12557). Everyone else already
+            // Addressed to this view alone (#12557). Everyone else already
             // has these bytes: sibling windows took them on their own ports,
             // and port-less views took them from the supplementary IPC
-            // fallback that this window's acceptance kept open.
+            // fallback that this window's acceptance kept open. Addressed by
+            // the holder's identity rather than its window, so a switch
+            // completing before Main routes this cannot redirect it.
             sendEvent({
               type: "data",
               id: batch.id,
               data: batchDataToString(batch.data),
-              portRecoveryWindowId: windowId,
+              portRecoveryWebContentsId: holderWebContentsId,
             });
           }
           disconnectWindow(windowId, "postMessage-error");
@@ -203,6 +209,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
         closeHandler,
         portQueueManager: perWindowQueueManager,
         batcher: perWindowBatcher,
+        holderWebContentsId,
       });
       console.log(`[PtyHost] MessagePort listener installed for window ${windowId}`);
     },
@@ -256,12 +263,13 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           for (const batch of failedBatches) {
             if (batch.bytes <= 0) continue;
             // Same single-recipient recovery as the window port above: the
-            // engaged worker belongs to this window's port-holding view.
+            // engaged worker belongs to the window's port-holding view, so it
+            // is addressed by that same identity.
             sendEvent({
               type: "data",
               id: batch.id,
               data: batchDataToString(batch.data),
-              portRecoveryWindowId: windowId,
+              portRecoveryWebContentsId: rendererConnections.get(windowId)?.holderWebContentsId,
             });
           }
           disconnectTerminalWorkerPort(windowId, terminalId, "postMessage-error");
@@ -335,10 +343,13 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       // filtering as we go would let a malformed payload erase the current
       // protection and reopen the starvation — the one direction this message
       // must never fail in. An empty array is legitimate and still clears.
-      if (
+      // Indexed rather than `.some()`, which skips holes: a sparse array like
+      // `["a", <hole>]` would pass and then insert `undefined` into the set.
+      const malformed =
         !Array.isArray(projectIds) ||
-        projectIds.some((projectId) => typeof projectId !== "string" || !projectId)
-      ) {
+        projectIds.length !== Object.keys(projectIds).length ||
+        projectIds.some((projectId) => typeof projectId !== "string" || !projectId);
+      if (malformed) {
         console.warn(
           "[PtyHost] set-fallback-eligible-projects payload is not a list of project ids, ignoring"
         );

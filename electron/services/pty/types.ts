@@ -248,8 +248,8 @@ export interface TerminalInfo extends TerminalPublicState {
 
 /** Per-chunk delivery hints from the pty-host; see {@link PtyManagerEvents.data}. */
 export interface PtyDataRouting {
-  portDeliveredWindowIds?: number[];
-  portRecoveryWindowId?: number;
+  portDeliveredWebContentsIds?: number[];
+  portRecoveryWebContentsId?: number;
 }
 
 export interface PtyManagerEvents {
@@ -257,14 +257,19 @@ export interface PtyManagerEvents {
    * `routing` is present only when the chunk needs more than a project-scoped
    * broadcast (#12557):
    *
-   * - `portDeliveredWindowIds` — the host kept the IPC fallback open for a
-   *   view that holds no MessagePort, so these windows' port holders already
-   *   have the chunk and must be dropped from the fan-out.
-   * - `portRecoveryWindowId` — this window's port threw mid-flush and every
-   *   other destination already has the chunk, so it goes to that window's
-   *   port holder and nobody else.
+   * - `portDeliveredWebContentsIds` — the host kept the IPC fallback open for a
+   *   view that holds no MessagePort, so these views already have the chunk and
+   *   must be dropped from the fan-out.
+   * - `portRecoveryWebContentsId` — this view's port threw mid-flush and every
+   *   other destination already has the chunk, so it goes to that view alone.
+   *
+   * Both are WebContents ids the host echoes back from the `connect-port` that
+   * brokered the connection, so they name the actual recipient even when the
+   * window's holder has changed since the chunk was sent.
    */
   data: (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => void;
+  /** A window's renderer MessagePort connection was torn down in the host (#12557). */
+  "port-disconnected": (windowId: number, reason: string) => void;
   exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;

@@ -412,6 +412,8 @@ export class PtyClient extends EventEmitter {
   private lastResourceProfile: ResourceProfile | null = null;
   /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
   private fallbackEligibleProjects: string[] = [];
+  /** Per-connection holder identity, echoed to the host on every (re)connect (#12557). */
+  private windowPortHolders = new Map<number, number>();
   private lastProcessTreePollIntervalMs: number | null = null;
 
   /**
@@ -1451,7 +1453,15 @@ export class PtyClient extends EventEmitter {
    * old shard gets an explicit disconnect so it can tear down its per-window
    * queue/batcher state.
    */
-  connectMessagePort(windowId: number, port: MessagePortMain): void {
+  connectMessagePort(windowId: number, port: MessagePortMain, holderWebContentsId?: number): void {
+    // Remembered per connection so the internal re-entries (shard reroute,
+    // restart replay, pending-port flush) carry the same identity as the
+    // original broker — they re-send the same port, so the recipient is
+    // unchanged and must keep being named (#12557).
+    if (holderWebContentsId !== undefined) {
+      this.windowPortHolders.set(windowId, holderWebContentsId);
+    }
+    const holderId = this.windowPortHolders.get(windowId);
     const targetKey = this.shardKeyForWindowContext(windowId);
     const target = this.ensureShard(targetKey);
 
@@ -1490,7 +1500,10 @@ export class PtyClient extends EventEmitter {
     }
 
     try {
-      target.lifecycle.child.postMessage({ type: "connect-port", windowId }, [port]);
+      target.lifecycle.child.postMessage(
+        { type: "connect-port", windowId, holderWebContentsId: holderId },
+        [port]
+      );
       if (process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyClient] MessagePort forwarded to Pty Host for window ${windowId}`);
       }
@@ -1578,6 +1591,7 @@ export class PtyClient extends EventEmitter {
     this.windowPortShard.delete(windowId);
     this.windowProjectContexts.delete(windowId);
     this.windowFocusedTerminals.delete(windowId);
+    this.windowPortHolders.delete(windowId);
     (this.shards.get(portKey ?? DEFAULT_SHARD_KEY) ?? this.defaultShard).send({
       type: "disconnect-port",
       windowId,

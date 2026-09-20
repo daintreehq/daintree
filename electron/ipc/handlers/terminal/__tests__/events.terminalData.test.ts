@@ -150,47 +150,57 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
     it("skips the port holder of a window the host already fed (#12557)", () => {
       // Window 1's active project-A view read the chunk off its MessagePort, so
       // the host named window 1 while keeping the fallback open for window 2's
-      // cached copy. Re-sending to the port holder would dispatch the same
-      // bytes into its xterm a second time — terminalClient.onData subscribes
-      // to both transports.
-      holdPortIn(1, activeA);
-      holdPortIn(2, activeB);
+      // cached copy. Re-sending to that view would dispatch the same bytes
+      // into its xterm a second time — terminalClient.onData subscribes to
+      // both transports.
 
-      ptyClient.emit("data", "term-a", "working... step 1", { portDeliveredWindowIds: [1] });
+      ptyClient.emit("data", "term-a", "working... step 1", {
+        portDeliveredWebContentsIds: [activeA.id],
+      });
 
       expect(dataSends(activeA)).toHaveLength(0);
       expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "working... step 1"]]);
     });
 
-    it("delivers to every project view when the host fed no window on a port", () => {
+    it("delivers to every project view when the host fed nobody on a port", () => {
       // No port acceptance anywhere: the list is absent and routing is exactly
       // what it was before #12557.
-      holdPortIn(1, activeA);
-
       ptyClient.emit("data", "term-a", "output");
 
       expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
       expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
     });
 
-    it("still delivers to a named window whose port holder is unknown", () => {
-      // Mid-switch a window can be named before Main has recorded its new port
-      // holder. Dropping nothing is the safe direction: a duplicated chunk is
-      // recoverable noise, a silently starved view is the bug being fixed.
-      ptyClient.emit("data", "term-a", "output", { portDeliveredWindowIds: [1] });
+    it("ignores a delivered id that matches no view of the project", () => {
+      // A view torn down between the host writing to its port and Main routing
+      // the fallback. Excluding an id nobody matches is a no-op, so every live
+      // view still receives the chunk.
+      ptyClient.emit("data", "term-a", "output", { portDeliveredWebContentsIds: [999_999] });
 
       expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
       expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
     });
 
+    it("excludes the recipient even after its window's holder moved on (#12557)", () => {
+      // The race the identity carriage exists for: the host wrote the chunk to
+      // window 1's project-A view, then window 1 switched to project B before
+      // Main routed the fallback. Resolving the recipient from the window would
+      // now exclude the B view and re-deliver into the A view that already
+      // parsed it; the echoed identity still names the A view.
+      holdPortIn(1, activeB);
+
+      ptyClient.emit("data", "term-a", "step", { portDeliveredWebContentsIds: [activeA.id] });
+
+      expect(dataSends(activeA)).toHaveLength(0);
+      expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "step"]]);
+    });
+
     it("routes a port-flush recovery batch to that window's holder alone (#12557)", () => {
-      // The window's port threw mid-flush. Everyone else already has these
+      // The view's port threw mid-flush. Everyone else already has these
       // bytes — siblings from their own ports, port-less views from the
       // supplementary fallback — so a re-broadcast would double-deliver.
-      holdPortIn(1, activeA);
-      holdPortIn(2, activeB);
 
-      ptyClient.emit("data", "term-a", "recovered", { portRecoveryWindowId: 1 });
+      ptyClient.emit("data", "term-a", "recovered", { portRecoveryWebContentsId: activeA.id });
 
       expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "recovered"]]);
       expect(dataSends(cachedA)).toHaveLength(0);
@@ -198,10 +208,10 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
       expect(dataSends(cachedB)).toHaveLength(0);
     });
 
-    it("drops a recovery batch for a window with no confirmed holder (#12557)", () => {
+    it("drops a recovery batch whose view is already gone (#12557)", () => {
       // Nothing can be addressed, and smearing it across the project would
       // duplicate into every view that already has it.
-      ptyClient.emit("data", "term-a", "recovered", { portRecoveryWindowId: 1 });
+      ptyClient.emit("data", "term-a", "recovered", { portRecoveryWebContentsId: 999_999 });
 
       for (const wc of [activeA, cachedA, activeB, cachedB]) {
         expect(dataSends(wc)).toHaveLength(0);
@@ -220,9 +230,9 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
       // `PtyClient.kill()` drops the spawn record, while chunks the host
       // already emitted are still arriving. The unscoped fan-out must not
       // hand one back to the view that read it off its port.
-      holdPortIn(1, activeA);
-
-      ptyClient.emit("data", "term-untracked", "late output", { portDeliveredWindowIds: [1] });
+      ptyClient.emit("data", "term-untracked", "late output", {
+        portDeliveredWebContentsIds: [activeA.id],
+      });
 
       expect(dataSends(activeA)).toHaveLength(0);
       expect(dataSends(cachedA)).toEqual([

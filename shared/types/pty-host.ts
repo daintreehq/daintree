@@ -347,7 +347,12 @@ export type PtyHostRequest =
       analysisBuffer: SharedArrayBuffer;
       visualSignalBuffer: SharedArrayBuffer;
     }
-  | { type: "connect-port"; windowId: number }
+  // `holderWebContentsId` is the view Main delivered the renderer end to. The
+  // host stores it opaquely and echoes it on every chunk that port accepts
+  // (#12557), so Main can exclude the exact recipient instead of re-deriving
+  // one from a window mapping that may have moved on since. Absent for
+  // synthetic connections (SurfacePortBroker) that own no project view.
+  | { type: "connect-port"; windowId: number; holderWebContentsId?: number }
   // Dedicated per-terminal worker-ingest ports (issue #10960): the port rides
   // the postMessage transfer list, exactly like connect-port.
   | { type: "connect-terminal-port"; windowId: number; id: string }
@@ -569,24 +574,36 @@ export type PtyHostEvent =
   // A structured logger entry the host already wrote to the shared log file.
   // Main mirrors it into its buffer/renderer without writing it again.
   | HostLogEvent
-  // `portDeliveredWindowIds` names the windows whose MessagePort batcher already
-  // accepted this chunk. Non-empty only when the fallback fired anyway to reach a
-  // cached duplicate view (#12557); Main drops each listed window's port-holder
-  // WebContents from the fan-out so the view that read the chunk off its port
-  // never parses it a second time. Absent/empty = nobody got it on a port, i.e.
-  // the original unrestricted project-scoped fallback.
-  // `portRecoveryWindowId` inverts the routing: this chunk was already
-  // delivered everywhere EXCEPT this window, whose port threw mid-flush, so
-  // Main sends it to that window's port holder alone. A plain re-broadcast
-  // would re-deliver to every sibling that took it on its own port and to
-  // every port-less view the supplementary fallback already fed.
+  // `portDeliveredWebContentsIds` names the VIEWS whose MessagePort batcher
+  // already accepted this chunk, echoed from the `connect-port` that brokered
+  // each connection. Non-empty only when the fallback fired anyway to reach a
+  // view holding no port (#12557); Main drops exactly these WebContents from
+  // the fan-out so a view that read the chunk off its port never parses it a
+  // second time. Carrying the identity — rather than a windowId Main would
+  // have to re-resolve — is what makes this correct across a project switch,
+  // where the window's holder can change between the host sending the chunk
+  // and Main routing it. Absent/empty = nobody got it on a port, i.e. the
+  // original unrestricted project-scoped fallback.
+  //
+  // `portRecoveryWebContentsId` inverts the routing: this chunk was already
+  // delivered everywhere EXCEPT this view, whose port threw mid-flush, so Main
+  // sends it to that view alone. A plain re-broadcast would re-deliver to every
+  // sibling that took it on its own port and to every port-less view the
+  // supplementary fallback already fed.
   | {
       type: "data";
       id: string;
       data: string;
-      portDeliveredWindowIds?: number[];
-      portRecoveryWindowId?: number;
+      portDeliveredWebContentsIds?: number[];
+      portRecoveryWebContentsId?: number;
     }
+  // A window's renderer connection is gone (#12557). Main clears its record of
+  // that window's port holder so the view stops being treated as reachable by
+  // MessagePort and becomes eligible for the IPC fallback again. Widening
+  // eligibility is always safe here: chunk routing excludes recipients by the
+  // identity the host echoes, never by this record, so a late or redundant
+  // notice costs one extra fallback event and can never double-deliver.
+  | { type: "port-disconnected"; windowId: number; reason: string }
   // Main-process-only copy of a chunk the renderer already received on its
   // visual path (MessagePort) or that the background gate suppressed. Consumed
   // by Main-side monitors (DevPreviewSessionService/UrlDetector) and NEVER

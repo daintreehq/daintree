@@ -8,10 +8,7 @@ import {
   broadcastToProjectRenderersExcept,
   broadcastToRenderer,
 } from "../../utils.js";
-import {
-  getPortHolderWebContents,
-  getPortHolderWebContentsId,
-} from "../../../window/webContentsRegistry.js";
+import { resolveLiveWebContents } from "../../../window/webContentsRegistry.js";
 import { logInfo, logWarn } from "../../../utils/logger.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
@@ -43,15 +40,14 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   // the owning project's views host a panel for the terminal, and its cached
   // views must still get every byte, since there is no resync on reactivation.
   const handlePtyData = (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => {
-    // Recovery for one window whose port threw mid-flush (#12557). Every other
-    // destination already has these bytes, so this goes to that window's port
-    // holder and nobody else — a re-broadcast would double-deliver to the
-    // siblings that took it on their own ports and to the port-less views the
-    // supplementary fallback already fed. No confirmed holder means the view
-    // never received a port, so nothing can be addressed and the batch is
-    // dropped rather than smeared across the project.
-    if (routing?.portRecoveryWindowId !== undefined) {
-      const holder = getPortHolderWebContents(routing.portRecoveryWindowId);
+    // Recovery for one view whose port threw mid-flush (#12557). Every other
+    // destination already has these bytes, so this goes to that view alone — a
+    // re-broadcast would double-deliver to the siblings that took it on their
+    // own ports and to the port-less views the supplementary fallback already
+    // fed. The host names the view by the identity Main gave it at connect
+    // time, so a project switch completing in between cannot redirect it.
+    if (routing?.portRecoveryWebContentsId !== undefined) {
+      const holder = resolveLiveWebContents(routing.portRecoveryWebContentsId);
       if (!holder) return;
       try {
         holder.send(CHANNELS.TERMINAL_DATA, id, data);
@@ -62,18 +58,12 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
     }
 
     // The host only sends this list when it deliberately kept the fallback open
-    // for a view its MessagePort routing cannot reach (#12557). Those windows'
-    // port holders already have the chunk; every other view of the project —
-    // cached and mid-handoff ones included — still needs it.
-    let exclude: Set<number> | null = null;
-    const delivered = routing?.portDeliveredWindowIds;
-    if (delivered && delivered.length > 0) {
-      exclude = new Set<number>();
-      for (const windowId of delivered) {
-        const holder = getPortHolderWebContentsId(windowId);
-        if (holder !== undefined) exclude.add(holder);
-      }
-    }
+    // for a view its MessagePort routing cannot reach (#12557). These views
+    // already have the chunk; every other view of the project — cached and
+    // mid-handoff ones included — still needs it. The ids are the recipients
+    // the host actually wrote to, so no re-derivation can go stale here.
+    const delivered = routing?.portDeliveredWebContentsIds;
+    const exclude = delivered && delivered.length > 0 ? new Set(delivered) : null;
     broadcastToProjectRenderersExcept(
       ptyClient.getTerminalProjectId(id),
       exclude,

@@ -725,6 +725,11 @@ function disconnectWindow(windowId: number, reason: string): void {
   }
 
   rendererConnections.delete(windowId);
+  // Tell Main the view that held this port no longer has one (#12557). Without
+  // it a window whose port failed keeps counting as reachable, and a sibling
+  // window accepting the chunk suppresses the fallback its view now depends
+  // on — the same starvation this issue fixed, narrowed to a failed port.
+  sendEvent({ type: "port-disconnected", windowId, reason });
   // Keep the active project mapping across transient renderer-port failures.
   // Without it, a multi-view window whose MessagePort just failed falls back
   // to the single-consumer SAB path and another cached view can consume/drop
@@ -939,7 +944,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   const termProjectId = terminalInfo?.projectId ?? null;
   const needsEligibleFallback =
     termProjectId !== null && fallbackEligibleProjects.has(termProjectId);
-  const portDeliveredWindowIds: number[] = [];
+  const portDeliveredWebContentsIds: number[] = [];
 
   if (
     !isSuspended &&
@@ -1001,7 +1006,12 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         const sink = workerConn?.engaged ? workerConn : conn;
         if (sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput)) {
           visualWritten = true;
-          portDeliveredWindowIds.push(windowId);
+          // Identified by the view Main brokered the port to, not by window:
+          // the window's holder can change between here and Main routing the
+          // fallback, and only the identity survives that (#12557).
+          if (conn.holderWebContentsId !== undefined) {
+            portDeliveredWebContentsIds.push(conn.holderWebContentsId);
+          }
         } else {
           // The data-loss pulse rides the WINDOW port either way — the
           // renderer's terminal-status subscribers only listen there.
@@ -1292,12 +1302,12 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       ipcQueueManager.addBytes(id, dataBytes);
       const utilization = ipcQueueManager.getUtilization(id);
 
-      // Send the data via IPC. The delivered-window list is omitted entirely in
+      // Send the data via IPC. The delivered-view list is omitted entirely in
       // the ordinary case so the wire shape and Main's fan-out are untouched
       // whenever no port-less view forced the fallback open.
       sendEvent(
-        portDeliveredWindowIds.length > 0
-          ? { type: "data", id, data: dataString, portDeliveredWindowIds }
+        portDeliveredWebContentsIds.length > 0
+          ? { type: "data", id, data: dataString, portDeliveredWebContentsIds }
           : { type: "data", id, data: dataString }
       );
       ipcDataEmitted = true;
