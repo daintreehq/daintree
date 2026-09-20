@@ -155,6 +155,7 @@
     "codegen:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts",
     "codegen:plugin-schema": "tsx scripts/codegen/plugin-json-schema.ts",
     "codegen:plugin-actions": "tsx scripts/codegen/plugin-actions-doc.ts",
+    "codegen:agent-capabilities": "tsx scripts/codegen/agent-capabilities.ts",
     "check:plugin-actions": "tsx scripts/codegen/plugin-actions-doc.ts --check",
     "check:plugin-schema": "tsx scripts/codegen/plugin-json-schema.ts --check",
     "check:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts --check",
