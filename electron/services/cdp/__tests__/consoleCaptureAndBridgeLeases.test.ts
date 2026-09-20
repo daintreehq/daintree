@@ -202,6 +202,7 @@ describe("console capture and the site preview bridge on one guest", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: WEB_CONTENTS_ID,
     });
     emit("Runtime.executionContextCreated", {
       context: { id: MAIN_CONTEXT_ID, auxData: { isDefault: true, frameId: MAIN_FRAME_ID } },
@@ -237,6 +238,7 @@ describe("console capture and the site preview bridge on one guest", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: WEB_CONTENTS_ID,
     });
 
     // One enable, so one replay: the bridge's old disable/enable cycle would
@@ -260,6 +262,7 @@ describe("console capture and the site preview bridge on one guest", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: WEB_CONTENTS_ID,
     });
 
     await getHandler("webview:start-console-capture")(null, WEB_CONTENTS_ID, "pane-1");
@@ -288,6 +291,7 @@ describe("console capture and the site preview bridge on one guest", () => {
       panelId: PANEL_ID,
       adapterId: ADAPTER_ID,
       mode: "browse",
+      subscriberWebContentsId: WEB_CONTENTS_ID,
     });
 
     await getHandler("webview:start-console-capture")(null, WEB_CONTENTS_ID, "pane-1");
