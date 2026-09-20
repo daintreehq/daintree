@@ -37,6 +37,7 @@ import os from "os";
 import path from "path";
 import { performance } from "node:perf_hooks";
 import { PERF_MARKS } from "../../../shared/perf/marks.js";
+import type { HostLogEvent } from "../../../shared/types/host-log.js";
 import type {
   CrashType,
   HostCrashPayload,
@@ -177,6 +178,13 @@ export interface PtyHostLifecycleCallbacks {
   onBeforeRestart: () => void;
   /** Returns whether PtyClient.isDisposed is true. */
   isDisposed: () => boolean;
+  /**
+   * Receive a structured entry the host already wrote to the shared log file.
+   * Intercepted ahead of {@link onMessage} so a log never reaches the event
+   * router, the domain bus, or the broker. PtyClient mirrors it into Main's
+   * buffer and the renderer without writing it again (#12544).
+   */
+  onHostLog: (event: HostLogEvent) => void;
   /** Logger functions. Decoupled from any specific logger implementation. */
   logInfo: (message: string) => void;
   logWarn: (message: string) => void;
@@ -381,6 +389,10 @@ export class PtyHostLifecycle {
     this.installHostLogForwarding();
 
     this.child.on("message", (msg: PtyHostEvent) => {
+      if (msg.type === "log") {
+        this.callbacks.onHostLog(msg);
+        return;
+      }
       this.callbacks.onMessage(msg);
     });
 
@@ -588,11 +600,37 @@ export class PtyHostLifecycle {
     this.hostStdoutBuffer = "";
     this.hostStderrBuffer = "";
 
+    // Every handler below is scoped to the child it was installed for. A
+    // restart clears the buffers for the new host, so a dead pipe closing
+    // afterwards would otherwise flush — and discard — its successor's
+    // partial line. `null` still counts as ours: `exit` clears `child` before
+    // the pipes finish draining, and that tail is exactly what close-time
+    // flushing exists to capture.
+    const owner = this.child;
+    const isCurrent = (): boolean => this.child === owner || this.child === null;
+
     const stdout = (this.child as unknown as { stdout?: NodeJS.ReadableStream }).stdout;
     const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
 
-    stdout?.on("data", (chunk: Buffer) => this.forwardHostOutput("stdout", chunk));
-    stderr?.on("data", (chunk: Buffer) => this.forwardHostOutput("stderr", chunk));
+    stdout?.on("data", (chunk: Buffer) => {
+      if (isCurrent()) this.forwardHostOutput("stdout", chunk);
+    });
+    stderr?.on("data", (chunk: Buffer) => {
+      if (isCurrent()) this.forwardHostOutput("stderr", chunk);
+    });
+    // Swallow post-exit pipe errors so an unhandled Readable error can't
+    // surface as an uncaughtException after the host is already shutting down.
+    stdout?.on("error", () => {});
+    stderr?.on("error", () => {});
+    // Flush any partial line buffered at close — 'exit' fires before the pipes
+    // fully drain, so the tail of a crash stack trace arrives after the
+    // exit-time flush has already cleared the buffer.
+    stdout?.on("close", () => {
+      if (isCurrent()) this.flushHostOutputBuffers();
+    });
+    stderr?.on("close", () => {
+      if (isCurrent()) this.flushHostOutputBuffers();
+    });
   }
 
   private forwardHostOutput(kind: "stdout" | "stderr", chunk: Buffer): void {

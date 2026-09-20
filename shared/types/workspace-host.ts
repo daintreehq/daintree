@@ -11,6 +11,7 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
+import type { HostLogEvent } from "./host-log.js";
 import type { BranchInfo, CreateWorktreeOptions, RepoState, WorktreeChanges } from "./git.js";
 import type {
   Worktree,
@@ -740,6 +741,9 @@ export type WorkspaceHostEvent =
   // Lifecycle events
   | { type: "ready" }
   | { type: "pong" }
+  // A structured logger entry the host already wrote to the shared log file.
+  // Main mirrors it into its buffer/renderer without writing it again.
+  | HostLogEvent
   // Teardown reports, sent only after the parent's `dispose` request. The
   // parent keeps the latest progress so a force-kill can say what the host was
   // stuck on, and treats `disposed` as the host's promise to exit next tick.

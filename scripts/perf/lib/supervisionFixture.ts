@@ -1309,6 +1309,7 @@ async function makePtyAdapter(): Promise<LadderAdapter> {
       onForkFailed: () => {},
       onBeforeRestart: () => {},
       isDisposed: () => false,
+      onHostLog: () => {},
       logInfo: () => {},
       logWarn: () => {},
     }
@@ -1793,6 +1794,7 @@ async function probeClassification(): Promise<ClassificationResult> {
       onForkFailed: () => {},
       onBeforeRestart: () => {},
       isDisposed: () => false,
+      onHostLog: () => {},
       logInfo: () => {},
       logWarn: () => {},
     }

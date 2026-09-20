@@ -22,6 +22,7 @@ import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { isErrorLike } from "../../shared/utils/ipcErrorSerialization.js";
 import { serializeErrorForLog } from "../../shared/utils/logErrorNormalization.js";
 import { getWritesSuppressed } from "../services/diskPressureState.js";
+import type { HostLogEvent } from "../../shared/types/host-log.js";
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 
@@ -228,6 +229,17 @@ export function resetLoggerStateForTesting(): void {
   loggerRegistry.clear();
   levelOverrides.clear();
   defaultLevel = IS_DEBUG_BOOT ? "debug" : "info";
+  // Drop the renderer transport and anything queued behind it, so a suite that
+  // registered a fake broadcast can't keep receiving entries from the next one
+  // (or leave a live throttle timer behind).
+  registeredBroadcast = null;
+  registeredHasWindow = null;
+  pendingLogs = [];
+  lastLogTime = 0;
+  if (throttleTimeout) {
+    clearTimeout(throttleTimeout);
+    throttleTimeout = null;
+  }
 }
 
 export function pruneOldLogs(basePath: string, retentionDays: number | 0): void {
@@ -460,6 +472,23 @@ function detectProcessTag(): "main" | "pty-host" | "workspace-host" | "utility" 
 
 const PROCESS_TAG = detectProcessTag();
 
+/**
+ * Whether this process hands its structured entries to Main over the host
+ * event channel instead of mirroring them to the console (#12544).
+ *
+ * Main pipes both managed hosts' stdout/stderr and re-logs every line, so a
+ * console mirror here becomes a second file record that has lost the entry's
+ * level and expanded its context into extra INFO lines. Sending the entry as
+ * a typed event instead leaves stdout carrying only genuinely raw output —
+ * native crashes, uncaught exceptions, third-party noise — which Main can go
+ * on forwarding verbatim without having to tell the two apart.
+ *
+ * `detectProcessTag()` keys off `process.parentPort`, so these two tags imply
+ * a parent port existed at import: a host run standalone reports `"main"` and
+ * keeps its console output.
+ */
+const FORWARDS_LOGS_TO_PARENT = PROCESS_TAG === "pty-host" || PROCESS_TAG === "workspace-host";
+
 function processWildcardKey(loggerName: string): string {
   const colon = loggerName.indexOf(":");
   if (colon <= 0) return `${PROCESS_TAG}:*`;
@@ -633,6 +662,101 @@ function flushLogs(): void {
 
   if (pendingLogs.length > 0 && !throttleTimeout) {
     throttleTimeout = setTimeout(flushLogs, LOG_THROTTLE_MS);
+  }
+}
+
+/**
+ * Turn a host entry's serialized context back into a record for the buffer.
+ *
+ * The string is whatever the host's `safeStringify` produced, so it is either
+ * a JSON object or one of that helper's error sentinels. Anything that does
+ * not parse back to an object is preserved verbatim rather than dropped — a
+ * malformed context is still evidence, and losing it would be a worse outcome
+ * than an oddly-shaped one.
+ */
+function parseHostLogContext(contextJson: string | undefined): LogContext | undefined {
+  if (!contextJson) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(contextJson);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as LogContext;
+    }
+  } catch {
+    // Fall through to the verbatim form below.
+  }
+  return { serializedContext: contextJson };
+}
+
+/**
+ * Mirror a utility host's structured entry into Main's buffer and renderer.
+ *
+ * Deliberately does **not** write to file: the host already wrote this entry
+ * to the shared log itself, and writing it again is the duplication #12544
+ * exists to remove. It also skips `shouldLog` — the host applied Main's own
+ * replayed level overrides before sending, so re-filtering here could only
+ * discard an entry that already passed the gate.
+ *
+ * Nothing on this path calls `emit`, so an ingested entry cannot loop back
+ * out as another log.
+ */
+export function ingestHostLogEvent(event: HostLogEvent): void {
+  if (typeof event?.message !== "string" || typeof event.source !== "string") return;
+
+  const entry = logBuffer.push({
+    timestamp: typeof event.timestamp === "number" ? event.timestamp : Date.now(),
+    level: event.level,
+    message: event.message,
+    context: parseHostLogContext(event.contextJson),
+    source: event.source,
+  });
+
+  sendLogToRenderer(entry);
+
+  if (!IS_TEST) {
+    const prefix = `[${event.level.toUpperCase()}] [${event.source}]`;
+    const consoleFn =
+      event.level === "error" ? console.error : event.level === "warn" ? console.warn : console.log;
+    consoleFn(`${prefix} ${event.message}`, event.contextJson ?? "");
+  }
+}
+
+/**
+ * Hand one already-scrubbed entry to Main over the host event channel.
+ *
+ * Called after the file write so a crash between the two still leaves the
+ * durable record behind. Delivery is best effort: Electron's parent port
+ * offers no acknowledgement, and a send that fails leaves the host's own file
+ * record as the surviving copy. It deliberately does not fall back to the
+ * console — that is the duplicate path, and reintroducing it exactly when the
+ * parent is still draining stdout would put the second record back.
+ */
+function forwardEntryToParent(
+  level: LogLevel,
+  source: string,
+  timestamp: number,
+  scrubbedMessage: string,
+  scrubbedContext: string
+): void {
+  if (!FORWARDS_LOGS_TO_PARENT) return;
+  const port = (process as { parentPort?: { postMessage?: (value: unknown) => void } }).parentPort;
+  if (typeof port?.postMessage !== "function") return;
+
+  const event: HostLogEvent = {
+    type: "log",
+    timestamp,
+    level,
+    source,
+    message: scrubbedMessage,
+  };
+  if (scrubbedContext) {
+    event.contextJson = scrubbedContext;
+  }
+
+  try {
+    port.postMessage(event);
+  } catch {
+    // The host's own file record is the durable copy; never log the failure
+    // from inside the logger.
   }
 }
 
@@ -979,8 +1103,9 @@ function emit(source: string, level: LogLevel, message: string, context?: LogCon
   const scrubbedMessage = scrubSecrets(message);
   const scrubbedContext = contextStr ? scrubSecrets(contextStr) : "";
   writeToLogFile(level.toUpperCase(), scrubbedMessage, scrubbedContext);
+  forwardEntryToParent(level, source, entry.timestamp, scrubbedMessage, scrubbedContext);
 
-  if (!IS_TEST) {
+  if (!IS_TEST && !FORWARDS_LOGS_TO_PARENT) {
     const prefix = `[${level.toUpperCase()}] [${source}]`;
     const consoleFn =
       level === "error" ? console.error : level === "warn" ? console.warn : console.log;
@@ -1012,8 +1137,9 @@ function emitError(source: string, message: string, error?: unknown, context?: L
   const scrubbedMessage = scrubSecrets(message);
   const scrubbedContext = scrubSecrets(contextStr);
   writeToLogFile("ERROR", scrubbedMessage, scrubbedContext);
+  forwardEntryToParent("error", source, entry.timestamp, scrubbedMessage, scrubbedContext);
 
-  if (!IS_TEST) {
+  if (!IS_TEST && !FORWARDS_LOGS_TO_PARENT) {
     console.error(`[ERROR] [${source}] ${scrubbedMessage}`, scrubbedContext);
   }
 }

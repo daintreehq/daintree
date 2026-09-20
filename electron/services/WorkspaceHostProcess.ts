@@ -16,7 +16,7 @@ import type {
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
-import { createLogger } from "../utils/logger.js";
+import { createLogger, ingestHostLogEvent } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
@@ -694,11 +694,24 @@ export class WorkspaceHostProcess extends EventEmitter {
     this.hostStdoutBuffer = "";
     this.hostStderrBuffer = "";
 
+    // Every handler below is scoped to the child it was installed for. A
+    // restart clears the buffers for the new host, so a dead pipe closing
+    // afterwards would otherwise flush — and discard — its successor's
+    // partial line. `null` still counts as ours: `exit` clears `child` before
+    // the pipes finish draining, and that tail is exactly what close-time
+    // flushing exists to capture.
+    const owner = this.child;
+    const isCurrent = (): boolean => this.child === owner || this.child === null;
+
     const stdout = (this.child as unknown as { stdout?: NodeJS.ReadableStream }).stdout;
     const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
 
-    stdout?.on("data", (chunk: Buffer) => this.forwardHostOutput("stdout", chunk));
-    stderr?.on("data", (chunk: Buffer) => this.forwardHostOutput("stderr", chunk));
+    stdout?.on("data", (chunk: Buffer) => {
+      if (isCurrent()) this.forwardHostOutput("stdout", chunk);
+    });
+    stderr?.on("data", (chunk: Buffer) => {
+      if (isCurrent()) this.forwardHostOutput("stderr", chunk);
+    });
     // Swallow post-exit pipe errors so an unhandled Readable error can't
     // surface as an uncaughtException after the host is already shutting down.
     stdout?.on("error", () => {});
@@ -706,8 +719,12 @@ export class WorkspaceHostProcess extends EventEmitter {
     // Flush any partial line buffered at close — 'exit' fires before pipes
     // fully drain, so the tail of a crash stack trace can arrive after the
     // exit-time flush would otherwise clear the buffer.
-    stdout?.on("close", () => this.flushHostOutputBuffers());
-    stderr?.on("close", () => this.flushHostOutputBuffers());
+    stdout?.on("close", () => {
+      if (isCurrent()) this.flushHostOutputBuffers();
+    });
+    stderr?.on("close", () => {
+      if (isCurrent()) this.flushHostOutputBuffers();
+    });
   }
 
   private flushHostOutputBuffers(): void {
@@ -1041,6 +1058,14 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   private processHostEvent(event: WorkspaceHostEvent): void {
+    // The host already wrote this entry to the shared log file; Main only
+    // mirrors it into its buffer and the renderer's live view. Handled ahead
+    // of the dispose guard so a teardown's own logs still arrive, and ahead of
+    // the domain switch so a log can never reach the broker or the plugin bus.
+    if (event.type === "log") {
+      ingestHostLogEvent(event);
+      return;
+    }
     // Teardown reports only exist after dispose, so they precede the guard.
     if (event.type === "dispose-progress" || event.type === "disposed") {
       this.handleDisposeReport(event);

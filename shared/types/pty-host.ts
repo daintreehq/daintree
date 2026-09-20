@@ -7,6 +7,7 @@
  * All types are serializable (no functions, no circular refs) for IPC transport.
  */
 
+import type { HostLogEvent } from "./host-log.js";
 import type { AgentState, AgentId, WaitingReason } from "./agent.js";
 import type { PanelKind, TerminalFlowStatus, PanelTitleMode } from "./panel.js";
 import type { ResourceProfile } from "./resourceProfile.js";
@@ -558,6 +559,9 @@ export interface PtyHostTerminalSnapshot {
  */
 export type PtyHostEvent =
   | PluginPtyHostEvent
+  // A structured logger entry the host already wrote to the shared log file.
+  // Main mirrors it into its buffer/renderer without writing it again.
+  | HostLogEvent
   | { type: "data"; id: string; data: string }
   // Main-process-only copy of a chunk the renderer already received on its
   // visual path (MessagePort) or that the background gate suppressed. Consumed

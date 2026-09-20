@@ -59,7 +59,7 @@ import os from "os";
 import path from "path";
 import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
-import { createLogger, isValidLogOverrideLevel } from "../utils/logger.js";
+import { createLogger, ingestHostLogEvent, isValidLogOverrideLevel } from "../utils/logger.js";
 import { store } from "../store.js";
 import { stripAssignedSessionIdArgs } from "../../shared/types/agentSettings.js";
 import { buildCommandLaunchShell } from "../ipc/handlers/terminal/commandLaunch.js";
@@ -537,6 +537,10 @@ export class PtyClient extends EventEmitter {
     if (this.shardCallbacksCache) return this.shardCallbacksCache;
     this.shardCallbacksCache = {
       onMessage: (shard, event) => this.handleShardEvent(shard, event),
+      // The host already wrote this entry to the shared log file — mirror it
+      // into Main's buffer and the renderer, never to disk again (#12544).
+      // Shard-agnostic: the entry carries its own source and timestamp.
+      onHostLog: (event) => ingestHostLogEvent(event),
       onExitSync: (shard, { fallbackCrashType }) => {
         shard.watchdog.stop();
         if (this.isDisposed) {

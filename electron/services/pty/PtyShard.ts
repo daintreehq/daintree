@@ -17,6 +17,7 @@
  */
 
 import type { MessagePortMain } from "electron";
+import type { HostLogEvent } from "../../../shared/types/host-log.js";
 import type {
   CrashType,
   HostCrashPayload,
@@ -70,6 +71,8 @@ export interface PtyShardCallbacks {
   onBrokerTimeout: (shard: PtyShard, requestId: string, method?: string) => void;
   /** Whether the owning PtyClient has been disposed. */
   isClientDisposed: () => boolean;
+  /** Receive a structured entry a host already wrote to the shared log file. */
+  onHostLog: (event: HostLogEvent) => void;
   logInfo: (message: string) => void;
   logWarn: (message: string) => void;
 }
@@ -134,6 +137,7 @@ export class PtyShard {
           this.needsRespawn = true;
         },
         isDisposed: () => this.retired || callbacks.isClientDisposed(),
+        onHostLog: callbacks.onHostLog,
         logInfo: callbacks.logInfo,
         logWarn: callbacks.logWarn,
       }
