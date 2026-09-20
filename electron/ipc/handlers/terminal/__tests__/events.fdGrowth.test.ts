@@ -119,6 +119,26 @@ describe("terminal event handlers — fd-growth (#12520)", () => {
     expect(message).not.toContain("apart");
   });
 
+  it("drops the elapsed claim when a recovery predates the episode it ends", () => {
+    // An episode outlives a clock stepped backwards, so the recovery can carry
+    // a timestamp earlier than its own start.
+    ptyClient.emit(
+      "fd-growth",
+      makePayload({
+        state: "recovered",
+        growth: 0,
+        descriptorTypes: undefined,
+        episodeStartedAt: 1_000_000,
+        timestamp: 1_000_000 - 5 * 60_000,
+      })
+    );
+
+    const [message] = logInfo.mock.calls[0] as [string];
+    expect(message).toContain("FD count back near baseline");
+    expect(message).not.toContain("after it rose");
+    expect(message).not.toMatch(/-\d+ min/);
+  });
+
   it("omits the type breakdown when the elevation carries none", () => {
     ptyClient.emit("fd-growth", makePayload({ descriptorTypes: undefined }));
 

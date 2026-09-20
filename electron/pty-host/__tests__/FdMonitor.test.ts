@@ -14,7 +14,14 @@ vi.mock("node:fs", () => ({
   fstatSync: (fd: number) => mockFstatSync(fd),
 }));
 
-import { FdMonitor, classifyFds, isProcessAlive, type FdSample } from "../FdMonitor.js";
+import {
+  FdMonitor,
+  classifyFds,
+  isProcessAlive,
+  MAX_SAMPLE_GAP_MS,
+  type FdSample,
+} from "../FdMonitor.js";
+import { FD_SAMPLE_INTERVAL_MS, FD_SAMPLE_POWER_MULTIPLIER } from "../ResourceGovernor.js";
 
 const INTERVAL = 30_000;
 const WARMUP = 2 * 60_000;
@@ -369,7 +376,6 @@ describe("FdMonitor", () => {
       sample(80, owners());
       expect(transitions).toHaveLength(1);
       expect(transitions[0]).toMatchObject({ state: "elevated", sustainedSamples: 5 });
-      // Dated from the reading after the gap, not the one before it.
       expect(transitions[0]?.episodeStartedAt).toBe(firstAfterGap);
     });
 
@@ -471,14 +477,13 @@ describe("FdMonitor", () => {
     });
 
     it("measures the gap from the last successful listing, not the last attempt", () => {
-      const { sample, skip, transitions } = calibrated();
+      const { sample, transitions } = calibrated();
       for (let i = 0; i < 4; i++) sample(80, owners());
 
-      // The listing keeps failing across the gap; none of those attempts count
-      // as a reading, so none of them can anchor the clock.
-      expect(sample(null, owners())).toBeNull();
-      skip(GAP);
-      expect(sample(null, owners())).toBeNull();
+      // Twenty failures, each one interval after the last: no two attempts are
+      // far apart, but the readings either side of them are, and it is the
+      // readings a streak compares.
+      for (let i = 0; i < 20; i++) expect(sample(null, owners())).toBeNull();
 
       sample(80, owners());
       expect(transitions).toEqual([]);
@@ -486,14 +491,27 @@ describe("FdMonitor", () => {
       expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
     });
 
-    it("leaves a short run of failed listings spanning no real gap alone", () => {
+    it("holds a streak together when the readings either side sit on the limit", () => {
       const { sample, transitions } = calibrated();
       for (let i = 0; i < 4; i++) sample(80, owners());
-      for (let i = 0; i < 3; i++) expect(sample(null, owners())).toBeNull();
 
-      // Four minutes between the readings either side: still consecutive.
+      // One failure fewer leaves exactly MAX_SAMPLE_GAP_MS between the
+      // readings, which is still close enough to be consecutive.
+      for (let i = 0; i < 19; i++) expect(sample(null, owners())).toBeNull();
+
       sample(80, owners());
       expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+    });
+
+    it("tolerates the longest cadence the governor will ever ask for", () => {
+      // FdMonitor cannot import the governor without a cycle, so the limit is
+      // sized against its constants here instead: the deepest power policy
+      // stretches the sample tenfold, and the timer realising it lands a tick
+      // late. Were the limit ever the smaller of the two, growth under that
+      // policy would reset every sample and never be reported at all.
+      expect(FD_SAMPLE_INTERVAL_MS * (FD_SAMPLE_POWER_MULTIPLIER.deep + 1)).toBeLessThan(
+        MAX_SAMPLE_GAP_MS
+      );
     });
   });
 

@@ -240,10 +240,13 @@ function formatFdGrowth(payload: FdGrowthPayload): string {
     `growth ${payload.growth} over the post-restore baseline of ${payload.baselineFds}`;
 
   if (payload.state === "recovered") {
-    const minutes = Math.round((payload.timestamp - payload.episodeStartedAt) / 60000);
+    // An episode outlives a clock stepped backwards, which would otherwise
+    // date its recovery before it started.
+    const elapsedMs = payload.timestamp - payload.episodeStartedAt;
+    const since = elapsedMs >= 0 ? `, ${Math.round(elapsedMs / 60000)} min after it rose` : "";
     return (
       `[TerminalDiagnostics] pty-host ${payload.hostPid} FD count back near baseline: ` +
-      `${counts} ${span}, ${minutes} min after it rose.`
+      `${counts} ${span}${since}.`
     );
   }
 

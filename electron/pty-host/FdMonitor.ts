@@ -43,7 +43,7 @@ const LOWER_BASELINE_SAMPLES = 3;
 // stretch, it stopped — the machine slept, or the host went that long without
 // a reading it could take — and the readings either side are two moments, not
 // a run. A clock stepped backwards leaves the same hole.
-const MAX_SAMPLE_GAP_MS = 10 * 60_000;
+export const MAX_SAMPLE_GAP_MS = 10 * 60_000;
 const MAX_INSPECTED_FDS = 1024;
 
 export type FdGrowthObservation = Omit<
@@ -192,12 +192,12 @@ export class FdMonitor {
   }
 
   /**
-   * Drops what was counted across consecutive readings and keeps what
-   * describes the host: the calibrated baseline still holds, since a gap
-   * opens and closes no descriptors, and retaking it would let growth that
-   * accrued before the gap settle into the floor it is measured against. An
-   * episode already reported stays open for the same reason — readings that
-   * were never taken are not evidence that it ended.
+   * Drops what was counted across consecutive readings and keeps what stands
+   * on its own. The calibrated baseline stays: readings nobody took are no
+   * evidence the floor moved, and retaking it here would let growth that
+   * accrued unseen settle into the very level it is measured against. An
+   * episode already reported stays open for the same reason — a gap is not
+   * evidence that it ended.
    */
   private discardStreaks(): void {
     this.settling = [];

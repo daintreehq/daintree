@@ -147,10 +147,13 @@ const WORKER_SAMPLE_MAX_AGE_MS = 10_000;
 // unplugged is exactly the one worth seeing. Same floors as
 // `powerPolicyPollMultiplier` gives each level. The orphan-PID sweep and the
 // memory and bounded-pause checks stay on every 2s tick.
-const FD_SAMPLE_POWER_MULTIPLIER: Record<Exclude<PowerPolicyLevel, "active">, number> = {
+export const FD_SAMPLE_POWER_MULTIPLIER: Record<Exclude<PowerPolicyLevel, "active">, number> = {
   saving: 2,
   deep: 10,
 };
+// Descriptor growth builds over open/close cycles, not seconds, so it is
+// sampled far less often than memory pressure.
+export const FD_SAMPLE_INTERVAL_MS = 30000;
 
 export class ResourceGovernor {
   private readonly MEMORY_LIMIT_PERCENT = 85;
@@ -182,9 +185,6 @@ export class ResourceGovernor {
   private readonly BYTES_PER_CELL = 12;
   private isThrottling = false;
   private checkInterval: NodeJS.Timeout | null = null;
-  // Descriptor growth builds over open/close cycles, not seconds, so it is
-  // sampled far less often than memory pressure.
-  private readonly FD_SAMPLE_INTERVAL_MS = 30000;
   private fdSampleInterval: NodeJS.Timeout | null = null;
   private fdSampleFailureLogged = false;
   private throttleStartTime = 0;
@@ -214,7 +214,7 @@ export class ResourceGovernor {
     this.checkInterval = setInterval(() => this.checkResources(), this.CHECK_INTERVAL_MS);
     console.log("[ResourceGovernor] Started monitoring memory usage");
     if (this.fdMonitor.supported) {
-      this.fdSampleInterval = setInterval(() => this.sampleFdUsage(), this.FD_SAMPLE_INTERVAL_MS);
+      this.fdSampleInterval = setInterval(() => this.sampleFdUsage(), FD_SAMPLE_INTERVAL_MS);
       console.log("[ResourceGovernor] FD monitoring enabled");
     }
   }
@@ -258,8 +258,8 @@ export class ResourceGovernor {
 
   /** The descriptor sample's effective spacing at the current power level. */
   private get fdSampleIntervalMs(): number {
-    if (this.powerLevel === "active") return this.FD_SAMPLE_INTERVAL_MS;
-    return this.FD_SAMPLE_INTERVAL_MS * FD_SAMPLE_POWER_MULTIPLIER[this.powerLevel];
+    if (this.powerLevel === "active") return FD_SAMPLE_INTERVAL_MS;
+    return FD_SAMPLE_INTERVAL_MS * FD_SAMPLE_POWER_MULTIPLIER[this.powerLevel];
   }
 
   /**
@@ -268,11 +268,16 @@ export class ResourceGovernor {
    * growth is evidence — otherwise at the level's stretched cadence.
    */
   private isFdSampleDue(now: number): boolean {
+    const elapsed = now - this.lastFdSampleAt;
     const due =
       this.powerLevel === "active" ||
       this.isThrottling ||
       this.isWarning ||
-      now - this.lastFdSampleAt >= this.fdSampleIntervalMs;
+      // A clock stepped backwards would otherwise hold the sample off until
+      // real time caught up, which is exactly the stretch of unobserved time
+      // the monitor needs to see for itself.
+      elapsed < 0 ||
+      elapsed >= this.fdSampleIntervalMs;
     if (due) this.lastFdSampleAt = now;
     return due;
   }
