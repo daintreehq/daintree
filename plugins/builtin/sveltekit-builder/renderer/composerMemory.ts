@@ -142,6 +142,19 @@ export function useComposerMemory(previewPanelId: string): ComposerMemory {
   return useSyncExternalStore(subscribe, () => readComposerMemory(previewPanelId));
 }
 
+/**
+ * Whether the composer is holding anything — a draft or a request in flight.
+ * A boolean rather than the memory itself, so the toolbar's disclosure toggle
+ * can track what the drawer has to show without re-rendering on every
+ * keystroke the way {@link useComposerMemory} would.
+ */
+export function useComposerOccupied(previewPanelId: string): boolean {
+  return useSyncExternalStore(subscribe, () => {
+    const memory = readComposerMemory(previewPanelId);
+    return memory.deliveries.length > 0 || memory.draft.trim() !== "";
+  });
+}
+
 export function __resetComposerMemoryForTests(): void {
   memories.clear();
   collapsedDrawers.clear();

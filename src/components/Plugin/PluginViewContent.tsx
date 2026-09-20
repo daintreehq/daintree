@@ -20,6 +20,7 @@ import {
   reportViewMounted,
   reportViewRenderFailed,
 } from "@/services/plugin/pluginPanelLifecycle";
+import { Package } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
 import { Skeleton, SkeletonHint } from "@/components/ui/Skeleton";
@@ -40,6 +41,9 @@ import {
   registerPluginStyleRoot,
 } from "@/services/plugin/pluginStyleContract";
 import { useBuiltinPanelView } from "@/registry/builtinRendererRegistry";
+import { Button } from "@/components/ui/button";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { actionService } from "@/services/ActionService";
 
 /**
  * The resolved subset of `PanelKindConfig` a plugin view actually needs. Both
@@ -827,16 +831,52 @@ export function makePluginViewContent(
             suppressed: focus arrives here programmatically, and a visible ring
             is what tells the user where it went. */}
         <div ref={statusRef} tabIndex={-1}>
-          <PluginViewRuntimeStatus
-            presentation={presentation}
-            panelDisplayName={displayName}
-            onRestartPlugin={handleRestartPlugin}
-            restarting={restarting}
-          />
+          {/* Worker state, which a plugin the user switched off does not have —
+              and a "Plugin stopped / Restart" line over the explanation below
+              would offer to restart something nobody asked to run. The wrapper
+              stays either way: it is where focus is rescued to. */}
+          {builtinDisabled ? null : (
+            <PluginViewRuntimeStatus
+              presentation={presentation}
+              panelDisplayName={displayName}
+              onRestartPlugin={handleRestartPlugin}
+              restarting={restarting}
+            />
+          )}
         </div>
-        {/* A disabled builtin renders no view. It must not fall through to the
-            `plugin://` path either: a builtin ships no bundle there to import.
-            A stale attempt waits one commit for the rebind effect. */}
+        {/* A disabled builtin renders no view — but a header over an empty pane
+            says nothing about why, so the pane says it instead, and points at
+            the one place the plugin can be switched back on. Outside the style
+            root, the boundary and the Suspense: none of them belong to a view
+            that was never built. */}
+        {builtinDisabled ? (
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto">
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              className="my-auto w-full shrink-0"
+              icon={<Package />}
+              title="Enable this plugin"
+              description={`${displayName} is turned off. Turn it back on in the plugin manager to use this view.`}
+              action={
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => {
+                    void actionService.dispatch("app.pluginManager", undefined, {
+                      source: "user",
+                    });
+                  }}
+                >
+                  Manage plugins
+                </Button>
+              }
+            />
+          </div>
+        ) : null}
+        {/* It must not fall through to the `plugin://` path either: a builtin
+            ships no bundle there to import. A stale attempt waits one commit
+            for the rebind effect. */}
         {builtinDisabled || attemptBuiltin !== builtinComponent ? null : (
           <ErrorBoundary
             // The attempt counter is the boundary's KEY, not its `resetKeys`.

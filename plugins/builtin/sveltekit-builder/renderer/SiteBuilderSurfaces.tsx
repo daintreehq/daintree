@@ -1,4 +1,5 @@
 import {
+  useCallback,
   useEffect,
   useRef,
   useSyncExternalStore,
@@ -49,11 +50,12 @@ import {
   composerMemoryKey,
   setDrawerCollapsed,
   useComposerMemory,
+  useComposerOccupied,
   useDrawerCollapsed,
 } from "./composerMemory.js";
 import { WaitingRow } from "./WaitingRow.js";
 import { IdentitySkeleton } from "./IdentitySkeleton.js";
-import { useDeferredLoading, useDohertyGate } from "@/hooks/useDeferredLoading";
+import { useDeferredLoading, useDohertyGate, useSkeletonFloor } from "@/hooks/useDeferredLoading";
 import { UI_STILL_WORKING_MS } from "@/lib/animationUtils";
 import { scopesFor, type CallSite } from "./agentTask.js";
 import {
@@ -115,17 +117,26 @@ function useSelectCrumb(
   controller: InspectorController | null,
   state: InspectorState,
   root: RefObject<HTMLElement | null>,
-  landing: (root: HTMLElement) => HTMLElement | null
+  landing: (root: HTMLElement) => HTMLElement | null,
+  /**
+   * Whether {@link landing}'s target is on screen yet. False while a surface is
+   * still holding a skeleton over the answer: the intent has to survive that,
+   * or focus is spent on a landing that has not been rendered.
+   */
+  landingReady = true
 ): ((usedAt: CallSite) => void) | undefined {
   // The generation the pick was made from; the answer advances it.
   const pending = useRef<{ generation: number; timer: ReturnType<typeof setTimeout> } | null>(null);
   const status = state.selection.status;
   const generation = state.selectionGeneration;
-  const drop = () => {
+  // Stable: both effects below take it as a dependency, and a fresh identity
+  // each render would make their dependency arrays meaningless. Only the ref is
+  // touched, so nothing here can go stale.
+  const drop = useCallback(() => {
     if (pending.current === null) return;
     clearTimeout(pending.current.timer);
     pending.current = null;
-  };
+  }, []);
   useEffect(() => {
     if (pending.current === null || status === "resolving") return;
     if (status !== "ready") {
@@ -133,11 +144,14 @@ function useSelectCrumb(
       return;
     }
     if (generation === pending.current.generation) return;
+    // The answer is in but its landing is not; the intent's own timeout still
+    // bounds the wait, and this runs again when the landing arrives.
+    if (!landingReady) return;
     drop();
     const target = root.current ? landing(root.current) : null;
     target?.focus();
-  });
-  useEffect(() => drop, []);
+  }, [status, generation, landingReady, root, landing, drop]);
+  useEffect(() => drop, [drop]);
   if (controller === null || !controller.canSelectComponent()) return undefined;
   return (usedAt) => {
     drop();
@@ -164,6 +178,21 @@ function stripLanding(root: HTMLElement): HTMLElement | null {
   return crumbs[crumbs.length - 1] ?? root.querySelector<HTMLElement>("button");
 }
 
+/**
+ * Whether the drawer has anything to disclose. The drawer's own open gate and
+ * the toolbar's disclosure state are the same question asked from two places,
+ * so they ask it once here — a toggle reporting "expanded" over a drawer that
+ * rendered nothing is a claim about an empty strip.
+ */
+function drawerHasDetails(state: InspectorState, composerOccupied: boolean): boolean {
+  return (
+    composerOccupied ||
+    state.selection.status !== "none" ||
+    state.issue !== null ||
+    workspaceNeedsAttention(state)
+  );
+}
+
 /** The drawer's identity block, which is there the moment the selection is ready. */
 function drawerLanding(root: HTMLElement): HTMLElement | null {
   return root.querySelector<HTMLElement>('[aria-label="Selected element"]');
@@ -180,6 +209,11 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
   const stripRef = useRef<HTMLDivElement | null>(null);
   const onStripKeyDown = useToolbarRoving(stripRef);
   const drawerCollapsed = useDrawerCollapsed(props.panelId);
+  // What the drawer would show, read here so the disclosure toggle can report
+  // whether pressing it actually reveals anything — the drawer keeps itself
+  // shut when there is nothing in it.
+  const composerOccupied = useComposerOccupied(composerMemoryKey(props.panelId, props.worktreeId));
+  const hasDetails = drawerHasDetails(state, composerOccupied);
   const selectCrumb = useSelectCrumb(controller, state, stripRef, stripLanding);
   if (!controller) {
     return (
@@ -219,7 +253,7 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
           selectCrumb={selectCrumb}
         />
       </div>
-      <DrawerToggle panelId={props.panelId} />
+      <DrawerToggle panelId={props.panelId} expanded={hasDetails && !drawerCollapsed} />
       <Button
         variant="ghost"
         size="icon-xs"
@@ -233,16 +267,25 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
   );
 }
 
-function DrawerToggle({ panelId }: { panelId: string }) {
+/**
+ * The drawer's disclosure control. The name is the thing, not the next action,
+ * so it holds still while the state travels on `aria-expanded` — and the state
+ * is whether the drawer is actually showing, not merely whether it was folded
+ * away: it hides itself when there is nothing in it, and claiming expansion
+ * over an empty strip would be a claim about nothing.
+ *
+ * `aria-expanded`, not `aria-pressed`: the two must never appear together, and
+ * this shows and hides a region rather than latching a setting.
+ */
+function DrawerToggle({ panelId, expanded }: { panelId: string; expanded: boolean }) {
   const collapsed = useDrawerCollapsed(panelId);
-  const label = collapsed ? "Show details" : "Hide details";
   return (
     <Button
       variant="ghost"
       size="icon-xs"
-      aria-label={label}
-      aria-pressed={!collapsed}
-      title={label}
+      aria-label="Site Builder details"
+      aria-expanded={expanded}
+      title="Site Builder details"
       onClick={() => setDrawerCollapsed(panelId, !collapsed)}
     >
       {collapsed ? <PanelRightOpen aria-hidden="true" /> : <PanelRightClose aria-hidden="true" />}
@@ -496,16 +539,30 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
   const composer = useComposerMemory(memoryKey);
   const collapsed = useDrawerCollapsed(props.panelId);
   const drawerRef = useRef<HTMLElement | null>(null);
-  const selectCrumb = useSelectCrumb(controller, state, drawerRef, drawerLanding);
+  // Both halves of the loading contract, owned here rather than inside
+  // `ResolvingHeader`: the onset gate suppresses a skeleton for a resolve that
+  // beats 400ms, and the floor holds one that appeared for its minimum dwell.
+  // The header unmounts the instant the source lands, so a floor living in it
+  // would go with it — source resolution settles right around the gate, which
+  // is exactly the window a floorless skeleton flashes in.
+  const resolvingSkeleton = useSkeletonFloor(
+    useDohertyGate(state.selection.status === "resolving")
+  );
+  const selectCrumb = useSelectCrumb(
+    controller,
+    state,
+    drawerRef,
+    drawerLanding,
+    // The identity block is behind the skeleton until the floor releases, and
+    // it is where a crumb's focus lands.
+    !resolvingSkeleton
+  );
   if (!controller) return null;
   const selection = state.selection;
-  const workspaceNotice = workspaceNeedsAttention(state);
-  const open =
-    composer.deliveries.length > 0 ||
-    composer.draft.trim() !== "" ||
-    selection.status !== "none" ||
-    state.issue !== null ||
-    workspaceNotice;
+  const open = drawerHasDetails(
+    state,
+    composer.deliveries.length > 0 || composer.draft.trim() !== ""
+  );
   if (!open || collapsed) return null;
 
   return (
@@ -521,7 +578,11 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
     >
       {/* Pinned. A desktop inspector always says what is selected; a form
           scrolls it away. */}
-      {selection.status === "ready" ? (
+      {resolvingSkeleton || selection.status === "resolving" ? (
+        // The held skeleton outranks a ready identity: releasing it the frame
+        // the answer lands is the tear-down the floor exists to stop.
+        <ResolvingHeader skeleton={resolvingSkeleton} />
+      ) : selection.status === "ready" ? (
         <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3">
           <SelectionIdentity
             selection={selection}
@@ -529,8 +590,6 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
             onSelectComponent={selectCrumb}
           />
         </div>
-      ) : selection.status === "resolving" ? (
-        <ResolvingHeader />
       ) : null}
 
       {/* One inset in every state. The two used to differ because a disclosure
@@ -543,10 +602,22 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
             tone={state.issue.severity}
             title={state.issue.message}
             role={state.issue.severity === "error" ? "alert" : "status"}
+            // Closing is the corner control, the way every other notice here
+            // closes. The action slot is for the one way forward, and an error
+            // always has one: replay the mode change, or rebuild the session
+            // carrying the inspector. A warning names a limitation nothing here
+            // can lift, so acknowledging it is the whole interaction.
+            onDismiss={() => controller.dismissIssue()}
             action={
-              <Button variant="ghost" size="xs" onClick={() => controller.dismissIssue()}>
-                Dismiss
-              </Button>
+              state.issue.recovery ? (
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  onClick={() => void controller.recoverFromIssue()}
+                >
+                  {state.issue.recovery.kind === "set-mode" ? "Retry" : "Reconnect"}
+                </Button>
+              ) : undefined
             }
           />
         ) : null}
@@ -766,18 +837,21 @@ function readyHasSomethingToSay(workspace: Extract<WorkspaceState, { status: "re
 
 /**
  * The identity's own geometry, in the identity's own slot, while main finds
- * the source. Under the Doherty gate nothing; past it the skeleton of the block
- * that is coming, so a slow resolve settles into the panel it was always going
- * to become rather than swapping a status line for it. The row heights match
+ * the source. Before the gate nothing; past it the skeleton of the block that
+ * is coming, so a slow resolve settles into the panel it was always going to
+ * become rather than swapping a status line for it. The row heights match
  * `SelectionIdentity` exactly (28/24/20), which is what keeps the sections
  * below from moving when the answer lands.
+ *
+ * Presentational: `SiteBuilderDrawer` owns the gate and the display floor,
+ * because this unmounts the moment the source lands and a floor kept here
+ * would never get to hold anything.
  */
-function ResolvingHeader() {
-  const visible = useDohertyGate(true);
+function ResolvingHeader({ skeleton }: { skeleton: boolean }) {
   const slow = useDeferredLoading(true, UI_STILL_WORKING_MS);
   return (
     <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3" aria-busy="true">
-      {visible ? (
+      {skeleton ? (
         <IdentitySkeleton label={slow ? "Finding the source — still working…" : undefined} />
       ) : (
         <div className="h-20" aria-hidden="true" />

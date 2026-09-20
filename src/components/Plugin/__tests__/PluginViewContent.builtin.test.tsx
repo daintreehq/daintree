@@ -18,6 +18,11 @@ import { usePluginRuntimeStore } from "@/store/pluginRuntimeStore";
 
 const stylePrep = vi.hoisted(() => ({ calls: [] as string[] }));
 const documentViews = vi.hoisted(() => ({ calls: [] as string[] }));
+const dispatch = vi.hoisted(() =>
+  vi.fn<(id: string, args: unknown, options: unknown) => Promise<void>>(() => Promise.resolve())
+);
+
+vi.mock("@/services/ActionService", () => ({ actionService: { dispatch } }));
 
 vi.mock("@/components/ui/Skeleton", () => ({
   Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
@@ -26,8 +31,10 @@ vi.mock("@/components/ui/Skeleton", () => ({
 vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
+// Observable rather than null: the host suppresses this layer for a disabled
+// builtin, and "rendered nothing" and "never mounted" are different claims.
 vi.mock("@/components/Plugin/PluginViewRuntimeStatus", () => ({
-  PluginViewRuntimeStatus: () => null,
+  PluginViewRuntimeStatus: () => <div data-testid="runtime-status" />,
 }));
 // The real boundary's reporting pipeline (Sentry, errorStore, notify) is out of
 // scope; this double keeps the contract the content relies on — forward to
@@ -109,6 +116,7 @@ let activateForView: ReturnType<
 beforeEach(() => {
   stylePrep.calls.length = 0;
   documentViews.calls.length = 0;
+  dispatch.mockClear();
   activateForView = vi.fn<(kindId: string, requestRecoveryPath?: boolean) => Promise<undefined>>(
     () => Promise.resolve(undefined)
   );
@@ -252,10 +260,22 @@ describe("built-in panel views", () => {
     expect(activateForView).not.toHaveBeenCalled();
     expect(documentViews.calls).toEqual([]);
 
+    // Not an empty pane: the panel says why it is empty and where to undo it.
+    // Worker chrome stays out of the way — a plugin nobody asked to run has no
+    // running to report, and "Restart plugin" over this would be nonsense.
+    expect(screen.getByText("Enable this plugin")).not.toBeNull();
+    expect(screen.getByText(/turned off/)).not.toBeNull();
+    expect(screen.queryByTestId("runtime-status")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Manage plugins" }));
+    expect(dispatch.mock.calls).toEqual([["app.pluginManager", undefined, { source: "user" }]]);
+
     act(() => {
       usePluginRuntimeStore.setState({ disabledPluginIds: new Set<string>() });
     });
     await screen.findByTestId("builtin-view");
+    expect(screen.queryByText("Enable this plugin")).toBeNull();
+    expect(screen.queryByTestId("runtime-status")).not.toBeNull();
     // The attempt held while disabled was built for no slot; it must not render
     // for the one commit before the rebind replaces it.
     expect(documentViews.calls).toEqual([]);

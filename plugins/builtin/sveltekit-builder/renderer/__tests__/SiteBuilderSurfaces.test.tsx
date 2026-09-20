@@ -2386,3 +2386,216 @@ describe("delivery across the builder's lifetime", () => {
     await screen.findByText(/^Sent to /);
   });
 });
+
+describe("issue recovery", () => {
+  /** The strip's own notice slot, so a drawer assertion can't read the wrong one. */
+  function notice(): HTMLElement {
+    return screen.getByRole("alert");
+  }
+
+  it("offers the mode change that failed again, and asks for the mode that failed", async () => {
+    await mountBound();
+    host.sitePreview.setMode.mockRejectedValueOnce(new Error("the page went away"));
+    fireEvent.click(screen.getByRole("button", { name: "Browse" }));
+
+    await waitFor(() => expect(notice().textContent).toContain("the page went away"));
+    // The way out is a way forward, not a way to make it go away.
+    expect(within(notice()).queryByRole("button", { name: "Dismiss" })).not.toBeNull();
+    const retry = within(notice()).getByRole("button", { name: "Retry" });
+    // Select is still what the preview is on: the failure rolled the mode back.
+    expect(screen.getByRole("button", { name: "Select" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+
+    host.sitePreview.setMode.mockClear();
+    fireEvent.click(retry);
+    // The target it asks for again is the one that failed, not the mode the
+    // rollback left the preview on.
+    await waitFor(() =>
+      expect(host.sitePreview.setMode).toHaveBeenCalledWith({
+        sessionId: "session-1",
+        mode: "browse",
+      })
+    );
+    await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Browse" }).getAttribute("aria-pressed")).toBe(
+        "true"
+      )
+    );
+  });
+
+  it("offers to rebuild the session when the fault is inside the page", async () => {
+    await mountBound();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 4,
+        event: { type: "runtimeIssue", code: "internal", detail: "" },
+      })
+    );
+
+    await waitFor(() => expect(notice().textContent).toContain("inside the page"));
+    host.sitePreview.bind.mockClear();
+    fireEvent.click(within(notice()).getByRole("button", { name: "Reconnect" }));
+    await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalled());
+  });
+
+  it("lets a warning be acknowledged without pretending anything can repair it", async () => {
+    await mountBound();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 5,
+        event: { type: "metadataProbed", locations: true, ancestry: false },
+      })
+    );
+
+    await waitFor(() => expect(text()).toContain("not the components above them"));
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+    await waitFor(() => expect(text()).not.toContain("not the components above them"));
+  });
+});
+
+describe("details disclosure", () => {
+  function toggle(): HTMLElement {
+    return screen.getByRole("button", { name: "Site Builder details" });
+  }
+
+  it("names the thing it discloses and carries the state on aria-expanded", async () => {
+    await mountBound();
+    // Nothing to show yet: the drawer keeps itself shut, so the control must
+    // not claim it is open.
+    expect(toggle().getAttribute("aria-expanded")).toBe("false");
+    expect(toggle().hasAttribute("aria-pressed")).toBe(false);
+    expect(toggle().getAttribute("title")).toBe("Site Builder details");
+
+    await act(async () => host.select(0));
+    await screen.findByRole("region", { name: "Selected element" });
+    await waitFor(() => expect(toggle().getAttribute("aria-expanded")).toBe("true"));
+
+    fireEvent.click(toggle());
+    await waitFor(() => expect(toggle().getAttribute("aria-expanded")).toBe("false"));
+    // The name held still across both flips; only the state moved.
+    expect(toggle().getAttribute("aria-label")).toBe("Site Builder details");
+    expect(toggle().getAttribute("title")).toBe("Site Builder details");
+    expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
+  });
+});
+
+describe("resolving skeleton", () => {
+  const GATE_MS = 400;
+  const FLOOR_MS = 250;
+  const SKELETON = "Finding the source for this element";
+
+  /** Hold main's answer so the gate and the floor can be driven by hand. */
+  function holdResolve(): () => void {
+    const answer = host.handlers.get(CHANNELS.selectionResolve)!;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    host.handlers.set(CHANNELS.selectionResolve, async (args) => {
+      await held;
+      return answer(args);
+    });
+    return release;
+  }
+
+  function skeleton(): HTMLElement | null {
+    return screen.queryByRole("status", { name: SKELETON });
+  }
+
+  async function settle(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("shows no skeleton at all for an answer that beats the gate", async () => {
+    await mountBound();
+    const release = holdResolve();
+    vi.useFakeTimers();
+
+    await act(async () => host.select(0));
+    await settle(GATE_MS - 1);
+    expect(skeleton()).toBeNull();
+
+    release();
+    await settle(0);
+    await settle(GATE_MS + FLOOR_MS);
+    // Nothing was ever shown, so there is nothing for the floor to hold.
+    expect(skeleton()).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+  });
+
+  it("holds a skeleton that appeared for its display floor instead of flashing it", async () => {
+    await mountBound();
+    const release = holdResolve();
+    vi.useFakeTimers();
+
+    await act(async () => host.select(0));
+    await settle(GATE_MS);
+    expect(skeleton()).not.toBeNull();
+
+    // The answer lands a frame past the gate — the exact case the floor exists
+    // for. The identity waits; the skeleton does not tear down under it.
+    release();
+    await settle(10);
+    expect(skeleton()).not.toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
+
+    await settle(FLOOR_MS - 11);
+    expect(skeleton()).not.toBeNull();
+
+    await settle(1);
+    expect(skeleton()).toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+  });
+
+  it("lands a crumb's focus on the identity the floor was holding back", async () => {
+    // Without the landing-readiness half of the fix the settling effect spends
+    // the focus intent on an identity the skeleton has not released yet, and
+    // focus is simply lost.
+    const outer = { file: "src/lib/Card.svelte", line: 3, column: 1 };
+    host.ancestry = [
+      { kind: "component", location: outer, componentTag: "Card", generated: false },
+    ];
+    await mountSelected();
+    const identity = screen.getByRole("region", { name: "Selected element" });
+    const crumb = within(identity).getByRole("button", { name: "Card" });
+    crumb.focus();
+
+    const release = holdResolve();
+    vi.useFakeTimers();
+    fireEvent.click(crumb);
+    // The fake page answers a reselect on the next tick, then main is held.
+    await settle(GATE_MS);
+    expect(skeleton()).not.toBeNull();
+
+    release();
+    await settle(10);
+    expect(document.activeElement).not.toBe(
+      screen.queryByRole("region", { name: "Selected element" })
+    );
+
+    await settle(FLOOR_MS);
+    const landed = screen.getByRole("region", { name: "Selected element" });
+    expect(document.activeElement).toBe(landed);
+  });
+});

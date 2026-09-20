@@ -198,8 +198,9 @@ const DISABLED: BuiltinPanelViewResolution = { status: "disabled" };
  * its owner is the kind's own plugin, so a slot id that happens to equal some
  * other plugin's kind id can never replace that plugin's view.
  *
- * `disabled` is distinct from `none` so a disabled builtin renders nothing
- * instead of falling through to a `plugin://` import it has no bundle for.
+ * `disabled` is distinct from `none` so a disabled builtin's host explains
+ * itself instead of falling through to a `plugin://` import it has no bundle
+ * for.
  */
 export function useBuiltinPanelView(
   kindId: string,
