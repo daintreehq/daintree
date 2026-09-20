@@ -548,6 +548,14 @@ export function ProjectResourceBadge({ statusItems = null }: ProjectResourceBadg
 
   const showProjects = !isLoading && stats.runningProjects > 0;
 
+  // The Popover root outlives its trigger now that the status cluster keeps the
+  // tree mounted, and Radix's anchor ref never clears on unmount — so an open
+  // popover would stay anchored to a detached node with nowhere to return
+  // focus. Close it ourselves when the readout goes away.
+  useEffect(() => {
+    if (!showProjects) setOpen(false);
+  }, [showProjects]);
+
   if (!showProjects && statusItems === null) {
     return null;
   }

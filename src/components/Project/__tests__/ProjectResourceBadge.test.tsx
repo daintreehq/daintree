@@ -43,8 +43,22 @@ vi.mock("@/store/projectStatsStore", () => ({
   },
 }));
 
+// Controlled-popover stub: `open` is mirrored onto the wrapper so tests can see
+// it, and any click inside opens it the way the real trigger would.
 vi.mock("@/components/ui/popover", () => ({
-  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Popover: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => (
+    <div data-popover-open={open ? "true" : "false"} onClickCapture={() => onOpenChange?.(true)}>
+      {children}
+    </div>
+  ),
   PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverContent: () => null,
 }));
@@ -638,6 +652,35 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     const buttons = Array.from(container.querySelectorAll("button"));
     expect(buttons).toEqual([getByTestId("status-item")]);
     expect(container.querySelector("[data-status-readout]")).toBeNull();
+  });
+
+  it("closes an open popover when the readout that anchors it goes away", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+
+    const { container } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+    await flush();
+
+    const readout = container.querySelector<HTMLButtonElement>("[data-status-readout]");
+    await act(async () => {
+      readout?.click();
+    });
+    expect(container.querySelector("[data-popover-open]")?.getAttribute("data-popover-open")).toBe(
+      "true"
+    );
+
+    // The status cluster keeps the Popover root mounted, so the trigger can
+    // leave under an open popover — Radix would keep it anchored to the
+    // detached node with nowhere to return focus.
+    statsStoreState.stats = {};
+    await advance(10_000);
+
+    expect(container.querySelector("[data-status-readout]")).toBeNull();
+    expect(container.querySelector("[data-popover-open]")?.getAttribute("data-popover-open")).toBe(
+      "false"
+    );
   });
 
   it("drops the row when the last status leaves and there is no readout", async () => {
