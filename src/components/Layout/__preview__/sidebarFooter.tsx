@@ -129,8 +129,12 @@ interface Fixture {
   seed: () => void;
 }
 
-/** How many projects the badge should report as running, and the memory reading. */
-function seedStats(runningProjects: number, totalMemoryMB: number): void {
+/**
+ * How many projects hold processes, how many agents are working, and the memory
+ * reading. Process presence and agent activity are separate axes on purpose —
+ * the strip reports the first in words and the second with its mark.
+ */
+function seedStats(runningProjects: number, totalMemoryMB: number, workingAgents = 1): void {
   const projects = Array.from({ length: 4 }, (_, i) => ({
     id: `proj-${i}`,
     name: ["Daintree", "Assistant", "Backend", "Site builder"][i]!,
@@ -140,7 +144,7 @@ function seedStats(runningProjects: number, totalMemoryMB: number): void {
     const running = i < runningProjects;
     stats[p.id] = {
       processCount: running ? 2 : 0,
-      activeAgentCount: running ? 1 : 0,
+      activeAgentCount: i === 0 ? workingAgents : 0,
       waitingAgentCount: 0,
       blockedAgentCount: 0,
       completedAgentCount: 0,
@@ -198,9 +202,27 @@ export const FIXTURES: Record<string, Fixture> = {
 
   /** No work in flight — the mark's other half, and the reason the row stays. */
   idle: {
-    what: "no work in flight, one project still holding processes",
+    what: "processes up but no agent working — the hollow mark",
     seed: () => {
       baseline();
+      seedStats(1, 1240, 0);
+      useKeepAwakeStore.setState({
+        visible: false,
+        state: { config: { enabled: true, onBattery: false }, isBlocking: false, revision: 2 },
+      });
+    },
+  },
+
+  /**
+   * The case that killed the first design: agents working while the machine is
+   * unplugged, so the keep-awake hold is released by policy. The mark must
+   * still read working.
+   */
+  "on-battery": {
+    what: "agents working, hold released because the laptop is on battery",
+    seed: () => {
+      baseline();
+      seedStats(1, 1240, 2);
       useKeepAwakeStore.setState({
         visible: false,
         state: { config: { enabled: true, onBattery: false }, isBlocking: false, revision: 2 },
@@ -217,7 +239,7 @@ export const FIXTURES: Record<string, Fixture> = {
         visible: false,
         state: { config: { enabled: true, onBattery: false }, isBlocking: false, revision: 2 },
       });
-      seedStats(0, 380);
+      seedStats(0, 380, 0);
     },
   },
 

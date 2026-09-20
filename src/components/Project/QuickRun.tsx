@@ -410,7 +410,10 @@ export function QuickRun({ projectId }: QuickRunProps) {
         onClick={toggleExpanded}
         className={cn(
           "flex w-full items-center gap-2 px-4 py-1.5 font-sans",
-          "text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus:outline-hidden"
+          "text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary",
+          // Element-owned, non-accent: this is the footer's resting control, and
+          // it was suppressing the global ring with nothing in its place.
+          "focus-visible:outline-hidden focus-visible:bg-overlay-medium focus-visible:text-text-primary"
         )}
         aria-expanded={isExpanded}
         aria-controls="quick-run-panel"
@@ -443,7 +446,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
               <div
                 className={cn(
                   // Fallback keeps themes without --dock-input-bg byte-identical.
-                  "relative flex items-center rounded-[var(--radius-md)] border border-border-strong bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
+                  "relative flex items-center rounded-[var(--radius-md)] border border-selection-outline bg-[var(--dock-input-bg,var(--color-overlay-soft))]",
                   // The focus anchor, and the single accent this region spends.
                   "transition-colors focus-within:border-accent-primary"
                 )}
@@ -488,6 +491,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                     // field's text runs flush into the button cluster and the
                     // last glyph touches the first icon.
                     "flex-1 bg-transparent py-2 pr-2 text-xs font-mono text-text-primary placeholder:text-text-secondary",
+                    // eslint-disable-next-line component-contract/no-unpaired-outline-suppression -- the wrapper paints the indicator for this field via focus-within:border-accent-primary; a ring on the bare input would sit inside that border and double it
                     "focus:outline-hidden min-w-0"
                   )}
                   autoComplete="off"
@@ -505,7 +509,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           autoRestart
                             ? "bg-overlay-medium text-text-primary"
-                            : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
+                            : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                         )}
                         // The label names the control, not its state — the state
                         // is `aria-pressed`'s job, and a label that flips reads
@@ -531,7 +535,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           runAsDocked
                             ? "bg-overlay-medium text-text-primary"
-                            : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
+                            : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
                         )}
                         // Same rule as auto-restart: one stable name, with the
                         // state on `aria-pressed`. Pressed means docked, which
@@ -626,9 +630,9 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           {item.type === "saved" ? (
                             <Pin className="h-3 w-3 text-text-secondary shrink-0" />
                           ) : item.type === "history" ? (
-                            <Clock className="h-3 w-3 text-text-muted shrink-0" />
+                            <Clock className="h-3 w-3 text-text-secondary shrink-0" />
                           ) : (
-                            <SquareTerminal className="h-3 w-3 text-text-muted shrink-0" />
+                            <SquareTerminal className="h-3 w-3 text-text-secondary shrink-0" />
                           )}
                           <div className="flex-1 truncate flex items-start justify-between min-w-0">
                             <div className="truncate">
@@ -662,19 +666,19 @@ export function QuickRun({ projectId }: QuickRunProps) {
                               <button
                                 type="button"
                                 onClick={(e) => handleUnpin(e, item)}
-                                className="ml-2 shrink-0 rounded-[var(--radius-sm)] p-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-overlay-soft"
+                                className="ml-2 shrink-0 rounded-[var(--radius-sm)] p-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-overlay-soft"
                                 aria-label="Unpin this command"
                               >
-                                <PinOff className="h-3 w-3 text-text-muted hover:text-status-error" />
+                                <PinOff className="h-3 w-3 text-text-secondary hover:text-status-error" />
                               </button>
                             ) : (
                               <button
                                 type="button"
                                 onClick={(e) => handlePin(e, item)}
-                                className="ml-2 shrink-0 rounded-[var(--radius-sm)] p-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-overlay-soft"
+                                className="ml-2 shrink-0 rounded-[var(--radius-sm)] p-1.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100 hover:bg-overlay-soft"
                                 aria-label="Pin this command"
                               >
-                                <Pin className="h-3 w-3 text-text-muted hover:text-text-primary" />
+                                <Pin className="h-3 w-3 text-text-secondary hover:text-text-primary" />
                               </button>
                             )}
                           </div>

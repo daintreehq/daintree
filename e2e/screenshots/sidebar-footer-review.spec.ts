@@ -65,6 +65,7 @@ const FIXTURES = [
   "idle",
   "nothing-running",
   "keep-awake-off",
+  "on-battery",
   "many-projects",
   "memory-critical",
   "toggles-active",

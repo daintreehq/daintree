@@ -301,18 +301,21 @@ function DiagnosticsSection({
 
 interface ProjectResourceBadgeProps {
   /**
-   * Whether Daintree has work in flight, from the keep-awake hold — the one
-   * signal main already computes for exactly this question.
+   * Whether Daintree is currently holding the machine awake. Drives the
+   * popover's explanation only — never the mark.
    *
-   * `null` means the hold has been switched off and therefore says nothing
-   * either way, in which case the row falls back to process presence. That is a
-   * weaker answer (a shell sitting at a prompt counts), which is why it is the
-   * fallback and not the source.
+   * It looked like the right source for "is Daintree working", since main
+   * raises the blocker while agents work. It is not: `isAllowedByPolicy` is
+   * `enabled && (!onBatteryPower || config.onBattery)`, and `onBattery`
+   * defaults to false — so on an unplugged laptop the hold is released while
+   * agents keep working, and the mark would have read idle through an entire
+   * session. The hold is the FSM's verdict *plus* a power policy; the mark
+   * wants the verdict alone.
    */
-  working?: boolean | null;
+  holdingWakeLock?: boolean;
 }
 
-export function ProjectResourceBadge({ working = null }: ProjectResourceBadgeProps = {}) {
+export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourceBadgeProps = {}) {
   const [stats, setStats] = useState<AggregateStats>({
     runningProjects: 0,
     totalMemoryMB: 0,
@@ -332,6 +335,24 @@ export function ProjectResourceBadge({ working = null }: ProjectResourceBadgePro
   const samplesRef = useRef<number[]>([]);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
+
+  /**
+   * How many agents the FSM currently calls working, across every project.
+   *
+   * Read straight off the store rather than through `fetchStats`: the stats
+   * push arrives on its own channel, so the mark turns over as soon as an agent
+   * starts or settles instead of trailing the badge's 10s poll. It costs no
+   * extra IPC — `ProjectStatusMap` already carries this for every project.
+   *
+   * This is the same passive PTY heuristic the keep-awake service runs on, so
+   * it is no less trustworthy than the hold it replaced, and it has neither the
+   * battery policy nor the enabled flag sitting in front of it.
+   */
+  const activeAgents = useProjectStatsStore((state) => {
+    let total = 0;
+    for (const entry of Object.values(state.stats)) total += entry.activeAgentCount ?? 0;
+    return total;
+  });
 
   const memoryState = getMemoryState(stats.totalMemoryMB, thresholds);
   const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
@@ -564,9 +585,7 @@ export function ProjectResourceBadge({ working = null }: ProjectResourceBadgePro
     return () => clearInterval(tick);
   }, [open]);
 
-  // The hold is the answer when it is available; process presence is the weaker
-  // fallback for when the user has switched keep-awake off.
-  const isWorking = working ?? stats.runningProjects > 0;
+  const isWorking = activeAgents > 0;
 
   // The row used to vanish whenever nothing was running, which made "idle" and
   // "this strip isn't here" the same picture — and idle is half of the question
@@ -585,10 +604,19 @@ export function ProjectResourceBadge({ working = null }: ProjectResourceBadgePro
     return null;
   }
 
+  // The count is a separate fact from the activity state and stays in words;
+  // the mark carries working versus idle. With nothing running at all there is
+  // no count worth printing, so the state becomes the label.
   const readoutLabel =
     stats.runningProjects > 0
       ? `${stats.runningProjects} project${stats.runningProjects !== 1 ? "s" : ""} active`
       : "Idle";
+
+  // What assistive technology gets. The mark is the only thing that shows the
+  // working state visually, so without spelling it out here a session that goes
+  // from working to idle with its project count unchanged announces nothing.
+  const announcement =
+    stats.runningProjects > 0 ? `${isWorking ? "Working" : "Idle"}, ${readoutLabel}` : readoutLabel;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -599,12 +627,16 @@ export function ProjectResourceBadge({ working = null }: ProjectResourceBadgePro
         <PopoverTrigger asChild>
           <button
             data-status-readout=""
-            aria-label={`${readoutLabel} — open resource breakdown`}
+            aria-label={`${announcement} — open resource breakdown`}
             className="px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-soft transition-colors cursor-pointer"
           >
             <div className="flex items-center gap-2 min-w-0">
+              {/* Decorative: the working/idle state it encodes is carried in
+                  words by the label and the live region, so announcing the mark
+                  as well would say everything twice. */}
               <span
                 key={`${isWorking}-${memoryState}`}
+                aria-hidden="true"
                 data-working={isWorking ? "true" : "false"}
                 className={`status-mark inline-flex h-2 w-2 rounded-full shrink-0 ${
                   isWorking ? WORKING_DOT_CLASS : IDLE_DOT_CLASS
@@ -620,16 +652,25 @@ export function ProjectResourceBadge({ working = null }: ProjectResourceBadgePro
             its ancestor. Wrapping the button would re-announce the whole strip
             on every press; nesting the region inside it puts a live region in a
             control's own subtree. Visually redundant with the label above, so
-            it is screen-reader only. */}
+            it is screen-reader only.
+
+            It announces the working state in words, not just the count: the
+            mark is the only thing that carries it visually, and a run whose
+            project count never changes would otherwise go from working to idle
+            in complete silence. */}
         <span role="status" className="sr-only">
-          {readoutLabel}
+          {announcement}
         </span>
         {memoryState === "critical" && (
           <span
             data-testid="sidebar-status-items"
-            className="ml-auto flex items-center gap-1 pr-3 shrink-0 text-2xs font-medium text-status-warning"
+            className="ml-auto flex items-center gap-1 pr-3 shrink-0 text-2xs font-medium text-text-primary"
           >
-            <TriangleAlert className="h-3 w-3 shrink-0" aria-hidden="true" />
+            {/* The triangle carries the severity colour; the words stay neutral.
+                Status-coloured body text misses 4.5:1 on most of the fifteen
+                themes — there is no status *text* ramp — and "High memory" has
+                to be readable on all of them. */}
+            <TriangleAlert className="h-3 w-3 shrink-0 text-status-warning" aria-hidden="true" />
             High memory
           </span>
         )}
@@ -638,33 +679,40 @@ export function ProjectResourceBadge({ working = null }: ProjectResourceBadgePro
         <div className="space-y-3">
           {/* The keep-awake hold used to be a coffee cup pinned to the strip,
               where it cost a permanent unlabelled glyph to say what the mark
-              now says. The explanation and its settings route survive here. */}
-          {working === true && (
-            <button
-              type="button"
-              onClick={() =>
-                void actionService.dispatch(
-                  "app.settings.openTab",
-                  { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
-                  { source: "user" }
-                )
-              }
-              className="flex w-full items-start gap-2 rounded-[var(--radius-sm)] p-1 text-left hover:bg-overlay-soft transition-colors"
-            >
-              <Coffee
-                className="h-3.5 w-3.5 shrink-0 mt-0.5 text-text-secondary"
-                aria-hidden="true"
-              />
-              <span className="flex flex-col gap-0.5 min-w-0">
-                <span className="text-2xs font-medium text-text-primary">
-                  Keeping this machine awake
-                </span>
-                <span className="text-3xs text-text-secondary leading-tight">
-                  Idle sleep is held off while an agent is working. The display can still turn off.
-                </span>
+              now says. The explanation and its settings route survive here.
+
+              Mounted unconditionally, with only its wording changing: the hold
+              ends on main's schedule, so a row that appeared only while holding
+              could vanish under a keyboard user mid-popover — the same
+              focus-dropping problem the cup's own `useLayoutEffect` existed to
+              patch. The shared close-time restoration does not cover a child
+              disappearing while the popover stays open. */}
+          <button
+            type="button"
+            onClick={() =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
+                { source: "user" }
+              )
+            }
+            className="flex w-full items-start gap-2 rounded-[var(--radius-sm)] p-1 text-left hover:bg-overlay-soft transition-colors"
+          >
+            <Coffee
+              className="h-3.5 w-3.5 shrink-0 mt-0.5 text-text-secondary"
+              aria-hidden="true"
+            />
+            <span className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-2xs font-medium text-text-primary">
+                {holdingWakeLock ? "Keeping this machine awake" : "Not holding sleep off"}
               </span>
-            </button>
-          )}
+              <span className="text-3xs text-text-secondary leading-tight">
+                {holdingWakeLock
+                  ? "Idle sleep is held off while an agent is working. The display can still turn off."
+                  : "Idle sleep is allowed right now. Change when Daintree holds it off in settings."}
+              </span>
+            </span>
+          </button>
           {popoverData ? (
             <>
               <MemorySummary

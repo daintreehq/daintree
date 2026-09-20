@@ -36,12 +36,20 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-const statsStoreState: { stats: Record<string, { processCount: number }> } = { stats: {} };
-vi.mock("@/store/projectStatsStore", () => ({
-  useProjectStatsStore: {
-    getState: () => statsStoreState,
-  },
+// `vi.hoisted` because `vi.mock`'s factory is lifted above every const in the
+// file — a plain top-level binding is still in its temporal dead zone when the
+// factory runs, and the whole suite fails to collect.
+const statsStoreState = vi.hoisted(() => ({
+  stats: {} as Record<string, { processCount: number; activeAgentCount?: number }>,
 }));
+// The badge reads this both ways: `getState()` inside the poll for the project
+// count, and as a hook selector for live agent activity.
+vi.mock("@/store/projectStatsStore", () => {
+  const useProjectStatsStore = (selector: (s: typeof statsStoreState) => unknown) =>
+    selector(statsStoreState);
+  useProjectStatsStore.getState = () => statsStoreState;
+  return { useProjectStatsStore };
+});
 
 // Controlled-popover stub: `open` is mirrored onto the wrapper so tests can see
 // it, and any click inside opens it the way the real trigger would.
@@ -596,7 +604,7 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     statsStoreState.stats = {};
 
-    const { container } = render(<ProjectResourceBadge working={false} />);
+    const { container } = render(<ProjectResourceBadge />);
     await flush();
 
     // A row that disappears when idle makes "idle" and "this strip isn't here"
@@ -608,14 +616,17 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
 
   it("marks working and idle differently, by more than colour", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
-    statsStoreState.stats = { p1: { processCount: 1 } };
+    statsStoreState.stats = { p1: { processCount: 1, activeAgentCount: 1 } };
 
-    const { container, rerender } = render(<ProjectResourceBadge working={true} />);
+    const first = render(<ProjectResourceBadge />);
     await flush();
-    const workingMark = container.querySelector(".status-mark")?.className ?? "";
+    const workingMark = first.container.querySelector(".status-mark")?.className ?? "";
+    first.unmount();
 
-    rerender(<ProjectResourceBadge working={false} />);
-    const idleMark = container.querySelector(".status-mark")?.className ?? "";
+    statsStoreState.stats = { p1: { processCount: 1, activeAgentCount: 0 } };
+    const second = render(<ProjectResourceBadge />);
+    await flush();
+    const idleMark = second.container.querySelector(".status-mark")?.className ?? "";
 
     // The rule, not the palette: the two states must be distinguishable, and
     // one of them must differ in shape so the distinction survives WCAG 1.4.1
@@ -624,32 +635,43 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(/\bborder\b/.test(workingMark)).not.toBe(/\bborder\b/.test(idleMark));
   });
 
-  it("falls back to process presence when keep-awake cannot answer", async () => {
+  it("reads work from agent activity, not from processes being up", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
-    statsStoreState.stats = { p1: { processCount: 1 } };
+    // Processes are up but no agent is working — a shell sitting at a prompt.
+    statsStoreState.stats = { p1: { processCount: 4, activeAgentCount: 0 } };
 
-    const { container } = render(<ProjectResourceBadge working={null} />);
+    const { container } = render(<ProjectResourceBadge />);
     await flush();
 
-    const nullMark = container.querySelector(".status-mark")?.className ?? "";
+    const mark = container.querySelector(".status-mark");
+    expect(mark?.getAttribute("data-working")).toBe("false");
+    // ...and the count is still reported, because it is a separate fact.
+    expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
+  });
 
-    statsStoreState.stats = {};
-    await advance(10_000);
-    const idleMark = container.querySelector(".status-mark")?.className ?? "";
+  it("spells the working state out for assistive technology", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1, activeAgentCount: 2 } };
 
-    // null is "no answer", not "idle": with processes up it must read as work.
-    expect(nullMark).not.toBe(idleMark);
+    const { container } = render(<ProjectResourceBadge />);
+    await flush();
+
+    // The mark is the only thing carrying working/idle visually, so a run whose
+    // project count never changes would otherwise flip state in silence.
+    const live = container.querySelector('[role="status"]');
+    expect(live?.textContent).toContain("Working");
+    expect(container.querySelector(".status-mark")?.getAttribute("aria-hidden")).toBe("true");
   });
 
   it("announces the count without wrapping the trigger button in a live region", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     statsStoreState.stats = { p1: { processCount: 1 } };
 
-    const { container } = render(<ProjectResourceBadge working={true} />);
+    const { container } = render(<ProjectResourceBadge />);
     await flush();
 
     const live = container.querySelector('[role="status"]');
-    expect(live?.textContent).toBe("1 project active");
+    expect(live?.textContent).toContain("1 project active");
     // A live region containing a control re-announces the whole strip every
     // time that control is pressed.
     expect(live?.querySelector("button")).toBeNull();
@@ -663,7 +685,7 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     mockGetHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 100 });
 
-    const { container } = render(<ProjectResourceBadge working={true} />);
+    const { container } = render(<ProjectResourceBadge />);
     await flush();
     expect(container.textContent ?? "").not.toContain("High memory");
 

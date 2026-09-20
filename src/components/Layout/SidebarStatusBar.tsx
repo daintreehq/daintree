@@ -5,21 +5,22 @@ import { useKeepAwakeStore } from "@/store/keepAwakeStore";
  * The sidebar's footer row: one ambient readout of what Daintree is doing.
  *
  * The keep-awake hold used to ride here as its own coffee-cup button beside the
- * readout. It is the same fact the readout's mark now carries — main raises the
- * power-save blocker precisely while agents are working — so expressing it twice
- * cost a permanent unlabelled glyph to say what a filled dot says for free. The
- * detail and its settings route moved into the readout's popover, which is where
- * the rest of the footer's explanation already lives.
+ * readout — a permanent unlabelled glyph whose meaning is not recoverable
+ * without having met the Caffeine app. Its detail and its settings route moved
+ * into the readout's popover, which is where the rest of the footer's
+ * explanation already lives.
  *
- * `working` is the hold itself rather than a re-derivation of it: `isBlocking`
- * is main's own answer to "is there work in flight", already gated through the
- * Doherty rise in `useKeepAwakeSync` so a hold shorter than 400ms never blinks
- * the mark. When the user has turned keep-awake off the hold is always false and
- * says nothing about work, so the badge falls back to process presence.
+ * The hold does NOT drive the working mark, though it was the obvious
+ * candidate: main raises the blocker while agents work, so it looked like a
+ * ready-made answer. `PowerSaveBlockerService.isAllowedByPolicy` is
+ * `enabled && (!onBatteryPower || config.onBattery)` with `onBattery` defaulting
+ * to false, so an unplugged laptop releases the hold while agents keep working —
+ * the mark would have read idle through a whole session on battery. The badge
+ * reads agent activity directly instead; the hold is passed only so the popover
+ * can explain itself.
  */
 export function SidebarStatusBar() {
   const holdingWakeLock = useKeepAwakeStore((state) => state.visible);
-  const keepAwakeEnabled = useKeepAwakeStore((state) => state.state?.config.enabled ?? true);
 
-  return <ProjectResourceBadge working={keepAwakeEnabled ? holdingWakeLock : null} />;
+  return <ProjectResourceBadge holdingWakeLock={holdingWakeLock} />;
 }
