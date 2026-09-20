@@ -723,12 +723,15 @@ export function ingestHostLogEvent(event: HostLogEvent): void {
 /**
  * Hand one already-scrubbed entry to Main over the host event channel.
  *
- * Called after the file write so a crash between the two still leaves the
- * durable record behind. Delivery is best effort: Electron's parent port
- * offers no acknowledgement, and a send that fails leaves the host's own file
- * record as the surviving copy. It deliberately does not fall back to the
- * console — that is the duplicate path, and reintroducing it exactly when the
- * parent is still draining stdout would put the second record back.
+ * Called after `writeToLogFile` so an ERROR — whose append is synchronous — is
+ * already on disk before anything is sent. Other levels are batched, so for
+ * them the ordering only guarantees the line is queued, not durable.
+ *
+ * Delivery is best effort: Electron's parent port offers no acknowledgement,
+ * and a send that fails leaves the host's own file record as the surviving
+ * copy. It deliberately does not fall back to the console — that is the
+ * duplicate path, and reintroducing it exactly when the parent is still
+ * draining stdout would put the second record back.
  */
 function forwardEntryToParent(
   level: LogLevel,

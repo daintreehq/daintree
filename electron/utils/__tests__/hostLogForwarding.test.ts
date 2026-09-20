@@ -24,6 +24,9 @@ type LoggerModule = typeof import("../logger.js");
  */
 const loaded: LoggerModule[] = [];
 
+/** `parentPort` is process-global; put back whatever was there. */
+let originalParentPort: PropertyDescriptor | undefined;
+
 /** Physical lines are not records — a pretty-printed context spans several. */
 const RECORD_PREFIX = /^\[\d{4}-\d{2}-\d{2}T[^\]]+\] \[(DEBUG|INFO|WARN|ERROR)\] /;
 
@@ -82,6 +85,7 @@ function captureSentEvents(): { events: HostLogEvent[]; postMessage: (value: unk
 }
 
 beforeEach(() => {
+  originalParentPort = Object.getOwnPropertyDescriptor(process, "parentPort");
   rmSync(TEST_LOG_DIR, { recursive: true, force: true });
   mkdirSync(TEST_LOG_DIR, { recursive: true });
   // Both roles resolve the same file — a host through the environment, main
@@ -100,6 +104,9 @@ afterEach(async () => {
   loaded.length = 0;
   vi.restoreAllMocks();
   delete (process as { parentPort?: unknown }).parentPort;
+  if (originalParentPort) {
+    Object.defineProperty(process, "parentPort", originalParentPort);
+  }
   delete process.env.DAINTREE_UTILITY_PROCESS_KIND;
   delete process.env.DAINTREE_USER_DATA;
   rmSync(TEST_LOG_DIR, { recursive: true, force: true });
@@ -143,10 +150,16 @@ describe("structured host log forwarding (#12544)", () => {
         await host.flushLogFileWritesForTesting();
         expect(recordsMatching("MARKER_TWO")).toHaveLength(1);
 
+        const recordsBefore = readRecords();
+
         const main = await loadMainLogger();
-        const broadcasts: unknown[][] = [];
+        const broadcasts: { channel: string; entries: { id: string; message: string }[] }[] = [];
         main.registerLoggerTransport(
-          (_channel, ...args) => broadcasts.push(args),
+          (channel, ...args) =>
+            broadcasts.push({
+              channel,
+              entries: args[0] as { id: string; message: string }[],
+            }),
           () => true
         );
         const { logBuffer } = await import("../../services/LogBuffer.js");
@@ -154,12 +167,13 @@ describe("structured host log forwarding (#12544)", () => {
         main.ingestHostLogEvent(events[0]);
         await main.flushLogFileWritesForTesting();
 
-        // The acceptance criterion: still exactly one record, and its JSON
-        // context produced no extra records of its own — the expanded context
-        // lines belong to that one record, they are not records themselves.
+        // The acceptance criterion: ingestion adds no record at all, so the
+        // event's JSON context cannot have produced extra ones either. The
+        // expanded context lines belong to that one record — they are not
+        // records themselves, which is why the census counts headers.
+        expect(readRecords()).toEqual(recordsBefore);
         expect(recordsMatching("MARKER_TWO")).toHaveLength(1);
         expect(recordsMatching("captured")).toHaveLength(0);
-        expect(readLogFile()).toContain('"captured": 3');
 
         const ingested = logBuffer.getAll().filter((e) => e.message.includes("MARKER_TWO"));
         expect(ingested).toHaveLength(1);
@@ -168,9 +182,67 @@ describe("structured host log forwarding (#12544)", () => {
         // Structured context survives as an object, not flattened into text.
         expect(ingested[0].context).toEqual({ captured: 3, drained: true });
         expect(ingested[0].timestamp).toBe(events[0].timestamp);
+
+        // The renderer's live log view is fed only by this path now, so losing
+        // the broadcast would blank host logs in the UI without failing
+        // anything else.
+        const delivered = broadcasts.flatMap((b) => b.entries.map((e) => e.id));
+        expect(delivered).toContain(ingested[0].id);
       });
     });
   }
+
+  it("preserves every level end to end, with no console mirror on any of them", async () => {
+    const { events, postMessage } = captureSentEvents();
+    const host = await loadHostLogger("workspace-host", postMessage);
+    // The host filters on its own level; debug has to be enabled to reach the
+    // wire at all.
+    host.setLogLevelOverrides({ "*": "debug" });
+    const log = host.createLogger("workspace-host:Levels");
+
+    log.debug("MARKER_L_debug");
+    log.info("MARKER_L_info");
+    log.warn("MARKER_L_warn");
+    log.error("MARKER_L_error", new Error("boom"));
+    await host.flushLogFileWritesForTesting();
+
+    // The old stdout path collapsed everything into info/warn and could never
+    // carry a debug or error entry at its own level.
+    expect(events.map((e) => e.level)).toEqual(["debug", "info", "warn", "error"]);
+    expect(console.log).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
+    expect(console.error).not.toHaveBeenCalled();
+
+    const main = await loadMainLogger();
+    const { logBuffer } = await import("../../services/LogBuffer.js");
+    for (const event of events) main.ingestHostLogEvent(event);
+
+    const levels = logBuffer
+      .getAll()
+      .filter((e) => e.message.startsWith("MARKER_L_"))
+      .map((e) => `${e.message}:${e.level}`);
+    expect(levels).toEqual([
+      "MARKER_L_debug:debug",
+      "MARKER_L_info:info",
+      "MARKER_L_warn:warn",
+      "MARKER_L_error:error",
+    ]);
+  });
+
+  it("omits the context entirely when an entry has none", async () => {
+    const { events, postMessage } = captureSentEvents();
+    const host = await loadHostLogger("pty-host", postMessage);
+    host.createLogger("pty-host:Test").info("MARKER_NO_CONTEXT");
+
+    expect(events[0].contextJson).toBeUndefined();
+
+    const main = await loadMainLogger();
+    const { logBuffer } = await import("../../services/LogBuffer.js");
+    main.ingestHostLogEvent(events[0]);
+
+    const entry = logBuffer.getAll().find((e) => e.message === "MARKER_NO_CONTEXT");
+    expect(entry?.context).toBeUndefined();
+  });
 
   it("keeps two genuinely repeated events as two records", async () => {
     const { events, postMessage } = captureSentEvents();
@@ -214,16 +286,31 @@ describe("structured host log forwarding (#12544)", () => {
     expect(console.warn).not.toHaveBeenCalled();
   });
 
-  it("keeps the console mirror for main and for a host running without a parent", async () => {
+  it("keeps the console mirror in main", async () => {
     const main = await loadMainLogger();
     main.createLogger("main:Test").info("MARKER_MAIN");
     await main.flushLogFileWritesForTesting();
 
-    // `detectProcessTag` keys off `parentPort`, so a host started standalone
-    // reports "main" and keeps its console output rather than posting into
-    // the void.
     expect(console.log).toHaveBeenCalled();
     expect(recordsMatching("MARKER_MAIN")).toHaveLength(1);
+  });
+
+  it("keeps the console mirror for a host started without a parent", async () => {
+    vi.resetModules();
+    delete (process as { parentPort?: unknown }).parentPort;
+    // The host kind is still advertised — only the port is missing.
+    process.env.DAINTREE_UTILITY_PROCESS_KIND = "workspace-host";
+    const standalone = await import("../logger.js");
+    standalone.initializeLogger(TEST_LOG_DIR);
+    loaded.push(standalone);
+
+    standalone.createLogger("workspace-host:Standalone").info("MARKER_STANDALONE");
+    await standalone.flushLogFileWritesForTesting();
+
+    // `detectProcessTag` keys off `parentPort`, so a host with nowhere to post
+    // reports "main" and keeps its console output rather than going silent.
+    expect(console.log).toHaveBeenCalled();
+    expect(recordsMatching("MARKER_STANDALONE")).toHaveLength(1);
   });
 
   it("preserves a context that does not parse back to an object", async () => {

@@ -299,6 +299,47 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
+  it("does not split one stream's partial line when the other closes", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.stderr.emit("data", Buffer.from("FATAL ERROR: out of mem"));
+    child.stdout.emit("close");
+    child.stderr.emit("data", Buffer.from("ory\n"));
+
+    const warnMessages = loggerCalls.filter((c) => c.level === "warn").map((c) => c.message);
+    // A close on the other pipe must not truncate this one mid-line.
+    expect(warnMessages).toContain("[WorkspaceHost] FATAL ERROR: out of memory");
+    expect(warnMessages).not.toContain("[WorkspaceHost] FATAL ERROR: out of mem");
+
+    host.dispose();
+  });
+
+  it("flushes a tail exactly once across exit and both stream closes", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.stderr.emit("data", Buffer.from("crash tail"));
+    child.emit("exit", 1);
+    child.stdout.emit("close");
+    child.stderr.emit("close");
+
+    const matching = loggerCalls.filter((c) => c.message === "[WorkspaceHost] crash tail");
+    expect(matching).toHaveLength(1);
+
+    host.dispose();
+  });
+
   it("keeps repeated raw lines repeated, including ones shaped like log prefixes", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {
