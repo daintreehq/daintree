@@ -131,6 +131,7 @@ const config: KnipConfig = {
     "src/components/Layout/__preview__/preview.tsx",
     "src/components/Plugin/__preview__/preview.tsx",
     "src/components/Terminal/__preview__/preview.tsx",
+    "src/components/AssistantPanel/__preview__/preview.tsx",
   ],
 
   // Project files Knip considers part of the graph. Includes root-level
@@ -202,14 +203,6 @@ const config: KnipConfig = {
     // predicates. The current fail-closed menu path documents that producers
     // are not wired yet; keep this as deliberate feature scaffolding.
     "src/services/WhenClauseStore.ts",
-
-    // why: the native assistant-host process wrapper and its binary resolver. Both
-    // are exercised by tests (including a conformance test that drives the real
-    // vendored engine) but are not yet reachable from a main-process service, so the
-    // static import graph does not see them. Remove these two once HelpSessionService
-    // spawns the engine.
-    "electron/services/assistant-host/AssistantHostProcess.ts",
-    "electron/services/assistant-host/resolveAssistantBinary.ts",
   ],
 
   ignoreBinaries: [
@@ -236,6 +229,10 @@ const config: KnipConfig = {
     "top",
     "where",
     "wsl.exe",
+
+    // why: the Go toolchain, probed and invoked by scripts/build-assistant.mjs to
+    // build the vendored assistant engine. A host toolchain, not an npm dependency.
+    "go",
   ],
 
   ignoreIssues: {
