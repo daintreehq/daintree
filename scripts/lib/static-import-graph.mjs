@@ -31,6 +31,31 @@ const NON_EXECUTING_QUERIES = new Set(["raw", "url", "inline"]);
 const CANDIDATE_SUFFIXES = ["", ".ts", ".tsx", ".mts", ".cts"];
 const INDEX_FILES = ["index.ts", "index.tsx"];
 
+/**
+ * Script kind per extension. Parsing a `.ts` file as TSX is not a harmless
+ * over-approximation: a generic arrow (`const id = <T>(x: T): T => x;`) or an
+ * angle-bracket assertion is a syntax error in TSX, and the parser's recovery
+ * swallows the rest of the statement list, so every import below it disappears
+ * without a word.
+ */
+const SCRIPT_KINDS = new Map([
+  [".ts", ts.ScriptKind.TS],
+  [".mts", ts.ScriptKind.TS],
+  [".cts", ts.ScriptKind.TS],
+  [".tsx", ts.ScriptKind.TSX],
+  [".js", ts.ScriptKind.JS],
+  [".mjs", ts.ScriptKind.JS],
+  [".cjs", ts.ScriptKind.JS],
+  [".jsx", ts.ScriptKind.JSX],
+]);
+
+/** `undefined` for anything that is not a script: CSS and assets carry no edges. */
+export function scriptKindOf(fileName) {
+  const dot = fileName.lastIndexOf(".");
+  if (dot < 0) return undefined;
+  return SCRIPT_KINDS.get(fileName.slice(dot).toLowerCase());
+}
+
 /** Splits `./x.ts?v=1` into its specifier and query. */
 function splitQuery(specifier) {
   const at = specifier.indexOf("?");
@@ -63,15 +88,28 @@ function exportClauseIsTypeOnly(node) {
   return clause.elements.every((element) => element.isTypeOnly);
 }
 
-/** Every specifier this source pulls in eagerly. */
-export function staticSpecifiers(source, fileName = "file.tsx") {
+/**
+ * Every specifier this source pulls in eagerly, plus any syntax error hit while
+ * reading it.
+ *
+ * A parse failure is reported rather than tolerated: error recovery drops the
+ * statements it cannot make sense of, so a file that fails to parse looks
+ * exactly like a file with no imports.
+ */
+export function parseStaticImports(source, fileName = "file.tsx") {
   const parsed = ts.createSourceFile(
     fileName,
     source,
     ts.ScriptTarget.Latest,
     true,
-    ts.ScriptKind.TSX
+    scriptKindOf(fileName) ?? ts.ScriptKind.TS
   );
+  const parseErrors = (parsed.parseDiagnostics ?? []).map((diagnostic) => {
+    const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, " ");
+    if (typeof diagnostic.start !== "number") return message;
+    const { line } = parsed.getLineAndCharacterOfPosition(diagnostic.start);
+    return `line ${line + 1}: ${message}`;
+  });
   const out = [];
   for (const statement of parsed.statements) {
     if (ts.isImportDeclaration(statement)) {
@@ -92,7 +130,16 @@ export function staticSpecifiers(source, fileName = "file.tsx") {
       out.push(statement.moduleReference.expression.text);
     }
   }
-  return out;
+  return { specifiers: out, parseErrors };
+}
+
+/** Every specifier this source pulls in eagerly. Throws when it will not parse. */
+export function staticSpecifiers(source, fileName = "file.tsx") {
+  const { specifiers, parseErrors } = parseStaticImports(source, fileName);
+  if (parseErrors.length > 0) {
+    throw new Error(`${fileName} failed to parse: ${parseErrors.join("; ")}`);
+  }
+  return specifiers;
 }
 
 /**
@@ -138,8 +185,9 @@ export const posix = (path) => path.split(sep).join("/");
  * Walk the eager graph from `entry`, following only files under `root`.
  *
  * Returns the bare specifiers each reached file imports, plus any relative
- * specifier that would not resolve. An unresolvable edge is reported rather
- * than skipped: silently dropping one is how a guard passes while blind.
+ * specifier that would not resolve and any file that would not parse. Both are
+ * reported rather than skipped: silently dropping one is how a guard passes
+ * while blind.
  */
 export function walkEagerGraph(entry, root) {
   const bare = new Map();
@@ -151,7 +199,13 @@ export function walkEagerGraph(entry, root) {
     const file = queue.shift();
     if (file === undefined || seen.has(file)) continue;
     seen.add(file);
-    const specifiers = staticSpecifiers(readFileSync(file, "utf8"), file);
+    // A non-script file (a stylesheet, an asset) is a leaf: it has no edges to
+    // follow and nothing a parser could tell us about.
+    if (scriptKindOf(file) === undefined) continue;
+    const { specifiers, parseErrors } = parseStaticImports(readFileSync(file, "utf8"), file);
+    for (const error of parseErrors) {
+      unresolved.push(`${posix(file)} failed to parse: ${error}`);
+    }
     bare.set(
       file,
       specifiers.filter((specifier) => !specifier.startsWith("."))
