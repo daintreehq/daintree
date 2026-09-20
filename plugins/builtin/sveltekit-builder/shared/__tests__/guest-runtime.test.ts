@@ -321,7 +321,7 @@ describe("source metadata", () => {
 
     expect(lastSelection()[0].ancestry).toHaveLength(64);
     expect(events("runtimeIssue")).toContainEqual(
-      expect.objectContaining({ code: "internal", detail: expect.stringContaining("truncated") })
+      expect.objectContaining({ code: "capacity", detail: expect.stringContaining("truncated") })
     );
   });
 
@@ -492,7 +492,7 @@ describe("selection interaction", () => {
 
     expect(lastSelection()).toHaveLength(32);
     expect(events("runtimeIssue")).toContainEqual(
-      expect.objectContaining({ code: "internal", detail: expect.stringContaining("capped") })
+      expect.objectContaining({ code: "capacity", detail: expect.stringContaining("capped") })
     );
   });
 
@@ -1043,7 +1043,7 @@ describe("hardening the observation", () => {
     expect(lastSelection()).toHaveLength(4);
     expect(lastSelection()[0].ancestry).toHaveLength(4);
     expect(events("runtimeIssue")).toContainEqual(
-      expect.objectContaining({ code: "internal", detail: expect.stringContaining("shortened") })
+      expect.objectContaining({ code: "capacity", detail: expect.stringContaining("shortened") })
     );
   });
 });

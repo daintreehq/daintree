@@ -269,11 +269,33 @@ export interface FollowedSelection {
   revisions: NonNullable<SourceRevisions>;
 }
 
+/**
+ * The one thing the builder can do about an issue, recorded where the operation
+ * is known rather than guessed at by the surface. Data, not a thunk: the state
+ * stays comparable, the controller owns the operation and the notice owns the
+ * words.
+ */
+export type IssueRecovery = { kind: "set-mode"; mode: SitePreviewMode } | { kind: "reconnect" };
+
 export interface InspectorIssue {
   severity: "warning" | "error";
   message: string;
   /** The page's own verdict, when it came from the page. */
   code?: string;
+  /**
+   * The diagnostic behind the title. Separate, because a raw error message is
+   * evidence, not a headline, and the notice needs a headline to put a
+   * recovery action under.
+   */
+  detail?: string;
+  /**
+   * Present on every issue that has a way forward. An error must offer one —
+   * a mode change replays its target, and a fault inside the page is repaired
+   * by rebuilding the session that carries the inspector. Warnings describe a
+   * limitation nothing here can lift, so they carry no recovery and are
+   * dismissed instead.
+   */
+  recovery?: IssueRecovery;
 }
 
 /** How long an agent request waits for the route files before going without them. */
@@ -327,6 +349,7 @@ const RUNTIME_ISSUE_COPY: Record<string, string> = {
     "This page carries no Svelte source locations. Run the app with the Vite dev server to select elements.",
   "not-dev-build": "This preview is a production build, so elements can't be traced to source",
   "overlay-blocked": "The page blocked the selection overlay",
+  capacity: "This was past a limit the builder works within, so part of it was left out",
   internal: "The inspector hit a problem inside the page",
   "metadata-shape":
     "This page's Svelte metadata has a shape the builder doesn't recognise, so elements can't be traced to source. Check the Svelte version against the supported baseline.",
@@ -835,7 +858,14 @@ export class InspectorController implements DevPreviewToolSession {
         modePending: false,
         issue: {
           severity: "error",
-          message: formatErrorMessage(error, "Couldn't switch the preview mode"),
+          // `formatErrorMessage` hands back the error's own message and only
+          // falls back when there isn't one, so it belongs in the body — used
+          // as the title it puts a raw diagnostic where the headline goes.
+          message: "Couldn't switch the preview mode",
+          detail: formatErrorMessage(error, "") || undefined,
+          // The target, not the reverted current mode: retrying has to ask for
+          // the switch that failed.
+          recovery: { kind: "set-mode", mode },
         },
       });
       this.resumeReprove();
@@ -1004,6 +1034,16 @@ export class InspectorController implements DevPreviewToolSession {
             severity: event.code === "internal" ? "error" : "warning",
             message: RUNTIME_ISSUE_COPY[event.code] ?? event.detail,
             code: event.code,
+            // The page's own words, under ours. A known code has a headline
+            // that says what kind of thing happened; the detail is the only
+            // thing that says which one.
+            ...(RUNTIME_ISSUE_COPY[event.code] === undefined || event.detail === ""
+              ? {}
+              : { detail: event.detail }),
+            // The other codes name a limitation of the page itself, which
+            // nothing here can lift; an internal fault is the guest runtime
+            // failing, and a fresh session is what replaces it.
+            ...(event.code === "internal" ? { recovery: { kind: "reconnect" } as const } : {}),
           },
         });
         return;
@@ -1746,7 +1786,15 @@ export class InspectorController implements DevPreviewToolSession {
   private handleIssue(raw: unknown): void {
     const parsed = IssuePushSchema.safeParse(raw);
     if (!parsed.success) return;
-    this.patchState({ issue: { severity: parsed.data.severity, message: parsed.data.message } });
+    this.patchState({
+      issue: {
+        severity: parsed.data.severity,
+        message: parsed.data.message,
+        // Pushed errors arrive without a cause we can act on individually, so
+        // the recovery is the one that repairs the session they came through.
+        ...(parsed.data.severity === "error" ? { recovery: { kind: "reconnect" } as const } : {}),
+      },
+    });
   }
 
   /**
@@ -1832,6 +1880,22 @@ export class InspectorController implements DevPreviewToolSession {
 
   dismissIssue(): void {
     this.patchState({ issue: null });
+  }
+
+  /**
+   * Take the notice's one way forward. Cleared first, so a fresh issue raised by
+   * the attempt itself — or pushed while it is in flight — is the one left on
+   * screen rather than being wiped by the state this call started from.
+   */
+  async recoverFromIssue(): Promise<void> {
+    const recovery = this.state.issue?.recovery;
+    if (recovery === undefined) return;
+    this.patchState({ issue: null });
+    if (recovery.kind === "set-mode") {
+      await this.setMode(recovery.mode);
+      return;
+    }
+    await this.retryConnect();
   }
 
   /**

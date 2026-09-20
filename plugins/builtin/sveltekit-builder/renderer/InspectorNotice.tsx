@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, Info, X, XCircle } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export type NoticeTone = "info" | "warning" | "error";
@@ -66,14 +67,19 @@ export function InspectorNotice({
         <div className="flex items-start justify-between gap-2">
           <p className="min-w-0 font-medium text-text-primary">{title}</p>
           {onDismiss ? (
-            <button
-              type="button"
+            // The primitive, not a hand-rolled button: hover, focus ring,
+            // radius and transition are the same ones every other icon control
+            // in the product draws. The offsets pull its 24px box back onto the
+            // title's optical line — the glyph inside it is still 12px.
+            <Button
+              variant="ghost"
+              size="icon-xs"
               aria-label="Dismiss"
               onClick={onDismiss}
-              className="-mr-1 -mt-0.5 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-raised hover:text-text-primary"
+              className="-mr-1 -mt-1 shrink-0"
             >
-              <X className="h-3 w-3" aria-hidden="true" />
-            </button>
+              <X aria-hidden="true" />
+            </Button>
           ) : null}
         </div>
         {children ? <div className="text-text-secondary">{children}</div> : null}

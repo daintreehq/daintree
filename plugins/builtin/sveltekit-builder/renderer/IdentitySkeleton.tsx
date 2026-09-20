@@ -20,15 +20,19 @@ export function IdentitySkeleton({ label }: { label?: string }) {
     >
       {/* 28 / 24 / 20: the identity's three rows, so the sections below land
           in the same place when the answer arrives. */}
+      {/* `immediate`, because the wait is already known to have passed the gate:
+          the drawer only mounts this past 400ms, and the delayed pulse would
+          spend another 400ms at zero opacity — long enough for the display
+          floor to expire before a single bone was ever visible. */}
       <div className="flex h-7 items-center gap-2">
-        <SkeletonBone heightPx={18} className="w-14 rounded-[var(--radius-sm)]" />
-        <SkeletonBone heightPx={14} className="w-32 rounded-[var(--radius-sm)]" />
+        <SkeletonBone immediate heightPx={18} className="w-14 rounded-[var(--radius-sm)]" />
+        <SkeletonBone immediate heightPx={14} className="w-32 rounded-[var(--radius-sm)]" />
       </div>
       <div className="flex h-6 items-center">
-        <SkeletonBone heightPx={11} className="w-48 rounded-[var(--radius-sm)]" />
+        <SkeletonBone immediate heightPx={11} className="w-48 rounded-[var(--radius-sm)]" />
       </div>
       <div className="flex h-5 items-center">
-        <SkeletonBone heightPx={11} className="w-28 rounded-[var(--radius-sm)]" />
+        <SkeletonBone immediate heightPx={11} className="w-28 rounded-[var(--radius-sm)]" />
       </div>
     </Skeleton>
   );

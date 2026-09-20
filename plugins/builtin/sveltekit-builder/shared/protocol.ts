@@ -207,7 +207,7 @@ export const GuestEventSchema = z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("runtimeIssue"),
-      code: z.enum(["no-svelte-meta", "not-dev-build", "overlay-blocked", "internal"]),
+      code: z.enum(["no-svelte-meta", "not-dev-build", "overlay-blocked", "capacity", "internal"]),
       detail: z.string().max(512),
     })
     .strict(),
