@@ -24,11 +24,14 @@ import {
   type PowerObservations,
   type PowerPolicySnapshot,
 } from "../../shared/types/powerPolicy.js";
+import { watchLinuxPowerSource, type LinuxPowerSourceWatch } from "../services/linuxPowerSource.js";
 import { setPollThrottle } from "./focusThrottleState.js";
 import { getPowerPolicy, subscribePowerPolicy, updatePowerObservations } from "./powerPolicy.js";
 import { publishPowerPolicy } from "./powerPolicyDelivery.js";
 
 let resumeTimeout: NodeJS.Timeout | null = null;
+// Only set on Linux, where it is the sole source of the battery observation.
+let linuxPowerSource: LinuxPowerSourceWatch | null = null;
 // One workspace refresh per wake, whichever of resume, unlock or focus lands
 // first. While the delayed resume handler has yet to decide, it owns the
 // refresh; if it finds nobody watching, the refresh is owed to whoever comes
@@ -102,13 +105,24 @@ export interface PowerMonitorDeps {
 export function setupPowerMonitor(deps: PowerMonitorDeps): void {
   let suspendTime: number | null = null;
 
-  try {
-    updatePowerObservations({ onBattery: powerMonitor.isOnBatteryPower() });
-  } catch {
-    // Unknown power source reads as AC — Linux commonly reports that anyway.
+  // Electron has no battery source on desktop Linux — `isOnBatteryPower()`
+  // answers false forever and neither event ever fires (#12516) — so sysfs
+  // reads it there, and reads it alone. Leaving the inert Electron path
+  // registered as a second writer would be worse than useless: the sysfs watch
+  // reports against its own last answer, so one stray `on-ac` would strand the
+  // policy on AC until the hardware genuinely changed.
+  if (process.platform === "linux") {
+    linuxPowerSource?.dispose();
+    linuxPowerSource = watchLinuxPowerSource((onBattery) => updatePowerObservations({ onBattery }));
+  } else {
+    try {
+      updatePowerObservations({ onBattery: powerMonitor.isOnBatteryPower() });
+    } catch {
+      // An unknown power source reads as AC.
+    }
+    powerMonitor.on("on-battery", () => updatePowerObservations({ onBattery: true }));
+    powerMonitor.on("on-ac", () => updatePowerObservations({ onBattery: false }));
   }
-  powerMonitor.on("on-battery", () => updatePowerObservations({ onBattery: true }));
-  powerMonitor.on("on-ac", () => updatePowerObservations({ onBattery: false }));
   // macOS and Windows only; Linux sessions usually never fire these, which is
   // why hidden/minimized windows reach `deep` on their own. A locked screen
   // fires no window blur, so without this a frontmost Daintree keeps polling
@@ -144,6 +158,10 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
   });
 
   powerMonitor.on("resume", () => {
+    // The power source can change while the machine sleeps with nothing firing
+    // on wake to say so, and on Linux nothing fires either way — read it now
+    // rather than leaving the policy a poll interval behind.
+    void linuxPowerSource?.refresh();
     clearResumeTimeout();
     wakeRecoveryPending = true;
     const generation = ++wakeGeneration;

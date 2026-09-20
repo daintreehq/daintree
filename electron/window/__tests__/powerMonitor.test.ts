@@ -5,10 +5,32 @@ import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type PowerHandler = (...args: any[]) => void;
 
+const linuxSource = vi.hoisted(() => ({
+  onChange: null as ((onBattery: boolean) => void) | null,
+  refresh: vi.fn(async () => {}),
+  dispose: vi.fn(),
+}));
+
+// Hoisted, so it survives the `vi.resetModules()` each test opens with —
+// that clears the module cache, never the mock registry.
+vi.mock("../../services/linuxPowerSource.js", () => ({
+  watchLinuxPowerSource: vi.fn((onChange: (onBattery: boolean) => void) => {
+    linuxSource.onChange = onChange;
+    return { refresh: linuxSource.refresh, dispose: linuxSource.dispose };
+  }),
+}));
+
+const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+function setPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+}
+
 const powerHandlers = new Map<string, PowerHandler>();
 let mockGetAllWindows: ReturnType<typeof vi.fn>;
 let mockGetFocusedWindow: ReturnType<typeof vi.fn>;
 let mockGetAppWebContents: ReturnType<typeof vi.fn>;
+let mockIsOnBatteryPower: ReturnType<typeof vi.fn>;
 
 function createMockWindow(options: { destroyed?: boolean } = {}) {
   const wc = {
@@ -52,6 +74,13 @@ let events: typeof import("../../services/events.js").events;
 describe("setupPowerMonitor", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
+    // Linux takes the sysfs branch and CI runs on Linux, so each test names the
+    // platform it means rather than inheriting the runner's.
+    setPlatform("darwin");
+    mockIsOnBatteryPower = vi.fn(() => false);
+    linuxSource.onChange = null;
+    linuxSource.refresh.mockClear();
+    linuxSource.dispose.mockClear();
     powerHandlers.clear();
     vi.resetModules();
 
@@ -68,6 +97,7 @@ describe("setupPowerMonitor", () => {
         getAllWindows: mockGetAllWindows,
       },
       powerMonitor: {
+        isOnBatteryPower: mockIsOnBatteryPower,
         on: vi.fn((event: string, handler: PowerHandler) => {
           powerHandlers.set(event, handler);
         }),
@@ -103,6 +133,7 @@ describe("setupPowerMonitor", () => {
   afterEach(() => {
     clearResumeTimeout();
     events.removeAllListeners();
+    Object.defineProperty(process, "platform", realPlatform);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -561,5 +592,71 @@ describe("setupPowerMonitor", () => {
 
     expect(onWake).toHaveBeenCalledTimes(1);
     expect(onWake.mock.calls[0]?.[0].sleepDuration).toBe(5_000);
+  });
+
+  describe("battery observation", () => {
+    it("seeds from Electron and follows its events off Linux", async () => {
+      const { getPowerPolicy } = await import("../powerPolicy.js");
+      const { watchLinuxPowerSource } = await import("../../services/linuxPowerSource.js");
+      mockIsOnBatteryPower.mockReturnValue(true);
+
+      setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+
+      expect(getPowerPolicy()).toMatchObject({ onBattery: true, level: "saving" });
+      expect(watchLinuxPowerSource).not.toHaveBeenCalled();
+    });
+
+    it("takes the reading from sysfs on Linux, where Electron reports AC regardless", async () => {
+      setPlatform("linux");
+      const { getPowerPolicy } = await import("../powerPolicy.js");
+
+      setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+      expect(getPowerPolicy()).toMatchObject({ onBattery: false, level: "active" });
+
+      linuxSource.onChange!(true);
+      expect(getPowerPolicy()).toMatchObject({ onBattery: true, level: "saving" });
+
+      linuxSource.onChange!(false);
+      expect(getPowerPolicy()).toMatchObject({ onBattery: false, level: "active" });
+    });
+
+    it("leaves the Electron battery events unregistered on Linux, so nothing can latch a stale answer", () => {
+      setPlatform("linux");
+
+      setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+
+      // The sysfs watch reports against its own last answer, so a second writer
+      // would strand the policy until the hardware genuinely changed.
+      expect(powerHandlers.has("on-battery")).toBe(false);
+      expect(powerHandlers.has("on-ac")).toBe(false);
+      expect(mockIsOnBatteryPower).not.toHaveBeenCalled();
+    });
+
+    it("re-reads sysfs on resume rather than waiting out the poll interval", () => {
+      setPlatform("linux");
+      setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+
+      powerHandlers.get("resume")!();
+
+      expect(linuxSource.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not read sysfs on resume off Linux", () => {
+      setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+
+      powerHandlers.get("resume")!();
+
+      expect(linuxSource.refresh).not.toHaveBeenCalled();
+    });
+
+    it("disposes the previous sysfs watch if set up again", () => {
+      setPlatform("linux");
+      setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+      expect(linuxSource.dispose).not.toHaveBeenCalled();
+
+      setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+
+      expect(linuxSource.dispose).toHaveBeenCalledTimes(1);
+    });
   });
 });
