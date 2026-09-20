@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { registerPanelCloseGuard, type PanelCloseVerdict } from "@/services/panelCloseGuard";
@@ -46,8 +46,14 @@ export function FileDocumentCloseGuardHost() {
     )
   );
   const [queue, setQueue] = useState<Prompt[]>([]);
+  // Mirrored on commit rather than during render: `settle` is stable and runs
+  // after an awaited save, so it needs the live queue, and a ref written
+  // during render is a compiler bailout. Layout phase, so a continuation that
+  // resolves before paint still reads the queue it was queued against.
   const queueRef = useRef(queue);
-  queueRef.current = queue;
+  useLayoutEffect(() => {
+    queueRef.current = queue;
+  }, [queue]);
   const [busy, setBusy] = useState<"save" | "discard" | null>(null);
   // The prompt whose Save or Discard is in flight. Its document goes clean
   // mid-operation, which must not read as "this prompt is stale".

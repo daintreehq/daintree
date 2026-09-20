@@ -289,6 +289,16 @@ export function GitHubResourceList({
   const [activeIndex, setActiveIndex] = useState(-1);
   const [sortPopoverOpen, setSortPopoverOpen] = useState(false);
   const [selectionMenuOpen, setSelectionMenuOpen] = useState(false);
+  /**
+   * Which row's actions menu is open, if any.
+   *
+   * Controlled rather than left to Radix so the panel can take its child
+   * overlays down with it. `FixedDropdown`'s documented invariant is that
+   * portaled content escapes the `<Activity>` subtree entirely: a menu still
+   * open when the panel hides stays mounted on `document.body`, with stale
+   * state and, once Floating UI loses its anchor, at (0,0).
+   */
+  const [openRowMenuNumber, setOpenRowMenuNumber] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
@@ -478,20 +488,27 @@ export function GitHubResourceList({
       }
       const target = type === "issue" ? `${root}/issues/new` : `${root}/compare`;
       // dispatch() resolves `{ ok: false }` rather than throwing, so an ignored
-      // result is a button that silently does nothing.
-      void actionService
-        .dispatch("system.openExternal", { url: target }, { source: "user" })
-        .then((result) => {
-          if (!result.ok) {
-            notify({
-              type: "error",
-              title:
-                type === "issue" ? "Couldn't open new issue" : "Couldn't open new pull request",
-              message: `Daintree couldn't hand off to the browser. Open ${target} manually, or try again.`,
-              action: { label: "Try again", onClick: () => handleCreateNew() },
-            });
-          }
-        });
+      // result is a button that silently does nothing. The retry re-opens the
+      // target already resolved rather than re-entering the handler: the root
+      // derivation can cost a `getIssueUrl` round trip, and a callback that
+      // reads its own binding is a compiler bailout (the same click-scoped
+      // shape `handleOpenInGitHub` uses).
+      const open = () => {
+        void actionService
+          .dispatch("system.openExternal", { url: target }, { source: "user" })
+          .then((result) => {
+            if (!result.ok) {
+              notify({
+                type: "error",
+                title:
+                  type === "issue" ? "Couldn't open new issue" : "Couldn't open new pull request",
+                message: `Daintree couldn't hand off to the browser. Open ${target} manually, or try again.`,
+                action: { label: "Try again", onClick: open },
+              });
+            }
+          });
+      };
+      open();
       handleClose();
     })();
   }, [data, projectPath, type, handleOpenInGitHub, handleClose]);
@@ -548,23 +565,27 @@ export function GitHubResourceList({
     (url: string) => {
       // dispatch() resolves `{ ok: false }` instead of throwing, so an
       // unchecked result is a row that silently does nothing. Same recovery
-      // shape the footer's "View on GitHub" uses.
-      void actionService
-        .dispatch("system.openExternal", { url }, { source: "user" })
-        .then((result) => {
-          if (!result.ok) {
-            notify({
-              type: "error",
-              title: "Couldn't open GitHub",
-              message: `Daintree couldn't hand off to the browser. Open ${url} manually, or try again.`,
-              coalesce: {
-                key: `forge-open-item-failed:${projectPath}`,
-                buildMessage: () => "Daintree couldn't hand off to the browser.",
-              },
-              action: { label: "Try again", onClick: () => handleOpenUrlExternal(url) },
-            });
-          }
-        });
+      // shape the footer's "View on GitHub" uses — click-scoped, because a
+      // callback that reads its own binding is a compiler bailout.
+      const open = () => {
+        void actionService
+          .dispatch("system.openExternal", { url }, { source: "user" })
+          .then((result) => {
+            if (!result.ok) {
+              notify({
+                type: "error",
+                title: "Couldn't open GitHub",
+                message: `Daintree couldn't hand off to the browser. Open ${url} manually, or try again.`,
+                coalesce: {
+                  key: `forge-open-item-failed:${projectPath}`,
+                  buildMessage: () => "Daintree couldn't hand off to the browser.",
+                },
+                action: { label: "Try again", onClick: open },
+              });
+            }
+          });
+      };
+      open();
       handleClose();
     },
     [handleClose, projectPath]
@@ -674,17 +695,6 @@ export function GitHubResourceList({
     numberQuery === null &&
     debouncedSearch.trim().length === 0 &&
     filterState === "open";
-
-  /**
-   * Which row's actions menu is open, if any.
-   *
-   * Controlled rather than left to Radix so the panel can take its child
-   * overlays down with it. `FixedDropdown`'s documented invariant is that
-   * portaled content escapes the `<Activity>` subtree entirely: a menu still
-   * open when the panel hides stays mounted on `document.body`, with stale
-   * state and, once Floating UI loses its anchor, at (0,0).
-   */
-  const [openRowMenuNumber, setOpenRowMenuNumber] = useState<number | null>(null);
 
   // A background revalidation can rename an issue or move a PR's head ref
   // under a selection made minutes ago. This refreshes the stored copies —
