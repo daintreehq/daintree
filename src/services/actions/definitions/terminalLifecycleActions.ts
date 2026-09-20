@@ -724,6 +724,7 @@ export function registerTerminalLifecycleActions(
       outputBufferSize: z.number(),
       semanticBufferLines: z.number(),
       restartCount: z.number(),
+      agentIncarnation: z.number().int().nonnegative().optional(),
       hasPty: z.boolean().optional(),
       agentSessionId: z.string().optional(),
       detectedAgentId: z.string().optional(),

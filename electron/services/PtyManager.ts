@@ -1037,6 +1037,7 @@ export class PtyManager extends EventEmitter {
       outputBufferSize: terminalInfo.outputBuffer.length,
       semanticBufferLines: terminalInfo.semanticBuffer.length,
       restartCount: terminalInfo.restartCount,
+      agentIncarnation: terminalInfo.agentIncarnation,
       hasPty,
       agentSessionId: terminalInfo.agentSessionId,
       detectedAgentId: terminalInfo.detectedAgentId,

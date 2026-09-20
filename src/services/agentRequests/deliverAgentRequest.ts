@@ -282,9 +282,14 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
  * refused, while a shell an agent was launched into keeps naming it. `spawnedAt` is the
  * stamp the panel takes when a pty starts under it, and every restart path
  * re-stamps it (`panelRegistry/restart.ts`), so it is the pty generation for
- * every generation the panel was there to see start. A pty-host crash replays
- * the pty under the same id without the panel re-stamping, so it is the
- * renderer's account of the generation rather than the host's. A slot holding no pty at all — a
+ * every generation the panel was there to see start. It is the renderer's
+ * account of the generation rather than the host's, and the two come apart in
+ * both directions: a pty-host crash replays the pty under the same id without
+ * the panel re-stamping, and reconnecting to a pty that never stopped stamps a
+ * new panel time. A replayed pty also starts its own count again, so a run
+ * that lived through one can find every field back where it bound them — which
+ * is why a look that names a different session ends the run then and there
+ * rather than being weighed again at the end. A slot holding no pty at all — a
  * recovery hold, which `addPanel.ts` deliberately leaves unstamped — has no
  * generation to name, and is refused rather than compared: two absent stamps
  * are equal to each other, and that equality would be the whole check passing
@@ -582,7 +587,19 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
         // would re-reading the identity on a loop re-entry. Both are the thing
         // the final check exists to refuse. A launch destination simply has no
         // identity to bind to yet, so it binds on the first look that does.
-        bound ??= identityOf(entry);
+        const seen = identityOf(entry);
+        if (bound === null) bound = seen;
+        // Latched, not sampled twice. Once a look has named a different session
+        // the run is over, however the slot reads later: a pty replayed under
+        // the same id after a host crash starts its count again, so a session
+        // that has already been seen to change can climb back to the numbers
+        // the run bound to and match them (#12535). Only a look that *named* a
+        // session counts against it — an unreadable one is no evidence, and
+        // waiting through it is what the readiness loop is for.
+        else if (seen !== null && !sameSession(bound, seen)) {
+          report({ status: "failed", message: sessionChanged(title, seen) }, terminalId);
+          return;
+        }
         if (readiness === "ready" || run.forced) {
           if (bound === null) {
             report({ status: "failed", message: unbindable(title, entry) }, terminalId);

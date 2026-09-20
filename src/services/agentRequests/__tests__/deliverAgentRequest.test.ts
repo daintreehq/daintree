@@ -97,6 +97,11 @@ function terminal(agentState: string | null = null) {
       agentIncarnation = (agentIncarnation ?? 0) + 1;
       state = "waiting";
     },
+    /** A pty replayed under the same id, counting from the start again. */
+    rewindIncarnation: () => {
+      agentIncarnation = 0;
+      state = "waiting";
+    },
   };
 }
 
@@ -429,6 +434,37 @@ describe("deliverAgentRequest", () => {
     // Bound against the working session on the first look, then replaced.
     await vi.advanceTimersByTimeAsync(1_000);
     agent.relaunchAgent();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude restarted before the request went out — nothing was sent",
+    });
+  });
+
+  it("ends the run on the look that names a different session, not at the end", async () => {
+    // A pty replayed under the same id after a host crash starts counting
+    // again, so a slot that has already been seen to change can come back to
+    // the numbers the run bound to. The check latches on the first look that
+    // disagrees rather than being weighed once more at the write (#12535).
+    const agent = terminal("working");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+    });
+    // Bound against the working session, then replaced, then wound back to the
+    // count it bound to — as a replayed pty would.
+    await vi.advanceTimersByTimeAsync(1_000);
+    agent.relaunchAgent();
+    await vi.advanceTimersByTimeAsync(1_000);
+    agent.rewindIncarnation();
     await vi.advanceTimersByTimeAsync(5_000);
     await run;
 
