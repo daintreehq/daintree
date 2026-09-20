@@ -125,9 +125,12 @@ describe("SemanticAnalysisService", () => {
 
     expect(console1.warn).not.toHaveBeenCalled();
     expect(console1.log).toHaveBeenCalledTimes(2);
-    expect(console1.log).toHaveBeenCalledWith(expect.stringContaining("Skipping worker message"), {
-      type: "UNREGISTER_TERMINAL",
-    });
+    expect(console1.log).toHaveBeenCalledWith(
+      expect.stringContaining("[DEBUG] [SemanticAnalysisService] Skipping worker message"),
+      {
+        type: "UNREGISTER_TERMINAL",
+      }
+    );
     expect(MockWorker.instances).toHaveLength(0);
 
     // `registeredTerminals` is private, so the only observable proof the entry
@@ -165,9 +168,12 @@ describe("SemanticAnalysisService", () => {
     semanticAnalysisService.unregisterTerminal("terminal");
 
     expect(console2.warn).not.toHaveBeenCalled();
-    expect(console2.log).toHaveBeenCalledWith(expect.stringContaining("Skipping worker message"), {
-      type: "UNREGISTER_TERMINAL",
-    });
+    expect(console2.log).toHaveBeenCalledWith(
+      expect.stringContaining("[DEBUG] [SemanticAnalysisService] Skipping worker message"),
+      {
+        type: "UNREGISTER_TERMINAL",
+      }
+    );
     expect(worker?.terminate).toHaveBeenCalledTimes(1);
     expect(worker?.postMessage).not.toHaveBeenCalled();
     expect(semanticAnalysisService.isReady()).toBe(false);
@@ -196,16 +202,28 @@ describe("SemanticAnalysisService", () => {
     expect(console3.log).not.toHaveBeenCalled();
   });
 
-  it("still warns when a non-cleanup message has no worker", async () => {
+  // One case per caller rather than one test firing all four: an aggregate
+  // warning count would let a caller that stopped warning hide behind another
+  // that warned twice.
+  const noisyCallers: { name: string; call: () => void }[] = [
+    { name: "registerTerminal", call: () => semanticAnalysisService.registerTerminal("terminal") },
+    {
+      name: "updateTerminal",
+      call: () => semanticAnalysisService.updateTerminal("terminal", "agent"),
+    },
+    { name: "reset", call: () => semanticAnalysisService.reset() },
+    { name: "ping", call: () => semanticAnalysisService.ping() },
+  ];
+
+  it.each(noisyCallers)("still warns when $name has no worker", async ({ call }) => {
     getAnalysisBufferMock.mockResolvedValueOnce(null);
 
     await semanticAnalysisService.initialize();
     const console4 = silenceConsole();
 
-    semanticAnalysisService.ping();
-    semanticAnalysisService.reset();
+    call();
 
-    expect(console4.warn).toHaveBeenCalledTimes(2);
+    expect(console4.warn).toHaveBeenCalledTimes(1);
     expect(console4.warn).toHaveBeenCalledWith(expect.stringContaining("Cannot post message"), "");
     expect(console4.log).not.toHaveBeenCalled();
     expect(MockWorker.instances).toHaveLength(0);
