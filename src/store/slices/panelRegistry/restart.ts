@@ -804,6 +804,11 @@ export const createRestartActions = (
           lastCheckResult: undefined,
           // Same for its handback (#12488): the restarted session was never asked.
           lastHandback: undefined,
+          // A new PTY starts the session count over, matching the fresh record
+          // the host builds for it (#12535). Carrying the old one forward would
+          // leave this surface disagreeing with the host about a session
+          // neither of them is holding any more.
+          agentIncarnation: undefined,
           startedAt: Date.now(),
         };
         const newById = { ...state.panelsById, [id]: updated };
@@ -1404,6 +1409,11 @@ export const createRestartActions = (
           lastCheckResult: undefined,
           // Same for its handback (#12488): the restarted session was never asked.
           lastHandback: undefined,
+          // A new PTY starts the session count over, matching the fresh record
+          // the host builds for it (#12535). Carrying the old one forward would
+          // leave this surface disagreeing with the host about a session
+          // neither of them is holding any more.
+          agentIncarnation: undefined,
           startedAt: Date.now(),
         };
         const newById = { ...state.panelsById, [id]: updated };

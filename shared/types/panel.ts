@@ -581,6 +581,22 @@ export interface PtyPanelData extends BasePanelData {
    * See `docs/architecture/terminal-identity.md`.
    */
   detectedAgentId?: BuiltInAgentId;
+  /**
+   * How many times the pty-host has observed a new agent session take over this
+   * terminal's PTY after a prior one exited (#12535).
+   *
+   * `startedAt` is the PTY generation, so it cannot move when a user relaunches
+   * an agent in the shell their last one left behind — the PTY, its pid and its
+   * restart count all hold. This is the only field that moves for that, which
+   * is what lets a queued agent request tell the session it bound to from its
+   * successor. Owned by the host and only ever copied here; the renderer never
+   * increments it.
+   *
+   * Not persisted, and cleared when a restart re-stamps `startedAt`. An
+   * observation, not proof of process identity — a relaunch the detector never
+   * classified leaves it unchanged.
+   */
+  agentIncarnation?: number;
   /** Captured agent session ID from graceful shutdown (used for session resume) */
   agentSessionId?: string;
   /** Process-level flags captured at launch time, persisted for session resume */

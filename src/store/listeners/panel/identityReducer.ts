@@ -10,6 +10,13 @@ export interface AgentDetectedReducerInput {
   nextDetectedAgentId: BuiltInAgentId | undefined;
   nextDetectedProcessId: string | undefined;
   nextEverDetectedAgent: true | undefined;
+  /**
+   * The host's observed respawn count carried on the detection event (#12535),
+   * or undefined from a producer that could not report it. Assigned, never
+   * derived: the renderer counts nothing of its own, so a missed event can only
+   * leave this behind, never invent a session boundary.
+   */
+  nextAgentIncarnation: number | undefined;
   timestamp: number;
 }
 
@@ -28,7 +35,20 @@ export function reduceAgentDetected(
   terminal: PtyPanelData,
   input: AgentDetectedReducerInput
 ): AgentDetectedReducerResult | null {
-  const { nextDetectedAgentId, nextDetectedProcessId, nextEverDetectedAgent, timestamp } = input;
+  const {
+    nextDetectedAgentId,
+    nextDetectedProcessId,
+    nextEverDetectedAgent,
+    nextAgentIncarnation,
+    timestamp,
+  } = input;
+
+  // Forward-only: a detection event overtaken by a later one must not roll the
+  // count back and make a superseded session look current again. A panel with
+  // none yet adopts whatever the host reports, zero included.
+  const needsIncarnationUpdate =
+    nextAgentIncarnation !== undefined &&
+    (terminal.agentIncarnation === undefined || nextAgentIncarnation > terminal.agentIncarnation);
 
   const needsIconUpdate =
     nextDetectedProcessId !== undefined && terminal.detectedProcessId !== nextDetectedProcessId;
@@ -72,7 +92,8 @@ export function reduceAgentDetected(
     !needsAgentIdUpdate &&
     !needsRuntimeIdentityUpdate &&
     !shouldSeedAgentState &&
-    !needsTitleUpdate
+    !needsTitleUpdate &&
+    !needsIncarnationUpdate
   ) {
     return null;
   }
@@ -82,6 +103,7 @@ export function reduceAgentDetected(
     ...(needsObservedTitleClear && { lastObservedTitle: undefined }),
     ...(needsStickyUpdate && { everDetectedAgent: true }),
     ...(needsAgentIdUpdate && { detectedAgentId: nextDetectedAgentId }),
+    ...(needsIncarnationUpdate && { agentIncarnation: nextAgentIncarnation }),
     ...(needsRuntimeIdentityUpdate && {
       runtimeIdentity: nextRuntimeIdentity ?? undefined,
     }),

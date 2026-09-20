@@ -1381,6 +1381,9 @@ events.on("agent:state-changed", (payload) => {
       waitingReason: payload.waitingReason,
       sessionCost: payload.sessionCost,
       sessionTokens: payload.sessionTokens,
+      ...(payload.agentIncarnation !== undefined
+        ? { agentIncarnation: payload.agentIncarnation }
+        : {}),
       // Exit metadata on completed/exited transitions. Omit when absent so the
       // wire stays minimal; exitCode may legitimately be null (signal kill), so
       // forward on presence rather than truthiness. #10638
@@ -1445,6 +1448,9 @@ events.on("agent:detected", (payload) => {
     processName: payload.processName,
     defaultTitle: payload.defaultTitle,
     timestamp: payload.timestamp,
+    ...(payload.agentIncarnation !== undefined
+      ? { agentIncarnation: payload.agentIncarnation }
+      : {}),
   });
 });
 

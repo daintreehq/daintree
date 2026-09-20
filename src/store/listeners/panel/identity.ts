@@ -89,6 +89,28 @@ export function setupIdentityListeners(): DisposableStore {
           return;
         }
 
+        // Applied before the state it belongs to, so a fresh `idle` is never
+        // briefly readable beside its predecessor's session count (#12535).
+        // The host owns the value; this only ever copies it, and only forward,
+        // so a reordered event cannot resurrect a superseded session.
+        const observedIncarnation = data.agentIncarnation;
+        if (
+          observedIncarnation !== undefined &&
+          (terminal.agentIncarnation === undefined ||
+            observedIncarnation > terminal.agentIncarnation)
+        ) {
+          usePanelStore.setState((st) => {
+            const panel = st.panelsById[terminalId];
+            if (!panel || !isPtyPanel(panel)) return st;
+            return {
+              panelsById: {
+                ...st.panelsById,
+                [terminalId]: { ...panel, agentIncarnation: observedIncarnation },
+              },
+            };
+          });
+        }
+
         terminalInstanceService.setAgentState(terminalId, state);
 
         if (terminal.agentState === "directing" && state === "waiting") {
@@ -294,6 +316,7 @@ export function setupIdentityListeners(): DisposableStore {
             nextDetectedAgentId,
             nextDetectedProcessId,
             nextEverDetectedAgent,
+            nextAgentIncarnation: data.agentIncarnation,
             timestamp,
           });
 

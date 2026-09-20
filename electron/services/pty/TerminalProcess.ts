@@ -421,6 +421,7 @@ export class TerminalProcess {
       lastCheckTime: spawnedAt,
       contentEpoch: 0,
       semanticBuffer: [],
+      agentIncarnation: 0,
       restartCount: 0,
       // Analysis is enabled whenever an agent is expected or live. Plain
       // terminals enable it on the fly when the process detector promotes.
@@ -1204,6 +1205,7 @@ export class TerminalProcess {
       detectedAgentId: t.detectedAgentId,
       detectedProcessIconId: t.detectedProcessIconId,
       everDetectedAgent: t.everDetectedAgent,
+      agentIncarnation: t.agentIncarnation,
       restartCount: t.restartCount,
       activityTier: this._activityTier,
       hasPty,

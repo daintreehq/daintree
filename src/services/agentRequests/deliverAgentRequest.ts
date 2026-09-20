@@ -287,17 +287,21 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
  * are equal to each other, and that equality would be the whole check passing
  * on nothing.
  *
- * Together they are the strongest claim this surface can make, and they are
- * still not a claim about the *process* inside the pty. An agent that exits
- * leaving its shell keeps both, and so does the `claude` a user then types
- * into that shell — a different session with the same slot, the same pty and
- * the same launch id, invisible to anything observable from here. That gap is
- * why the host treats every submission as text typed at whatever is listening
- * rather than as a message delivered to a known conversation.
+ * `agentIncarnation` is what neither of those can be: the count of times the
+ * pty-host has *seen* a new agent take over this pty after a prior one exited.
+ * An agent that quits leaving its shell, and the `claude` a user then types
+ * into that shell, share the slot, the pty and the launch id — and differ
+ * here (#12535). It is an observation of the boundaries the detector caught,
+ * not proof of process identity: a relaunch it never classified still moves
+ * nothing, and the window between this last look and the write is still a
+ * window. That residue is why the host goes on treating every submission as
+ * text typed at whatever is listening rather than as a message delivered to a
+ * known conversation.
  */
 interface DestinationIdentity {
   agentId: string;
   spawnedAt: number;
+  agentIncarnation: number;
 }
 
 /** The identity an entry supports, or `null` when it supports none. */
@@ -321,11 +325,23 @@ function identityOf(entry: TerminalStatusEntry | undefined): DestinationIdentity
   // Same reading applied to the generation stamp: unobserved is not "a session
   // that started at no time", and it must not compare equal to the next one.
   if (typeof entry.spawnedAt !== "number") return null;
-  return { agentId: entry.agentId, spawnedAt: entry.spawnedAt };
+  // And to the session count. Zero is a reading — no relaunch seen in this pty
+  // generation — so it is only absence that refuses here. A surface that cannot
+  // observe it cannot tell this session from its successor, which is the one
+  // thing this identity is for; two absent counts comparing equal is the shape
+  // #12441 had to fix once already.
+  const agentIncarnation = entry.agentIncarnation;
+  if (agentIncarnation === undefined || !Number.isSafeInteger(agentIncarnation)) return null;
+  if (agentIncarnation < 0) return null;
+  return { agentId: entry.agentId, spawnedAt: entry.spawnedAt, agentIncarnation };
 }
 
 function sameSession(bound: DestinationIdentity, now: DestinationIdentity): boolean {
-  return bound.agentId === now.agentId && bound.spawnedAt === now.spawnedAt;
+  return (
+    bound.agentId === now.agentId &&
+    bound.spawnedAt === now.spawnedAt &&
+    bound.agentIncarnation === now.agentIncarnation
+  );
 }
 
 /** One terminal's current status entry, or `undefined` when none is readable. */
@@ -555,8 +571,12 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
         if (busy) readyBy = Date.now() + LAUNCH_READY_TIMEOUT_MS;
         if (readiness === "ready" || run.forced) {
           // Bound from the same observation that proved readiness, so the two
-          // cannot disagree about which session they are about.
-          bound = identityOf(entry);
+          // cannot disagree about which session they are about. Bound once:
+          // the loop re-enters when the last look found the destination off its
+          // prompt, and re-reading the identity there would quietly adopt
+          // whatever is in the slot now — which is the thing the final check
+          // exists to refuse (#12535).
+          bound ??= identityOf(entry);
           if (bound === null) {
             report({ status: "failed", message: unbindable(title, entry) }, terminalId);
             return;

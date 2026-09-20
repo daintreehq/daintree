@@ -89,6 +89,20 @@ export interface TerminalPublicState {
    * even if no agent is currently detected. Not persisted.
    */
   everDetectedAgent?: boolean;
+  /**
+   * How many times a new agent session has been observed taking over this PTY
+   * after a prior one exited — the `respawn` the detector already fires when a
+   * user relaunches a CLI in the shell their last agent left behind (#12535).
+   *
+   * `spawnedAt` is the PTY generation, so it cannot move for a relaunch inside
+   * an unchanged PTY; neither can `ptyPid` or `restartCount`. This counts the
+   * boundaries the detector did see, which is what lets a queued request tell
+   * the session it bound to from its successor. It is an observation, not proof
+   * of process identity: a relaunch the detector never classified is still
+   * invisible here. Zero is a real reading — no respawn observed in this PTY
+   * generation — not "unknown". Reset with the record when the PTY is replaced.
+   */
+  agentIncarnation: number;
   restartCount: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;

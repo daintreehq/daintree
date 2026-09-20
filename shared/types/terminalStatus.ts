@@ -58,6 +58,23 @@ export interface TerminalStatusEntry {
   lastOutputChangeAt?: number;
   exitCode?: number | null;
   spawnedAt?: number;
+  /**
+   * How many new agent sessions this terminal's PTY has been observed taking on
+   * after a prior one exited (#12535).
+   *
+   * `spawnedAt` is the PTY generation and cannot move when an agent exits and
+   * the user relaunches one in the shell it left behind — the PTY, its pid and
+   * its restart count all hold. This is the field that moves for that, so a
+   * caller holding an earlier reading can tell the session it saw from its
+   * successor. An observation of boundaries the detector caught, never proof of
+   * process identity: a relaunch it never classified leaves this unchanged.
+   *
+   * Zero is a real reading — none observed in this PTY generation. Absent means
+   * the surface could not observe it, which is not zero. The two surfaces count
+   * independently of each other's uptime, so compare readings from one source
+   * rather than across a `pty`/`renderer` switch.
+   */
+  agentIncarnation?: number;
   lastCheckResult?: TerminalCheckResult;
   /**
    * The handback marker the agent most recently printed for a submission that

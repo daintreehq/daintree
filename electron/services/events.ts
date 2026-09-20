@@ -611,6 +611,12 @@ export type DaintreeEventMap = {
     waitingReason?: import("../../shared/types/agent.js").WaitingReason;
     sessionCost?: number;
     sessionTokens?: number;
+    /**
+     * Observed new-agent-in-this-PTY count at this transition (#12535).
+     * Carried on every transition, not just the respawn that moves it, so a
+     * subscriber applies the state and the session it belongs to together.
+     */
+    agentIncarnation?: number;
     /** Process exit code on completed/exited transitions; null on a signal kill with no numeric code. */
     exitCode?: number | null;
     /** Raw OS signal number on completed/exited transitions, when applicable. */
@@ -680,6 +686,11 @@ export type DaintreeEventMap = {
     processName: string;
     defaultTitle?: string;
     timestamp: number;
+    /**
+     * Observed new-agent-in-this-PTY count at the moment of detection
+     * (#12535). Absent when the producer could not report it.
+     */
+    agentIncarnation?: number;
   };
 
   /**

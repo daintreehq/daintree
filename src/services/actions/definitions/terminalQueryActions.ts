@@ -502,6 +502,13 @@ export function registerTerminalQueryActions(
           // running); spawnedAt comes from the panel's creation timestamp.
           exitCode: isPtyPanel(terminal) ? (terminal.exitCode ?? null) : undefined,
           spawnedAt: isPtyPanel(terminal) ? terminal.startedAt : undefined,
+          // Observed respawns inside an unchanged PTY (#12535). Defaulted to
+          // zero for a PTY panel rather than left absent: the panel row is born
+          // with the PTY and the count only ever moves on a detection event
+          // this surface subscribes to, so "none recorded" *is* "none observed"
+          // here. Absent would be read as unobservable and refuse every
+          // delivery this surface answers for, which is the whole of them.
+          agentIncarnation: isPtyPanel(terminal) ? (terminal.agentIncarnation ?? 0) : undefined,
           // Parsed test/lint/check result (issue #10682). Best-effort, not
           // authoritative — see TerminalCheckResult / the schema doc above.
           lastCheckResult: isPtyPanel(terminal) ? terminal.lastCheckResult : undefined,

@@ -36,6 +36,14 @@ export interface AgentStateChangePayload {
   previousState: AgentState;
   /** Timestamp of state change */
   timestamp: number;
+  /**
+   * How many new agent sessions this PTY has been observed taking on after a
+   * prior one exited (#12535). The PTY generation (`startedAt`) cannot move for
+   * a relaunch inside an unchanged PTY, so this is the only thing that tells a
+   * bound session from its successor. Absent means the producer could not
+   * report it — never read absence as zero.
+   */
+  agentIncarnation?: number;
   /** Optional trace ID to track event chains */
   traceId?: string;
   /** What caused this state change */
@@ -144,6 +152,14 @@ export interface AgentDetectedPayload {
   processName: string;
   /** Timestamp when detected */
   timestamp: number;
+  /**
+   * How many new agent sessions this PTY has been observed taking on after a
+   * prior one exited (#12535). The PTY generation (`startedAt`) cannot move for
+   * a relaunch inside an unchanged PTY, so this is the only thing that tells a
+   * bound session from its successor. Absent means the producer could not
+   * report it — never read absence as zero.
+   */
+  agentIncarnation?: number;
 }
 
 /** Payload for agent exited events */

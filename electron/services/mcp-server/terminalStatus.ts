@@ -236,6 +236,13 @@ function buildEntry(record: TerminalRecord, submissionToken?: string): TerminalS
     spawnedAt: record.spawnedAt,
   };
 
+  // Counted on the pty-host record, so this surface reports whatever it holds.
+  // Older records predate the field and are unobserved rather than zero — the
+  // distinction the delivery path refuses on (#12535).
+  if (record.agentIncarnation !== undefined) {
+    entry.agentIncarnation = record.agentIncarnation;
+  }
+
   // `!wasKilled && !isExited` off the pty-host record (#12336). A pane that
   // exits cleanly is deliberately preserved, so the record outlives its
   // process and `false` is a real reading rather than a missing row. Assigned

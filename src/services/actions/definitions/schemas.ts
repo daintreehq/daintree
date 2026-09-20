@@ -535,6 +535,14 @@ export const TerminalStatusEntrySchema = z.object({
     .describe(
       "Wall-clock spawn time in epoch milliseconds, for run-duration and staleness checks."
     ),
+  agentIncarnation: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "How many times a new agent session has been observed taking over this terminal's PTY after a prior one exited. `spawnedAt` cannot move for a relaunch inside an unchanged PTY, so this is what tells a session you saw earlier from its successor. 0 means none observed; absent means unobserved, which is not 0. An observation of what the detector caught, not proof of process identity."
+    ),
   lastCheckResult: z
     .object({
       command: z.string().nullable(),

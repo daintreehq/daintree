@@ -23,6 +23,10 @@ function terminal(agentState: string | null = null) {
   // plain shell clears `agentId`.
   let agentId: string | null = "claude";
   let spawnedAt: number | undefined = 1_000;
+  // How many relaunches inside this pty the host has seen (#12535). Zero is a
+  // live agent that has not been replaced; the renderer surface reports it for
+  // every pty-backed pane, so the default here is what real panes report.
+  let agentIncarnation: number | undefined = 0;
   let hasPty: boolean | undefined = undefined;
   let waitingReason: string | null = null;
   dispatch.mockImplementation(async (id: string, args: Record<string, unknown>) => {
@@ -39,6 +43,7 @@ function terminal(agentState: string | null = null) {
               terminalId: "t1",
               agentId,
               ...(spawnedAt === undefined ? {} : { spawnedAt }),
+              ...(agentIncarnation === undefined ? {} : { agentIncarnation }),
               ...(hasPty === undefined ? {} : { hasPty }),
               agentState: state,
               ...(waitingReason === null ? {} : { waitingReason }),
@@ -78,8 +83,20 @@ function terminal(agentState: string | null = null) {
     },
     /** A surface that reports no spawn stamp at all, process or no process. */
     hideSpawnedAt: () => (spawnedAt = undefined),
+    /** A surface too old to count sessions — it cannot name which one this is. */
+    hideIncarnation: () => (agentIncarnation = undefined),
     setWaitingReason: (next: string) => (waitingReason = next),
     restart: () => (spawnedAt = (spawnedAt ?? 0) + 1),
+    /**
+     * The bug this identity exists for (#12535): the agent quits, the user runs
+     * the same CLI again in the shell it left, and the pty never restarts. Same
+     * slot, same pty, same agent id, same spawn stamp — only the host's count
+     * of sessions it has watched take the pty over moves.
+     */
+    relaunchAgent: () => {
+      agentIncarnation = (agentIncarnation ?? 0) + 1;
+      state = "waiting";
+    },
   };
 }
 
@@ -254,6 +271,98 @@ describe("deliverAgentRequest", () => {
       status: "failed",
       message: "Claude restarted before the request went out — nothing was sent",
     });
+  });
+
+  it("does not send into an agent relaunched inside the pty it bound to", async () => {
+    // The whole of #12535: the bound agent quits to its shell, the user types
+    // the same CLI again, and every other observable holds — same slot, same
+    // pty, same agent id, same spawn stamp. Only the host's count of sessions
+    // it has watched take this pty over says a different one is listening.
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+      verify: verifyThenChange(() => agent.relaunchAgent()),
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude restarted before the request went out — nothing was sent",
+    });
+  });
+
+  it("does not let 'send anyway' waive a relaunch inside the same pty", async () => {
+    // Forcing waives the readiness signal, not the proof of where the words go.
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+      verify: verifyThenChange(() => agent.relaunchAgent()),
+    });
+    forceAgentRequest("owner-1\nwt-1");
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude restarted before the request went out — nothing was sent",
+    });
+  });
+
+  it("sends to a session that has not been relaunched", async () => {
+    // The other half of the guard: a count that holds is a session that holds,
+    // and zero is a reading rather than a refusal.
+    const agent = terminal("waiting");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual(["Make it pop"]);
+    expect(last(states)?.state.status).toBe("sent");
+  });
+
+  it("does not bind on a surface that cannot say which session this is", async () => {
+    // A surface too old to report the count cannot tell this session from the
+    // one that replaces it, and two absent counts compare equal — the shape the
+    // absent spawn stamp already had to be refused for.
+    const agent = terminal("waiting");
+    agent.hideIncarnation();
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+    });
+    await vi.advanceTimersByTimeAsync(2_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state.status).toBe("failed");
   });
 
   it("does not bind to a pane restored without its process", async () => {
@@ -471,7 +580,13 @@ describe("deliverAgentRequest", () => {
           ok: true,
           result: {
             terminals: [
-              { terminalId: "t1", agentId: "claude", spawnedAt: 1_000, agentState: "waiting" },
+              {
+                terminalId: "t1",
+                agentId: "claude",
+                spawnedAt: 1_000,
+                agentIncarnation: 0,
+                agentState: "waiting",
+              },
             ],
           },
         };

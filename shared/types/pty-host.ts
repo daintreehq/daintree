@@ -594,6 +594,11 @@ export type PtyHostEvent =
       state: AgentState;
       previousState: AgentState;
       timestamp: number;
+      /**
+       * Observed new-agent-in-this-PTY count (#12535). Absent from an older
+       * producer, where absent means unobserved rather than zero.
+       */
+      agentIncarnation?: number;
       traceId?: string;
       trigger: string;
       confidence: number;
@@ -650,6 +655,11 @@ export type PtyHostEvent =
       /** Default title derived from detection — written into panel.title when titleMode === "default". */
       defaultTitle?: string;
       timestamp: number;
+      /**
+       * Observed new-agent-in-this-PTY count (#12535). Absent from an older
+       * producer, where absent means unobserved rather than zero.
+       */
+      agentIncarnation?: number;
     }
   | {
       type: "agent-exited";
@@ -1010,6 +1020,12 @@ export interface PtyHostTerminalInfo {
   originalAgentPresetId?: string;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
+  /**
+   * Observed count of new agent sessions taking over this PTY after a prior
+   * one exited (#12535). Absent means the surface could not observe it; zero
+   * means none was observed. Reset with the record when the PTY is replaced.
+   */
+  agentIncarnation?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
