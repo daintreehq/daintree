@@ -489,6 +489,22 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       const readySelector = options.waitForSelector ?? '[aria-label="Toggle Sidebar"]';
       await window.locator(readySelector).waitFor({ state: "visible", timeout: launchTimeout });
 
+      if (process.env.BACKGROUND_ENERGY_SPINNER_OVERRIDE === "paused") {
+        const installEnergyStyle = () => {
+          const install = () => {
+            if (document.getElementById("energy-experiment-spinner")) return;
+            const style = document.createElement("style");
+            style.id = "energy-experiment-spinner";
+            style.textContent = ".animate-spin-slow { animation-play-state: paused !important; }";
+            document.head.append(style);
+          };
+          if (document.head) install();
+          else document.addEventListener("DOMContentLoaded", install, { once: true });
+        };
+        await window.context().addInitScript(installEnergyStyle);
+        for (const page of app.windows()) await page.evaluate(installEnergyStyle);
+      }
+
       disposeTelemetry();
       return { app, window, userDataDir };
     } catch (error) {

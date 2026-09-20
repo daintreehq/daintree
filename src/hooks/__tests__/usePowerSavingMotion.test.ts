@@ -165,4 +165,35 @@ describe("usePowerSavingMotion", () => {
     expect(powerSaving()).toBeUndefined();
     expect(lifecycle.listeners.size).toBe(0);
   });
+
+  it("aligns existing and newly started spinners without changing other animations", () => {
+    const icon = document.createElement("div");
+    icon.className = "animate-spin-slow";
+    const duration = 1400;
+    const spinner = {
+      animationName: "spin-slow",
+      startTime: 123,
+      effect: { getTiming: () => ({ duration }) },
+    };
+    const transition = { startTime: 456 };
+    Object.defineProperty(icon, "getAnimations", { value: () => [spinner, transition] });
+    document.body.append(icon);
+    const { unmount } = renderHook(() => usePowerSavingMotion());
+    expect((performance.timeOrigin + spinner.startTime) % duration).toBeCloseTo(0);
+    expect(transition.startTime).toBe(456);
+
+    const start = () => {
+      const event = new Event("animationstart", { bubbles: true });
+      Object.defineProperty(event, "animationName", { value: "spin-slow" });
+      icon.dispatchEvent(event);
+    };
+    spinner.startTime = 789;
+    start();
+    expect((performance.timeOrigin + spinner.startTime) % duration).toBeCloseTo(0);
+    unmount();
+    spinner.startTime = 999;
+    start();
+    expect(spinner.startTime).toBe(999);
+    icon.remove();
+  });
 });
