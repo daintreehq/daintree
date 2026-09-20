@@ -65,13 +65,15 @@ function makeScript(s: ScriptFixture): PerformanceScriptTiming {
   } as PerformanceScriptTiming;
 }
 
-function emitLoafEntry(opts: {
+type LoafFixture = {
   duration: number;
   blockingDuration?: number;
   scripts?: ScriptFixture[];
   startTime?: number;
-}) {
-  const entry = {
+};
+
+function makeLoafEntry(opts: LoafFixture): PerformanceLongAnimationFrameTiming {
+  return {
     name: "frame",
     entryType: "long-animation-frame",
     startTime: opts.startTime ?? 0,
@@ -85,10 +87,15 @@ function emitLoafEntry(opts: {
     scripts: (opts.scripts ?? []).map(makeScript),
     toJSON: () => ({}),
   } as PerformanceLongAnimationFrameTiming;
+}
 
-  observerCallback?.({
-    getEntries: () => [entry as unknown as PerformanceEntry],
-  });
+function emitLoafEntries(entries: LoafFixture[]) {
+  const built = entries.map((opts) => makeLoafEntry(opts) as unknown as PerformanceEntry);
+  observerCallback?.({ getEntries: () => built });
+}
+
+function emitLoafEntry(opts: LoafFixture) {
+  emitLoafEntries([opts]);
 }
 
 describe("startLongTaskMonitor", () => {
@@ -174,6 +181,21 @@ describe("startLongTaskMonitor", () => {
     startLongTaskMonitor(100);
     emitLoafEntry({ duration: 150 });
     expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("does not consume the warning cooldown during startup suppression", () => {
+    mockIsRendererPerfCaptureEnabled.mockReturnValue(true);
+    mockNow = 2000;
+    startLongTaskMonitor(100);
+
+    emitLoafEntry({ duration: 150 });
+    expect(logWarn).not.toHaveBeenCalled();
+
+    mockNow = 6000;
+    emitLoafEntry({ duration: 150 });
+    expect(logWarn).toHaveBeenCalledTimes(1);
+
+    expect(mockMarkRendererPerformance).toHaveBeenCalledTimes(2);
   });
 
   it("warns after suppression with first-script attribution", () => {
@@ -338,6 +360,23 @@ describe("startLongTaskMonitor", () => {
     const topScripts = (meta as { topScripts: Array<Record<string, unknown>> }).topScripts;
     expect(topScripts).toHaveLength(1);
     expect(topScripts[0]).toMatchObject({ sourceFunctionName: "belowGate", durationMs: 40 });
+  });
+
+  it("warns once for a mixed batch delivered in one callback and captures every entry", () => {
+    mockIsRendererPerfCaptureEnabled.mockReturnValue(true);
+    mockNow = 6000;
+    startLongTaskMonitor(100);
+    emitLoafEntries([{ duration: 75 }, { duration: 100 }, { duration: 150 }]);
+
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(
+      "Renderer long animation frame detected",
+      expect.objectContaining({ durationMs: 100 })
+    );
+    expect(mockMarkRendererPerformance).toHaveBeenCalledTimes(3);
+    expect(
+      mockMarkRendererPerformance.mock.calls.map((c) => (c[1] as { durationMs: number }).durationMs)
+    ).toEqual([75, 100, 150]);
   });
 
   it("does not call markRendererPerformance when capture is disabled", () => {
