@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * The Site Builder domain model — the frozen vocabulary every part of the
+ * The SvelteKit Tools domain model — the frozen vocabulary every part of the
  * plugin shares: what a selection is, and what the source underneath it is.
  *
  * The one rule this file exists to enforce, which the specification treats as
@@ -103,6 +103,12 @@ export type Rect = z.infer<typeof RectSchema>;
  */
 export const DefinitionSchema = z
   .object({
+    /**
+     * The coordinate this element was found at, in the page's own spelling of
+     * the file — kept verbatim because it is also the key the page is asked
+     * for this element by, and the page only knows its own spelling. Never
+     * cite it: use {@link Definition.sourceFile}.
+     */
     location: SourceLocationSchema,
     range: SourceRangeSchema,
     tagName: z.string().min(1),
@@ -151,12 +157,21 @@ export const SelectedNodeSchema = z
      */
     runtimeOccurrenceId: z.string().min(1),
     definition: DefinitionSchema.nullable(),
+    /**
+     * The file the definition's location resolved to, app-relative and POSIX,
+     * in the host's spelling rather than the page's. It sits here with the
+     * host's other conclusions about the node — `invocation`, `mapping` —
+     * because `definition.location` is the page's coordinate and has to stay
+     * that way. Anything naming the file to a person or an agent names this.
+     * Absent when nothing was traced, or from a resolve that predates it.
+     */
+    sourceFile: z.string().min(1).optional(),
     /** Nearest `component` ancestry entry: the call site that rendered this copy. */
     invocation: AncestryEntrySchema.nullable(),
     /** Full chain, innermost first, generated frames included but flagged. */
     ancestry: z.array(AncestryEntrySchema),
     mapping: MappingConfidenceSchema,
-    /** Human label for the breadcrumb, e.g. `button "Start Pro"`. */
+    /** The page's own label for the breadcrumb, collapsed to one line, e.g. `button "Start Pro"`. */
     label: z.string(),
     bounds: z.array(RectSchema),
   })
@@ -186,8 +201,18 @@ export const SiteSelectionSchema = z
      * selection from an older epoch is stale by definition and never re-targeted.
      */
     documentEpoch: z.number().int().nonnegative(),
+    /**
+     * What the page said it was serving, carried back unverified — the route
+     * the project model matched is on {@link PagePlace}, and that is the one
+     * to trust.
+     */
     routeId: z.string().nullable(),
-    /** Already redacted of query values before it reaches any model or log. */
+    /**
+     * Redacted before it reaches any model or log: query values, userinfo and
+     * the fragment are gone, and anything unparseable or off `http(s)` is the
+     * placeholder instead of a slice of itself. Still the page's to influence
+     * — it can push any path it likes — so treat it as an observation.
+     */
     displayedUrl: z.string(),
     viewport: ViewportSchema,
     nodes: z.array(SelectedNodeSchema),

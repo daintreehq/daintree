@@ -15,6 +15,9 @@ import { activate } from "../index.js";
 import { BUILDER_TOOL_ID, CHANNELS } from "../../shared/protocol.js";
 import manifest from "../../plugin.json" with { type: "json" };
 import { createSandbox, createTestHost, type Sandbox } from "./testHost.js";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 
 let sandbox: Sandbox | null = null;
 
@@ -233,5 +236,54 @@ describe("activate", () => {
       actionId: "devPreview.toggleTool",
       args: { toolId: BUILDER_TOOL_ID },
     });
+  });
+  /**
+   * The walk stops at its depth budget, so an app below that budget is never
+   * reached. What must not happen is the handlers turning "did not finish"
+   * into "there is nothing here" — a claim about the worktree the scan never
+   * earned.
+   */
+  it("says a scan that ran out of budget did not finish, rather than calling it no app", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "site-builder-deep-")));
+    const worktree = path.join(root, "worktree");
+    // Past DEFAULT_MAX_DEPTH, so the walk sees the directory holding it and
+    // stops without ever reading its manifest.
+    const buried = path.join(worktree, "a", "b", "c", "d", "e", "f");
+    await fs.mkdir(buried, { recursive: true });
+    await fs.writeFile(
+      path.join(worktree, "package.json"),
+      JSON.stringify({ name: "root", private: true })
+    );
+    await fs.writeFile(
+      path.join(buried, "package.json"),
+      JSON.stringify({ name: "buried", dependencies: { "@sveltejs/kit": "^2.0.0" } })
+    );
+    sandbox = {
+      worktree,
+      appRoot: buried,
+      cleanup: () => fs.rm(root, { recursive: true, force: true }),
+    } as Sandbox;
+
+    const test = createTestHost(worktree);
+    await activate(test.host);
+
+    const detected = await test.invoke<{ appCount: number; complete?: boolean }>(
+      CHANNELS.detectApps,
+      { projectId: "p1", worktreeId: "w1", worktreePath: worktree }
+    );
+    expect(detected.appCount).toBe(0);
+    expect(detected.complete).toBe(false);
+
+    const opened = await test.invoke<{ status: string; scanComplete?: boolean }>(
+      CHANNELS.workspaceOpen,
+      {
+        projectId: "p1",
+        worktreeId: "w1",
+        worktreePath: worktree,
+        previewPanelId: "preview-1",
+      }
+    );
+    expect(opened.status).toBe("no-app");
+    expect(opened.scanComplete).toBe(false);
   });
 });

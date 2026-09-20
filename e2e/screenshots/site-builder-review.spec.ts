@@ -1,5 +1,5 @@
 /**
- * SvelteKit Site Builder visual-review harness.
+ * SvelteKit Tools visual-review harness.
  *
  * The builder is a strip under the dev preview's toolbar plus a drawer beside
  * the page, and the states that decide its design belong to a live dev server
@@ -60,8 +60,8 @@ const ALL_THEMES = BUILT_IN_THEME_SOURCES.map((t) => t.id);
 test.use({ deviceScaleFactor: 2 });
 
 const FRAME = "[data-fixture]";
-const STRIP = '[role="toolbar"][aria-label="Site Builder"]';
-const DRAWER = '[aria-label="Site Builder details"]';
+const STRIP = '[role="toolbar"][aria-label="SvelteKit Tools"]';
+const DRAWER = '[aria-label="SvelteKit Tools details"]';
 
 let server: ViteDevServer | undefined;
 let baseURL = "";
@@ -241,7 +241,7 @@ async function open(page: Page, fixture: FixtureName, theme: string): Promise<Lo
   return frame;
 }
 
-test("site builder — states, interactions and themes", async ({ page }) => {
+test("SvelteKit Tools — states, interactions and themes", async ({ page }) => {
   test.info().annotations.push({
     type: "conditional-skip",
     description: "DAINTREE_SHOT_SITEBUILDER is required for the site-builder capture",

@@ -1,8 +1,8 @@
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import type {
+  BuiltinPluginFsApi,
   BuiltinPluginHostApi,
-  PluginFsApi,
   PluginIpcContext,
 } from "../../../../shared/types/plugin.js";
 import {
@@ -27,7 +27,7 @@ import {
   BUILDER_TOOL_ID,
   TOGGLE_BUILDER_ACTION_ID,
 } from "../shared/protocol.js";
-import type { ProjectFileReader } from "../shared/project/fs.js";
+import type { ProjectFileReader, ProjectReadOptions } from "../shared/project/fs.js";
 import { loadParse, loadSourceModel } from "./engine.js";
 import { resolveSelection } from "./selection.js";
 import {
@@ -38,10 +38,10 @@ import {
   resolveReportedPath,
 } from "./source.js";
 import { SourceTracker } from "./tracker.js";
-import { WorkspaceRegistry, type Workspace } from "./workspace.js";
+import { ScanGate, WorkspaceRegistry, type Workspace } from "./workspace.js";
 
 /**
- * Main-side half of the SvelteKit Site Builder: source truth. It resolves the
+ * Main-side half of SvelteKit Tools: source truth. It resolves the
  * app and turns guest observations into source identity against current bytes.
  * It never writes — the agent the selection is handed to does that, and the
  * source tracker is how the view learns of it. The live preview is the
@@ -88,16 +88,51 @@ function ownedWorkspace(
   return workspace;
 }
 
-function projectReader(fs: PluginFsApi): ProjectFileReader {
+/** A manifest's bytes as text. Non-fatal: a manifest we cannot decode fails the parse, like any other malformed one. */
+const metadataDecoder = new TextDecoder("utf-8");
+
+/**
+ * The project model's view of one workspace's filesystem.
+ *
+ * `signal` is bound into the reader rather than passed per call because
+ * `inspectProject` and `inspectWorktree` take a reader and nothing else — this
+ * is how a closed workspace's cancellation reaches every read they make. It
+ * stops further I/O being scheduled and rejects the read in flight; it does
+ * not interrupt a parse already running.
+ */
+function projectReader(fs: BuiltinPluginFsApi, signal?: AbortSignal): ProjectFileReader {
+  const callOptions = (options?: ProjectReadOptions) => {
+    const chosen = options?.signal ?? signal;
+    return chosen ? { signal: chosen } : undefined;
+  };
+  const bounded = fs.readFileBounded;
   return {
-    readFile: (target) => fs.readFile(target),
-    readdir: (target) => fs.readdir(target),
-    stat: (target) => fs.stat(target),
+    readFile: (target, options) => fs.readFile(target, callOptions(options)),
+    readdir: (target, options) => fs.readdir(target, callOptions(options)),
+    stat: (target, options) => fs.stat(target, callOptions(options)),
+    ...(bounded && {
+      readBoundedText: async (target, options) => {
+        const read = await bounded.call(fs, target, {
+          ...callOptions(options),
+          limitBytes: options.limitBytes,
+        });
+        if (read.status !== "ok") return read;
+        const text = metadataDecoder.decode(read.bytes);
+        // A BOM would fail `JSON.parse`; every other caller reads config text.
+        return {
+          status: "ok" as const,
+          text: text.charCodeAt(0) === 0xfeff ? text.slice(1) : text,
+        };
+      },
+    }),
   };
 }
 
 export async function activate(host: BuiltinPluginHostApi): Promise<() => void> {
   const registry = new WorkspaceRegistry();
+  // Every worktree scan goes through here, so the number running at once is a
+  // property of the plugin rather than of how often a renderer asks.
+  const scans = new ScanGate();
 
   // Every push names the preview panel it is about: the workspace's owner
   // subscribes per panel, so a builder on another preview — or in another
@@ -121,13 +156,13 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
   await host.registerAction(
     {
       id: TOGGLE_BUILDER_ACTION_ID,
-      title: "Toggle Site Builder",
+      title: "Toggle SvelteKit Tools",
       description:
-        "Switch the Site Builder on or off in this worktree's dev preview, opening the preview if none is running.",
+        "Switch SvelteKit Tools on or off in this worktree's dev preview, opening the preview if none is running.",
       category: "panels",
       kind: "command",
       danger: "safe",
-      keywords: ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "agent"],
+      keywords: ["svelte", "sveltekit", "tools", "inspect", "inspector", "preview", "agent"],
       // Toggling a preview tool exercises none of the plugin's capabilities, so
       // it asks for none: the host elevates a command to a confirm prompt from
       // what it requires, and a dialog on every toolbar click is not that.
@@ -156,20 +191,68 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
         projectId: args.projectId,
         worktreeId: args.worktreeId,
       });
-      const workspaceReader = projectReader(workspaceFs);
+      // Created before the first scan and handed to the workspace that scan
+      // opens, so from then on a close aborts everything the workspace reads.
+      // It does NOT cover this scan: until the session id exists there is
+      // nothing for `workspaceClose` to name, and the view waits for the open
+      // before closing it. An open that ends without a workspace aborts its
+      // own controller rather than leaving one behind.
+      const lifetime = new AbortController();
+      const workspaceReader = projectReader(workspaceFs, lifetime.signal);
 
-      let scan = await inspectWorktree(workspaceReader, worktreePath, requested);
+      let scan;
+      try {
+        scan = await scans.run(
+          null,
+          () =>
+            inspectWorktree(workspaceReader, worktreePath, requested, {
+              signal: lifetime.signal,
+            }),
+          lifetime.signal
+        );
+      } catch (error) {
+        lifetime.abort();
+        throw error;
+      }
       if (!scan.inspection) {
-        if (requested !== undefined || scan.apps.length === 0) return { status: "no-app" as const };
+        if (requested !== undefined || scan.apps.length === 0) {
+          lifetime.abort();
+          // A walk that ran out of budget found no app; it did not establish
+          // that there is none, and the caller is told which of the two it is.
+          if (!scan.complete) {
+            warnIssue(
+              "APP_SCAN_TRUNCATED",
+              "This worktree was too large to search all of it, and no SvelteKit app turned up in the part that was. Open the preview from the app's own directory.",
+              args.previewPanelId
+            );
+          }
+          return { status: "no-app" as const, scanComplete: scan.complete };
+        }
         if (scan.apps.length > 1) {
+          lifetime.abort();
           return { status: "ambiguous" as const, appRoots: scan.apps.map((app) => app.appRoot) };
         }
         // One app on a scan that hit its budget. Discovery will not call it
         // "the only app", and neither does this: it opens the one it found and
         // says the list may be incomplete.
         const only = scan.apps[0]!;
-        scan = await inspectWorktree(workspaceReader, worktreePath, only.appRoot);
-        if (!scan.inspection) return { status: "no-app" as const };
+        try {
+          scan = await scans.run(
+            null,
+            () =>
+              inspectWorktree(workspaceReader, worktreePath, only.appRoot, {
+                signal: lifetime.signal,
+              }),
+            lifetime.signal
+          );
+        } catch (error) {
+          lifetime.abort();
+          throw error;
+        }
+        if (!scan.inspection) {
+          lifetime.abort();
+          return { status: "no-app" as const, scanComplete: scan.complete };
+        }
         warnIssue(
           "APP_SCAN_TRUNCATED",
           "This worktree is too large to scan completely. Opened the one SvelteKit app found; pick another app root if this is the wrong one.",
@@ -188,6 +271,7 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
         appRoot,
         support,
         fs: workspaceFs,
+        lifetime,
         tracker: new SourceTracker({
           fs: workspaceFs,
           workspaceSessionId: id,
@@ -220,8 +304,19 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
       const scopedReader = projectReader(
         host.fsForWorkspace({ projectId: args.projectId, worktreeId: args.worktreeId })
       );
-      const discovery = await discoverSvelteKitApps(scopedReader, path.resolve(args.worktreePath));
-      return { appCount: discovery.apps.length };
+      const worktreePath = path.resolve(args.worktreePath);
+      // Every preview in a worktree asks the same question and wants the same
+      // answer, so concurrent askers share one walk rather than each starting
+      // their own. There is no workspace yet, hence no signal: the gate is the
+      // bound here.
+      const discovery = await scans.run(
+        `detect:${args.projectId}:${args.worktreeId}:${worktreePath}`,
+        () => discoverSvelteKitApps(scopedReader, worktreePath)
+      );
+      // `complete` is not decoration: zero apps on a truncated walk is a scan
+      // that ran out, and a caller that reads it as "no SvelteKit here" is
+      // reporting a conclusion we never reached.
+      return { appCount: discovery.apps.length, complete: discovery.complete };
     }
   );
 
@@ -277,7 +372,7 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
           .then((stat) => (stat.isFile ? stat.size : null))
           .catch(() => null);
         if (size === null || size > MAX_SOURCE_BYTES) return null;
-        const read = await readSource(workspace!.fs, target.absolute);
+        const read = await readSource(workspace!.fs, target.absolute, workspace!.lifetime.signal);
         return read.status === "ok" || read.status === "not-utf8" ? read.revision : null;
       }
       return { revisions };
@@ -322,10 +417,16 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
       if (!workspace) throw workspaceClosed();
       const { inspectProject } = await import("../shared/project/index.js");
       // Read fresh: routes are exactly what an agent adds while the panel is open.
-      const { model } = await inspectProject(projectReader(workspace.fs), {
-        worktreeRoot: workspace.worktreePath,
-        appRoot: workspace.appRoot,
-      });
+      const { model } = await scans.run(
+        null,
+        () =>
+          inspectProject(projectReader(workspace.fs, workspace.lifetime.signal), {
+            worktreeRoot: workspace.worktreePath,
+            appRoot: workspace.appRoot,
+            signal: workspace.lifetime.signal,
+          }),
+        workspace.lifetime.signal
+      );
       return model;
     }
   );

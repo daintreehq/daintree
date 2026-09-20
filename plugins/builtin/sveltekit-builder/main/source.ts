@@ -1,7 +1,7 @@
 import path from "node:path";
 import { createHash } from "node:crypto";
 import { realpath } from "node:fs/promises";
-import type { PluginFsApi } from "../../../../shared/types/plugin.js";
+import type { BuiltinPluginFsApi, PluginFsApi } from "../../../../shared/types/plugin.js";
 
 /**
  * Source files as main sees them: bytes, their revision, and the paths an
@@ -37,7 +37,7 @@ export type SourceRead =
   | { status: "not-utf8"; revision: string };
 
 /**
- * What a stat can settle before a byte is read.
+ * The bytes of a source file, or the reason there are none to parse.
  *
  * The cap used to be applied to `bytes.byteLength` — after a complete
  * `readFileBytes`, which is to say after the whole file was in main's heap. The
@@ -45,49 +45,82 @@ export type SourceRead =
  * still cost 400 MB to refuse, and main is where the app and every other
  * plugin live.
  *
- * `not-a-file` is the case worth naming: `something.svelte` can be a directory
- * or a named pipe, and a FIFO's `size` is 0 while its read need never end — the
- * cap would be satisfied by a stream that blocks or supplies as much as it
- * likes. Only a regular file gets as far as a read.
+ * `readFileBounded` closes that properly: one opened descriptor, at most
+ * `MAX_SOURCE_BYTES + 1` bytes read through it, and the regular-file check
+ * made on that descriptor. It matters because `something.svelte` can be a
+ * directory or a named pipe, and a FIFO's `size` is 0 while its read need
+ * never end — a path stat would be answering about a name, not about the thing
+ * the read is actually attached to.
  *
- * A stat is not a complete bound on a regular file: it can grow between this
- * call and the read, and the post-read check in {@link readSource} is what
- * catches that. Closing the window entirely needs a read that stops at
- * limit-plus-one bytes, which `host.fs` does not offer — adding it is a change
- * to the published plugin API rather than something to slip in here. This turns
- * the ordinary case from "allocate it all, then refuse" into "refuse", and
- * leaves one read of a file that was under the cap a moment ago.
+ * The stat-then-read fallback is for a handle that has no bounded read: a test
+ * double, or an out-of-process host proxy. It keeps the old shape, including
+ * its two acknowledged holes — a stat that throws falls through to the read,
+ * and the file can grow between the stat and it, which is what the post-read
+ * check catches.
  */
-async function preflight(
+type SourceBytes =
+  { status: "ok"; bytes: Uint8Array } | { status: "too-large" } | { status: "missing" };
+
+async function readBoundedBytes(
+  fs: BuiltinPluginFsApi,
+  absolutePath: string,
+  signal?: AbortSignal
+): Promise<SourceBytes> {
+  const bounded = fs.readFileBounded;
+  if (bounded) {
+    try {
+      const read = await bounded.call(fs, absolutePath, {
+        limitBytes: MAX_SOURCE_BYTES,
+        ...(signal && { signal }),
+      });
+      if (read.status === "too-large") return { status: "too-large" };
+      // Nothing readable as source is there, which is what `missing` means to
+      // every caller: there is no text to parse and no revision to hold it to.
+      if (read.status === "not-a-file") return { status: "missing" };
+      return { status: "ok", bytes: read.bytes };
+    } catch (error) {
+      // A cancelled read is not a missing file: reporting it as one would have
+      // the caller carry on as though it had looked.
+      if (signal?.aborted) throw error;
+      // `host.fs` cannot tell missing from denied; neither is readable source.
+      return { status: "missing" };
+    }
+  }
+  return legacyBytes(fs, absolutePath, signal);
+}
+
+async function legacyBytes(
   fs: PluginFsApi,
-  absolutePath: string
-): Promise<"ok" | "too-large" | "not-a-file"> {
+  absolutePath: string,
+  signal?: AbortSignal
+): Promise<SourceBytes> {
+  const options = signal ? { signal } : undefined;
   try {
-    const stat = await fs.stat(absolutePath);
-    if (!stat.isFile) return "not-a-file";
-    return stat.size > MAX_SOURCE_BYTES ? "too-large" : "ok";
-  } catch {
+    const stat = await fs.stat(absolutePath, options);
+    if (!stat.isFile) return { status: "missing" };
+    if (stat.size > MAX_SOURCE_BYTES) return { status: "too-large" };
+  } catch (error) {
+    if (signal?.aborted) throw error;
     // An unreadable stat is not evidence of anything; the read reports the
     // truth, including whether the file is there at all.
-    return "ok";
+  }
+  try {
+    const bytes = await fs.readFileBytes(absolutePath, options);
+    // Still checked after the read: the file may have grown since the stat.
+    return bytes.byteLength > MAX_SOURCE_BYTES ? { status: "too-large" } : { status: "ok", bytes };
+  } catch {
+    return { status: "missing" };
   }
 }
 
-export async function readSource(fs: PluginFsApi, absolutePath: string): Promise<SourceRead> {
-  const before = await preflight(fs, absolutePath);
-  if (before === "too-large") return { status: "too-large" };
-  // Nothing readable as source is there, which is what `missing` means to
-  // every caller: there is no text to parse and no revision to hold it to.
-  if (before === "not-a-file") return { status: "missing" };
-  let bytes: Uint8Array;
-  try {
-    bytes = await fs.readFileBytes(absolutePath);
-  } catch {
-    // `host.fs` cannot tell missing from denied; neither is readable source.
-    return { status: "missing" };
-  }
-  // Still checked after the read: the file may have grown since the stat.
-  if (bytes.byteLength > MAX_SOURCE_BYTES) return { status: "too-large" };
+export async function readSource(
+  fs: BuiltinPluginFsApi,
+  absolutePath: string,
+  signal?: AbortSignal
+): Promise<SourceRead> {
+  const read = await readBoundedBytes(fs, absolutePath, signal);
+  if (read.status !== "ok") return read;
+  const { bytes } = read;
   const revision = sha256Hex(bytes);
   try {
     const decoded = decoder.decode(bytes);
@@ -109,15 +142,13 @@ export async function readSource(fs: PluginFsApi, absolutePath: string): Promise
  * this returns `null` for is one {@link readSource} would refuse anyway, so
  * reporting no revision is what the rest of the builder already expects.
  */
-export async function readRevision(fs: PluginFsApi, absolutePath: string): Promise<string | null> {
-  if ((await preflight(fs, absolutePath)) !== "ok") return null;
-  try {
-    const bytes = await fs.readFileBytes(absolutePath);
-    if (bytes.byteLength > MAX_SOURCE_BYTES) return null;
-    return sha256Hex(bytes);
-  } catch {
-    return null;
-  }
+export async function readRevision(
+  fs: BuiltinPluginFsApi,
+  absolutePath: string,
+  signal?: AbortSignal
+): Promise<string | null> {
+  const read = await readBoundedBytes(fs, absolutePath, signal);
+  return read.status === "ok" ? sha256Hex(read.bytes) : null;
 }
 
 export type ContainedPath =

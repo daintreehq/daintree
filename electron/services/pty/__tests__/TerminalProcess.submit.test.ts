@@ -96,7 +96,7 @@ describe("TerminalProcess.submit", () => {
     // The rule: whatever the submitted text contains, exactly one paste
     // terminator reaches the pty, and it is the last thing written. A body that
     // could end the paste early hands the rest to the program as keystrokes —
-    // text taken from a web page (a DOM id) reaches here from the Site Builder.
+    // text taken from a web page (a DOM id) reaches here from SvelteKit Tools.
     vi.useFakeTimers();
     const terminal = createTerminal();
 
@@ -150,7 +150,7 @@ describe("TerminalProcess.submit", () => {
 
   it("neutralizes page-derived controls on Gemini's soft-newline path", async () => {
     // Gemini declares no bracketed paste, so its body used to reach the pty
-    // byte for byte. A DOM id the Site Builder quotes into a prompt can carry
+    // byte for byte. A DOM id SvelteKit Tools quotes into a prompt can carry
     // a cursor sequence and an interrupt; neither may be written as input.
     vi.useFakeTimers();
     const terminal = createTerminal({ kind: "terminal", launchAgentId: "gemini" });

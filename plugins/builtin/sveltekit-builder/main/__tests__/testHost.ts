@@ -4,9 +4,9 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { createMockHost } from "../../../../../shared/testing/createMockHost.js";
 import type {
+  BuiltinPluginFsApi,
   BuiltinPluginHostApi,
   PluginChannelSchema,
-  PluginFsApi,
   PluginHostApi,
   PluginIpcContext,
   PluginWorkspaceScope,
@@ -117,7 +117,7 @@ export interface TestHost {
   /** Every scope `fsForWorkspace` was asked for, in order. */
   scopes: PluginWorkspaceScope[];
   /** The handle handed back for each of those scopes, for a test that needs to patch one. */
-  scopedFs: PluginFsApi[];
+  scopedFs: BuiltinPluginFsApi[];
   invoke<T = unknown>(
     channel: string,
     args: unknown,
@@ -141,7 +141,7 @@ export function createTestHost(allowedRoot: string): TestHost {
   const watchers: Array<{ paths: string[]; callback: (changed: string) => void; via: FsVia }> = [];
   const readsVia: Array<{ via: FsVia; path: string }> = [];
   const scopes: PluginWorkspaceScope[] = [];
-  const scopedFs: PluginFsApi[] = [];
+  const scopedFs: BuiltinPluginFsApi[] = [];
 
   const read = (via: FsVia, target: string): void => {
     reads.push(target);
@@ -160,65 +160,84 @@ export function createTestHost(allowedRoot: string): TestHost {
   // Two handles over the same disk, distinguishable by what they record: a
   // workspace that keeps reading through the ambient `host.fs` is the bug this
   // plugin's tests exist to catch, and identical handles would hide it.
-  const makeDiskFs = (via: FsVia): PluginFsApi => ({
-    readFile: async (target) => {
-      read(via, target);
-      return fs.readFile(contain(target), "utf8");
-    },
-    readFileBytes: async (target) => {
-      read(via, target);
-      return new Uint8Array(await fs.readFile(contain(target)));
-    },
-    writeFile: async (target, contents, options) => {
-      const resolved = contain(target);
-      if (options !== undefined && typeof options.expectedRevision === "string") {
-        const current = await fs.readFile(resolved).catch(() => null);
-        if (current === null) throw fsError("TARGET_UNAVAILABLE", "gone");
-        const currentRevision = sha(current);
-        if (currentRevision !== options.expectedRevision) {
-          const error = fsError("REVISION_MISMATCH", "changed") as Error & {
-            code: string;
-            currentRevision: string;
-          };
-          error.currentRevision = currentRevision;
-          throw error;
+  const makeDiskFs = (via: FsVia): BuiltinPluginFsApi => {
+    const api: BuiltinPluginFsApi = {
+      readFile: async (target) => {
+        read(via, target);
+        return fs.readFile(contain(target), "utf8");
+      },
+      readFileBytes: async (target) => {
+        read(via, target);
+        return new Uint8Array(await fs.readFile(contain(target)));
+      },
+      // The host's bounded read, over the same disk. It refuses a non-regular
+      // file and anything past the cap, but goes through this handle's own
+      // `readFileBytes` rather than its own descriptor: the fd-level guarantee
+      // is the host's to keep — `electron/services/plugin/__tests__/
+      // pluginFsBounds.test.ts` proves that one against a real FIFO — and a
+      // double that read around this object could not be patched by a test
+      // simulating what a read returned.
+      readFileBounded: async (target, options) => {
+        options.signal?.throwIfAborted();
+        const stats = await fs.stat(contain(target));
+        if (!stats.isFile()) return { status: "not-a-file" };
+        const bytes = await api.readFileBytes(target, options);
+        return bytes.byteLength > options.limitBytes
+          ? { status: "too-large" }
+          : { status: "ok", bytes };
+      },
+      writeFile: async (target, contents, options) => {
+        const resolved = contain(target);
+        if (options !== undefined && typeof options.expectedRevision === "string") {
+          const current = await fs.readFile(resolved).catch(() => null);
+          if (current === null) throw fsError("TARGET_UNAVAILABLE", "gone");
+          const currentRevision = sha(current);
+          if (currentRevision !== options.expectedRevision) {
+            const error = fsError("REVISION_MISMATCH", "changed") as Error & {
+              code: string;
+              currentRevision: string;
+            };
+            error.currentRevision = currentRevision;
+            throw error;
+          }
         }
-      }
-      writes.push({ path: resolved, contents });
-      await fs.writeFile(resolved, contents, "utf8");
-      return { revision: sha(contents) };
-    },
-    readdir: async (target) => {
-      read(via, target);
-      const entries = await fs.readdir(contain(target), { withFileTypes: true });
-      return entries.map((entry) => ({
-        name: entry.name,
-        isDirectory: entry.isDirectory(),
-        isFile: entry.isFile(),
-        isSymbolicLink: entry.isSymbolicLink(),
-      }));
-    },
-    stat: async (target) => {
-      read(via, target);
-      const stat = await fs.stat(contain(target));
-      return {
-        isDirectory: stat.isDirectory(),
-        isFile: stat.isFile(),
-        isSymbolicLink: stat.isSymbolicLink(),
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      };
-    },
-    watch: async (paths, callback) => {
-      paths.forEach(contain);
-      const record = { paths, callback, via };
-      watchers.push(record);
-      return () => {
-        const index = watchers.indexOf(record);
-        if (index !== -1) watchers.splice(index, 1);
-      };
-    },
-  });
+        writes.push({ path: resolved, contents });
+        await fs.writeFile(resolved, contents, "utf8");
+        return { revision: sha(contents) };
+      },
+      readdir: async (target) => {
+        read(via, target);
+        const entries = await fs.readdir(contain(target), { withFileTypes: true });
+        return entries.map((entry) => ({
+          name: entry.name,
+          isDirectory: entry.isDirectory(),
+          isFile: entry.isFile(),
+          isSymbolicLink: entry.isSymbolicLink(),
+        }));
+      },
+      stat: async (target) => {
+        read(via, target);
+        const stat = await fs.stat(contain(target));
+        return {
+          isDirectory: stat.isDirectory(),
+          isFile: stat.isFile(),
+          isSymbolicLink: stat.isSymbolicLink(),
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+        };
+      },
+      watch: async (paths, callback) => {
+        paths.forEach(contain);
+        const record = { paths, callback, via };
+        watchers.push(record);
+        return () => {
+          const index = watchers.indexOf(record);
+          if (index !== -1) watchers.splice(index, 1);
+        };
+      },
+    };
+    return api;
+  };
 
   const registerHandler = ((
     channel: string,
@@ -232,7 +251,7 @@ export function createTestHost(allowedRoot: string): TestHost {
 
   const host = Object.assign(Object.create(mock) as PluginHostApi, {
     fs: makeDiskFs("ambient"),
-    fsForWorkspace: (scope: PluginWorkspaceScope): PluginFsApi => {
+    fsForWorkspace: (scope: PluginWorkspaceScope): BuiltinPluginFsApi => {
       scopes.push(scope);
       const scoped = makeDiskFs("scoped");
       scopedFs.push(scoped);

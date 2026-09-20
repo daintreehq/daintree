@@ -38,12 +38,14 @@ import {
   SelectionResolveResultSchema,
   SourceChangedPushSchema,
   WorkspaceOpenResultSchema,
+  type ProjectModel,
+  type RouteNode,
   type SupportVerdict,
 } from "../shared/protocol.js";
 import type { SiteSelection, Viewport } from "../shared/model.js";
 
 /**
- * One controller per dev preview with the Site Builder switched on — the
+ * One controller per dev preview with SvelteKit Tools switched on — the
  * host's tool session for that preview. It holds the preview binding, the
  * source workspace and the selection, and lives exactly as long as the host
  * keeps the builder on for the preview, surfaces or no surfaces.
@@ -127,7 +129,8 @@ export type WorkspaceState =
       appRoots: string[];
     }
   | { status: "ambiguous"; appRoots: string[] }
-  | { status: "no-app" }
+  /** `scanComplete` false: the walk ran out of budget, so no app was found rather than none existing. */
+  | { status: "no-app"; scanComplete: boolean }
   | { status: "failed"; message: string };
 
 /** A frame the trail can hand to a crumb: a component invocation with a tag. */
@@ -296,6 +299,27 @@ export interface InspectorIssue {
    * dismissed instead.
    */
   recovery?: IssueRecovery;
+}
+
+/**
+ * The route serving `pathname`, or null when the scan did not establish one.
+ *
+ * SvelteKit prefers a static segment over a `[param]`, so a dynamic match found
+ * in a tree whose walk stopped early is exactly the match an unvisited static
+ * route would have beaten.
+ */
+function routeFor(
+  model: ProjectModel,
+  pathname: string,
+  matchRoute: (routes: RouteNode[], pathname: string, basePath?: string) => RouteNode | null
+): RouteNode | null {
+  if (model.basePath === null || model.routesDirectory?.source === "unresolved") return null;
+  const match = matchRoute(model.routes, pathname, model.basePath);
+  if (!match?.dynamic) return match;
+  const truncated = model.routeDiagnostics?.some(
+    (diagnostic) => diagnostic.code === "traversal-truncated"
+  );
+  return truncated ? null : match;
 }
 
 /** How long an agent request waits for the route files before going without them. */
@@ -619,7 +643,9 @@ export class InspectorController implements DevPreviewToolSession {
           return;
         }
         case "no-app":
-          this.patchState({ workspace: { status: "no-app" } });
+          this.patchState({
+            workspace: { status: "no-app", scanComplete: result.scanComplete ?? true },
+          });
           return;
       }
     } catch (error) {
@@ -1469,7 +1495,7 @@ export class InspectorController implements DevPreviewToolSession {
       this.failReprove();
       return;
     }
-    // The page answers only in Select mode; the ask waits for it to come back.
+    // The page answers only in Inspect mode; the ask waits for it to come back.
     if (this.state.mode !== "select" || this.state.modePending) return;
     // An answer is still being resolved: this firing is only its deadline.
     if (this.quietResolve !== null) {
@@ -1907,6 +1933,9 @@ export class InspectorController implements DevPreviewToolSession {
   async pagePlace(selection: SiteSelection): Promise<PagePlace | null> {
     try {
       // Optional context: a slow project scan must not hold the request up.
+      // The timeout abandons the wait, not the scan — main has no request-level
+      // cancellation to reach, so the inspection runs on and this caller simply
+      // stops listening for it.
       const raw = await Promise.race([
         this.deps.invoke(CHANNELS.projectModel, {
           workspaceSessionId: selection.workspaceSessionId,
@@ -1934,8 +1963,13 @@ export class InspectorController implements DevPreviewToolSession {
           kit: model.versions.kit,
           tailwind: model.versions.tailwind,
         },
-        // A base the config computes can't be stripped; no route is named then.
-        route: model.basePath === null ? null : matchRoute(model.routes, pathname, model.basePath),
+        // Three ways the route is not ours to name: a base the config computes
+        // cannot be stripped from the URL; routes walked in the default
+        // directory because the config was unreadable describe a tree the app
+        // may not have; and a dynamic match on a walk that stopped early may be
+        // standing in for a static route we never reached. Naming files in any
+        // of the three hands an agent a guess dressed as a reading.
+        route: routeFor(model, pathname, matchRoute),
       };
     } catch {
       return null;
@@ -1966,8 +2000,8 @@ export class InspectorController implements DevPreviewToolSession {
 }
 
 /**
- * The builder for one dev preview, as the host's session for its Site Builder
- * tool. The host owns its lifetime — created when the builder is switched on,
+ * The builder for one dev preview, as the host's session for SvelteKit
+ * Tools. The host owns its lifetime — created when the builder is switched on,
  * kept across surface unmounts, disposed when the tool goes off or the preview
  * or plugin does — so nothing here reconstructs those events.
  */
@@ -1978,7 +2012,7 @@ export function createBuilderSession(
   // The chunk can land after the host let this preview go. Disposing what we
   // would build here cancels agent requests and forgets composer drafts for the
   // whole panel — which by then may belong to the next session.
-  if (context.signal.aborted) throw new Error("The Site Builder was switched off while it loaded");
+  if (context.signal.aborted) throw new Error("SvelteKit Tools was switched off while it loaded");
   const controller = new InspectorController(context.panelId, deps(context.panelId));
   controller.update(context);
   return controller;

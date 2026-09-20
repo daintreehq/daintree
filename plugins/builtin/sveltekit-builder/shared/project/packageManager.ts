@@ -1,5 +1,6 @@
 import {
   type ProjectFileReader,
+  type ProjectReadOptions,
   directoriesUpTo,
   fileExists,
   joinPath,
@@ -69,12 +70,13 @@ function parseManagerField(value: unknown): ManagerField {
 export async function detectPackageManager(
   reader: ProjectFileReader,
   appRoot: string,
-  worktreeRoot: string
+  worktreeRoot: string,
+  options: ProjectReadOptions = {}
 ): Promise<PackageManagerDetection> {
   const dirs = directoriesUpTo(appRoot, worktreeRoot);
 
   for (const dir of dirs) {
-    const manifest = await readJsonFile(reader, joinPath(dir, "package.json"));
+    const manifest = await readJsonFile(reader, joinPath(dir, "package.json"), options);
     const declared = parseManagerField(manifest?.["packageManager"]);
     if (declared.kind === "absent") continue;
     const where = `${toWorktreeRelative(worktreeRoot, dir)}/package.json#packageManager`;
@@ -91,7 +93,7 @@ export async function detectPackageManager(
   };
 
   for (const dir of dirs) {
-    if (await fileExists(reader, joinPath(dir, "pnpm-workspace.yaml"))) {
+    if (await fileExists(reader, joinPath(dir, "pnpm-workspace.yaml"), options)) {
       record("pnpm", `${toWorktreeRelative(worktreeRoot, dir)}/pnpm-workspace.yaml`);
       break;
     }
@@ -101,7 +103,7 @@ export async function detectPackageManager(
     const present = await Promise.all(
       LOCKFILES.map(async (entry) => ({
         entry,
-        exists: await fileExists(reader, joinPath(dir, entry.file)),
+        exists: await fileExists(reader, joinPath(dir, entry.file), options),
       }))
     );
     const hits = present.filter((item) => item.exists);

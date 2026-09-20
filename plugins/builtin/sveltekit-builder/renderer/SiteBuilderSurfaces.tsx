@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   ChevronRight,
   FolderCode,
+  FolderSearch,
   FolderTree,
   FolderX,
   MousePointer2,
@@ -71,7 +72,7 @@ import { SelectionTrail, trailFor, type PickedCrumb } from "./SelectionTrail.js"
 
 const MODE_OPTIONS = [
   { value: "browse" as const, label: "Browse" },
-  { value: "select" as const, label: "Select" },
+  { value: "select" as const, label: "Inspect" },
 ];
 
 /**
@@ -221,11 +222,11 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       <div
         ref={stripRef}
         role="toolbar"
-        aria-label="Site Builder"
+        aria-label="SvelteKit Tools"
         onKeyDown={onStripKeyDown}
         className="flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
       >
-        <WaitingRow label="Starting the Site Builder" />
+        <WaitingRow label="Starting SvelteKit Tools" />
       </div>
     );
   }
@@ -234,7 +235,7 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
     <div
       ref={stripRef}
       role="toolbar"
-      aria-label="Site Builder"
+      aria-label="SvelteKit Tools"
       onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
@@ -258,8 +259,8 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       <Button
         variant="ghost"
         size="icon-xs"
-        aria-label="Close Site Builder"
-        title="Close Site Builder"
+        aria-label="Close SvelteKit Tools"
+        title="Close SvelteKit Tools"
         onClick={props.onClose}
       >
         <X aria-hidden="true" />
@@ -447,7 +448,13 @@ function StripStatus({
       return <StripMessage icon={FolderTree}>Choose which app this preview shows</StripMessage>;
     }
     if (workspace.status === "no-app") {
-      return <StripMessage icon={FolderX}>No SvelteKit app in this worktree</StripMessage>;
+      // A walk that ran out of budget looked at part of the worktree, so it
+      // cannot say the app is absent — only that it did not reach one.
+      return workspace.scanComplete ? (
+        <StripMessage icon={FolderX}>No SvelteKit app in this worktree</StripMessage>
+      ) : (
+        <StripMessage icon={FolderSearch}>No app found before the search stopped</StripMessage>
+      );
     }
     if (workspace.status === "failed") {
       return (
@@ -551,7 +558,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
   return (
     <aside
       ref={drawerRef}
-      aria-label="Site Builder details"
+      aria-label="SvelteKit Tools details"
       // Width, resizing, the narrow-pane policy and the `@container/drawer` the
       // rows below answer to all belong to the host's drawer chrome
       // (`src/components/DevPreview/DevPreviewToolDrawerChrome.tsx`); this fills
@@ -685,7 +692,10 @@ function SiteSourceBody({
         </InspectorNotice>
       );
     case "no-app":
-      return (
+      // Two different answers wearing one status: a finished walk that found
+      // nothing, and a walk that stopped at its budget having found nothing
+      // yet. Only the first is evidence the app is not there.
+      return workspace.scanComplete ? (
         <InspectorNotice
           tone="info"
           title="Preview only — no SvelteKit app found"
@@ -693,6 +703,15 @@ function SiteSourceBody({
         >
           You can select in the preview, but there's no SvelteKit source in this worktree to trace
           it to.
+        </InspectorNotice>
+      ) : (
+        <InspectorNotice
+          tone="info"
+          title="Preview only — the search stopped early"
+          density="compact"
+        >
+          This worktree was too large to search all of it, and no SvelteKit app turned up in the
+          part that was. You can still select in the preview.
         </InspectorNotice>
       );
     case "ambiguous":

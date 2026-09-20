@@ -1,8 +1,10 @@
 import {
   type ProjectFileReader,
+  type ProjectFsDirEntry,
   joinPath,
-  readDirectory,
+  readDirectoryBounded,
   readJsonFile,
+  rethrowIfAborted,
   toWorktreeRelative,
 } from "./fs.js";
 
@@ -57,6 +59,13 @@ export interface SvelteKitApp {
 export interface DiscoveryOptions {
   maxDepth?: number;
   maxDirectories?: number;
+  /**
+   * Cancels the walk between directories, and — through the reader it was
+   * bound to — the read in flight. What it cannot interrupt is a `JSON.parse`
+   * already running: that is synchronous, and the metadata byte cap is what
+   * bounds it.
+   */
+  signal?: AbortSignal;
 }
 
 export interface DiscoveryResult {
@@ -88,6 +97,30 @@ export function declaredDependencies(manifest: Record<string, unknown>): Record<
 }
 
 /**
+ * Whether an entry is a directory, stat'ing the shapes a listing leaves open.
+ *
+ * A plain `readdir` describes a symlink as neither file nor directory, and a
+ * monorepo's linked `apps/site` is exactly that. `null` is "we could not tell"
+ * — a stat that failed — which the walk counts as an unread subtree rather
+ * than as a file.
+ */
+async function resolveIsDirectory(
+  reader: ProjectFileReader,
+  path: string,
+  entry: ProjectFsDirEntry,
+  signal?: AbortSignal
+): Promise<boolean | null> {
+  if (entry.isDirectory) return true;
+  if (entry.isFile) return false;
+  try {
+    return (await reader.stat(path, signal ? { signal } : {})).isDirectory;
+  } catch (error) {
+    rethrowIfAborted(error, signal);
+    return null;
+  }
+}
+
+/**
  * Every SvelteKit app root under a worktree, outermost first.
  *
  * The app root is not the git root and the two identities stay separate all the
@@ -103,6 +136,7 @@ export async function discoverSvelteKitApps(
 ): Promise<DiscoveryResult> {
   const maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
   const maxDirectories = options.maxDirectories ?? DEFAULT_MAX_DIRECTORIES;
+  const { signal } = options;
 
   const found: SvelteKitApp[] = [];
   let queue: string[] = [worktreeRoot];
@@ -116,9 +150,12 @@ export async function discoverSvelteKitApps(
         truncated = true;
         break;
       }
+      // Checked per directory rather than per read: a closed workspace stops
+      // the walk here, so nothing further is scheduled.
+      signal?.throwIfAborted();
       visited += 1;
 
-      const manifest = await readJsonFile(reader, joinPath(dir, "package.json"));
+      const manifest = await readJsonFile(reader, joinPath(dir, "package.json"), { signal });
       if (manifest) {
         const range = declaredDependencies(manifest)[KIT_PACKAGE];
         if (typeof range === "string") {
@@ -132,17 +169,44 @@ export async function discoverSvelteKitApps(
         }
       }
 
-      const children = await readDirectory(reader, dir);
+      const { entries: children, truncated: listingTruncated } = await readDirectoryBounded(
+        reader,
+        dir,
+        { signal }
+      );
+      // A listing that hit the entry cap may hide an app, so the scan is no
+      // more "the whole tree" than one that hit the directory budget.
+      truncated ||= listingTruncated;
+
+      const candidates: { path: string; isDirectory: boolean | null }[] = [];
+      for (const entry of children) {
+        if (entry.isFile) continue;
+        if (isSkippedDirectory(entry.name)) continue;
+        const path = joinPath(dir, entry.name);
+        candidates.push({
+          path,
+          isDirectory: await resolveIsDirectory(reader, path, entry, signal),
+        });
+      }
+      // An entry we could not stat may have held an app, so the scan is no
+      // more "the whole tree" than one that ran out of budget.
+      truncated ||= candidates.some((entry) => entry.isDirectory === null);
+
       if (depth === maxDepth) {
-        truncated ||= children.some(
-          (entry) => entry.isDirectory && !isSkippedDirectory(entry.name)
-        );
+        truncated ||= candidates.some((entry) => entry.isDirectory === true);
         continue;
       }
-      for (const entry of children) {
-        if (!entry.isDirectory) continue;
-        if (isSkippedDirectory(entry.name)) continue;
-        next.push(joinPath(dir, entry.name));
+      for (const entry of candidates) {
+        if (entry.isDirectory !== true) continue;
+        // Queued against the remaining visit budget, not against the listing.
+        // Without this a root of 2000 directories each holding thousands more
+        // accumulates millions of paths the walk will never visit: the budget
+        // bounds what is read, and this bounds what is retained to read it.
+        if (visited + next.length >= maxDirectories) {
+          truncated = true;
+          break;
+        }
+        next.push(entry.path);
       }
     }
     queue = next;

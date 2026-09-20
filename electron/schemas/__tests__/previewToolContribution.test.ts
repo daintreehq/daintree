@@ -20,7 +20,11 @@ function errorCodes(result: ReturnType<typeof parse>): string[] {
   );
 }
 
-const tool = { id: `${BUILDER}.builder`, title: "Site Builder", guestAdapter: `${BUILDER}.guest` };
+const tool = {
+  id: `${BUILDER}.builder`,
+  title: "SvelteKit Tools",
+  guestAdapter: `${BUILDER}.guest`,
+};
 const adapter = { id: `${BUILDER}.guest`, entry: "renderer/guest/entry.ts" };
 
 describe("contributes.previewTools / contributes.guestAdapters", () => {

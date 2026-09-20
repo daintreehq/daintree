@@ -18,7 +18,7 @@ import { getPreviewHost } from "./installShims";
 import "@/index.css";
 
 /**
- * Standalone visual-review harness for the SvelteKit Site Builder.
+ * Standalone visual-review harness for SvelteKit Tools.
  *
  * The builder's states are things a live dev server and a real agent decide —
  * a page that has not loaded, a component whose source main is still finding, a

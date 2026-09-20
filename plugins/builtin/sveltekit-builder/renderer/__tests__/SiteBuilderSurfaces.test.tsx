@@ -73,7 +73,7 @@ function switchOn() {
   useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
 }
 
-/** What the dev preview mounts while the Site Builder is switched on. */
+/** What the dev preview mounts while SvelteKit Tools is switched on. */
 function Builder() {
   const props = { ...hostContext(), session: session(), onClose: () => {} };
   return (
@@ -132,7 +132,7 @@ beforeEach(() => {
         PLUGIN_ID,
         {
           devMode: false,
-          displayName: "Site Builder",
+          displayName: "SvelteKit Tools",
           previewToolIds: new Set([BUILDER_TOOL_ID]),
         },
       ],
@@ -142,7 +142,7 @@ beforeEach(() => {
   registerDevPreviewTool({
     id: BUILDER_TOOL_ID,
     pluginId: PLUGIN_ID,
-    label: "Site Builder",
+    label: "SvelteKit Tools",
     Button: () => null,
     createSession: (toolContext) => createBuilderSession(toolContext),
   });
@@ -310,7 +310,7 @@ describe("page verdicts", () => {
 });
 
 describe("preview binding", () => {
-  it("binds its own preview in Select mode, naming the host's guest adapter", async () => {
+  it("binds its own preview in Inspect mode, naming the host's guest adapter", async () => {
     mount();
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalledTimes(1));
     // An id, never a body: the host owns the runtime it installs.
@@ -573,7 +573,7 @@ describe("selection identity", () => {
     // repeats it only while the drawer is not there to show it.
     const identity = screen.getByRole("region", { name: "Selected element" });
     expect(identity.textContent).toContain(`${FILE}:6`);
-    expect(screen.getByRole("toolbar", { name: "Site Builder" }).textContent).not.toContain(
+    expect(screen.getByRole("toolbar", { name: "SvelteKit Tools" }).textContent).not.toContain(
       `${FILE}:6`
     );
     // The trail names the components this element was reached through, and
@@ -639,7 +639,7 @@ describe("selection identity", () => {
     expect(identity.textContent).toContain("PricingCard");
     expect(identity.textContent).not.toContain("src/lib/Card.svelte");
     expect(identity.textContent).not.toContain(`${FILE}:6`);
-    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
     expect(strip.textContent).not.toContain(`${FILE}:6`);
 
     await act(async () => answer("src/lib/Card.svelte"));
@@ -1271,7 +1271,7 @@ describe("stale selections", () => {
     // re-select the proven element as a member of that invocation — by call
     // site, never by label, since two nested components can share a name.
     await mountSelected();
-    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
     const identity = screen.getByRole("region", { name: "Selected element" });
     for (const surface of [strip, identity]) {
       expect(within(surface).getByRole("button", { name: "PricingCard" })).toBeTruthy();
@@ -1350,7 +1350,7 @@ describe("stale selections", () => {
       },
     ];
     await mountSelected();
-    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
     const cards = within(strip).getAllByRole("button", { name: "Card" });
     expect(cards).toHaveLength(2);
     cards[0]!.focus();
@@ -1394,7 +1394,7 @@ describe("stale selections", () => {
     await mountBound();
     await act(async () => host.select(0, [OBSERVATION], "user", { ...site, name: "Tree" }));
     const identity = await screen.findByRole("region", { name: "Selected element" });
-    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
     for (const surface of [strip, identity]) {
       const trees = within(surface).getAllByText("Tree");
       expect(trees.length).toBeGreaterThan(0);
@@ -1407,7 +1407,7 @@ describe("stale selections", () => {
     await mountSelected();
     host.reselectFinds = false;
     const before = session().getSnapshot();
-    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
     fireEvent.click(within(strip).getByRole("button", { name: "PricingCard" }));
     await waitFor(() => expect(host.sitePreview.reselect).toHaveBeenCalledTimes(1));
     await act(async () => {});
@@ -1419,12 +1419,12 @@ describe("stale selections", () => {
   });
 
   it("offers no crumb to click while browsing", async () => {
-    // The page only answers a selection request in Select mode. A crumb that
+    // The page only answers a selection request in Inspect mode. A crumb that
     // is a button in Browse mode is a button that does nothing.
     await mountSelected();
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     await waitFor(() => expect(session().getSnapshot().mode).toBe("browse"));
-    const strip = screen.getByRole("toolbar", { name: "Site Builder" });
+    const strip = screen.getByRole("toolbar", { name: "SvelteKit Tools" });
     expect(within(strip).getByRole("navigation", { name: "Breadcrumb" }).textContent).toContain(
       "PricingCard"
     );
@@ -1774,12 +1774,12 @@ describe("stale selections", () => {
     fireEvent.click(screen.getByRole("button", { name: "Browse" }));
     await waitFor(() => expect(host.sitePreview.setMode).toHaveBeenCalled());
     await act(async () => changed(FILE));
-    // The page answers only in Select mode, so this one is the user's to see.
+    // The page answers only in Inspect mode, so this one is the user's to see.
     await screen.findByText("Select again — the file changed");
     await act(async () => new Promise((resolve) => setTimeout(resolve, 1300)));
     expect(host.sitePreview.reselect).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "Select" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect" }));
     await waitFor(() => expect(host.calls(CHANNELS.selectionResolve)).toHaveLength(2), {
       timeout: 4000,
     });
@@ -2403,8 +2403,8 @@ describe("issue recovery", () => {
     // The way out is a way forward, not a way to make it go away.
     expect(within(notice()).queryByRole("button", { name: "Dismiss" })).not.toBeNull();
     const retry = within(notice()).getByRole("button", { name: "Retry" });
-    // Select is still what the preview is on: the failure rolled the mode back.
-    expect(screen.getByRole("button", { name: "Select" }).getAttribute("aria-pressed")).toBe(
+    // Inspect is still what the preview is on: the failure rolled the mode back.
+    expect(screen.getByRole("button", { name: "Inspect" }).getAttribute("aria-pressed")).toBe(
       "true"
     );
 
@@ -2689,5 +2689,32 @@ describe("resolving skeleton", () => {
     await settle(FLOOR_MS);
     const landed = screen.getByRole("region", { name: "Selected element" });
     expect(document.activeElement).toBe(landed);
+  });
+});
+
+describe("a worktree scan that did not finish", () => {
+  /**
+   * Discovery stops at its budget, so "no app found" and "no app here" are
+   * different answers. The surfaces must not spend the second one on evidence
+   * that only supports the first.
+   */
+  async function mountWithNoApp(scanComplete: boolean) {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({ status: "no-app", scanComplete }));
+    mount();
+    await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen).length).toBeGreaterThan(0));
+  }
+
+  it("states the worktree has no app only when the walk actually finished", async () => {
+    await mountWithNoApp(true);
+    await screen.findByText("No SvelteKit app in this worktree");
+  });
+
+  it("says the search stopped rather than claiming the worktree has no app", async () => {
+    await mountWithNoApp(false);
+    await screen.findByText("No app found before the search stopped");
+    expect(screen.queryByText("No SvelteKit app in this worktree")).toBe(null);
+    // The drawer must tell the same story as the strip.
+    expect(document.body.textContent).toContain("the search stopped early");
+    expect(document.body.textContent).not.toContain("no SvelteKit app found");
   });
 });

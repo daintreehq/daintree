@@ -139,7 +139,7 @@ async function selectInPage(
   return { selectionId: selection.selection.selectionId, source };
 }
 
-describe("Site Builder end to end: view controller → plugin main → disk", () => {
+describe("SvelteKit Tools end to end: view controller → plugin main → disk", () => {
   it("resolves a clicked element to the exact markup that defines it", async () => {
     const env = await setUp();
     const { source } = await selectInPage(env, "src/lib/native.svelte", "<section");

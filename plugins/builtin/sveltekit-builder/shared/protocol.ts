@@ -2,8 +2,8 @@ import { z } from "zod";
 import { RectSchema, SiteSelectionSchema, SourceLocationSchema, ViewportSchema } from "./model.js";
 
 /**
- * The Site Builder wire contract. Three boundaries meet here and all three are
- * frozen for the life of a protocol version:
+ * The SvelteKit Tools wire contract. Three boundaries meet here, and every message
+ * across them is validated at both ends:
  *
  * - renderer view → plugin main, over the plugin channel bridge (`CHANNELS`);
  * - plugin main → renderer view, pushed (`PUSH_CHANNELS`);
@@ -91,6 +91,23 @@ export const PUSH_CHANNELS = {
  * about its own `__svelte_meta` can at worst point the inspector at the wrong
  * element of its own project, never at another file.
  */
+/**
+ * A label is a tag, an id and class tokens, none of which can hold a line
+ * break — so one that arrives with a break was not built from the element, and
+ * the rest of it is not a second line of anything. Collapsed rather than
+ * rejected: the label is how the user recognises what they clicked, and the
+ * host decides it is one line, not whatever is running in the page.
+ *
+ * Only the breaks go. A no-break space is legal inside an id, at either end of
+ * it as much as in the middle, and an id of `save\u00a0` is not the id `save`
+ * — so nothing here trims, and no other whitespace is touched.
+ */
+export function singleLineLabel(label: string): string {
+  return label
+    .replace(/^[\n\r\f\u0085\u2028\u2029]+|[\n\r\f\u0085\u2028\u2029]+$/gu, "")
+    .replace(/[\n\r\f\u0085\u2028\u2029]+/gu, " ");
+}
+
 export const GuestNodeObservationSchema = z
   .object({
     runtimeOccurrenceId: z.string().min(1).max(128),
@@ -147,6 +164,13 @@ export const GuestNodeObservationSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * What the page calls the node. Bounded, never shaped: a grammar here
+     * would only reject labels built from ids and classes that are legal in
+     * HTML. It is the page's text, so every surface that shows or forwards it
+     * treats it as data — the host collapses it to one line, and a prompt
+     * quotes it.
+     */
     label: z.string().max(200),
     bounds: z.array(RectSchema).max(32),
     /** True when the node sits inside `{@html}`, canvas, or a shadow root. */
@@ -311,8 +335,12 @@ export const WorkspaceOpenResultSchema = z.discriminatedUnion("status", [
       appRoots: z.array(z.string().min(1)).min(2),
     })
     .strict(),
-  /** No SvelteKit app found under this worktree. */
-  z.object({ status: z.literal("no-app") }).strict(),
+  /**
+   * No SvelteKit app found under this worktree. `scanComplete` is false when
+   * the walk hit its budget, which makes this "we did not find one", not
+   * "there is none" — a distinction the user needs to retry differently.
+   */
+  z.object({ status: z.literal("no-app"), scanComplete: z.boolean().optional() }).strict(),
 ]);
 export type WorkspaceOpenResult = z.infer<typeof WorkspaceOpenResultSchema>;
 
@@ -397,7 +425,15 @@ export const DetectAppsArgsSchema = z
   })
   .strict();
 export const DetectAppsResultSchema = z
-  .object({ appCount: z.number().int().nonnegative() })
+  .object({
+    appCount: z.number().int().nonnegative(),
+    /**
+     * False when discovery stopped at its depth or directory budget. A zero
+     * count on an incomplete walk is a scan that ran out, not a worktree
+     * without a SvelteKit app.
+     */
+    complete: z.boolean().optional(),
+  })
   .strict();
 
 /** Args for the channels that only need to name their workspace. */
@@ -469,6 +505,31 @@ export const RouteNodeSchema = z
   .strict();
 export type RouteNode = z.infer<typeof RouteNodeSchema>;
 
+/**
+ * Where the routes directory came from. `svelte.config` and `vite.config` are
+ * readings; `default` is Kit's own fallback applying to a config that sets
+ * nothing; `unresolved` is the refusal — a config exists that we would have to
+ * execute to read, so the path beside it is a fallback and not a finding.
+ */
+export const RoutesDirectorySourceSchema = z.enum([
+  "svelte.config",
+  "vite.config",
+  "default",
+  "unresolved",
+]);
+export type RoutesDirectorySource = z.infer<typeof RoutesDirectorySourceSchema>;
+
+/** Something the routes tree says that SvelteKit would reject, or that we could not read. */
+export const RouteDiagnosticSchema = z
+  .object({
+    code: z.enum(["unresolved-layout-reset", "duplicate-route-id", "traversal-truncated"]),
+    message: z.string().min(1),
+    /** Worktree-relative paths the diagnostic is about. */
+    files: z.array(z.string().min(1)),
+  })
+  .strict();
+export type RouteDiagnostic = z.infer<typeof RouteDiagnosticSchema>;
+
 export const ProjectModelResultSchema = z
   .object({
     appRoot: z.string().min(1),
@@ -485,6 +546,22 @@ export const ProjectModelResultSchema = z
     routes: z.array(RouteNodeSchema),
     /** `kit.paths.base`: "" when unset, null when the config computes it. */
     basePath: z.string().nullable().optional(),
+    /**
+     * Where `routes` was read from. Without it a caller cannot tell a route
+     * list read out of the project's own config from one walked in the default
+     * directory because the config was unreadable — and an agent told the
+     * second is being told something we never established.
+     */
+    routesDirectory: z
+      .object({
+        /** Worktree-relative, like every other path on the wire. */
+        path: z.string().min(1),
+        source: RoutesDirectorySourceSchema,
+      })
+      .strict()
+      .optional(),
+    /** Walks that stopped early and trees SvelteKit would reject. */
+    routeDiagnostics: z.array(RouteDiagnosticSchema).optional(),
   })
   .strict();
 export type ProjectModel = z.infer<typeof ProjectModelResultSchema>;

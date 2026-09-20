@@ -138,7 +138,7 @@ function useDrawerResize(): {
  * surface, and a plugin cannot decide to eat a tiled preview.
  *
  * The chrome is hidden while the tool's drawer renders nothing, so a tool that
- * stays closed until it has something to say (the Site Builder does) costs the
+ * stays closed until it has something to say (SvelteKit Tools does) costs the
  * page no width at all.
  */
 export function DevPreviewToolDrawerChrome({

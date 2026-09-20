@@ -30,7 +30,7 @@ export const DETACH_COPY: Record<SitePreviewDetachReason, string> = {
   "install-failed": "Couldn't start the inspector inside the preview",
   "debugger-detached": "Disconnected — DevTools may have taken over the preview",
   "guest-flooding": "Disconnected — the page sent too many invalid messages",
-  "owner-disabled": "Disconnected — the Site Builder plugin was switched off",
+  "owner-disabled": "Disconnected — the SvelteKit Tools plugin was switched off",
   // Unreachable in practice: the view this would be addressed to is the one
   // that went away. Present because the reason is part of the wire contract.
   "subscriber-destroyed": "Disconnected from the dev preview",
@@ -49,16 +49,6 @@ export const ORIGIN_SUSPENDED_COPY = "Paused — this page isn't at a local addr
 
 export function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
-}
-
-export function displayUrl(url: string | null): string {
-  if (!url) return "No page loaded";
-  try {
-    const parsed = new URL(url);
-    return `${parsed.pathname}${parsed.hash}` || "/";
-  } catch {
-    return url;
-  }
 }
 
 export function basename(path: string): string {
@@ -90,7 +80,7 @@ export function relativeTo(root: string | null, path: string): string {
  */
 export function wireFailureMessage(error: unknown, fallback: string): string {
   if (isSchemaError(error)) {
-    return "The Site Builder and this version of Daintree disagree about the response format. Restarting the app usually clears it.";
+    return "SvelteKit Tools and this version of Daintree disagree about the response format. Restarting the app usually clears it.";
   }
   return formatErrorMessage(error, fallback);
 }
@@ -116,7 +106,7 @@ function isSchemaError(error: unknown): boolean {
  * a neighbour's location when a child component's root precedes it in the
  * same template (its `add_locations` counts that root while hydrating), and a
  * client-side navigation re-renders the page without that — which needs
- * Browse mode, since Select mode keeps the page's links from navigating.
+ * Browse mode, since Inspect mode keeps the page's links from navigating.
  */
 export function mismatchMessage(mismatch: SelectionMismatch): string {
   const where = `${mismatch.file}:${mismatch.line}:${mismatch.column}`;
