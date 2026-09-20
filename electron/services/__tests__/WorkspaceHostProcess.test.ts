@@ -340,6 +340,41 @@ describe("WorkspaceHostProcess", () => {
     host.dispose();
   });
 
+  it("keeps a dead child's tail and a successor's partial line apart", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const firstChild = mockChildren[0] as MockUtilityChild;
+    firstChild.emit("exit", 1);
+
+    // manualRestart forks synchronously, bypassing the backoff timer.
+    host.manualRestart();
+    host.waitForReady().catch(() => {});
+    const secondChild = mockChildren[1] as MockUtilityChild;
+    secondChild.stdout.emit("data", Buffer.from("successor partial"));
+
+    // The dead pipe delivers its crash tail only now, with a replacement
+    // already running — the ordering that makes this hard.
+    firstChild.stderr.emit("data", Buffer.from("FATAL: dying child tail"));
+    firstChild.stderr.emit("close");
+
+    const messages = loggerCalls.map((c) => c.message);
+    // The old child's diagnostics must not be dropped just because a
+    // successor exists...
+    expect(messages.filter((m) => m === "[WorkspaceHost] FATAL: dying child tail")).toHaveLength(1);
+    // ...and must not consume the successor's still-incomplete line.
+    expect(messages).not.toContain("[WorkspaceHost] successor partial");
+
+    secondChild.stdout.emit("data", Buffer.from(" line\n"));
+    expect(loggerCalls.map((c) => c.message)).toContain("[WorkspaceHost] successor partial line");
+
+    host.dispose();
+  });
+
   it("keeps repeated raw lines repeated, including ones shaped like log prefixes", async () => {
     const { WorkspaceHostProcess } = await loadModule();
     const host = new WorkspaceHostProcess("/tmp/project", {

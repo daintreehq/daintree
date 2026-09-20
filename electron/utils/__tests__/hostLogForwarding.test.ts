@@ -150,7 +150,7 @@ describe("structured host log forwarding (#12544)", () => {
         await host.flushLogFileWritesForTesting();
         expect(recordsMatching("MARKER_TWO")).toHaveLength(1);
 
-        const recordsBefore = readRecords();
+        const fileBefore = readLogFile();
 
         const main = await loadMainLogger();
         const broadcasts: { channel: string; entries: { id: string; message: string }[] }[] = [];
@@ -171,7 +171,9 @@ describe("structured host log forwarding (#12544)", () => {
         // event's JSON context cannot have produced extra ones either. The
         // expanded context lines belong to that one record — they are not
         // records themselves, which is why the census counts headers.
-        expect(readRecords()).toEqual(recordsBefore);
+        // Byte-for-byte: ingestion appended nothing at all, so the event's
+        // context cannot have produced records either.
+        expect(readLogFile()).toBe(fileBefore);
         expect(recordsMatching("MARKER_TWO")).toHaveLength(1);
         expect(recordsMatching("captured")).toHaveLength(0);
 

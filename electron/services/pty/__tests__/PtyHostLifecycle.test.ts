@@ -363,16 +363,17 @@ describe("PtyHostLifecycle", () => {
       lifecycle.start();
       const firstChild = mockChild;
 
-      firstChild.stderr.emit("data", Buffer.from("FATAL: dying child tail"));
       firstChild.emit("exit", 1);
 
       const secondChild = createMockChild();
       shared.forkMock.mockReturnValue(secondChild);
       lifecycle.start();
       mockChild = secondChild;
-
       secondChild.stdout.emit("data", Buffer.from("successor partial"));
-      // The dead pipe drains after its replacement is already running.
+
+      // The dead pipe delivers its crash tail only now, with a replacement
+      // already running — the ordering that makes this hard.
+      firstChild.stderr.emit("data", Buffer.from("FATAL: dying child tail"));
       firstChild.stderr.emit("close");
 
       const infos = (callbacks.callbacks.logInfo as Mock).mock.calls.map((c) => c[0]);
