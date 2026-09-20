@@ -241,6 +241,26 @@ describe("useActiveWorktreeSync host sync", () => {
     expect(latestActivationRequest()).toEqual({ worktreeId: worktree.id, durable: true });
   });
 
+  it("does not resend when only the restore target changes, then uses the current one on the next pick", () => {
+    // The durable flag is read at send time, non-reactively: a restore target
+    // that moves on its own is not a new activation, so re-running the sync
+    // effect for it would put another round of activations on every attached
+    // view (#12370). The next genuine selection change still picks up the
+    // target current at that moment.
+    const { rerender } = renderHook(() => useActiveWorktreeSync());
+    expect(request()).toHaveBeenCalledTimes(1);
+    expect(latestActivationRequest()).toEqual({ worktreeId: worktree.id, durable: false });
+
+    mocks.selectionState.restoreWorktreeId = otherWorktree.id;
+    rerender();
+    expect(request()).toHaveBeenCalledTimes(1);
+
+    mocks.selectionState.activeWorktreeId = otherWorktree.id;
+    rerender();
+    expect(request()).toHaveBeenCalledTimes(2);
+    expect(latestActivationRequest()).toEqual({ worktreeId: otherWorktree.id, durable: true });
+  });
+
   it("drops a host mark when the selection clears, so it cannot swallow a later pick", () => {
     markHostActivationApplied(worktree.id);
     mocks.selectionState.activeWorktreeId = null;

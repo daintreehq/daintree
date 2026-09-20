@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { useWorktrees } from "@/hooks";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store";
@@ -27,8 +27,12 @@ export function useActiveWorktreeSync() {
     projectId: null,
     worktreeId: null,
   });
-  const restoreRef = useRef(restoreWorktreeId);
-  restoreRef.current = restoreWorktreeId;
+  // Whether the pick was the durable restore target is captured at send time,
+  // non-reactively: a change to the restore target alone must not re-run the
+  // sync effect, and a ref written during render is a compiler bailout.
+  const recordActivationRequest = useEffectEvent((worktreeId: string) => {
+    markActivationRequested(worktreeId, restoreWorktreeId === worktreeId);
+  });
 
   const activeWorktree = useMemo(
     () => worktrees.find((w) => w.id === activeWorktreeId) ?? null,
@@ -112,9 +116,8 @@ export function useActiveWorktreeSync() {
     // `worktree-activated` echo be skipped instead of re-selecting an id this
     // view may have moved past by the time it lands (#12370). Whether it was
     // the durable pick is captured now, so a later catch-up re-apply can keep
-    // the source it was made with. Read at send time on purpose — a change to
-    // the restore target alone must not resend.
-    markActivationRequested(selectedWorktreeId, restoreRef.current === selectedWorktreeId);
+    // the source it was made with.
+    recordActivationRequest(selectedWorktreeId);
     window.electron.worktreePort
       .request("set-active", {
         worktreeId: selectedWorktreeId,

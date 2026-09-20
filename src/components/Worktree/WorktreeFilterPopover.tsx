@@ -240,16 +240,27 @@ function ChipGrid<T extends string>({
   // the keyboard folded it away in the same tick, the chip under focus
   // unmounted, and the modeless popover left focus on the body. The popover's
   // content unmounts on close, so this resets per opening.
-  const seenSelectedRef = useRef(new Set<T>());
+  //
+  // State adjusted during render, not a ref: this history IS render input, and
+  // refs may not be read or written during render (React Compiler enforces
+  // it). The documented "adjust state when props change" pattern — React
+  // re-runs the component before paint, so no underived frame is observable,
+  // and membership makes the update terminate.
+  const [seenSelected, setSeenSelected] = useState<ReadonlySet<T>>(() => new Set<T>());
+  const canFold =
+    counts !== undefined && overflowAfter !== undefined && options.length > overflowAfter;
+  if (canFold) {
+    const additions = options.filter((o) => isActive(o.value) && !seenSelected.has(o.value));
+    if (additions.length > 0) {
+      setSeenSelected(new Set([...seenSelected, ...additions.map((o) => o.value)]));
+    }
+  }
 
   const { shown, hiddenCount, hiddenAllDead } = useMemo(() => {
     if (!counts || overflowAfter === undefined || options.length <= overflowAfter) {
       return { shown: options, hiddenCount: 0, hiddenAllDead: true };
     }
-    for (const o of options) if (isActive(o.value)) seenSelectedRef.current.add(o.value);
-    const selected = options.filter(
-      (o) => isActive(o.value) || seenSelectedRef.current.has(o.value)
-    );
+    const selected = options.filter((o) => isActive(o.value) || seenSelected.has(o.value));
     const matching = options.filter((o) => !isActive(o.value) && counts[o.value] > 0);
     // Nothing to show — fold nothing rather than render an empty facet.
     if (selected.length + matching.length === 0) {
@@ -271,7 +282,7 @@ function ChipGrid<T extends string>({
       // tell the user there is nothing under there worth opening.
       hiddenAllDead: matching.length - shownMatching.size === 0,
     };
-  }, [options, counts, overflowAfter, isActive]);
+  }, [options, counts, overflowAfter, isActive, seenSelected]);
 
   const visible = showAll || hiddenCount === 0 ? options : shown;
 

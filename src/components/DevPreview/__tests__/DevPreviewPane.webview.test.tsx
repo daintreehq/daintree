@@ -3744,6 +3744,43 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(getWebviewElement(container).getAttribute("src")).toBe(expected);
     });
 
+    it("seeds a forced replacement guest from the latest route, not the mount-time one", async () => {
+      // The key-bump replacement (#12296) never passes through `showEmptyState`, so the
+      // mount-edge adjustment above the JSX never fires for it. Key and seed have to move
+      // in one step or the fresh guest boots from the URL this session started on.
+      setSavedHistory({ past: [], present: `${PROXY}/start`, future: [] });
+      const { container } = render(<DevPreviewPane {...baseProps} />);
+      await settle();
+
+      const firstGuest = getWebviewElement(container);
+      await act(async () => {
+        emitWebviewEvent(firstGuest, "did-navigate", { url: `${PROXY}/moved?q=1` });
+        await Promise.resolve();
+      });
+      await settle();
+
+      const guestsBefore = guestLog.length;
+      // Both in-place reload paths unavailable — a guest that never attached has no
+      // WebContents, which is what drops `performReload` through to the remount.
+      firstGuest.getWebContentsId.mockImplementation(() => {
+        throw new Error("detached");
+      });
+      firstGuest.reload.mockImplementation(() => {
+        throw new Error("detached");
+      });
+      await act(async () => {
+        emitWebviewEvent(firstGuest, "render-process-gone", {
+          details: { reason: "crashed", exitCode: 1 },
+        });
+        await Promise.resolve();
+      });
+      await settle();
+
+      expect(guestLog.length).toBe(guestsBefore + 1);
+      expect(guestLog.at(-1)!.srcWrites).toEqual([`${PROXY}/moved?q=1`]);
+      expect(getWebviewElement(container).getAttribute("src")).toBe(`${PROXY}/moved?q=1`);
+    });
+
     it("keeps a replacement guest's seed current across repeated origin crossings", async () => {
       // Guards specifically against a fix that refreshes the seed once and then re-freezes:
       // the second crossing must be seeded from the second destination, not the first.

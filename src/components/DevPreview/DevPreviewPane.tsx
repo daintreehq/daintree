@@ -251,19 +251,27 @@ export function DevPreviewPane({
   // effect does not fire a redundant loadURL on first ready (#9940). The
   // hard-restart path resets this to "" explicitly when unconfigured.
   const lastSetUrlRef = useRef<string>(history.present);
-  // Seed value for the webview `src` attribute, fixed for the lifetime of each guest.
-  // Never re-bound to navigation state while a guest is mounted — Electron's
-  // SrcAttribute observer would turn each guest navigation into a redundant full
-  // reload (#9940). A ref rather than state because a *replacement* guest has to be
-  // re-seeded synchronously, before the JSX below reads it: an effect lands after the
-  // fresh guest has already begun loading the stale value, which is how the intended
-  // route was lost across an origin migration (#12297). See the re-seed just above the
-  // webview JSX, and BrowserPane's `initialUrlRef` for the same pattern (#10185).
-  const webviewSeedUrlRef = useRef(history.present);
-  // Bumped to force a fresh guest when in-place reload cannot reach the current
-  // one — a renderer that died before it was ever attached has no WebContents to
-  // reload, and recovery must not silently do nothing (#12296).
-  const [webviewInstanceKey, setWebviewInstanceKey] = useState(0);
+  // Identity and seed of the current guest, as one value. `seedUrl` is the webview
+  // `src` attribute, fixed for the lifetime of each guest.
+  //
+  // `seedUrl` is never re-bound to navigation state while a guest is mounted —
+  // Electron's SrcAttribute observer would turn each guest navigation into a
+  // redundant full reload (#9940). A *replacement* guest has to be re-seeded before
+  // the JSX below reads it: an effect lands after the fresh guest has already begun
+  // loading the stale value, which is how the intended route was lost across an
+  // origin migration (#12297). State adjusted during render rather than a ref —
+  // refs may not be read or written during render (React Compiler enforces it) —
+  // which React resolves before it commits the replacement guest.
+  //
+  // `key` is bumped to force a fresh guest when in-place reload cannot reach the
+  // current one: a renderer that died before it was ever attached has no WebContents
+  // to reload, and recovery must not silently do nothing (#12296). Paired with the
+  // seed so that replacement is atomic.
+  const [webviewInstance, setWebviewInstance] = useState(() => ({
+    key: 0,
+    seedUrl: history.present,
+  }));
+  const webviewSeedUrl = webviewInstance.seedUrl;
   const [consoleTerminalId, setConsoleTerminalId] = useState<string | null>(terminalId);
   const isConsoleOpen = terminal?.devPreviewConsoleOpen ?? false;
   const activeConsoleTab = terminal?.devPreviewConsoleTab ?? "output";
@@ -445,7 +453,9 @@ export function DevPreviewPane({
     if (!isUnconfigured) return;
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
-    webviewSeedUrlRef.current = "";
+    setWebviewInstance((previous) =>
+      previous.seedUrl === "" ? previous : { ...previous, seedUrl: "" }
+    );
     lastSetUrlRef.current = "";
     setWebviewLoadError(null);
     clearRetryState();
@@ -466,12 +476,15 @@ export function DevPreviewPane({
         // Match the `src` seed so the isWebviewReady navigation effect does not
         // re-load the same URL on first ready (#9940). The isUnconfigured effect
         // resets this to "" afterward when there is no dev command.
-        lastSetUrlRef.current = webviewSeedUrlRef.current;
+        lastSetUrlRef.current = webviewSeedUrl;
         clearRetryState();
       }
       setWebviewElement(node);
     },
-    [captureScrollViaCdp, clearRetryState]
+    // Deliberately the seed, not `currentUrl`: the seed only moves while no guest is
+    // attached, so this identity never churns under an ordinary navigation and can
+    // never detach and re-attach a live guest.
+    [captureScrollViaCdp, clearRetryState, webviewSeedUrl]
   );
 
   useEffect(() => {
@@ -489,12 +502,11 @@ export function DevPreviewPane({
   // the URL we actually want before the remount rather than letting the new element
   // rewind to the mount-time URL.
   const remountWebview = useCallback(() => {
-    // Imperative, not the render-time re-seed below: a key bump keeps `showEmptyState`
-    // false, so that mount-edge guard never fires and the replacement guest would boot
-    // from the mount-time seed (#12297).
-    webviewSeedUrlRef.current = currentUrl;
+    // Seeded here, not by the render-time adjustment below: a key bump keeps
+    // `showEmptyState` false, so that mount-edge guard never fires and the
+    // replacement guest would boot from the mount-time seed (#12297).
     setIsWebviewReady(false);
-    setWebviewInstanceKey((key) => key + 1);
+    setWebviewInstance((previous) => ({ key: previous.key + 1, seedUrl: currentUrl }));
   }, [currentUrl, setIsWebviewReady]);
 
   // Returns whether a reload was actually initiated. Deliberately not gated on
@@ -603,7 +615,9 @@ export function DevPreviewPane({
     clearLoadTimers();
     setHistory(initializeBrowserHistory(undefined, ""));
     setBrowserUrl(id, "");
-    webviewSeedUrlRef.current = "";
+    setWebviewInstance((previous) =>
+      previous.seedUrl === "" ? previous : { ...previous, seedUrl: "" }
+    );
     lastSetUrlRef.current = "";
     setIsLoading(false);
     setIsWebviewReady(false);
@@ -875,11 +889,14 @@ export function DevPreviewPane({
   //
   // Gated on `webviewElement` rather than on `showEmptyState`: the ref callback only runs
   // on commit, so this reflects whether a guest is *actually* live. That keeps the write
-  // impossible while one is mounted (re-binding `src` would trigger Electron's
-  // SrcAttribute observer into a redundant reload, #9940) and immune to a render that
-  // React starts and throws away, which a previous/next flag comparison is not.
-  if (!webviewElement && currentUrl) {
-    webviewSeedUrlRef.current = currentUrl;
+  // impossible while one is mounted — re-binding `src` would trigger Electron's
+  // SrcAttribute observer into a redundant reload (#9940).
+  //
+  // Safe against a render React starts and throws away because it converges rather than
+  // transitions: it only ever assigns `currentUrl`, so a discarded pass re-derives the
+  // same value instead of consuming an edge, which a previous/next flag comparison would.
+  if (!webviewElement && currentUrl && webviewSeedUrl !== currentUrl) {
+    setWebviewInstance({ ...webviewInstance, seedUrl: currentUrl });
   }
 
   return (
@@ -1127,10 +1144,10 @@ export function DevPreviewPane({
                       }
                     >
                       <webview
-                        key={webviewInstanceKey}
+                        key={webviewInstance.key}
                         ref={setWebviewNode}
                         // Seed-only: never re-bind to navigation state (#9940).
-                        src={webviewSeedUrlRef.current}
+                        src={webviewSeedUrl}
                         partition={webviewPartition}
                         // @ts-expect-error React 19 requires "" to emit the attribute; boolean true is silently dropped
                         allowpopups=""
