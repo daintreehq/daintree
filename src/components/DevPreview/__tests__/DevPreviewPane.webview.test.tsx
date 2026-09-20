@@ -3779,6 +3779,17 @@ describe("DevPreviewPane webview lifecycle regression", () => {
       expect(guestLog.length).toBe(guestsBefore + 1);
       expect(guestLog.at(-1)!.srcWrites).toEqual([`${PROXY}/moved?q=1`]);
       expect(getWebviewElement(container).getAttribute("src")).toBe(`${PROXY}/moved?q=1`);
+
+      // The seed navigates the replacement by itself. The `src` interceptor
+      // ignores writes made inside loadURL, so asserting the seed alone would
+      // also pass for a guest that was seeded and then imperatively sent to the
+      // same place — a second request for a route that may be single-use.
+      await act(async () => {
+        emitWebviewEvent(getWebviewElement(container), "dom-ready");
+        await Promise.resolve();
+      });
+      await settle();
+      expect(guestLog.at(-1)!.loadURLs).toEqual([]);
     });
 
     it("keeps a replacement guest's seed current across repeated origin crossings", async () => {

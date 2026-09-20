@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useActiveWorktreeSync } from "../useActiveWorktreeSync";
 import {
@@ -241,15 +241,20 @@ describe("useActiveWorktreeSync host sync", () => {
     expect(latestActivationRequest()).toEqual({ worktreeId: worktree.id, durable: true });
   });
 
-  it("does not resend when only the restore target changes, then uses the current one on the next pick", () => {
-    // The durable flag is read at send time, non-reactively: a restore target
-    // that moves on its own is not a new activation, so re-running the sync
-    // effect for it would put another round of activations on every attached
-    // view (#12370). The next genuine selection change still picks up the
-    // target current at that moment.
+  it("does not resend a restore-only change after a rejected request, then uses the current target on the next pick", async () => {
+    // The durable flag is read at send time, non-reactively. Simply depending
+    // on the restore target looks equivalent — the duplicate-send guard hides
+    // it — right until a rejected request clears that guard: a restore target
+    // moving on its own would then fire a second activation for a selection
+    // the user never changed, and every attached view answers it (#12370).
+    request().mockRejectedValueOnce(new Error("worktree port closed"));
     const { rerender } = renderHook(() => useActiveWorktreeSync());
     expect(request()).toHaveBeenCalledTimes(1);
     expect(latestActivationRequest()).toEqual({ worktreeId: worktree.id, durable: false });
+    // Let the rejection clear the de-duplication marker.
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     mocks.selectionState.restoreWorktreeId = otherWorktree.id;
     rerender();
