@@ -43,8 +43,22 @@ vi.mock("@/store/projectStatsStore", () => ({
   },
 }));
 
+// Controlled-popover stub: `open` is mirrored onto the wrapper so tests can see
+// it, and any click inside opens it the way the real trigger would.
 vi.mock("@/components/ui/popover", () => ({
-  Popover: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+  Popover: ({
+    children,
+    open,
+    onOpenChange,
+  }: {
+    children: React.ReactNode;
+    open?: boolean;
+    onOpenChange?: (open: boolean) => void;
+  }) => (
+    <div data-popover-open={open ? "true" : "false"} onClickCapture={() => onOpenChange?.(true)}>
+      {children}
+    </div>
+  ),
   PopoverTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   PopoverContent: () => null,
 }));
@@ -576,6 +590,111 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     // No misleading "0MB"; the badge withholds the reading entirely.
     expect(container.textContent ?? "").not.toContain("0MB");
     expect(container.textContent ?? "").not.toContain("project active");
+  });
+
+  it("pins status items to the right of the readout without nesting them in the trigger", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+
+    const { container, getByTestId } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+
+    await flush();
+
+    const trigger = container.querySelector("button");
+    expect(trigger?.textContent).toBe("1 project active");
+    // A button inside the trigger button is invalid markup and would open the
+    // popover on every status click.
+    expect(trigger?.contains(getByTestId("status-item"))).toBe(false);
+  });
+
+  it("keeps a showing status mounted when the readout arrives beside it", async () => {
+    let resolveProjects: (projects: Project[]) => void = () => {};
+    mockGetAll.mockReturnValue(
+      new Promise<Project[]>((resolve) => {
+        resolveProjects = resolve;
+      })
+    );
+    statsStoreState.stats = { p1: { processCount: 1 } };
+
+    const { container, getByTestId } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+
+    // Still loading: the status shows on its own, and takes focus.
+    const before = getByTestId("status-item");
+    expect(container.querySelectorAll("button").length).toBe(1);
+    before.focus();
+
+    await act(async () => {
+      resolveProjects([makeProject({ id: "p1", name: "Proj One" })]);
+    });
+    await flush();
+
+    expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
+    // Same node, not a lookalike: a remount would have dropped focus to the body.
+    expect(getByTestId("status-item")).toBe(before);
+    expect(document.activeElement).toBe(before);
+  });
+
+  it("still shows status items while there is no readout to show", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = {};
+
+    const { container, getByTestId } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+
+    await flush();
+
+    // The status is the only control: no "0 projects active" trigger beside it.
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons).toEqual([getByTestId("status-item")]);
+    expect(container.querySelector("[data-status-readout]")).toBeNull();
+  });
+
+  it("closes an open popover when the readout that anchors it goes away", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+
+    const { container } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+    await flush();
+
+    const readout = container.querySelector<HTMLButtonElement>("[data-status-readout]");
+    await act(async () => {
+      readout?.click();
+    });
+    expect(container.querySelector("[data-popover-open]")?.getAttribute("data-popover-open")).toBe(
+      "true"
+    );
+
+    // The status cluster keeps the Popover root mounted, so the trigger can
+    // leave under an open popover — Radix would keep it anchored to the
+    // detached node with nowhere to return focus.
+    statsStoreState.stats = {};
+    await advance(10_000);
+
+    expect(container.querySelector("[data-status-readout]")).toBeNull();
+    expect(container.querySelector("[data-popover-open]")?.getAttribute("data-popover-open")).toBe(
+      "false"
+    );
+  });
+
+  it("drops the row when the last status leaves and there is no readout", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = {};
+
+    const { container, rerender } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+    await flush();
+
+    rerender(<ProjectResourceBadge statusItems={null} />);
+
+    expect(container.firstElementChild).toBeNull();
   });
 
   it("removes visibility listener on unmount", () => {

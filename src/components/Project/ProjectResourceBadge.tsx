@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
@@ -285,7 +285,16 @@ function DiagnosticsSection({
   );
 }
 
-export function ProjectResourceBadge() {
+interface ProjectResourceBadgeProps {
+  /**
+   * Ambient status marks pinned to the right of the footer row. Pass null when
+   * there are none — the row exists for either half, so a status can show before
+   * the first stats read lands or while no project is running.
+   */
+  statusItems?: ReactNode;
+}
+
+export function ProjectResourceBadge({ statusItems = null }: ProjectResourceBadgeProps = {}) {
   const [stats, setStats] = useState<AggregateStats>({
     runningProjects: 0,
     totalMemoryMB: 0,
@@ -537,25 +546,59 @@ export function ProjectResourceBadge() {
     return () => clearInterval(tick);
   }, [open]);
 
-  if (isLoading || stats.runningProjects === 0) {
+  const showProjects = !isLoading && stats.runningProjects > 0;
+
+  // The Popover root outlives its trigger now that the status cluster keeps the
+  // tree mounted, and Radix's anchor ref never clears on unmount — so an open
+  // popover would stay anchored to a detached node with nowhere to return
+  // focus. Close it ourselves when the readout goes away.
+  useEffect(() => {
+    if (!showProjects) setOpen(false);
+  }, [showProjects]);
+
+  if (!showProjects && statusItems === null) {
     return null;
   }
 
+  const statusCluster =
+    statusItems !== null ? (
+      <div
+        data-testid="sidebar-status-items"
+        className="ml-auto flex items-center gap-0.5 pr-2 shrink-0"
+      >
+        {statusItems}
+      </div>
+    ) : null;
+
+  // One tree for both shapes: swapping the root when the readout arrives or
+  // leaves would remount a status that is still showing, dropping its focus and
+  // its open tooltip.
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button className="px-4 py-2 border-t border-divider surface-chrome flex items-center shrink-0 w-full hover:bg-daintree-text/[0.02] transition-colors cursor-pointer">
-          <div className="flex items-center gap-2 min-w-0">
-            <span
-              key={memoryState}
-              className={`status-mark inline-flex h-2 w-2 rounded-full ${STATE_DOT_CLASSES[memoryState]} animate-diagnostics-flash shrink-0`}
-            />
-            <span className="text-3xs tabular-nums text-text-secondary font-medium truncate">
-              {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
-            </span>
-          </div>
-        </button>
-      </PopoverTrigger>
+      <div
+        data-sidebar-status-bar=""
+        className="border-t border-divider surface-chrome flex items-center shrink-0 w-full min-h-9"
+      >
+        {showProjects && (
+          <PopoverTrigger asChild>
+            <button
+              data-status-readout=""
+              className="px-4 py-2.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-daintree-text/[0.02] transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span
+                  key={memoryState}
+                  className={`status-mark inline-flex h-2 w-2 rounded-full ${STATE_DOT_CLASSES[memoryState]} animate-diagnostics-flash shrink-0`}
+                />
+                <span className="text-3xs tabular-nums text-text-secondary font-medium truncate">
+                  {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
+                </span>
+              </div>
+            </button>
+          </PopoverTrigger>
+        )}
+        {statusCluster}
+      </div>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-72 p-3">
         <div className="space-y-3">
           {popoverData ? (

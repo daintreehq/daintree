@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
-import { ProjectResourceBadge, QuickRun } from "@/components/Project";
+import { QuickRun } from "@/components/Project";
+import { SidebarStatusBar } from "./SidebarStatusBar";
 import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
 import { useMacroFocusStore } from "@/store/macroFocusStore";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
@@ -191,7 +192,7 @@ export function Sidebar({
 
           <ProjectPluginIndicator />
 
-          <ProjectResourceBadge />
+          <SidebarStatusBar />
 
           <div
             role="separator"

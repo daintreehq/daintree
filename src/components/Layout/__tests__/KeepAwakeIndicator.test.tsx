@@ -16,7 +16,7 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: dispatchMock },
 }));
 
-import { KeepAwakeIndicator, KeepAwakeIndicatorPlaceholder } from "../KeepAwakeIndicator";
+import { KeepAwakeIndicator } from "../KeepAwakeIndicator";
 
 afterEach(() => {
   cleanup();
@@ -35,7 +35,8 @@ describe("KeepAwakeIndicator", () => {
     expect(button.getAttribute("aria-label")).toBe(
       "Keeping this machine awake, open keep-awake settings"
     );
-    expect(button.hasAttribute("data-toolbar-item")).toBe(true);
+    // Out of the toolbar, so it must not join the toolbar's roving tab order.
+    expect(button.hasAttribute("data-toolbar-item")).toBe(false);
   });
 
   it("says what is held and what still happens", () => {
@@ -66,12 +67,35 @@ describe("KeepAwakeIndicator", () => {
     );
   });
 
-  it("holds the slot with a placeholder that stays out of the tab order", () => {
-    const { container } = render(<KeepAwakeIndicatorPlaceholder />);
-    const placeholder = container.firstElementChild!;
+  describe("when the hold ends under keyboard focus", () => {
+    function renderInBar(showIndicator: boolean) {
+      return (
+        <div data-sidebar-status-bar="">
+          <button data-status-readout="" data-testid="readout">
+            1 project active
+          </button>
+          <div>{showIndicator && <KeepAwakeIndicator />}</div>
+          <button data-testid="elsewhere">elsewhere</button>
+        </div>
+      );
+    }
 
-    expect(placeholder.getAttribute("aria-hidden")).toBe("true");
-    expect(placeholder.hasAttribute("data-toolbar-item")).toBe(false);
-    expect(placeholder.querySelector("button")).toBeNull();
+    it("hands focus to the readout instead of dropping it to the body", () => {
+      const { getByTestId, rerender } = render(renderInBar(true));
+      getByTestId("keep-awake-indicator").focus();
+
+      rerender(renderInBar(false));
+
+      expect(document.activeElement).toBe(getByTestId("readout"));
+    });
+
+    it("leaves focus alone once it has moved on", () => {
+      const { getByTestId, rerender } = render(renderInBar(true));
+      getByTestId("elsewhere").focus();
+
+      rerender(renderInBar(false));
+
+      expect(document.activeElement).toBe(getByTestId("elsewhere"));
+    });
   });
 });
