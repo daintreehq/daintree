@@ -51,16 +51,6 @@ export function plural(count: number, one: string, many: string): string {
   return `${count} ${count === 1 ? one : many}`;
 }
 
-export function displayUrl(url: string | null): string {
-  if (!url) return "No page loaded";
-  try {
-    const parsed = new URL(url);
-    return `${parsed.pathname}${parsed.hash}` || "/";
-  } catch {
-    return url;
-  }
-}
-
 export function basename(path: string): string {
   const index = path.lastIndexOf("/");
   return index === -1 ? path : path.slice(index + 1);
