@@ -1,85 +1,37 @@
 import { describe, expect, it } from "vitest";
-import { existsSync, readFileSync } from "node:fs";
-import { dirname, relative, resolve, sep } from "node:path";
+import { dirname, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { posix, walkEagerGraph } from "../../../../../scripts/lib/static-import-graph.mjs";
+
+/**
+ * The builtin renderer glob imports this entry eagerly for every user, so
+ * whatever it reaches statically lands in the first-render graph. zod is the
+ * expensive passenger: `shared/protocol.ts` pulls it in, which is why the
+ * zod-free half of the contract lives in `shared/ids.ts` (#12323). Host `@/…`
+ * modules are out of scope: this ratchets the plugin's own files.
+ *
+ * Stricter than the repo-wide guard in `src/registry/__tests__`, which applies
+ * the zod rule to every built-in: this one also pins which of the plugin's own
+ * files may be in the graph at all. Both share one walker so they cannot
+ * disagree about what counts as an eager edge.
+ */
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = resolve(here, "../..");
 const ENTRY = resolve(here, "../index.ts");
 
-/** Comments are stripped first: an import quoted inside one is not an edge. */
-function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:"'`])\/\/[^\n]*/g, "$1");
-}
+const graph = () => walkEagerGraph(ENTRY, pluginRoot);
+const reachedFiles = () => graph().files.map((file) => posix(relative(pluginRoot, file)));
 
-/**
- * Every static specifier: `from "x"`, a side-effect `import "x"` and
- * `export … from "x"` alike. `import("x")` is deliberately absent — a dynamic
- * import is its own chunk, which is the whole point of the lazy view.
- */
-function staticSpecifiers(source: string): string[] {
-  const body = stripComments(source);
-  const out: string[] = [];
-  for (const match of body.matchAll(
-    /(?:^|[\n;])\s*(?:import|export)\b(?!\s+type\b)([^;]*?)from\s*["']([^"']+)["']/g
-  )) {
-    // `import type`/`export type` is erased before a bundler sees it, so it is
-    // not an eager edge. The negative lookahead covers the statement form; the
-    // inline `{ type X }` form still names a real module and stays an edge.
-    if (match[2]) out.push(match[2]);
-  }
-  for (const match of body.matchAll(/(?:^|[\n;])\s*import\s*["']([^"']+)["']/g)) {
-    if (match[1]) out.push(match[1]);
-  }
-  return out;
-}
-
-function resolveLocal(fromFile: string, specifier: string): string {
-  const base = resolve(dirname(fromFile), specifier.replace(/\.js$/, ""));
-  for (const candidate of [`${base}.ts`, `${base}.tsx`, `${base}/index.ts`]) {
-    if (existsSync(candidate)) return candidate;
-  }
-  throw new Error(`unresolvable import ${specifier} from ${relative(pluginRoot, fromFile)}`);
-}
-
-/** Plugin-local files reached statically from the entry, with their bare imports. */
-function eagerPluginGraph(): { files: string[]; bare: Map<string, string[]> } {
-  const files: string[] = [];
-  const bare = new Map<string, string[]>();
-  const seen = new Set<string>();
-  const queue = [ENTRY];
-  while (queue.length > 0) {
-    const file = queue.shift() as string;
-    if (seen.has(file)) continue;
-    seen.add(file);
-    files.push(file);
-    const specifiers = staticSpecifiers(readFileSync(file, "utf8"));
-    bare.set(
-      file,
-      specifiers.filter((specifier) => !specifier.startsWith("."))
-    );
-    for (const specifier of specifiers) {
-      if (specifier.startsWith(".")) queue.push(resolveLocal(file, specifier));
-    }
-  }
-  return { files, bare };
-}
-
-/** Posix separators: `relative()` yields `renderer\x.ts` on Windows, and the
- * assertions below name files the one way they read in the repo. */
-const reachedFiles = () =>
-  eagerPluginGraph().files.map((file) => relative(pluginRoot, file).split(sep).join("/"));
-
-// The builtin renderer glob imports this entry eagerly for every user, so
-// whatever it reaches statically lands in the first-render graph. zod is the
-// expensive passenger: `shared/protocol.ts` pulls it in, which is why the
-// zod-free half of the contract lives in `shared/ids.ts` (#12323). Host `@/…`
-// modules are out of scope: this ratchets the plugin's own files.
 describe("eager renderer entry graph", () => {
+  it("resolves every relative import it follows", () => {
+    expect(graph().unresolved).toEqual([]);
+  });
+
   it("never reaches zod", () => {
-    const offenders = [...eagerPluginGraph().bare]
+    const offenders = [...graph().bare]
       .filter(([, specifiers]) => specifiers.some((specifier) => /^zod(\/|$)/.test(specifier)))
-      .map(([file]) => relative(pluginRoot, file).split(sep).join("/"));
+      .map(([file]) => posix(relative(pluginRoot, file)));
     expect(offenders).toEqual([]);
   });
 
