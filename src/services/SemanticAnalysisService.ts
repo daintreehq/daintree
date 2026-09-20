@@ -216,10 +216,22 @@ class SemanticAnalysisService {
 
   /**
    * Post a message to the worker.
+   *
+   * `quiet` is for lifecycle cleanup, where a missing worker is the expected
+   * steady state rather than a fault — the analysis buffer is unavailable in
+   * production, so no worker is ever constructed and every terminal close
+   * would otherwise warn. Every other path keeps the warning, because a
+   * missing worker there is a genuine failure worth chasing.
    */
-  private postMessage(message: SemanticWorkerInboundMessage): void {
+  private postMessage(message: SemanticWorkerInboundMessage, options?: { quiet?: boolean }): void {
     if (!this.worker) {
-      logWarn("[SemanticAnalysisService] Cannot post message — worker not initialized");
+      if (options?.quiet) {
+        logDebug("[SemanticAnalysisService] Skipping worker message — worker not initialized", {
+          type: message.type,
+        });
+      } else {
+        logWarn("[SemanticAnalysisService] Cannot post message — worker not initialized");
+      }
       return;
     }
     this.worker.postMessage(message);
@@ -250,15 +262,21 @@ class SemanticAnalysisService {
 
   /**
    * Unregister a terminal from state tracking.
+   *
+   * Safe to call repeatedly and after `dispose()`: the cached registration is
+   * dropped either way, and a worker that isn't there is expected cleanup.
    */
   unregisterTerminal(terminalId: string): void {
     // Remove from cache
     this.registeredTerminals.delete(terminalId);
 
-    this.postMessage({
-      type: "UNREGISTER_TERMINAL",
-      terminalId,
-    });
+    this.postMessage(
+      {
+        type: "UNREGISTER_TERMINAL",
+        terminalId,
+      },
+      { quiet: true }
+    );
   }
 
   /**
