@@ -1980,7 +1980,6 @@ describe("ResourceProfileService", () => {
       expect(snap.targetProfile).toBe("performance");
       expect(snap.currentProfile).toBe("balanced");
       expect(snap.lagPressureActive).toBe(false);
-      expect(snap.interactiveOverrideActive).toBe(false);
     });
 
     it("maps a single low-memory signal (score 1) to a balanced target", () => {

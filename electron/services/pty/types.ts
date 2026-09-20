@@ -438,3 +438,11 @@ export const PORT_BATCH_THROUGHPUT_DELAY_MS = 16; // ~60Hz frame — setTimeout 
 // keystroke echo: the batcher swaps its throughput timer for an immediate so
 // typing into a flooding terminal isn't delayed by the 16ms batch window.
 export const PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS = 50;
+// Longer tail for the same signal: output within this window of the terminal's
+// last input keeps the base 16ms batch window even when the resource profile
+// has stretched it (efficiency: 40ms). This is the terminal-scoped form of the
+// old global "no efficiency while scrolling" override — a mouse-reporting TUI's
+// redraws after a wheel report often land past the 50ms echo window (#12518).
+// Matches the renderer's input/wheel BURST decay, so both sides agree on when
+// an interaction is over.
+export const PORT_BATCH_RECENT_INPUT_WINDOW_MS = 1000;

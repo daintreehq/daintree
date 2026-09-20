@@ -51,7 +51,6 @@ export function isAllClear(snapshot: WhySlowSnapshot): boolean {
     r.targetProfile !== "performance" ||
     r.reasons.length > 0 ||
     r.lagPressureActive ||
-    r.interactiveOverrideActive ||
     r.isOnBattery ||
     (r.thermalState !== "unknown" && r.thermalState !== "nominal") ||
     r.speedLimit < 100
@@ -301,9 +300,6 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                     <Badge tone="alert">
                       event-loop lag{resource.lagEscalatedActive ? " (escalated)" : ""}
                     </Badge>
-                  ) : null}
-                  {resource.interactiveOverrideActive ? (
-                    <Badge tone="warn">interactive override</Badge>
                   ) : null}
                   {resource.isOnBattery ? <Badge tone="warn">on battery</Badge> : null}
                   {resource.thermalState !== "unknown" && resource.thermalState !== "nominal" ? (

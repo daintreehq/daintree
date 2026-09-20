@@ -181,4 +181,85 @@ describe("useResourceProfile", () => {
     expect(restoreSpy).toHaveBeenCalledTimes(1);
     restoreSpy.mockRestore();
   });
+
+  it("skips the live-terminal re-applies for values that did not move (#12518)", () => {
+    const refreshSpy = vi.spyOn(terminalInstanceService, "refreshWebGLMode");
+    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAllForeground");
+    renderHook(() => useResourceProfile());
+
+    act(() => {
+      capturedCallback!(makePayload(8, 6, 2500));
+    });
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
+
+    // A different profile with the same WebGL band and scrollback ceiling
+    // re-walks nothing, but the store still tracks the new profile.
+    act(() => {
+      capturedCallback!({
+        ...makePayload(8, 6, 2500),
+        profile: "performance",
+      });
+    });
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(restoreSpy).toHaveBeenCalledTimes(1);
+    expect(useResourceProfileStore.getState().profile).toBe("performance");
+
+    // Only the scrollback ceiling moves: no WebGL re-evaluation.
+    act(() => {
+      capturedCallback!(makePayload(8, 6, 10000));
+    });
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    expect(restoreSpy).toHaveBeenCalledTimes(2);
+
+    // Only the WebGL band moves: no scrollback walk.
+    act(() => {
+      capturedCallback!(makePayload(12, 10, 10000));
+    });
+    expect(refreshSpy).toHaveBeenCalledTimes(2);
+    expect(restoreSpy).toHaveBeenCalledTimes(2);
+
+    refreshSpy.mockRestore();
+    restoreSpy.mockRestore();
+  });
+
+  it("re-evaluates WebGL mode when only the lower threshold moves", () => {
+    const refreshSpy = vi.spyOn(terminalInstanceService, "refreshWebGLMode");
+    renderHook(() => useResourceProfile());
+
+    act(() => {
+      capturedCallback!(makePayload(12, 10, 2500));
+    });
+    act(() => {
+      capturedCallback!(makePayload(12, 8, 2500));
+    });
+
+    expect(getWebglLowerThreshold()).toBe(8);
+    expect(refreshSpy).toHaveBeenCalledTimes(2);
+    refreshSpy.mockRestore();
+  });
+
+  it("applies a first pull that matches the current config without walking terminals", async () => {
+    const refreshSpy = vi.spyOn(terminalInstanceService, "refreshWebGLMode");
+    const restoreSpy = vi.spyOn(terminalInstanceService, "restoreScrollbackAllForeground");
+    useResourceProfileStore.getState().setProfile("balanced");
+    renderHook(() => useResourceProfile());
+
+    await act(async () => {
+      pullResolve!({
+        profile: "performance",
+        config: {
+          webglUpperThreshold: getWebglUpperThreshold(),
+          webglLowerThreshold: getWebglLowerThreshold(),
+          agentScrollbackMaxLines: getAgentScrollbackMaxLines(),
+        },
+      } as unknown as ResourceProfilePayload);
+    });
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expect(restoreSpy).not.toHaveBeenCalled();
+    expect(useResourceProfileStore.getState().profile).toBe("performance");
+    refreshSpy.mockRestore();
+    restoreSpy.mockRestore();
+  });
 });

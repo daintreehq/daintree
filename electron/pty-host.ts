@@ -77,7 +77,10 @@ import {
 } from "./pty-host/handlers/index.js";
 import { PluginPtyProcessManager } from "./pty-host/services/PluginPtyProcessManager.js";
 import { GracefulCaptureTracker } from "./pty-host/GracefulCaptureTracker.js";
-import { PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS } from "./services/pty/types.js";
+import {
+  PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS,
+  PORT_BATCH_RECENT_INPUT_WINDOW_MS,
+} from "./services/pty/types.js";
 import { isSmokeTestTerminalId } from "../shared/utils/smokeTestTerminals.js";
 import { startEventLoopMonitor } from "./pty-host/eventLoopMonitor.js";
 import { SCROLLBACK_MIN } from "../shared/config/scrollback.js";
@@ -957,9 +960,12 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // Output landing within the input window is likely keystroke echo — let
       // the batcher accelerate a pending throughput flush so typing into a
       // flooding terminal isn't held a frame behind the flood.
-      const interactive =
-        terminalInfo !== undefined &&
-        Date.now() - terminalInfo.lastInputTime < PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS;
+      const sinceInputMs =
+        terminalInfo !== undefined ? Date.now() - terminalInfo.lastInputTime : Infinity;
+      const interactive = sinceInputMs < PORT_BATCH_INTERACTIVE_INPUT_WINDOW_MS;
+      // A wheel over a mouse-reporting TUI is PTY input too, so its redraws
+      // ride this per-terminal tail instead of a global profile lift (#12518).
+      const recentInput = sinceInputMs < PORT_BATCH_RECENT_INPUT_WINDOW_MS;
       if (interactive) {
         // PERF-120 T3 attribution mark (no-op unless DAINTREE_PERF_CAPTURE):
         // echo output for a just-typed terminal is leaving the host. Paired
@@ -977,7 +983,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         // never written for an engaged terminal, so nothing double-delivers.
         const workerConn = terminalWorkerConnections.get(windowId)?.get(id);
         const sink = workerConn?.engaged ? workerConn : conn;
-        if (sink.batcher.write(id, chunk, byteCount, owned, interactive)) {
+        if (sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput)) {
           visualWritten = true;
         } else {
           // The data-loss pulse rides the WINDOW port either way — the

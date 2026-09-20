@@ -95,13 +95,6 @@ const LAG_EXIT_WINDOW_SAMPLES = 9; // 45s sliding window
 const LAG_EXIT_CLEAN_REQUIRED = 7; // 7-of-9 clean tolerates 2 noisy samples
 const LAG_PRESSURE_MAX_MS = 120_000; // 2-minute hard cap on stuck latch
 
-// Upper bound on a SINGLE interactive-override request, so one bad/oversized
-// call can't hold the profile off efficiency for long. The trusted renderer
-// requests ~1.5s windows and re-requests while interaction continues, so a
-// genuine continuous scroll renews the hold — and the hold self-expires within
-// this bound once interaction stops, letting efficiency relief resume.
-const MAX_INTERACTIVE_OVERRIDE_MS = 5_000;
-
 // Memory-pressure thresholds scale with device RAM so machines with very
 // different physical memory behave sensibly. On an 8 GB machine these
 // fractions evaluate to ~1229 MB / ~655 MB, preserving the originally-tuned
@@ -197,9 +190,9 @@ export class ResourceProfileService {
   /**
    * Cached-view reclaim band, pushed to every PVM. Deliberately NOT part of
    * RESOURCE_PROFILE_CONFIGS: it is a property of the machine's RAM, not of the
-   * profile, so it stays armed at one value across every transition — including
-   * the interactive efficiency→balanced clamp, which used to loosen the floor
-   * 1024→768 exactly when memory was lowest (#11469).
+   * profile, so it stays armed at one value across every transition — an
+   * efficiency→balanced lift used to loosen the floor 1024→768 exactly when
+   * memory was lowest (#11469).
    */
   private readonly memoryPressurePolicy: MemoryPressurePolicy;
   private readonly terminalWorkloadHighMb: number;
@@ -228,11 +221,6 @@ export class ResourceProfileService {
   private lagEnterTicks = 0;
   private lagExitWindow: boolean[] = [];
   private lagPressureStartedAt: number | null = null;
-  // Wall-clock until which an interactive override is in effect. While active,
-  // the profile is clamped to ≥ balanced (efficiency is never entered/held) so
-  // an actively-scrolled full-screen TUI keeps full PTY throughput. Renderer-
-  // driven and time-boxed (see requestInteractiveOverride); 0 = inactive.
-  private interactiveOverrideUntil = 0;
   private readonly profileListeners = new Set<
     (change: { from: ResourceProfile; to: ResourceProfile }) => void
   >();
@@ -330,39 +318,6 @@ export class ResourceProfileService {
     return () => {
       this.profileListeners.delete(listener);
     };
-  }
-
-  private isInteractiveOverrideActive(): boolean {
-    return Date.now() < this.interactiveOverrideUntil;
-  }
-
-  /**
-   * Hold the profile at ≥ balanced for `durationMs` because the user is actively
-   * interacting (e.g. scrolling a full-screen mouse-reporting TUI). Efficiency
-   * stretches the pty-host's port-batch delay 16ms→40ms, which throttles the
-   * returned-redraw stream and makes scroll feel slow ("gets slow and stays
-   * slow"). This is the deliberate, lighter "no efficiency while scrolling" clamp
-   * (NOT a full Performance pin): it (1) lifts out of efficiency immediately if
-   * we're there, releasing the lag latch, and (2) blocks re-entry to efficiency
-   * for the window via the guards in sampleLag/applyProfile. The window is
-   * time-boxed and extended on each call (the renderer throttles calls), so it
-   * self-expires shortly after interaction stops; the next lag/eval sample then
-   * resumes normal scoring with no explicit revert needed.
-   */
-  requestInteractiveOverride(durationMs: number): void {
-    if (this.disposed) return;
-    // Reject non-finite input: a NaN would poison `interactiveOverrideUntil`
-    // (Date.now() < NaN is always false, and Math.max(NaN, x) === NaN), bricking
-    // every future request until restart. Negatives/Infinity are clamped below.
-    if (!Number.isFinite(durationMs)) return;
-    const clamped = Math.max(0, Math.min(durationMs, MAX_INTERACTIVE_OVERRIDE_MS));
-    this.interactiveOverrideUntil = Math.max(this.interactiveOverrideUntil, Date.now() + clamped);
-    // Lift out of efficiency right now if we're sitting in it — releasing the lag
-    // latch so normal scoring (now clamped to ≥ balanced by the guards) governs.
-    if (this.currentProfile === "efficiency") {
-      this.clearLagPressure();
-      this.applyProfile("balanced");
-    }
   }
 
   /**
@@ -671,16 +626,6 @@ export class ResourceProfileService {
       return;
     }
 
-    // While an interactive override holds the floor at ≥ balanced, do not enter
-    // the efficiency latch. applyProfile would redirect efficiency→balanced
-    // anyway, so latching here would only strand a held-but-not-applied latch.
-    // Lag is still sampled (the histogram was reset above), so detection resumes
-    // cleanly the instant the override expires.
-    if (this.isInteractiveOverrideActive()) {
-      this.lagEnterTicks = 0;
-      return;
-    }
-
     // Severe-spike fast path: a single sample above the escalation threshold
     // with sustained high ELU enters the latch immediately, halving the
     // worst-case reaction time for genuine saturation bursts. ELU is still
@@ -854,7 +799,6 @@ export class ResourceProfileService {
     }
     this.lagPreviousElu = null;
     this.clearLagPressure();
-    this.interactiveOverrideUntil = 0;
     this.cachedTerminalWorkload = null;
     this.terminalWorkloadTier = 0;
     this.thermalState = "unknown";
@@ -1092,7 +1036,7 @@ export class ResourceProfileService {
   /**
    * Read-only "why am I slow?" projection (#10910): the active profile, the
    * profile the current pressure would target, the per-signal reasons, and the
-   * event-loop-lag latch / interactive-override state that can override scoring.
+   * event-loop-lag latch state that can override scoring.
    */
   getWhySlowResourceSnapshot(): WhySlowResourceSnapshot {
     const { pressureScore, reasons } = this.computePressureBreakdown();
@@ -1103,7 +1047,6 @@ export class ResourceProfileService {
       reasons,
       lagPressureActive: this.lagPressureActive,
       lagEscalatedActive: this.lagEscalatedActive,
-      interactiveOverrideActive: this.isInteractiveOverrideActive(),
       thermalState: this.thermalState,
       isOnBattery: this.isOnBattery,
       speedLimit: this.speedLimit,
@@ -1118,22 +1061,19 @@ export class ResourceProfileService {
   private applyProfile(profile: ResourceProfile): void {
     if (this.disposed) return;
 
-    // While an interactive override is active, never drop to efficiency — clamp
-    // to balanced. This is the single choke point for ALL transitions, so it
-    // catches both the lag-latch entry (sampleLag) and a memory/fleet-driven
-    // downgrade (computeTargetProfile) without each needing its own guard.
-    if (profile === "efficiency" && this.isInteractiveOverrideActive()) {
-      profile = "balanced";
-    }
-
     const previous = this.currentProfile;
 
-    // No-op transition: skip the fan-out + broadcast. This matters for the
-    // override redirect above — a scoring-driven efficiency target redirected to
-    // balanced while ALREADY balanced would otherwise re-push profile settings
-    // and fire resource:profile-changed, churning renderer WebGL/scrollback work
-    // during the very interaction the override is protecting. Candidate state is
-    // still cleared so the hold machinery doesn't re-fire the same target.
+    // No-op transition: skip the fan-out + broadcast. Every consumer below is
+    // expensive somewhere (host pushes on every pty shard, CDP freeze/thaw of
+    // cached views, a renderer-wide WebGL/scrollback re-derive), so only a real
+    // change of profile may reach them. Candidate state is still cleared so the
+    // hold machinery doesn't re-fire the same target.
+    //
+    // Nothing interactive may call this. Scrolling used to lift efficiency to
+    // balanced here, and with the score unchanged the next evaluation dropped
+    // straight back — a full round trip per scroll burst (#12518). Scroll
+    // responsiveness is now terminal-scoped instead: the pty-host's recent-input
+    // batch window and the renderer's per-terminal WebGL scroll hold.
     if (profile === previous) {
       this.candidateProfile = null;
       this.candidateFirstSeenAt = null;
@@ -1244,9 +1184,9 @@ export class ResourceProfileService {
       // The cached-view reclaim band is deliberately NOT pushed here. Every PVM
       // is armed once — at `start()` for existing windows, at
       // `applyCurrentProfileTo()` for each window created later — so no
-      // transition can move it, least of all the interactive
-      // efficiency→balanced clamp above, which used to swap the active floor
-      // 1024→768 at the exact moment memory was lowest (#11469).
+      // transition can move it. Pushing it per profile used to swap the active
+      // floor 1024→768 on an efficiency→balanced lift at the exact moment
+      // memory was lowest (#11469).
       //
       // Re-pushing here would not make the arming self-healing anyway: a no-op
       // transition returns above, and a session sitting at a stable profile
