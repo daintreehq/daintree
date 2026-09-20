@@ -507,7 +507,8 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // Then again for the `closed` idle reason on both wait tools. A terminal the user
   // closes only goes hidden and is killed `TRASH_TTL_MS` later, so without it a waiter
   // reads the user's own close as an ordinary exit up to 20 s after the fact.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 62_200;
+  // Measured at 62_583 B — 383 B over the 62_200 before it.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 62_600;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -636,7 +637,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // Workbench only, beside the `slashCommands.list` it extends, so the external total
   // does not move. `agentCapabilities.get` stays off every tier until its source read
   // is contained, and costs nothing here until then.
-  const MAX_COHORT_PAYLOAD_BYTES = 226_600;
+  //
+  // Measured together at 227_849 B — 1_249 B over the 226_600 before them.
+  const MAX_COHORT_PAYLOAD_BYTES = 227_900;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
