@@ -43,6 +43,7 @@ const DISPOSE_EXIT_AFTER_ACK_GRACE_MS = 500;
 export type WorkspaceHostDisposeReason =
   | "idle-grace"
   | "warm-cap"
+  | "memory-pressure"
   | "evicted"
   | "relocation"
   | "ready-failed"

@@ -348,6 +348,11 @@ export interface MemoryPressureActions {
   /** Returns the number of cached project views evicted. */
   evictCachedProjectViews?: () => Promise<number> | number;
   /**
+   * Disposes every workspace host no window holds, including ones kept only
+   * because their project's view is still cached (#12519). Returns how many.
+   */
+  reclaimDormantWorkspaceHosts?: () => number;
+  /**
    * Asks the pty-host to trim the scrollback of terminals its governance policy
    * clears — never one with a live agent. Resolves with the trimmed/skipped
    * counts, which are the only observable account of what it did: the trim
@@ -978,6 +983,19 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
                 error: String(err),
               });
             }
+            // After evictCachedProjectViews: a cached view pins its workspace
+            // host, so reclaiming dormant hosts before the eviction would find
+            // nothing to release.
+            let tier2HostsReclaimed = 0;
+            try {
+              tier2HostsReclaimed = actions.reclaimDormantWorkspaceHosts?.() ?? 0;
+            } catch (err) {
+              tier2ActionFailed = true;
+              logWarn("memory-pressure-tier2-action-failed", {
+                action: "reclaimDormantWorkspaceHosts",
+                error: String(err),
+              });
+            }
             let tier2TerminalsHibernated = 0;
             try {
               tier2TerminalsHibernated = await actions.hibernateIdleProjects();
@@ -1008,6 +1026,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               !tier2PressureRemains ||
               tier2TabsEvicted > 0 ||
               tier2ViewsEvicted > 0 ||
+              tier2HostsReclaimed > 0 ||
               tier2TerminalsHibernated > 0 ||
               (!tier2MeasurementFailed && tier2DeltaMb >= MIN_RECLAIMED_MB)
                 ? "productive"
@@ -1020,6 +1039,7 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
               deltaMb: Math.round(tier2DeltaMb),
               portalTabsDestroyed: tier2TabsEvicted,
               viewsEvicted: tier2ViewsEvicted,
+              workspaceHostsReclaimed: tier2HostsReclaimed,
               terminalsHibernated: tier2TerminalsHibernated,
               pressureRemains: tier2PressureRemains,
               resampleFailed: tier2MeasurementFailed,

@@ -193,6 +193,9 @@ describe("WorkspaceService.pause/resume", () => {
 
   it("resume() restarts PR service, resumes monitors, and restores priority", () => {
     const monitor = createAndRegisterMonitor();
+    // Stands in for a load that initialized the PR service — resume() starts
+    // nothing before that (#12519).
+    service["prService"]["initializedForPath"] = "/test/root";
     // First pause to set pollingEnabled = false
     vi.spyOn(os, "setPriority").mockImplementation(() => {});
     service.pause();
@@ -207,6 +210,19 @@ describe("WorkspaceService.pause/resume", () => {
     expect(resumeSpy).toHaveBeenCalled();
     expect(service["pollingEnabled"]).toBe(true);
     expect(setPrioritySpy).toHaveBeenCalledWith(process.pid, os.constants.priority.PRIORITY_NORMAL);
+  });
+
+  it("resume() of a workspace whose PR service never initialized starts nothing (#12519)", () => {
+    // A non-git load returns before initializing PR detection, so every
+    // switch-back used to log "not initialized" from start().
+    vi.spyOn(os, "setPriority").mockImplementation(() => {});
+    service.pause();
+    vi.clearAllMocks();
+
+    service.resume();
+
+    expect(mockPullRequestService.start).not.toHaveBeenCalled();
+    expect(service["pollingEnabled"]).toBe(true);
   });
 
   it("pause() is idempotent — second call does not re-pause monitors", () => {

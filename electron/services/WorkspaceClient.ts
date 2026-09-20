@@ -21,6 +21,7 @@ import {
   WorkspaceCopyTreeClient,
 } from "./workspace-client/index.js";
 import type { WorkspaceHostProcess } from "./WorkspaceHostProcess.js";
+import { getWebContentsForProject } from "../window/webContentsRegistry.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
 import type {
   WorkspaceClientConfig,
@@ -148,6 +149,10 @@ export class WorkspaceClient extends EventEmitter {
         this._statesInflight.delete(`w:${windowId}`);
         this._statesResultInflight.delete(`w:${windowId}`);
       },
+      // Views register under their workspace id, which for a project is the
+      // same id the pool resolves from the host's path; a scratch workspace
+      // never has a pool entry, so it can't be mistaken for one.
+      hasLiveProjectView: (projectId) => getWebContentsForProject(projectId).length > 0,
     });
 
     this.copyTree = new WorkspaceCopyTreeClient({
@@ -212,6 +217,12 @@ export class WorkspaceClient extends EventEmitter {
     await this.pool.updateForgeSettings(projectPath);
   }
 
+  /** Push forge settings to every live host — the global default provider changed. */
+  async updateForgeSettingsForAllProjects(): Promise<void> {
+    if (this.isDisposed) return;
+    await this.pool.updateForgeSettingsForAll();
+  }
+
   // ── Direct port management ──
 
   attachDirectPort(windowId: number, webContents: Electron.WebContents): void {
@@ -262,7 +273,7 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   async refresh(worktreeId?: string): Promise<void> {
-    for (const entry of this.pool.entries.values()) {
+    for (const entry of this.pool.attachedEntries()) {
       try {
         const requestId = entry.host.generateRequestId();
         await entry.host.sendWithResponse({
@@ -278,7 +289,7 @@ export class WorkspaceClient extends EventEmitter {
 
   async refreshOnWake(): Promise<void> {
     await Promise.allSettled(
-      Array.from(this.pool.entries.values()).map(async (entry) => {
+      this.pool.attachedEntries().map(async (entry) => {
         const requestId = entry.host.generateRequestId();
         await entry.host.sendWithResponse({
           type: "refresh-on-wake",
@@ -294,7 +305,7 @@ export class WorkspaceClient extends EventEmitter {
     // refresh walk them one at a time for no quota benefit — each provider
     // owns its own transport limits.
     await Promise.allSettled(
-      Array.from(this.pool.entries.values()).map(async (entry) => {
+      this.pool.attachedEntries().map(async (entry) => {
         try {
           const requestId = entry.host.generateRequestId();
           // A manual refresh now awaits CI enrichment on top of provider
@@ -351,7 +362,10 @@ export class WorkspaceClient extends EventEmitter {
   }
 
   setPollingEnabled(enabled: boolean): void {
-    for (const entry of this.pool.entries.values()) {
+    // Disabling reaches every host; re-enabling only the attached ones, or each
+    // focus regain would restart a paused dormant host's watchers and polling.
+    const targets = enabled ? this.pool.attachedEntries() : this.pool.entries.values();
+    for (const entry of targets) {
       entry.host.send({ type: "set-polling-enabled", enabled });
     }
   }
@@ -467,6 +481,16 @@ export class WorkspaceClient extends EventEmitter {
   evictProjectForRelocation(projectPath: string): void {
     if (this.isDisposed) return;
     this.pool.evictProjectForRelocation(projectPath);
+  }
+
+  /**
+   * Dispose every host no window holds (see
+   * {@link WorkspaceHostPool.reclaimDormantHosts}). Called only from the
+   * memory-pressure ladder's forced tier. Returns how many were disposed.
+   */
+  reclaimDormantHosts(): number {
+    if (this.isDisposed) return 0;
+    return this.pool.reclaimDormantHosts();
   }
 
   pauseHealthCheck(): void {
