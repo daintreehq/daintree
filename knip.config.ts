@@ -64,7 +64,12 @@ const config: KnipConfig = {
     // so declare the TypeScript roots directly and retain analysis of their
     // imported shims and fixtures.
     "src/components/Fleet/__preview__/preview.tsx",
+    "src/components/FileViewer/__preview__/preview.tsx",
     "src/components/HelpPanel/__preview__/preview.tsx",
+    "src/components/Layout/__preview__/preview.tsx",
+    "src/components/Layout/__preview__/sidebarFooter.tsx",
+    "src/components/Plugin/__preview__/preview.tsx",
+    "src/components/Terminal/__preview__/preview.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
     "src/components/Panel/__preview__/preview.tsx",
     "src/components/DragDrop/__preview__/preview.tsx",
@@ -172,8 +177,6 @@ const config: KnipConfig = {
   },
 
   // why: these packages are consumed via mechanisms Knip can't trace:
-  //   - tailwindcss / @tailwindcss/typography / tw-animate-css: loaded through
-  //     src/index.css (@import statements)
   //   - wait-on: invoked as a shell command from scripts/dev.mjs
   //   - fast-check: peer of @fast-check/vitest; declared in devDeps as a
   //     pinning anchor but imported indirectly through `@fast-check/vitest`.
@@ -184,9 +187,6 @@ const config: KnipConfig = {
   //   - conf: imported in electron/__tests__/storeBackupRestore.test.ts;
   //     transitive via electron-store.
   ignoreDependencies: [
-    "tailwindcss",
-    "@tailwindcss/typography",
-    "tw-animate-css",
     "wait-on",
     "fast-check",
     "conf",
@@ -207,7 +207,6 @@ const config: KnipConfig = {
     "@octokit/types",
     // CJS-only runtime dependencies loaded through createRequire so the ESM
     // bundles can keep narrow interop types at the call sites.
-    "ajv",
     "ajv-formats",
     "proper-lockfile",
     // packages/daintree-plugin reuses host archive/schema code outside the
