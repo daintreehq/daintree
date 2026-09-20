@@ -87,8 +87,15 @@ export async function inspectProject(
 
   const { versions, resolutions } = versionReport;
   // The installed Kit decides whether a config handed to the Vite plugin is
-  // read at all, so the version has to be known before the config is.
-  const configReads = { ...reads, kitVersion: versions.kit };
+  // read at all, so the version has to be known before the config is — and
+  // "known" means the copy we read is the one the app resolves. Under
+  // Plug'n'Play it is not: a stale `node_modules` left by a previous linker
+  // answers for a package the loader never loads, and the support verdict
+  // already says so. Reading the gate off that copy would have one inspection
+  // calling the same file unauthoritative and authoritative at once.
+  const authoritativeKit =
+    installStyle === "pnp" || resolutions?.kit === "unresolved" ? null : versions.kit;
+  const configReads = { ...reads, kitVersion: authoritativeKit };
   const [routesDirectory, basePath] = await Promise.all([
     resolveRoutesDirectory(reader, appRoot, configReads),
     resolveBasePath(reader, appRoot, configReads),

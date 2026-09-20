@@ -130,3 +130,33 @@ describe("provenance on the wire model", () => {
     expect(model.routeDiagnostics).toEqual(routeDiagnostics);
   });
 });
+
+describe("the Vite-bypass gate and the version it reads", () => {
+  it("will not decide the bypass from a package copy it has already called unauthoritative", async () => {
+    const memory = createMemoryReader({
+      "/repo/.pnp.cjs": "module.exports = {};",
+      "/repo/package.json": JSON.stringify({
+        name: "pnp-site",
+        devDependencies: { "@sveltejs/kit": "^2.70.0" },
+      }),
+      // Left by a previous linker: the loader resolves from the zip cache and
+      // never reads this.
+      "/repo/node_modules/@sveltejs/kit/package.json": JSON.stringify({ version: "2.61.0" }),
+      "/repo/vite.config.ts":
+        "import { sveltekit } from '@sveltejs/kit/vite';\nexport default { plugins: [sveltekit({ files: { routes: 'src/actual' } })] };",
+      "/repo/svelte.config.js": "export default { kit: { files: { routes: 'src/old' } } };",
+      "/repo/src/routes/+page.svelte": "<h1>Old</h1>",
+    });
+
+    const { model, support } = await inspectProject(memory, {
+      worktreeRoot: "/repo",
+      appRoot: "/repo",
+    });
+
+    // The disk copy was read — so the refusal below comes from the gate on its
+    // authority, not from a version we simply never found.
+    expect(model.versions.kit).toBe("2.61.0");
+    expect(support.verdict.level).toBe("untested");
+    expect(model.routesDirectory?.source).toBe("unresolved");
+  });
+});

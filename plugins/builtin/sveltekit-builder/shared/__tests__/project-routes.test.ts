@@ -515,19 +515,45 @@ describe("resolveRoutesDirectory against configs that are not a single literal",
   });
 
   it("reads a CommonJS config, and refuses one that assigns its exports piecemeal", async () => {
+    // `svelte.config.js` in a package that is not `"type": "module"`.
     const whole = await resolve({
-      "/repo/svelte.config.cjs": "module.exports = { kit: { files: { routes: 'src/pages' } } };",
+      "/repo/svelte.config.js": "module.exports = { kit: { files: { routes: 'src/pages' } } };",
     });
     const piecemeal = await resolve({
-      "/repo/svelte.config.cjs": "module.exports.kit = { files: { routes: 'src/pages' } };",
+      "/repo/svelte.config.js": "module.exports.kit = { files: { routes: 'src/pages' } };",
     });
     const mutated = await resolve({
-      "/repo/svelte.config.cjs":
+      "/repo/svelte.config.js":
         "module.exports = { kit: { files: { routes: 'src/wrong' } } };\nmodule.exports.kit.files.routes = 'src/pages';",
+    });
+    const shadowed = await resolve({
+      "/repo/svelte.config.js":
+        "function wrap(module) { module.exports = { kit: { files: { routes: 'src/wrong' } } }; }",
     });
 
     expect([whole.source, whole.path]).toEqual(["svelte.config", "/repo/src/pages"]);
-    expect([piecemeal.source, mutated.source]).toEqual(["unresolved", "unresolved"]);
+    expect([piecemeal.source, mutated.source, shadowed.source]).toEqual([
+      "unresolved",
+      "unresolved",
+      "unresolved",
+    ]);
+  });
+
+  it("will not answer from a config spelling SvelteKit does not load", async () => {
+    // Kit looks for `svelte.config.js` and `svelte.config.ts`. A `.mjs` or
+    // `.cjs` beside them may configure the app or may be dead weight, and which
+    // it is depends on a loader we do not run.
+    const mjs = await resolve({
+      "/repo/svelte.config.mjs": "export default { kit: { files: { routes: 'src/pages' } } };",
+    });
+    const alongside = await resolve({
+      "/repo/svelte.config.cjs": "module.exports = { kit: { files: { routes: 'src/wrong' } } };",
+      "/repo/svelte.config.js": "export default { kit: { files: { routes: 'src/pages' } } };",
+    });
+
+    expect(mjs.source).toBe("unresolved");
+    // The file Kit does load answers, and the other is not consulted.
+    expect([alongside.source, alongside.path]).toEqual(["svelte.config", "/repo/src/pages"]);
   });
 
   it("does not report a default for a file it lost track of", async () => {
@@ -535,6 +561,156 @@ describe("resolveRoutesDirectory against configs that are not a single literal",
     const resolved = await resolve({
       "/repo/svelte.config.js":
         "const note = `unclosed;\nexport default { kit: { files: { routes: 'src/pages' } } };",
+    });
+
+    expect(resolved.source).toBe("unresolved");
+  });
+
+  it("abandons a file whose regex literal it cannot tell from a division", async () => {
+    // The regex body holds `}}};`. Read as a division, it closes the config
+    // object early and leaves a shorter object that still parses — a wrong
+    // answer that looks like a confident one.
+    const resolved = await resolve({
+      "/repo/svelte.config.js": [
+        "export default {",
+        "  preprocess: {",
+        "    markup({ content }) {",
+        "      if (content) /}}};/.test(content);",
+        "      return { code: content };",
+        "    }",
+        "  },",
+        '  kit: { files: { routes: "src/pages" } }',
+        "};",
+      ].join("\n"),
+    });
+
+    expect(resolved.source).toBe("unresolved");
+  });
+
+  it("derives the routes directory from files.src rather than assuming src/routes", async () => {
+    const moved = await resolve({
+      "/repo/svelte.config.js": 'export default { kit: { files: { src: "app" } } };',
+    });
+    const computed = await resolve({
+      "/repo/svelte.config.js": "export default { kit: { files: { src: dir } } };",
+    });
+
+    expect([moved.source, moved.path]).toEqual(["svelte.config", "/repo/app/routes"]);
+    expect(computed.source).toBe("unresolved");
+  });
+
+  it("refuses a CommonJS export that is conditional, reassigned or passed on", async () => {
+    const conditional = await resolve({
+      "/repo/svelte.config.js":
+        'if (false)\n  module.exports = { kit: { files: { routes: "src/wrong" } } };',
+    });
+    const assigned = await resolve({
+      "/repo/svelte.config.js":
+        'module.exports = { kit: { files: { routes: "src/wrong" } } };\nObject.assign(module.exports, { kit: { files: { routes: "src/actual" } } });',
+    });
+    const bracketed = await resolve({
+      "/repo/svelte.config.js": 'module["exports"] = { kit: { files: { routes: "src/wrong" } } };',
+    });
+
+    expect([conditional.source, assigned.source, bracketed.source]).toEqual([
+      "unresolved",
+      "unresolved",
+      "unresolved",
+    ]);
+  });
+
+  it("keeps a line comment and a regex apart, whichever spelling they take", async () => {
+    // `/[//]/` is a regex whose body opens with a comment marker, and a
+    // terminator that is not LF still ends a comment. Losing either takes the
+    // mutation on the next line out of the file before anything reads it.
+    const regexBody = await resolve({
+      "/repo/svelte.config.js":
+        'module.exports = { kit: { files: { routes: "src/wrong" } } };\nconst slash = /[//]/; module.exports.kit.files.routes = "src/actual";',
+    });
+    const separator = await resolve({
+      "/repo/svelte.config.js":
+        "module.exports={kit:{files:{routes:'src/wrong'}}};\n// note\u2028module.exports.kit.files.routes='src/actual';",
+    });
+
+    expect([regexBody.source, separator.source]).toEqual(["unresolved", "unresolved"]);
+  });
+
+  it("treats a slash after ++ or a keyword-named property as a division it cannot risk", async () => {
+    const postfix = await resolve({
+      "/repo/svelte.config.js":
+        'module.exports = {kit:{files:{routes:"src/wrong"}}};\nlet n = 1;\nconst ratio = n++ / 2; module.exports.kit.files.routes = "actual";',
+    });
+    const property = await resolve({
+      "/repo/svelte.config.js":
+        'module.exports = {kit:{files:{routes:"src/wrong"}}};\nconst box = { return: 4 };\nconst r = box.return / 2; module.exports.kit.files.routes = "actual";',
+    });
+
+    expect([postfix.source, property.source]).toEqual(["unresolved", "unresolved"]);
+  });
+
+  it("refuses a wrapper authorised by a require the file defines itself", async () => {
+    const resolved = await resolve({
+      "/repo/svelte.config.js": [
+        'function require(_) { return { defineConfig: () => ({ kit: { files: { routes: "src/actual" } } }) }; }',
+        'const { defineConfig } = require("vite");',
+        'export default defineConfig({ kit: { files: { routes: "src/wrong" } } });',
+      ].join("\n"),
+    });
+
+    expect(resolved.source).toBe("unresolved");
+  });
+
+  it("resolves a drive-letter path against the app root on a platform that has no drives", async () => {
+    const resolved = await resolve({
+      "/repo/svelte.config.js": 'export default { kit: { files: { routes: "C:/routes" } } };',
+    });
+
+    // `C:` is an ordinary directory name here, which is what path.resolve does.
+    expect(resolved.path).toBe("/repo/C:/routes");
+  });
+
+  it("knows a regex can follow any reserved word, not just the common few", async () => {
+    // `void /}}};/` read as a division swallows the braces that close the
+    // config object. The config here is ordinary and must simply be read.
+    const resolved = await resolve({
+      "/repo/svelte.config.js":
+        "void /}}};x/;\nexport default { kit: { files: { routes: 'src/pages' } } };",
+    });
+
+    expect([resolved.source, resolved.path]).toEqual(["svelte.config", "/repo/src/pages"]);
+  });
+
+  it("refuses an object whose prototype could supply the key, quoted or not", async () => {
+    const bare = await resolve({
+      "/repo/svelte.config.js": "export default { kit: { files: { __proto__: defaults } } };",
+    });
+    const quoted = await resolve({
+      "/repo/svelte.config.js":
+        'export default { "__proto__": { kit: { files: { routes: "src/actual" } } } };',
+    });
+
+    expect([bare.source, quoted.source]).toEqual(["unresolved", "unresolved"]);
+  });
+
+  it("refuses a path a template literal breaks across lines", async () => {
+    // A template normalises CRLF when it is evaluated, so the text in the file
+    // is not the string the config ends up with.
+    const resolved = await resolve({
+      "/repo/svelte.config.js": "export default { kit: { files: { routes: `src/\r\npages` } } };",
+    });
+
+    expect(resolved.source).toBe("unresolved");
+  });
+
+  it("does not let an aliased vite import authorise a local function of the same name", async () => {
+    const resolved = await resolve({
+      "/repo/svelte.config.js": [
+        'import { defineConfig as viteConfig } from "vite";',
+        "function defineConfig(_) {",
+        '  return { kit: { files: { routes: "src/actual" } } };',
+        "}",
+        'export default defineConfig({ kit: { files: { routes: "src/wrong" } } });',
+      ].join("\n"),
     });
 
     expect(resolved.source).toBe("unresolved");
@@ -652,12 +828,33 @@ describe("resolveRoutesDirectory when the Vite plugin carries the config", () =>
     expect(unknown.source).toBe("unresolved");
   });
 
+  it("refuses a plugin call that is not inside the object the Vite config exports", async () => {
+    const resolved = await resolveRoutesDirectory(
+      createMemoryReader({
+        "/repo/vite.config.js": [
+          "import { sveltekit } from '@sveltejs/kit/vite';",
+          "const unused = () => sveltekit({ files: { routes: 'src/wrong' } });",
+          "export { default } from './vite.actual.js';",
+        ].join("\n"),
+        "/repo/vite.actual.js":
+          "import { sveltekit } from '@sveltejs/kit/vite';\nexport default { plugins: [sveltekit({ files: { routes: 'src/actual' } })] };",
+        "/repo/svelte.config.js": "export default { kit: { files: { routes: 'src/old' } } };",
+      }),
+      "/repo",
+      CURRENT_KIT
+    );
+
+    expect(resolved.source).toBe("unresolved");
+  });
+
   it("withholds a reading when a build script points Vite at another config file", async () => {
     const resolved = await resolveRoutesDirectory(
       createMemoryReader({
         ...viteAndSvelte("export default { plugins: [sveltekit()] };"),
         "/repo/package.json": JSON.stringify({
-          scripts: { dev: "vite dev --config config/site.ts" },
+          // Quoted, because that is what a real script often looks like, and
+          // the shell hands Vite the same flag either way.
+          scripts: { dev: 'vite dev "--config" config/site.ts' },
         }),
       }),
       "/repo",
@@ -689,6 +886,61 @@ describe("resolveRoutesDirectory when the Vite plugin carries the config", () =>
 
     expect(indirect.source).toBe("unresolved");
     expect([decoyed.source, decoyed.path]).toEqual(["vite.config", "/repo/src/pages"]);
+  });
+
+  it("refuses a file that imports the plugin twice under different names", async () => {
+    // Only one of the two is in the exported plugin list, and which one that is
+    // needs dataflow this deliberately does not do.
+    const resolved = await resolveRoutesDirectory(
+      createMemoryReader(
+        viteAndSvelte(
+          [
+            'import { sveltekit as legacy } from "@sveltejs/kit/vite";',
+            'import { sveltekit as current } from "@sveltejs/kit/vite";',
+            "const unused = () => legacy();",
+            'export default { plugins: [current({ files: { routes: "src/actual" } })] };',
+          ].join("\n")
+        )
+      ),
+      "/repo",
+      CURRENT_KIT
+    );
+
+    expect(resolved.source).toBe("unresolved");
+  });
+
+  it("does not take a binding from a re-export that binds nothing here", async () => {
+    // `export { sveltekit } from …` passes the plugin on without naming it in
+    // this file, so the local `sveltekit` is someone else's function.
+    const resolved = await resolveRoutesDirectory(
+      createMemoryReader(
+        viteAndSvelte(
+          [
+            "export { sveltekit } from '@sveltejs/kit/vite';",
+            "function sveltekit(options) { return options; }",
+            "export default { plugins: [sveltekit({ files: { routes: 'src/wrong' } })] };",
+          ].join("\n")
+        )
+      ),
+      "/repo",
+      CURRENT_KIT
+    );
+
+    expect(resolved.source).toBe("unresolved");
+  });
+
+  it("refuses a version that is a range, and a prerelease of the release that introduced the bypass", async () => {
+    const files = viteAndSvelte(
+      "export default { plugins: [sveltekit({ files: { routes: 'src/pages' } })] };"
+    );
+    const range = await resolveRoutesDirectory(createMemoryReader(files), "/repo", {
+      kitVersion: "2.61.0 || 2.70.0",
+    });
+    const prerelease = await resolveRoutesDirectory(createMemoryReader(files), "/repo", {
+      kitVersion: "2.62.0-next.1",
+    });
+
+    expect([range.source, prerelease.source]).toEqual(["unresolved", "unresolved"]);
   });
 
   it("withholds a reading when the plugin argument is not a literal", async () => {
