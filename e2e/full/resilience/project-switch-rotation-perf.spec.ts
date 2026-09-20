@@ -959,15 +959,27 @@ perfDescribe("Resilience: project-switch rotation (real UI, nonce-to-paint)", ()
       { entryPoint: "mru", depth: 1 },
       { entryPoint: "palette-keyboard", depth: 2 },
       { entryPoint: "palette-keyboard", depth: 3 },
-      { entryPoint: "mru", depth: 1 },
+      // End with an explicit destination. During overlap, an MRU gesture is
+      // resolved against the live stack, not this harness's predictive stack.
+      { entryPoint: "palette-keyboard", depth: 1 },
     ];
     for (let burst = 0; burst < RAPID_BURSTS; burst++) {
       const recordsBefore = readMarks().length;
       let finalTarget = mruStack[0]!;
-      for (const step of rapidPlan) {
-        const target = mruStack[step.depth]!;
-        const targetState = states.get(target)!;
+      for (const [stepIndex, step] of rapidPlan.entries()) {
         const page = await getActiveAppWindow(ctx.app, 10_000, { requireProject: true });
+        let target = mruStack[step.depth]!;
+        if (stepIndex === rapidPlan.length - 1) {
+          // A cold switch can leave the outgoing view attached. Selecting that
+          // same project is a UI no-op, not a final switch request. Choose a
+          // destination distinct from both the attached and pending projects.
+          const attached = await page.evaluate(
+            () => (window as any).__DAINTREE_INITIAL_PROJECT__?.id as string | undefined
+          );
+          const pending = newMainReceived(recordsBefore, null)?.meta?.targetProjectId;
+          target = mruStack.find((id) => id !== attached && id !== pending)!;
+        }
+        const targetState = states.get(target)!;
         const before = readMarks().length;
         if (step.entryPoint === "mru") {
           await page.keyboard.press(MRU_COMBO);
@@ -984,7 +996,7 @@ perfDescribe("Resilience: project-switch rotation (real UI, nonce-to-paint)", ()
           }
           await sleep(RAPID_GAP_MS);
         }
-        mruStack.splice(step.depth, 1);
+        mruStack.splice(mruStack.indexOf(target), 1);
         mruStack.unshift(target);
         finalTarget = target;
       }
@@ -1180,6 +1192,10 @@ perfDescribe("Resilience: project-switch rotation (real UI, nonce-to-paint)", ()
 
     // Apparatus invariants only — latency, lag and memory are never asserted.
     expect(attachedMismatches, "attached view is the target after every sample").toBe(0);
+    expect(
+      bursts.filter((burst) => !burst.attachedMatchedTarget).map((burst) => burst.burst),
+      "every rapid burst attaches its final explicitly selected project"
+    ).toEqual([]);
     expect(rendererGone, "no renderer crashes during measurement").toBe(0);
     // Hard timeouts are a product finding this harness exists to expose; they
     // are reported in `apparatus` and never gate the run.

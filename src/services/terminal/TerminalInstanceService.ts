@@ -134,7 +134,9 @@ class TerminalInstanceService {
   private cancelledCreations = new Set<string>();
   private dataBuffer = new TerminalOutputIngestService(
     (id, data, chunkCount) => this.writeToTerminal(id, data, chunkCount),
-    () => usePanelStore.getState().focusedId,
+    // Cached views retain their local focus id, but no pane there can receive
+    // input. Keeping that stale exemption defeats batching for single-pane projects.
+    () => (isProjectViewCached() ? null : usePanelStore.getState().focusedId),
     // Background drains are held both during an active wheel gesture and while
     // a keystroke echo is in flight — the same "focused feel beats background
     // throughput" contract, applied to the two sustained interactions.
@@ -145,7 +147,11 @@ class TerminalInstanceService {
       this.burstController.hasActiveWheelGesture() ||
       this.burstController.getEchoPendingHoldId() !== null,
     (id) =>
-      this.burstController.isWheelActive(id) || this.burstController.getEchoPendingHoldId() === id
+      this.burstController.isWheelActive(id) || this.burstController.getEchoPendingHoldId() === id,
+    (id) => {
+      const managed = this.instances.get(id);
+      return !!managed && !managed.isAttaching && (!managed.isVisible || isProjectViewCached());
+    }
   );
   private suppressedExitUntil = new Map<string, number>();
   private unseenTracker = new TerminalUnseenOutputTracker();
@@ -753,6 +759,15 @@ class TerminalInstanceService {
 
   setVisible(id: string, isVisible: boolean, expectedGeneration?: number): void {
     this.revealController.setVisible(id, isVisible, expectedGeneration);
+    const managed = this.instances.get(id);
+    if (
+      isVisible &&
+      managed?.isVisible &&
+      !managed.isAttaching &&
+      (expectedGeneration === undefined || managed.attachGeneration === expectedGeneration)
+    ) {
+      this.dataBuffer.resumeFlush(id);
+    }
   }
 
   lockResize(id: string, locked: boolean, customTtlMs?: number): void {

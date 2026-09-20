@@ -44,6 +44,8 @@ const FOCUSED_DRAIN_PRIORITY_ENABLED =
 // with the wheel burst itself (~1s after the last wheel event).
 const BACKGROUND_HOLD_RECHECK_MS = 24;
 const BACKGROUND_HOLD_MAX_MS = 250;
+const HIDDEN_BATCH_WINDOW_MS = 100;
+const DENSE_OUTPUT_GAP_MS = 60;
 
 type TerminalIngestQueue = {
   chunks: Array<string | Uint8Array>;
@@ -57,6 +59,9 @@ type TerminalIngestQueue = {
   // enqueueChunk drain inline for a terminal that stopped being deferrable
   // mid-hold (e.g. focus moved to it) instead of waiting out the recheck.
   holdScheduled: boolean;
+  lastChunkAt: number | undefined;
+  denseOutput: boolean;
+  batchTimer: ReturnType<typeof setTimeout> | undefined;
 };
 
 // A drained batch plus how many raw queue chunks it merged. The count must
@@ -98,7 +103,8 @@ export class TerminalOutputIngestService {
     // drain inline like the focused pane: scrolling an unfocused full-screen
     // TUI is a PTY round-trip per redraw, and deferring — let alone holding —
     // its own output stalls the very gesture the hold regime protects.
-    private readonly isInteractionParticipant: (id: string) => boolean = () => false
+    private readonly isInteractionParticipant: (id: string) => boolean = () => false,
+    private readonly isHidden: (id: string) => boolean = () => false
   ) {}
 
   public async initialize(): Promise<void> {
@@ -140,9 +146,10 @@ export class TerminalOutputIngestService {
     const queue = this.queues.get(id);
     if (!queue) return;
     queue.inFlightBytes = Math.max(0, queue.inFlightBytes - bytes);
-    const lowWatermark = this.shouldDeferDrain(id)
-      ? BACKGROUND_LOW_WATERMARK_BYTES
-      : RENDERER_LOW_WATERMARK_BYTES;
+    const lowWatermark =
+      this.shouldDeferDrain(id) || this.isHidden(id)
+        ? BACKGROUND_LOW_WATERMARK_BYTES
+        : RENDERER_LOW_WATERMARK_BYTES;
     if (queue.inFlightBytes <= lowWatermark && queue.chunks.length > 0) {
       this.scheduleOrDrain(id, queue);
     }
@@ -162,7 +169,8 @@ export class TerminalOutputIngestService {
   public resumeFlush(id: string): void {
     const queue = this.queues.get(id);
     if (!queue || queue.chunks.length === 0) return;
-    this.scheduleOrDrain(id, queue);
+    this.cancelBatch(queue);
+    this.scheduleOrDrain(id, queue, false);
   }
 
   /** Held ingest bytes for a terminal — diagnostic accessor for the watchdog. */
@@ -181,6 +189,7 @@ export class TerminalOutputIngestService {
     const queue = this.queues.get(id);
     if (!queue || queue.chunks.length === 0) return 0;
     if (queue.drainScheduled) return 0;
+    if (queue.batchTimer !== undefined) return 0;
     if (queue.inFlightBytes > 0) return 0;
     return queue.queuedBytes;
   }
@@ -244,6 +253,9 @@ export class TerminalOutputIngestService {
         drainScheduled: false,
         holdStartedAt: undefined,
         holdScheduled: false,
+        lastChunkAt: undefined,
+        denseOutput: false,
+        batchTimer: undefined,
       };
       this.queues.set(id, queue);
     }
@@ -256,6 +268,10 @@ export class TerminalOutputIngestService {
 
   private enqueueChunk(id: string, data: string | Uint8Array): void {
     const queue = this.getOrCreateQueue(id);
+    const now = performance.now();
+    queue.denseOutput =
+      queue.lastChunkAt !== undefined && now - queue.lastChunkAt < DENSE_OUTPUT_GAP_MS;
+    queue.lastChunkAt = now;
     const bytes = this.chunkByteSize(data);
     queue.chunks.push(data);
     queue.queuedBytes += bytes;
@@ -316,7 +332,28 @@ export class TerminalOutputIngestService {
    * BACKGROUND_HOLD_MAX_MS — because a scroll is a sustained interaction where
    * even yielded-once batches stack enough parse slices to jank the gesture.
    */
-  private scheduleOrDrain(id: string, queue: TerminalIngestQueue): void {
+  private scheduleOrDrain(id: string, queue: TerminalIngestQueue, allowBatch = true): void {
+    const hidden =
+      this.isHidden(id) && this.getFocusedId() !== id && !this.isInteractionParticipant(id);
+    if (!hidden || queue.queuedBytes >= BACKGROUND_COALESCE_CAP_BYTES) {
+      this.cancelBatch(queue);
+    } else if (queue.batchTimer !== undefined) {
+      return;
+    } else if (
+      allowBatch &&
+      hidden &&
+      !this.hasInteractionHold() &&
+      queue.denseOutput &&
+      queue.chunks.length > 0
+    ) {
+      // Sparse output drains normally. Only sustained hidden streams amortize
+      // parser/addon callbacks; activity detection runs independently in the host.
+      queue.batchTimer = setTimeout(() => {
+        queue.batchTimer = undefined;
+        if (this.queues.get(id) === queue) this.scheduleOrDrain(id, queue, false);
+      }, HIDDEN_BATCH_WINDOW_MS);
+      return;
+    }
     if (!this.shouldDeferDrain(id)) {
       queue.holdStartedAt = undefined;
       this.tryDrain(id, queue);
@@ -374,7 +411,7 @@ export class TerminalOutputIngestService {
   }
 
   private tryDrain(id: string, queue: TerminalIngestQueue): void {
-    const deferred = this.shouldDeferDrain(id);
+    const deferred = this.shouldDeferDrain(id) || this.isHidden(id);
     const highWatermark = deferred
       ? BACKGROUND_HIGH_WATERMARK_BYTES
       : RENDERER_HIGH_WATERMARK_BYTES;
@@ -442,7 +479,14 @@ export class TerminalOutputIngestService {
   }
 
   private clearQueue(id: string): void {
+    const queue = this.queues.get(id);
+    if (queue) this.cancelBatch(queue);
     this.queues.delete(id);
+  }
+
+  private cancelBatch(queue: TerminalIngestQueue): void {
+    if (queue.batchTimer !== undefined) clearTimeout(queue.batchTimer);
+    queue.batchTimer = undefined;
   }
 
   // Flush everything held for a terminal, bypassing the in-flight watermark
@@ -450,7 +494,9 @@ export class TerminalOutputIngestService {
   // multi-MB hold must not become one synchronous xterm.write (#4853).
   private forceDrain(id: string): void {
     const queue = this.queues.get(id);
-    if (!queue || queue.chunks.length === 0) return;
+    if (!queue) return;
+    this.cancelBatch(queue);
+    if (queue.chunks.length === 0) return;
 
     while (queue.chunks.length > 0) {
       const batch = this.coalesceBatch(queue);

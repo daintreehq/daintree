@@ -851,3 +851,122 @@ describe("TerminalOutputIngestService", () => {
     });
   });
 });
+
+describe("adaptive hidden output batching", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  function fixture() {
+    let hidden = true;
+    let focused: string | null = null;
+    const write = vi.fn();
+    const service = new TerminalOutputIngestService(
+      write,
+      () => focused,
+      () => false,
+      () => false,
+      () => hidden
+    );
+    return {
+      service,
+      write,
+      reveal: () => {
+        hidden = false;
+        service.resumeFlush("t");
+      },
+      focus: () => {
+        focused = "t";
+      },
+    };
+  }
+
+  it("coalesces sustained hidden output while preserving port acknowledgement counts", async () => {
+    const { service, write } = fixture();
+    service.bufferData("t", "first");
+    await vi.advanceTimersByTimeAsync(20);
+    service.bufferData("t", "second");
+    await vi.advanceTimersByTimeAsync(20);
+    service.bufferData("t", "third");
+    expect(write.mock.calls.map((c) => c[1])).toEqual(["first"]);
+    expect(service.getStalledBytes("t")).toBe(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(write.mock.calls.map((c) => [c[1], c[2]])).toEqual([
+      ["first", 1],
+      ["secondthird", 2],
+    ]);
+    expect(service.getQueuedBytes("t")).toBe(0);
+  });
+
+  it("does not add timers or delay to sparse output", async () => {
+    const { service, write } = fixture();
+    for (let i = 0; i < 5; i++) {
+      service.bufferData("t", String(i));
+      expect(write).toHaveBeenCalledTimes(i + 1);
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(150);
+    }
+  });
+
+  it("flushes stopped output immediately on reveal and does not replay it later", async () => {
+    const { service, write, reveal } = fixture();
+    service.bufferData("t", "first");
+    await vi.advanceTimersByTimeAsync(20);
+    service.bufferData("t", "last");
+    reveal();
+    expect(write.mock.calls.map((c) => c[1])).toEqual(["first", "last"]);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(write).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets focused output bypass a pending batch", async () => {
+    const { service, write, focus } = fixture();
+    service.bufferData("t", "first");
+    await vi.advanceTimersByTimeAsync(20);
+    service.bufferData("t", "held");
+    focus();
+    service.bufferData("t", "echo");
+    expect(write.mock.calls.map((c) => c[1])).toEqual(["first", "heldecho"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("preserves split UTF-8 and ANSI bytes and mixed-type ordering", async () => {
+    const { service, write } = fixture();
+    service.bufferData("t", "first");
+    await vi.advanceTimersByTimeAsync(20);
+    const bytes = new TextEncoder().encode("😀\x1b[31mred\x1b[0m");
+    service.bufferData("t", bytes.slice(0, 2));
+    service.bufferData("t", bytes.slice(2, 7));
+    service.bufferData("t", bytes.slice(7));
+    service.bufferData("t", "tail");
+    service.flushForTerminal("t");
+    expect(write.mock.calls.slice(1).map((c) => [c[1], c[2]])).toEqual([
+      [bytes, 3],
+      ["tail", 1],
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("cancels queued work when a terminal is reset and reused", async () => {
+    const { service, write } = fixture();
+    service.bufferData("t", "first");
+    await vi.advanceTimersByTimeAsync(20);
+    service.bufferData("t", "discard");
+    service.resetForTerminal("t");
+    service.bufferData("t", "new generation");
+    await vi.advanceTimersByTimeAsync(200);
+    expect(write.mock.calls.map((c) => c[1])).toEqual(["first", "new generation"]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("drains at the byte cap without waiting for the time window", async () => {
+    const { service, write } = fixture();
+    service.bufferData("t", "first");
+    await vi.advanceTimersByTimeAsync(20);
+    service.bufferData("t", "a".repeat(16 * 1024));
+    service.bufferData("t", "b".repeat(16 * 1024));
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls[1]![2]).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

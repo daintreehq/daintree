@@ -42,6 +42,25 @@ let latestPowerLevel: PowerPolicyLevel = "active";
  */
 export function usePowerSavingMotion(): void {
   useEffect(() => {
+    const synchronizeSpinner = (element: Element) => {
+      for (const animation of element.getAnimations?.() ?? []) {
+        if ("animationName" in animation && animation.animationName === "spin-slow") {
+          const duration = animation.effect?.getTiming().duration;
+          if (typeof duration === "number" && duration > 0) {
+            // Translate the shared epoch into this document's timeline, so
+            // separate project views/windows align too. No recurring JS timer.
+            animation.startTime = -(performance.timeOrigin % duration);
+          }
+        }
+      }
+    };
+    const onAnimationStart = (event: AnimationEvent) => {
+      if (event.animationName === "spin-slow" && event.target instanceof Element) {
+        synchronizeSpinner(event.target);
+      }
+    };
+    document.addEventListener("animationstart", onAnimationStart);
+    document.querySelectorAll(".animate-spin-slow").forEach(synchronizeSpinner);
     const apply = () => {
       const suspend = shouldSuspendDecorativeMotion({
         powerLevel: latestPowerLevel,
@@ -72,6 +91,7 @@ export function usePowerSavingMotion(): void {
       offLifecycle();
       offProfile();
       document.removeEventListener("visibilitychange", apply);
+      document.removeEventListener("animationstart", onAnimationStart);
       delete document.body.dataset.powerSaving;
     };
   }, []);

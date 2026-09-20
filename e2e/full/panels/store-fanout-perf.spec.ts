@@ -1,11 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any -- window bridges are untyped in Playwright evaluate() */
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { chmodSync, mkdirSync, mkdtempSync, writeFileSync, rmSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
 import { tmpdir } from "os";
-import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
+import { launchApp, closeApp, openSecondWindow, type AppContext } from "../../helpers/launch";
 import { openAndOnboardProject } from "../../helpers/project";
+import { addAndSwitchToProject } from "../../helpers/workflows";
 import { T_LONG } from "../../helpers/timeouts";
 
 // Store-update fanout harness: how many React components re-render — and how
@@ -190,7 +191,7 @@ function buildFixture(scale: number, dir: string): Fixture {
       "  streamTimer = setInterval(() => {",
       "    tick++;",
       "    process.stdout.write('working... step ' + tick + '\\n');",
-      "  }, 150);",
+      "  }, " + String(Number(process.env.BACKGROUND_ENERGY_STREAM_MS ?? 150)) + ");",
       "};",
       "const stopWork = () => {",
       "  if (oscTimer) { clearInterval(oscTimer); oscTimer = null; }",
@@ -262,6 +263,9 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
       test.setTimeout(900_000);
 
       const fixture = prepareFixture(scale);
+      const windowMode = process.env.BACKGROUND_ENERGY_SECOND_WINDOW;
+      const secondFixture = windowMode ? prepareFixture(1) : undefined;
+      const thirdFixture = windowMode === "1" ? prepareFixture(1) : undefined;
       let ctx: AppContext | undefined;
       try {
         // enableWebgl keeps the GPU process out-of-process (and matches
@@ -290,10 +294,11 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
           const probe = (window as any).__DAINTREE_RENDER_PROBE__;
           return { installed: !!probe?.installed };
         });
-        expect(
-          probeState.installed,
-          "render probe missing — build with `npm run build:e2e:bench` first"
-        ).toBe(true);
+        if (process.env.BACKGROUND_ENERGY_PRODUCTION !== "1")
+          expect(
+            probeState.installed,
+            "render probe missing — build with `npm run build:e2e:bench` first"
+          ).toBe(true);
 
         // All worktrees discovered by the workspace scan.
         await expect
@@ -390,9 +395,9 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         };
 
         const probeStart = () =>
-          page.evaluate(() => (window as any).__DAINTREE_RENDER_PROBE__.start());
+          page.evaluate(() => (window as any).__DAINTREE_RENDER_PROBE__?.start());
         const probeStop = () =>
-          page.evaluate(() => (window as any).__DAINTREE_RENDER_PROBE__.stop());
+          page.evaluate(() => (window as any).__DAINTREE_RENDER_PROBE__?.stop() ?? []);
 
         // Attribute captured commits to [t0, t1] windows on the page clock.
         const collectWindow = (
@@ -432,6 +437,603 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
         }>;
         const ambientCommits = ambient.length;
         const ambientRenders = ambient.reduce((a, c) => a + c.renders, 0);
+
+        if (process.env.RUN_BACKGROUND_ENERGY === "1") {
+          if (process.env.BACKGROUND_ENERGY_WARM === "1") {
+            for (const wt of worktrees.slice(0, scale)) {
+              await page.evaluate((id) => (window as any).electron.worktree.setActive(id), wt.id);
+              const id = launched[worktrees.indexOf(wt)];
+              await expect(
+                page.locator(`[data-panel-id="${id}"][data-panel-location="grid"]`)
+              ).toBeVisible({ timeout: T_LONG });
+              await page.waitForTimeout(250);
+            }
+            await page.evaluate((id) => (window as any).electron.worktree.setActive(id), mainWt.id);
+            await page.waitForTimeout(2000);
+          }
+          let cachedMirror: Page | undefined;
+          let secondActivePage: Page | undefined;
+          let mirroredProjectId: string | undefined;
+          let cachedIds = launched;
+          if (secondFixture) {
+            const existingPages = new Set(ctx.app.windows());
+            const mirrorMode = windowMode === "mirror";
+            let projectId = mirrorMode
+              ? await page.evaluate(() => (window as any).__DAINTREE_INITIAL_PROJECT__?.id)
+              : undefined;
+            await openSecondWindow(ctx.app, page, {
+              projectPath: mirrorMode ? fixture.dir : secondFixture.dir,
+            });
+            if (!mirrorMode) {
+              await expect
+                .poll(
+                  async () => {
+                    projectId = await page.evaluate(async (name) => {
+                      const all = await (window as any).electron.project.getAll();
+                      return all.find((p: any) => p.path.endsWith(name))?.id;
+                    }, path.basename(secondFixture.dir));
+                    return !!projectId;
+                  },
+                  { timeout: 30_000 }
+                )
+                .toBe(true);
+            }
+            mirroredProjectId = projectId;
+            await expect
+              .poll(
+                async () => {
+                  for (const candidate of ctx!.app.windows().filter((p) => !existingPages.has(p))) {
+                    if (
+                      (await candidate
+                        .evaluate(() => (window as any).__DAINTREE_INITIAL_PROJECT__?.id)
+                        .catch(() => null)) === projectId
+                    )
+                      cachedMirror = candidate;
+                  }
+                  return !!cachedMirror;
+                },
+                { timeout: 30_000 }
+              )
+              .toBe(true);
+            if (!cachedMirror) throw new Error("Second project view did not attach");
+            if (mirrorMode) {
+              for (const wt of worktrees.slice(0, scale)) {
+                await cachedMirror.evaluate(
+                  (id) => (window as any).electron.worktree.setActive(id),
+                  wt.id
+                );
+                const id = launched[worktrees.indexOf(wt)];
+                await expect(
+                  cachedMirror.locator(`[data-panel-id="${id}"][data-panel-location="grid"]`)
+                ).toBeVisible({ timeout: T_LONG });
+                await cachedMirror.waitForTimeout(100);
+              }
+            } else {
+              let id: string | null = null;
+              await expect
+                .poll(
+                  async () => {
+                    const result = await cachedMirror!.evaluate(async () => {
+                      const all = await (window as any).electron.worktree.getAll();
+                      if (!all.length) return null;
+                      const envelope = await (window as any).__daintreeDispatchAction(
+                        "agent.launch",
+                        { agentId: "claude", worktreeId: all[0].id, focusPolicy: "preserve" },
+                        { source: "test" }
+                      );
+                      return envelope?.ok ? envelope.result?.terminalId : null;
+                    });
+                    if (result) id = result;
+                    return id;
+                  },
+                  { timeout: 30_000, intervals: [1500] }
+                )
+                .toBeTruthy();
+              cachedIds = [id!];
+              await expect(cachedMirror.locator(`[data-panel-id="${id}"]`)).toBeVisible({
+                timeout: T_LONG,
+              });
+              await expect
+                .poll(
+                  () =>
+                    cachedMirror!
+                      .locator(`[data-panel-id="${id}"]`)
+                      .getAttribute("data-detected-agent-id"),
+                  { timeout: 60_000 }
+                )
+                .toBe("claude");
+            }
+            await cachedMirror.evaluate((ids) => {
+              const win = window as any;
+              win.__energyMirrorCounters = { parsed: 0, renders: 0 };
+              for (const id of ids) {
+                const terminal = win.__daintreeGetTerminalForE2E(id);
+                terminal.onWriteParsed(() => win.__energyMirrorCounters.parsed++);
+                terminal.onRender(() => win.__energyMirrorCounters.renders++);
+              }
+            }, cachedIds);
+            secondActivePage = await addAndSwitchToProject(
+              ctx.app,
+              cachedMirror,
+              (thirdFixture ?? secondFixture).dir,
+              "Energy second window"
+            );
+            await cachedMirror.waitForTimeout(2000);
+            expect(await cachedMirror.evaluate(() => document.body.dataset.powerSaving)).toBe(
+              "true"
+            );
+            await page.evaluate((id) => (window as any).electron.worktree.setActive(id), mainWt.id);
+          }
+          const readMirror = () =>
+            cachedMirror?.evaluate(() => ({
+              ...(window as any).__energyMirrorCounters,
+              saving: document.body.dataset.powerSaving,
+            }));
+          const cdp = await page.context().newCDPSession(page);
+          await cdp.send("Performance.enable");
+          const metrics = async () => {
+            const result = await cdp.send("Performance.getMetrics");
+            return Object.fromEntries(result.metrics.map((m: any) => [m.name, m.value]));
+          };
+          await page.evaluate((ids) => {
+            const win = window as any;
+            win.__energyCounters = {};
+            win.__energyCleanup = [];
+            win.__energyFlushTerminal = {};
+            win.__energyPolicyChanges = [];
+            const policyObserver = new MutationObserver(() =>
+              win.__energyPolicyChanges.push({
+                at: performance.now(),
+                saving: document.body.dataset.powerSaving ?? null,
+              })
+            );
+            policyObserver.observe(document.body, {
+              attributes: true,
+              attributeFilter: ["data-power-saving"],
+            });
+            win.__energyCleanup.push({ dispose: () => policyObserver.disconnect() });
+            for (const id of ids) {
+              const terminal = win.__daintreeGetTerminalForE2E(id);
+              if (!terminal) continue;
+              const counter = {
+                parsed: 0,
+                renders: 0,
+                markers: 0,
+                skippedMarkers: 0,
+                submittedBytes: 0,
+                flushedBytes: 0,
+              };
+              win.__energyCounters[id] = counter;
+              win.__energyCleanup.push(terminal.onWriteParsed(() => counter.parsed++));
+              win.__energyCleanup.push(terminal.onRender(() => counter.renders++));
+              // Counterfactual apparatus: bounded renderer-only batching, host detection unchanged.
+              const originalWrite = terminal.write;
+              let pending: Array<{ data: Uint8Array; callback?: () => void }> = [];
+              let pendingBytes = 0;
+              let previousWriteAt = -Infinity;
+              let timer: ReturnType<typeof setTimeout> | undefined;
+              const flush = () => {
+                if (timer !== undefined) clearTimeout(timer);
+                timer = undefined;
+                if (!pending.length) return;
+                const batch = pending;
+                const size = pendingBytes;
+                pending = [];
+                pendingBytes = 0;
+                const bytes = new Uint8Array(size);
+                let offset = 0;
+                for (const item of batch) {
+                  bytes.set(item.data, offset);
+                  offset += item.data.length;
+                }
+                counter.flushedBytes += size;
+                originalWrite.call(terminal, bytes, () => {
+                  for (const item of batch) item.callback?.();
+                });
+              };
+              win.__energyFlushTerminal[id] = flush;
+              terminal.write = function (data: string | Uint8Array, callback?: () => void) {
+                const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data;
+                counter.submittedBytes += bytes.length;
+                const now = performance.now();
+                const frequent = now - previousWriteAt < 60;
+                previousWriteAt = now;
+                const delay =
+                  win.__energyAdaptiveBatch && !frequent ? 0 : (win.__energyBatchMs ?? 0);
+                if (!delay || terminal.element?.checkVisibility({ checkVisibilityCSS: true })) {
+                  flush();
+                  counter.flushedBytes += bytes.length;
+                  return originalWrite.call(this, data, callback);
+                }
+                pending.push({ data: bytes.slice(), callback });
+                pendingBytes += bytes.length;
+                if (pendingBytes >= 32 * 1024) flush();
+                else if (timer === undefined) timer = setTimeout(flush, delay);
+              };
+              win.__energyCleanup.push({
+                dispose: () => {
+                  flush();
+                  terminal.write = originalWrite;
+                },
+              });
+              const original = terminal.registerMarker;
+              terminal.registerMarker = function (...args: any[]) {
+                if (
+                  win.__energyAblateMarkers &&
+                  !terminal.element?.checkVisibility({ checkVisibilityCSS: true })
+                ) {
+                  counter.skippedMarkers++;
+                  return undefined;
+                }
+                counter.markers++;
+                return original.apply(this, args);
+              };
+              win.__energyCleanup.push({
+                dispose: () => {
+                  terminal.registerMarker = original;
+                },
+              });
+            }
+          }, launched);
+          const readCounters = () =>
+            page.evaluate(() => {
+              const win = window as any;
+              return Object.fromEntries(
+                Object.entries(win.__energyCounters).map(([id, value]) => {
+                  const term = win.__daintreeGetTerminalForE2E(id);
+                  return [
+                    id,
+                    {
+                      ...(value as object),
+                      paused: term?._core?._renderService?._isPaused,
+                      webgl: win.__daintreeGetTerminalWebGLState(id)?.active,
+                    },
+                  ];
+                })
+              );
+            });
+          const readEnergyState = () =>
+            page.evaluate(() => ({
+              body: { ...document.body.dataset },
+              hidden: document.hidden,
+              focused: document.hasFocus(),
+              reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches,
+              runningSpinners: document
+                .getAnimations()
+                .filter(
+                  (a) =>
+                    (a as CSSAnimation).animationName === "spin-slow" && a.playState === "running"
+                ).length,
+            }));
+          const energyWindows = [];
+          for (const mode of (process.env.BACKGROUND_ENERGY_MODES ?? "idle,hidden-stream").split(
+            ","
+          )) {
+            if (mode === "hidden-stream") {
+              for (const id of launched.filter((id) => id !== flipPanelId)) {
+                await page.evaluate(
+                  ([id, data]) => (window as any).electron.terminal.write(id, data),
+                  [id, `${WORK_TOKEN}\r`]
+                );
+              }
+              if (cachedMirror && windowMode === "1") {
+                for (const id of cachedIds)
+                  await cachedMirror.evaluate(
+                    ([id, data]) => (window as any).electron.terminal.write(id, data),
+                    [id, `${WORK_TOKEN}\r`]
+                  );
+              }
+              await page.waitForTimeout(2000);
+            }
+            await page.evaluate(
+              ({ delay, adaptive }) => {
+                (window as any).__energyAdaptiveBatch = adaptive;
+                for (const flush of Object.values((window as any).__energyFlushTerminal))
+                  (flush as () => void)();
+                (window as any).__energyBatchMs = delay;
+              },
+              {
+                delay: Number(mode.match(/batch-(\d+)/)?.[1] ?? 0),
+                adaptive: mode.includes("adaptive"),
+              }
+            );
+            const pollMatch = mode.match(/poll-(\d+)/);
+            if (pollMatch) {
+              await page.evaluate(
+                ({ ids, interval }) => {
+                  for (const id of ids)
+                    (window as any).electron.terminal.setActivityTier(id, "active", interval);
+                },
+                { ids: launched.filter((id) => id !== flipPanelId), interval: Number(pollMatch[1]) }
+              );
+            }
+            await page.evaluate((enabled) => {
+              (window as any).__energyAblateMarkers = enabled;
+            }, mode.includes("markers-ablated"));
+            if (mode.includes("spin-")) {
+              await page.evaluate((mode) => {
+                document.getElementById("energy-no-motion")?.remove();
+                const style = document.createElement("style");
+                style.id = "energy-no-motion";
+                style.textContent = mode.endsWith("paused")
+                  ? ".animate-spin-slow { animation-play-state: paused !important; }"
+                  : `.animate-spin-slow { animation-timing-function: steps(${Number(mode.match(/steps-(\d+)/)?.[1] ?? 12)}, end) !important; }`;
+                document.head.append(style);
+                if (mode.includes("synced")) {
+                  for (const a of document.getAnimations()) {
+                    if ((a as CSSAnimation).animationName === "spin-slow") a.startTime = 0;
+                  }
+                }
+              }, mode);
+            } else if (mode.endsWith("no-motion")) {
+              await page.evaluate(() => {
+                document.getElementById("energy-no-motion")?.remove();
+                const style = document.createElement("style");
+                style.id = "energy-no-motion";
+                style.textContent =
+                  "*, *::before, *::after { animation-play-state: paused !important; transition: none !important; }";
+                document.head.append(style);
+              });
+            } else {
+              await page.evaluate(() => document.getElementById("energy-no-motion")?.remove());
+            }
+            await page.waitForTimeout(2000);
+            const animations = await page.evaluate(() =>
+              document.getAnimations().map((a) => {
+                const target = (a.effect as KeyframeEffect)?.target as Element | null;
+                return {
+                  state: a.playState,
+                  name: (a as CSSAnimation).animationName,
+                  tag: target?.tagName,
+                  classes: target?.getAttribute("class"),
+                  visible: target?.checkVisibility({
+                    checkVisibilityCSS: true,
+                    contentVisibilityAuto: true,
+                  }),
+                  ancestors: target
+                    ? Array.from(
+                        (function* () {
+                          let p = target.parentElement;
+                          for (let i = 0; p && i < 4; i++, p = p.parentElement) yield p;
+                        })()
+                      ).map((p) => ({
+                        tag: p.tagName,
+                        classes: p.className,
+                        panel: p.getAttribute("data-panel-id"),
+                      }))
+                    : [],
+                  timing: a.effect?.getComputedTiming(),
+                };
+              })
+            );
+            await ctx.app.evaluate(({ app }) => {
+              const g = globalThis as any;
+              g.__energyCpuSamples = [];
+              app.getAppMetrics();
+              g.__energyCpuTimer = setInterval(
+                () => g.__energyCpuSamples.push(app.getAppMetrics()),
+                1000
+              );
+            });
+            if (process.env.BACKGROUND_ENERGY_PROFILE === "1") {
+              await cdp.send("Profiler.enable");
+              await cdp.send("Profiler.start");
+            }
+            await probeStart();
+            await page.evaluate(() => {
+              (window as any).__energyPolicyChanges = [];
+            });
+            const environmentBefore = await readEnergyState();
+            const before = await metrics();
+            const countersBefore = await readCounters();
+            const mirrorBefore = await readMirror();
+            await page.waitForTimeout(Number(process.env.BACKGROUND_ENERGY_WINDOW_MS ?? 10000));
+            const after = await metrics();
+            const environmentAfter = await readEnergyState();
+            const countersAfter = await readCounters();
+            const mirrorAfter = await readMirror();
+            if (mirrorBefore && mirrorAfter) {
+              expect(
+                mirrorAfter.renders - mirrorBefore.renders,
+                "cached project in another window does not render"
+              ).toBe(0);
+              expect(mirrorAfter.saving).toBe("true");
+              if (windowMode === "1")
+                expect(
+                  mirrorAfter.parsed - mirrorBefore.parsed,
+                  "cached independent project remains current"
+                ).toBeGreaterThan(0);
+            }
+            const commits = await probeStop();
+            if (process.env.BACKGROUND_ENERGY_PROFILE === "1") {
+              const profile = await cdp.send("Profiler.stop");
+              writeFileSync(
+                `/tmp/daintree-energy-${scale}-${mode}.cpuprofile`,
+                JSON.stringify(profile.profile)
+              );
+            }
+            const processSamples = await ctx.app.evaluate(() => {
+              const g = globalThis as any;
+              clearInterval(g.__energyCpuTimer);
+              return g.__energyCpuSamples;
+            });
+            console.log("ENERGY_WINDOW_COMPLETE", mode);
+            energyWindows.push({
+              mode,
+              environmentBefore,
+              environmentAfter,
+              policyChanges: await page.evaluate(() => (window as any).__energyPolicyChanges),
+              reactInstrumentation: probeState.installed,
+              animations,
+              processSamples,
+              metrics: Object.fromEntries(
+                [
+                  "TaskDuration",
+                  "ScriptDuration",
+                  "LayoutDuration",
+                  "RecalcStyleDuration",
+                  "LayoutCount",
+                  "RecalcStyleCount",
+                ].map((key) => [key, after[key] - before[key]])
+              ),
+              countersBefore,
+              countersAfter,
+              mirrorBefore,
+              mirrorAfter,
+              reactCommits: commits.length,
+              reactRenders: commits.reduce((n: number, c: any) => n + c.renders, 0),
+              topComponents: topComponents([collectWindow(commits, 0, Infinity)]),
+            });
+          }
+          console.log(
+            "ENERGY_WINDOWS " + JSON.stringify({ scale, visibleId: flipPanelId, energyWindows })
+          );
+          const switches = [];
+          for (const wt of worktrees.slice(0, scale).filter((wt) => wt.id !== mainWt.id)) {
+            const id = launched[worktrees.indexOf(wt)];
+            const renderedBefore = await page.evaluate(
+              (id) => (window as any).__energyCounters[id].renders,
+              id
+            );
+            const started = Date.now();
+            await page.evaluate((id) => (window as any).electron.worktree.setActive(id), wt.id);
+            const target = page.locator(`[data-panel-id="${id}"][data-panel-location="grid"]`);
+            await expect(target).toBeVisible({ timeout: T_LONG });
+            await expect
+              .poll(
+                () =>
+                  page.evaluate((id) => {
+                    const terminal = (window as any).__daintreeGetTerminalForE2E(id);
+                    if (!terminal) return false;
+                    const b = terminal.buffer.active;
+                    for (let i = 0; i < b.length; i++) {
+                      if (b.getLine(i)?.translateToString().includes("working... step"))
+                        return true;
+                    }
+                    return false;
+                  }, id),
+                { timeout: T_LONG }
+              )
+              .toBe(true);
+            await expect
+              .poll(() => page.evaluate((id) => (window as any).__energyCounters[id].renders, id), {
+                timeout: T_LONG,
+              })
+              .toBeGreaterThan(renderedBefore);
+            await expect
+              .poll(() => target.getAttribute("data-agent-state"), { timeout: T_LONG })
+              .toBe("working");
+            const visibleWithOutputMs = Date.now() - started;
+            const contents = await page.evaluate((id) => {
+              const terminal = (window as any).__daintreeGetTerminalForE2E(id);
+              const b = terminal.buffer.active;
+              const steps: number[] = [];
+              for (let i = 0; i < b.length; i++) {
+                const match = b
+                  .getLine(i)
+                  ?.translateToString(true)
+                  .match(/^working\.\.\. step (\d+)$/);
+                if (match) steps.push(Number(match[1]));
+              }
+              return { steps, type: b.type, cols: terminal.cols, rows: terminal.rows };
+            }, id);
+            expect(contents.steps.length, "streamed numbered output retained").toBeGreaterThan(20);
+            const firstGap = contents.steps.findIndex(
+              (step, i) => i > 0 && step !== contents.steps[i - 1] + 1
+            );
+            expect(firstGap, "every retained output line is consecutive").toBe(-1);
+            switches.push({
+              worktree: wt.id,
+              visibleWithOutputMs,
+              retainedSteps: contents.steps.length,
+              firstStep: contents.steps[0],
+              lastStep: contents.steps.at(-1),
+            });
+          }
+          let mirrorRevealMs: number | undefined;
+          if (cachedMirror && secondActivePage && mirroredProjectId) {
+            for (const id of launched.filter((id) => id !== flipPanelId)) {
+              await page.evaluate(
+                ([id, data]) => (window as any).electron.terminal.write(id, data),
+                [id, `${IDLE_TOKEN}\r`]
+              );
+            }
+            if (windowMode === "1")
+              for (const id of cachedIds)
+                await cachedMirror.evaluate(
+                  ([id, data]) => (window as any).electron.terminal.write(id, data),
+                  [id, `${IDLE_TOKEN}\r`]
+                );
+            await page.waitForTimeout(1000);
+            const readLastSteps = (target: Page) =>
+              target.evaluate(
+                (ids) =>
+                  ids.map((id) => {
+                    const terminal = (window as any).__daintreeGetTerminalForE2E(id);
+                    const buffer = terminal.buffer.active;
+                    let last = 0;
+                    for (let i = 0; i < buffer.length; i++) {
+                      const match = buffer
+                        .getLine(i)
+                        ?.translateToString(true)
+                        .match(/^working\.\.\. step (\d+)$/);
+                      if (match) last = Number(match[1]);
+                    }
+                    return last;
+                  }),
+                cachedIds.filter((id) => id !== flipPanelId)
+              );
+            const expectedLastSteps =
+              windowMode === "mirror"
+                ? await readLastSteps(page)
+                : await cachedMirror.evaluate(
+                    async (ids) =>
+                      Promise.all(
+                        ids.map(async (id) => {
+                          const snapshot = await (
+                            window as any
+                          ).electron.terminal.getSerializedState(id);
+                          const matches = [
+                            ...(snapshot?.data ?? "").matchAll(/working\.\.\. step (\d+)/g),
+                          ];
+                          return Number(matches.at(-1)?.[1] ?? 0);
+                        })
+                      ),
+                    cachedIds
+                  );
+            expect(expectedLastSteps.every((step) => step > 20)).toBe(true);
+            const started = Date.now();
+            await secondActivePage.evaluate((id) => {
+              void (window as any).electron.project.switch(id);
+            }, mirroredProjectId);
+            await expect
+              .poll(
+                () => cachedMirror!.evaluate(() => (window as any).electron.app.isViewCached()),
+                { timeout: T_LONG }
+              )
+              .toBe(false);
+            await expect
+              .poll(() => readLastSteps(cachedMirror!), { timeout: T_LONG })
+              .toEqual(expectedLastSteps);
+            mirrorRevealMs = Date.now() - started;
+          }
+          console.log(
+            "BACKGROUND_ENERGY " +
+              JSON.stringify({
+                scale,
+                visibleId: flipPanelId,
+                energyWindows,
+                switches,
+                mirrorRevealMs,
+              })
+          );
+          await page.evaluate(() => {
+            for (const d of (window as any).__energyCleanup) d.dispose();
+          });
+          await cdp.detach();
+          if (process.env.BACKGROUND_ENERGY_ONLY === "1") return;
+          await page.evaluate((id) => (window as any).electron.worktree.setActive(id), mainWt.id);
+        }
 
         // ── Workload: tick-quiet — forced git poll, zero file changes ──
         const tickQuiet: EventSample[] = [];
@@ -576,6 +1178,8 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
       } finally {
         if (ctx?.app) await closeApp(ctx.app);
         fixture.cleanup();
+        secondFixture?.cleanup();
+        thirdFixture?.cleanup();
       }
     });
   }

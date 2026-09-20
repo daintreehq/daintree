@@ -642,7 +642,9 @@ body,
 }
 
 .animate-spin-slow {
-  animation: spin-slow 1.4s linear infinite;
+  /* Shared phase is set by usePowerSavingMotion, including newly mounted icons.
+   * Aligned steps let the compositor sleep between status updates. */
+  animation: spin-slow 1.4s steps(24, end) infinite;
   transform-origin: center;
   will-change: transform;
 }

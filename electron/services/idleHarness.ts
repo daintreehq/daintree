@@ -634,6 +634,9 @@ async function buildFixture(
   for (const [index, count] of config.terminalsPerProject.entries()) {
     const repoPath = await createFixtureRepo(tempRoot, `project-${index + 1}`);
     const project = await projectStore.addProject(repoPath);
+    // addProject creates a closed row. Hydration intentionally excludes closed
+    // projects; this fixture represents already-open workspaces being switched.
+    projectStore.updateProjectStatus(project.id, "background");
     const fixture: FixtureProject = { index, id: project.id, path: repoPath, terminals: count };
     projects.push(fixture);
     const settings = await projectStore.getProjectSettings(project.id);
