@@ -69,12 +69,18 @@ function hasSvelteKitApp(
       );
     })
     .then((result) => {
-      const count = (result as { appCount?: unknown }).appCount;
-      const found = typeof count === "number" && count > 0;
+      const { appCount, complete } = result as { appCount?: unknown; complete?: unknown };
+      const found = typeof appCount === "number" && appCount > 0;
+      // A walk that stopped at its budget did not establish that the worktree
+      // has no app, so it cannot be the reason to withhold the tool: doing that
+      // hides the very surfaces that would say the search was cut short, and
+      // makes a command refuse with a claim about the worktree nobody proved.
+      // Only a finished walk that found nothing is an answer.
+      const answer = found || complete === false;
       // Only a positive answer is reused: an app scaffolded a moment ago must
       // show up on the next page load, not after the cache runs out.
       if (!found && detected.get(key)?.pending === pending) detected.delete(key);
-      return found;
+      return answer;
     })
     .catch(() => {
       // A failed lookup is retried next time rather than hiding the button for good.

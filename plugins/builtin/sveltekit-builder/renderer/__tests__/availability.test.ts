@@ -43,6 +43,25 @@ describe("the builder's availability answer", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
+  it("stays available when the walk stopped early, so the surfaces can say why", async () => {
+    // Withholding the tool here would hide the notice explaining that the
+    // search was cut short, and make commands refuse with a claim about the
+    // worktree that the truncated walk never established.
+    const invoke = vi.fn().mockResolvedValue({ appCount: 0, complete: false });
+    stubInvoke(invoke);
+
+    const applies = await loadApplies();
+    expect(await applies(nextContext() as never)).toBe(true);
+  });
+
+  it("is unavailable when a finished walk genuinely found no app", async () => {
+    const invoke = vi.fn().mockResolvedValue({ appCount: 0, complete: true });
+    stubInvoke(invoke);
+
+    const applies = await loadApplies();
+    expect(await applies(nextContext() as never)).toBe(false);
+  });
+
   it("does not retry a lookup that failed for any other reason", async () => {
     const invoke = vi.fn().mockRejectedValue(new Error("EACCES: permission denied"));
     stubInvoke(invoke);

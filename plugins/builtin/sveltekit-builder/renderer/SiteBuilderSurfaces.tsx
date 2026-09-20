@@ -12,6 +12,7 @@ import {
   AlertTriangle,
   ChevronRight,
   FolderCode,
+  FolderSearch,
   FolderTree,
   FolderX,
   MousePointer2,
@@ -447,7 +448,13 @@ function StripStatus({
       return <StripMessage icon={FolderTree}>Choose which app this preview shows</StripMessage>;
     }
     if (workspace.status === "no-app") {
-      return <StripMessage icon={FolderX}>No SvelteKit app in this worktree</StripMessage>;
+      // A walk that ran out of budget looked at part of the worktree, so it
+      // cannot say the app is absent — only that it did not reach one.
+      return workspace.scanComplete ? (
+        <StripMessage icon={FolderX}>No SvelteKit app in this worktree</StripMessage>
+      ) : (
+        <StripMessage icon={FolderSearch}>No app found before the search stopped</StripMessage>
+      );
     }
     if (workspace.status === "failed") {
       return (
@@ -685,7 +692,10 @@ function SiteSourceBody({
         </InspectorNotice>
       );
     case "no-app":
-      return (
+      // Two different answers wearing one status: a finished walk that found
+      // nothing, and a walk that stopped at its budget having found nothing
+      // yet. Only the first is evidence the app is not there.
+      return workspace.scanComplete ? (
         <InspectorNotice
           tone="info"
           title="Preview only — no SvelteKit app found"
@@ -693,6 +703,15 @@ function SiteSourceBody({
         >
           You can select in the preview, but there's no SvelteKit source in this worktree to trace
           it to.
+        </InspectorNotice>
+      ) : (
+        <InspectorNotice
+          tone="info"
+          title="Preview only — the search stopped early"
+          density="compact"
+        >
+          This worktree was too large to search all of it, and no SvelteKit app turned up in the
+          part that was. You can still select in the preview.
         </InspectorNotice>
       );
     case "ambiguous":

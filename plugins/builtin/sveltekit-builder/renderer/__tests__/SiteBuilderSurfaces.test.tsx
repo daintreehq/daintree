@@ -2691,3 +2691,30 @@ describe("resolving skeleton", () => {
     expect(document.activeElement).toBe(landed);
   });
 });
+
+describe("a worktree scan that did not finish", () => {
+  /**
+   * Discovery stops at its budget, so "no app found" and "no app here" are
+   * different answers. The surfaces must not spend the second one on evidence
+   * that only supports the first.
+   */
+  async function mountWithNoApp(scanComplete: boolean) {
+    host.handlers.set(CHANNELS.workspaceOpen, () => ({ status: "no-app", scanComplete }));
+    mount();
+    await waitFor(() => expect(host.calls(CHANNELS.workspaceOpen).length).toBeGreaterThan(0));
+  }
+
+  it("states the worktree has no app only when the walk actually finished", async () => {
+    await mountWithNoApp(true);
+    await screen.findByText("No SvelteKit app in this worktree");
+  });
+
+  it("says the search stopped rather than claiming the worktree has no app", async () => {
+    await mountWithNoApp(false);
+    await screen.findByText("No app found before the search stopped");
+    expect(screen.queryByText("No SvelteKit app in this worktree")).toBe(null);
+    // The drawer must tell the same story as the strip.
+    expect(document.body.textContent).toContain("the search stopped early");
+    expect(document.body.textContent).not.toContain("no SvelteKit app found");
+  });
+});
