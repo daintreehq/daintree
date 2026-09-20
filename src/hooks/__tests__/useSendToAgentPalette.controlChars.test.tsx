@@ -2,12 +2,13 @@
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
+import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "@shared/utils/terminalInputProtocol";
 
-const { useWorktreeStoreOptionalMock, managed, writeMock, notifyUserInputMock } = vi.hoisted(
+const { useWorktreeStoreOptionalMock, instances, writeMock, notifyUserInputMock } = vi.hoisted(
   () => ({
     useWorktreeStoreOptionalMock: vi.fn(),
-    managed: {
-      value: undefined as { terminal: { modes: { bracketedPasteMode: boolean } } } | undefined,
+    instances: {
+      byId: {} as Record<string, { terminal: { modes: { bracketedPasteMode: boolean } } }>,
     },
     writeMock: vi.fn(),
     notifyUserInputMock: vi.fn(),
@@ -23,7 +24,11 @@ vi.mock("@/hooks/useWorktreeStore", () => ({
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     getCachedSelection: () => "",
-    get: () => managed.value,
+    // Keyed by id, and the fixtures below give source and target opposite modes,
+    // so reading the source pane's mode instead of the destination's fails here
+    // rather than passing on a shared stub. `null` is what the real service
+    // returns for an unknown id.
+    get: (id: string) => instances.byId[id] ?? null,
     notifyUserInput: notifyUserInputMock,
   },
 }));
@@ -77,8 +82,12 @@ describe("send to agent, target without bracketed paste", () => {
     writeMock.mockReset();
     notifyUserInputMock.mockReset();
     // The branch under test: a target whose program never turned bracketed
-    // paste on, so the text goes in unwrapped.
-    managed.value = { terminal: { modes: { bracketedPasteMode: false } } };
+    // paste on, so the text goes in unwrapped. The source has it on, so
+    // formatting off the wrong pane's mode would wrap and fail these.
+    instances.byId = {
+      a: { terminal: { modes: { bracketedPasteMode: true } } },
+      b: { terminal: { modes: { bracketedPasteMode: false } } },
+    };
     usePanelStore.setState({ panelsById: {}, panelIds: [] });
   });
 
@@ -94,6 +103,9 @@ describe("send to agent, target without bracketed paste", () => {
     sendFromSourceToTarget("ls\x1b[201~\x03rm -rf /\x15");
 
     expect(writeMock).toHaveBeenCalledWith("b", "ls␛[201~␃rm -rf /␕");
+    // Exactly one write: a raw send alongside the formatted one would satisfy
+    // the assertion above, and at a parser boundary every write counts.
+    expect(writeMock).toHaveBeenCalledTimes(1);
     expect(notifyUserInputMock).toHaveBeenCalledWith("b");
   });
 
@@ -101,5 +113,59 @@ describe("send to agent, target without bracketed paste", () => {
     sendFromSourceToTarget("one\r\ntwo\rthree\nfour");
 
     expect(writeMock).toHaveBeenCalledWith("b", "one\rtwo\rthree\rfour");
+    expect(writeMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("send to agent, wrapped and unreadable targets", () => {
+  beforeEach(() => {
+    useWorktreeStoreOptionalMock.mockImplementation(
+      (_selector: unknown, fallback: unknown) => fallback
+    );
+    writeMock.mockReset();
+    notifyUserInputMock.mockReset();
+    // Each test below supplies its own map; emptying it here keeps a reordered
+    // or filtered run from reading the previous describe's fixture.
+    instances.byId = {};
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  });
+
+  afterEach(() => {
+    cleanup();
+    usePaletteStore.setState({ activePaletteId: null });
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  });
+
+  it("neutralises the body but keeps its line endings inside the wrapper", () => {
+    // Modes inverted from the first describe, so the destination's is the one
+    // being read. The body carries a terminator of its own: wrapping text that
+    // was never sanitised would leave it free to close the paste early and hand
+    // the rest over as typed input.
+    instances.byId = {
+      a: { terminal: { modes: { bracketedPasteMode: false } } },
+      b: { terminal: { modes: { bracketedPasteMode: true } } },
+    };
+    sendFromSourceToTarget("one\r\ntwo\rthree\x1b[201~\x03");
+
+    expect(writeMock).toHaveBeenCalledWith(
+      "b",
+      `${BRACKETED_PASTE_START}one\r\ntwo\rthree␛[201~␃${BRACKETED_PASTE_END}`
+    );
+    expect(writeMock).toHaveBeenCalledTimes(1);
+    expect(notifyUserInputMock).toHaveBeenCalledWith("b");
+  });
+
+  it("wraps without notifying when the target has no managed instance", () => {
+    // No instance means no mode to read and nothing to notify. Both halves of
+    // that branch have to survive the formatter being shared with the others.
+    instances.byId = { a: { terminal: { modes: { bracketedPasteMode: false } } } };
+    sendFromSourceToTarget("ls\x1b[201~\x03");
+
+    expect(writeMock).toHaveBeenCalledWith(
+      "b",
+      `${BRACKETED_PASTE_START}ls␛[201~␃${BRACKETED_PASTE_END}`
+    );
+    expect(writeMock).toHaveBeenCalledTimes(1);
+    expect(notifyUserInputMock).not.toHaveBeenCalled();
   });
 });

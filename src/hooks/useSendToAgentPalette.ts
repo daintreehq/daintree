@@ -6,10 +6,7 @@ import { useSearchablePalette } from "./useSearchablePalette";
 import { getTerminalDisplayTitle } from "@/utils/terminalTitleDisplay";
 import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
-import {
-  formatWithBracketedPaste,
-  neutralizeControlCharacters,
-} from "@shared/utils/terminalInputProtocol";
+import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { usePaletteStore } from "@/store/paletteStore";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { useWorktreeStoreOptional } from "./useWorktreeStore";
@@ -99,23 +96,21 @@ function sendSelectionToTarget(targetId: string): void {
   if (!text) return;
   if (targetId === pendingState.sourceId) return;
 
+  // Terminal selection text carries whatever the source pane printed, so it
+  // goes through the paste boundary in either mode. Without a managed instance
+  // there is no mode to read — wrapped is the safe reading — and nothing to
+  // notify either, which is why that branch stays separate.
   const managed = terminalInstanceService.get(targetId);
   if (managed) {
-    if (managed.terminal.modes.bracketedPasteMode) {
-      terminalClient.write(targetId, formatWithBracketedPaste(text));
-    } else {
-      // Terminal selection text carries whatever the source pane printed. The
-      // wrapper neutralises for the other branch; this one has to do it for
-      // itself, and `\r` means something different here — it submits. Fold
-      // every line ending to `\n`, neutralise, then re-encode the submits.
-      terminalClient.write(
-        targetId,
-        neutralizeControlCharacters(text.replace(/\r\n|\r/g, "\n")).replace(/\n/g, "\r")
-      );
-    }
+    terminalClient.write(
+      targetId,
+      formatForTerminalPaste(text, {
+        bracketedPasteMode: managed.terminal.modes.bracketedPasteMode,
+      })
+    );
     terminalInstanceService.notifyUserInput(targetId);
   } else {
-    terminalClient.write(targetId, formatWithBracketedPaste(text));
+    terminalClient.write(targetId, formatForTerminalPaste(text, { bracketedPasteMode: true }));
   }
 
   pendingState.sourceId = null;

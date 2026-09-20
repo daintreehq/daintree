@@ -9,10 +9,7 @@ import { usePanelStore } from "@/store/panelStore";
 import { triggerPopStash, triggerStashInput } from "@/store/terminalInputStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { isPtyPanel } from "@shared/types/panel";
-import {
-  formatWithBracketedPaste,
-  neutralizeControlCharacters,
-} from "@shared/utils/terminalInputProtocol";
+import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import { assessTerminalInterrupt } from "@/utils/terminalInterrupt";
 import { UnactionableTargetError } from "@/services/actions/unactionableTarget";
@@ -179,19 +176,17 @@ export function registerTerminalInputActions(
       try {
         const text = await navigator.clipboard.readText();
         if (!text) return;
-        if (managed.terminal.modes.bracketedPasteMode) {
-          terminalClient.write(targetId, formatWithBracketedPaste(text));
-        } else {
-          // A clipboard carries whatever was copied, a web page's escape
-          // sequences included. `denyPluginDispatch` keeps agents off this
-          // action, so this is the boundary being consistent rather than a
-          // hole — the wrapped branch has neutralised since the boundary
-          // existed, and unwrapped text reaches the same parser.
-          terminalClient.write(
-            targetId,
-            neutralizeControlCharacters(text.replace(/\r\n|\r/g, "\n")).replace(/\n/g, "\r")
-          );
-        }
+        // A clipboard carries whatever was copied, a web page's escape
+        // sequences included. `denyPluginDispatch` keeps agents off this action,
+        // so both modes going through the paste boundary is the boundary being
+        // consistent rather than a hole — unwrapped text reaches the same parser
+        // the wrapped branch has neutralised for since the boundary existed.
+        terminalClient.write(
+          targetId,
+          formatForTerminalPaste(text, {
+            bracketedPasteMode: managed.terminal.modes.bracketedPasteMode,
+          })
+        );
         terminalInstanceService.notifyUserInput(targetId);
       } catch {
         // Clipboard API may be denied

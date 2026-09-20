@@ -105,18 +105,35 @@ describe("installLinuxPrimarySelectionListeners", () => {
       expect(notifyUserInput).toHaveBeenCalledWith("term-1");
     });
 
-    it("wraps the payload with bracketed-paste markers when the mode is active", async () => {
+    it("wraps on the terminal's mode, not on how the text looks", async () => {
+      // Short and single-line, so nothing about the text itself argues for a
+      // wrapper. Gating the branch on the text — `shouldUseBracketedPaste` and
+      // friends — instead of on the mode would leave this one unwrapped.
       bracketedPasteMode = true;
       readSelection.mockResolvedValueOnce({ text: "pasted" });
       hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
       await flush();
-      expect(writeToPty).toHaveBeenCalledTimes(1);
-      const [id, payload] = writeToPty.mock.calls[0]!;
       const ESC = String.fromCharCode(0x1b);
-      expect(id).toBe("term-1");
-      expect(payload).toContain("pasted");
-      expect(payload).toContain(`${ESC}[200~`);
-      expect(payload).toContain(`${ESC}[201~`);
+      expect(writeToPty).toHaveBeenCalledWith("term-1", `${ESC}[200~pasted${ESC}[201~`);
+      expect(writeToPty).toHaveBeenCalledTimes(1);
+    });
+
+    it("wraps the payload with bracketed-paste markers when the mode is active", async () => {
+      // Exact bytes rather than a pair of substring checks: delimiters
+      // concatenated by hand around text that was never sanitised would satisfy
+      // `toContain` while leaving the selection's own terminator free to close
+      // the paste early. Inside the wrapper `\r` stays, because there it is the
+      // line separator the program reads as data.
+      bracketedPasteMode = true;
+      readSelection.mockResolvedValueOnce({ text: "npm\r\nrun \x1b[201~build\x03" });
+      hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+      await flush();
+      const ESC = String.fromCharCode(0x1b);
+      expect(writeToPty).toHaveBeenCalledWith(
+        "term-1",
+        `${ESC}[200~npm\r\nrun ␛[201~build␃${ESC}[201~`
+      );
+      expect(writeToPty).toHaveBeenCalledTimes(1);
     });
 
     it("normalizes newlines to carriage returns when bracketed paste is off", async () => {

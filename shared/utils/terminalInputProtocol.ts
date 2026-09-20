@@ -124,3 +124,36 @@ export function formatWithBracketedPaste(text: string): string {
   const body = neutralizeControlCharacters(text, { insideBracketedPaste: true });
   return `${BRACKETED_PASTE_START}${body}${BRACKETED_PASTE_END}`;
 }
+
+/**
+ * Format a blob of text for injection into a terminal, in either paste mode.
+ *
+ * Both modes live here because the bug class is a path that neutralises on one
+ * branch and not the other: the clipboard, the send-to-agent palette and 'send
+ * to help' each reached a parser raw until #12441, and each was its own
+ * hand-written copy of this expression. A new injection path picks up both
+ * branches by calling this, or it is not using the paste boundary at all.
+ *
+ * The mode is the caller's to supply and has no default — the safe value
+ * differs per destination, and a wrong guess is silent.
+ *
+ * The branches encode line structure differently, and both are deliberate.
+ * `formatWithBracketedPaste` leaves the caller's line endings alone: inside the
+ * wrapper `\r` is the separator the program reads as data. Unwrapped it submits,
+ * which is what middle-click and paste have always done — so every line ending,
+ * CRLF and bare CR and bare LF alike, is folded to `\n` first, neutralised, and
+ * only then turned back into the `\r` we mean. Folding only CRLF would leave a
+ * bare CR for the sanitiser to glyph, and text off a screen that uses them would
+ * arrive as a single line.
+ *
+ * NOT for the raw keyboard path, and not for agent-aware submission: a keystroke
+ * is supposed to be a control character, and `normalizeSubmitText` deliberately
+ * leaves `\n` in place for `getSoftNewlineSequence` to re-encode per agent.
+ */
+export function formatForTerminalPaste(
+  text: string,
+  options: { bracketedPasteMode: boolean }
+): string {
+  if (options.bracketedPasteMode) return formatWithBracketedPaste(text);
+  return neutralizeControlCharacters(text.replace(/\r\n|\r/g, "\n")).replace(/\n/g, "\r");
+}

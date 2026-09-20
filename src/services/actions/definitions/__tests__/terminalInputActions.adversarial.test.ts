@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
+import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "@shared/utils/terminalInputProtocol";
 
 const panelStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 const contextMenuMock = vi.hoisted(() => ({ openPanelContextMenu: vi.fn() }));
@@ -8,9 +9,6 @@ const terminalInstanceMock = vi.hoisted(() => ({
   notifyUserInput: vi.fn(),
 }));
 const terminalClientMock = vi.hoisted(() => ({ write: vi.fn() }));
-const bracketedMock = vi.hoisted(() => ({
-  formatWithBracketedPaste: vi.fn((t: string) => `<BP>${t}</BP>`),
-}));
 const sendToAgentMock = vi.hoisted(() => ({ openSendToAgentPalette: vi.fn() }));
 const terminalInputStoreMock = vi.hoisted(() => ({
   triggerStashInput: vi.fn(),
@@ -37,13 +35,6 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => ({
   terminalInstanceService: terminalInstanceMock,
 }));
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
-// Only the wrapper is stubbed, so the assertions can tell the two branches
-// apart. `neutralizeControlCharacters` stays real: what the unbracketed branch
-// hands the parser is the thing under test, not a stand-in for it.
-vi.mock("@shared/utils/terminalInputProtocol", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@shared/utils/terminalInputProtocol")>()),
-  ...bracketedMock,
-}));
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
 vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);
 vi.mock("@/store/fleetArmingStore", () => fleetArmingMock);
@@ -115,7 +106,6 @@ beforeEach(() => {
     },
     configurable: true,
   });
-  bracketedMock.formatWithBracketedPaste.mockImplementation((t: string) => `<BP>${t}</BP>`);
 });
 
 afterEach(() => {
@@ -191,9 +181,39 @@ describe("terminalInputActions adversarial", () => {
     const { run } = setupActions();
     await run("terminal.paste");
 
-    expect(bracketedMock.formatWithBracketedPaste).toHaveBeenCalledWith("hello\nworld");
-    expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "<BP>hello\nworld</BP>");
+    // Real delimiter bytes rather than a stub: what the wrapped branch hands the
+    // parser is the thing under test, exactly as it is for the unwrapped one.
+    expect(terminalClientMock.write).toHaveBeenCalledWith(
+      "t1",
+      `${BRACKETED_PASTE_START}hello\nworld${BRACKETED_PASTE_END}`
+    );
+    expect(terminalClientMock.write).toHaveBeenCalledTimes(1);
     expect(terminalInstanceMock.notifyUserInput).toHaveBeenCalledWith("t1");
+  });
+
+  it("paste in bracketed-paste mode neutralises the body before wrapping it", async () => {
+    // A clipboard carrying the END sequence twice. Wrapping text that was never
+    // sanitised closes the paste at the first one and hands everything after it
+    // over as typed input — and a sanitiser that replaced only the first
+    // occurrence would leave the second doing the same job.
+    clipboardText = `ls${BRACKETED_PASTE_END}rm -rf /${BRACKETED_PASTE_END}\x03`;
+    setPanelState({
+      focusedId: "t1",
+      panelsById: { t1: { isInputLocked: false, kind: "terminal" } },
+    });
+    terminalInstanceMock.get.mockReturnValue({
+      terminal: { getSelection: () => "", modes: { bracketedPasteMode: true } },
+      isInputLocked: false,
+    });
+
+    const { run } = setupActions();
+    await run("terminal.paste");
+
+    expect(terminalClientMock.write).toHaveBeenCalledWith(
+      "t1",
+      `${BRACKETED_PASTE_START}ls␛[201~rm -rf /␛[201~␃${BRACKETED_PASTE_END}`
+    );
+    expect(terminalClientMock.write).toHaveBeenCalledTimes(1);
   });
 
   it("paste without bracketed mode normalizes CRLF/LF to CR", async () => {
@@ -211,6 +231,7 @@ describe("terminalInputActions adversarial", () => {
     await run("terminal.paste");
 
     expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "a\rb\rc");
+    expect(terminalClientMock.write).toHaveBeenCalledTimes(1);
   });
 
   it("paste without bracketed mode neutralises control characters", async () => {
