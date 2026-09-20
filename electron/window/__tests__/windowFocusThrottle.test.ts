@@ -7,6 +7,26 @@ import type { IdleTerminalNotificationService } from "../../services/IdleTermina
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron's app.on() signature uses any
 type Handler = (...args: any[]) => void;
 
+// These tests pin darwin, so nothing here should reach the sysfs branch at all.
+// The mock is the backstop: unmocked, a stray Linux run would start a real
+// 30s poll against /sys inside the test process.
+const linuxSource = vi.hoisted(() => ({
+  watches: [] as Array<{ onChange: (onBattery: boolean) => void }>,
+}));
+
+vi.mock("../../services/linuxPowerSource.js", () => ({
+  watchLinuxPowerSource: vi.fn((onChange: (onBattery: boolean) => void) => {
+    linuxSource.watches.push({ onChange });
+    return { refresh: vi.fn(async () => {}), dispose: vi.fn() };
+  }),
+}));
+
+const realPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
+function setPlatform(platform: NodeJS.Platform) {
+  Object.defineProperty(process, "platform", { value: platform, configurable: true });
+}
+
 const appHandlers = new Map<string, Handler>();
 const powerHandlers = new Map<string, Handler>();
 
@@ -114,6 +134,10 @@ let focusThrottleModule: typeof import("../focusThrottleState.js");
 describe("WindowFocusThrottle", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
+    // These tests drive Electron's battery events, which only exist off Linux —
+    // and CI runs on Linux, so the platform is named rather than inherited.
+    setPlatform("darwin");
+    linuxSource.watches.length = 0;
     appHandlers.clear();
     powerHandlers.clear();
     windows = [];
@@ -167,6 +191,7 @@ describe("WindowFocusThrottle", () => {
   });
 
   afterEach(() => {
+    Object.defineProperty(process, "platform", realPlatform);
     vi.useRealTimers();
   });
 

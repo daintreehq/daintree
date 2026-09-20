@@ -99,7 +99,7 @@ export function watchLinuxPowerSource(
     try {
       onChange(onBattery);
     } catch (error) {
-      console.warn("[PowerSaveBlocker] Linux power source listener threw:", error);
+      console.warn("[LinuxPowerSource] listener threw:", error);
     }
   };
 
