@@ -212,6 +212,38 @@ describe("worktree scans are bounded in number", () => {
     expect(ranAfterClose).toBe(false);
   });
 
+  it("leaves no abort listener behind on a scan that waited its turn", async () => {
+    // The signal is the workspace lifetime, not one scan's: a listener per
+    // queued scan accumulates for as long as the workspace is open.
+    const gate = new ScanGate();
+    let open!: () => void;
+    const holding = new Promise<void>((resolve) => (open = resolve));
+    const held = Array.from({ length: MAX_CONCURRENT_SCANS }, () => gate.run(null, () => holding));
+    const lifetime = new AbortController();
+    let listeners = 0;
+    const signal = lifetime.signal;
+    const added = signal.addEventListener.bind(signal);
+    const removed = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((...args: Parameters<typeof added>) => {
+      listeners += 1;
+      return added(...args);
+    }) as typeof added;
+    signal.removeEventListener = ((...args: Parameters<typeof removed>) => {
+      listeners -= 1;
+      return removed(...args);
+    }) as typeof removed;
+
+    const queued = Array.from({ length: 8 }, () => gate.run(null, async () => "done", signal));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(listeners).toBe(8);
+
+    open();
+    await Promise.all(held);
+    await Promise.all(queued);
+
+    expect(listeners).toBe(0);
+  });
+
   it("gives two askers with the same key one scan, not two", async () => {
     const gate = new ScanGate();
     let walks = 0;

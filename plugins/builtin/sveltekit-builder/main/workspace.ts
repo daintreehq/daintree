@@ -110,20 +110,29 @@ export class ScanGate {
       // never dips between the two and a fresh caller cannot slip in past the
       // cap. A waiter whose workspace closes leaves the queue instead of
       // holding capacity for a scan nobody will read.
-      await new Promise<void>((resolve, reject) => {
-        const waiter = { resolve, reject };
-        this.waiting.push(waiter);
-        signal?.addEventListener(
-          "abort",
-          () => {
+      let detach: (() => void) | undefined;
+      try {
+        await new Promise<void>((resolve, reject) => {
+          const waiter = { resolve, reject };
+          this.waiting.push(waiter);
+          if (!signal) return;
+          const onAbort = () => {
             const index = this.waiting.indexOf(waiter);
             if (index === -1) return;
             this.waiting.splice(index, 1);
             reject(signal.reason);
-          },
-          { once: true }
-        );
-      });
+          };
+          signal.addEventListener("abort", onAbort, { once: true });
+          // The signal is the workspace lifetime, not this scan's: a waiter
+          // handed its slot normally must take its listener with it, or every
+          // queued scan leaves one behind for the life of the workspace.
+          detach = () => {
+            signal.removeEventListener("abort", onAbort);
+          };
+        });
+      } finally {
+        detach?.();
+      }
     } finally {
       this.queued -= 1;
     }

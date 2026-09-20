@@ -2,6 +2,7 @@ import { SUPPORTED_BASELINE } from "../model.js";
 import type { SupportVerdict } from "../protocol.js";
 import {
   type ProjectFileReader,
+  type ProjectReadOptions,
   directoriesUpTo,
   fileExists,
   joinPath,
@@ -52,7 +53,8 @@ export interface InstalledVersionReport {
 export async function readInstalledVersionReport(
   reader: ProjectFileReader,
   appRoot: string,
-  worktreeRoot: string
+  worktreeRoot: string,
+  options: ProjectReadOptions = {}
 ): Promise<InstalledVersionReport> {
   const searchDirs = directoriesUpTo(appRoot, worktreeRoot);
   const entries = await Promise.all(
@@ -60,7 +62,8 @@ export async function readInstalledVersionReport(
       for (const dir of searchDirs) {
         const result = await readJsonFileResult(
           reader,
-          joinPath(dir, "node_modules", TRACKED_PACKAGES[key], "package.json")
+          joinPath(dir, "node_modules", TRACKED_PACKAGES[key], "package.json"),
+          options
         );
         if (result.status === "missing") continue;
         const version = result.value?.["version"];
@@ -86,9 +89,10 @@ export async function readInstalledVersionReport(
 export async function readInstalledVersions(
   reader: ProjectFileReader,
   appRoot: string,
-  worktreeRoot: string
+  worktreeRoot: string,
+  options: ProjectReadOptions = {}
 ): Promise<InstalledVersions> {
-  return (await readInstalledVersionReport(reader, appRoot, worktreeRoot)).versions;
+  return (await readInstalledVersionReport(reader, appRoot, worktreeRoot, options)).versions;
 }
 
 /**
@@ -107,11 +111,13 @@ const PNP_MARKERS = [".pnp.cjs", ".pnp.loader.mjs", ".pnp.js"];
 export async function detectInstallStyle(
   reader: ProjectFileReader,
   appRoot: string,
-  worktreeRoot: string
+  worktreeRoot: string,
+  options: ProjectReadOptions = {}
 ): Promise<InstallStyle> {
   for (const dir of directoriesUpTo(appRoot, worktreeRoot)) {
+    options.signal?.throwIfAborted();
     for (const marker of PNP_MARKERS) {
-      if (await fileExists(reader, joinPath(dir, marker))) return "pnp";
+      if (await fileExists(reader, joinPath(dir, marker), options)) return "pnp";
     }
   }
   return "node-modules";

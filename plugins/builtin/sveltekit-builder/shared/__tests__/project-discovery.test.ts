@@ -215,6 +215,72 @@ describe("a scan is bounded by what it reads, not only by how far it walks", () 
 
     expect(discovery.complete).toBe(false);
   });
+
+  it("calls a directory it could not list a partial scan, not an empty one", async () => {
+    const memory = createMemoryReader({
+      "/repo/apps/site/package.json": KIT_MANIFEST,
+      "/repo/private/keep": "",
+    });
+    const unreadable: ProjectFileReader = {
+      ...memory,
+      async readdir(path, options) {
+        if (path === "/repo/private") throw new Error("EACCES: permission denied");
+        return memory.readdir(path, options);
+      },
+    };
+
+    const discovery = await discoverSvelteKitApps(unreadable, "/repo");
+
+    // The app that was readable is still reported; what is missing is the claim
+    // that nothing else is there.
+    expect(discovery.apps.map((app) => app.appRoot)).toEqual(["/repo/apps/site"]);
+    expect(discovery.complete).toBe(false);
+  });
+
+  it("descends into a directory a listing describes as neither file nor directory", async () => {
+    const memory = createMemoryReader({
+      "/repo/apps/site/package.json": KIT_MANIFEST,
+    });
+    // The shape production `host.fs` returns for a symlink: a monorepo whose
+    // `apps/site` is a link would otherwise be skipped, and the scan would call
+    // itself complete having never looked.
+    const opaque: ProjectFileReader = {
+      ...memory,
+      async readdir(path, options) {
+        const entries = await memory.readdir(path, options);
+        return entries.map((entry) =>
+          entry.name === "site" ? { name: entry.name, isDirectory: false, isFile: false } : entry
+        );
+      },
+    };
+
+    const discovery = await discoverSvelteKitApps(opaque, "/repo");
+
+    expect(discovery.apps.map((app) => app.appRoot)).toEqual(["/repo/apps/site"]);
+    expect(discovery.complete).toBe(true);
+  });
+
+  it("counts an entry it could not stat as a subtree it never read", async () => {
+    const memory = createMemoryReader({ "/repo/apps/site/package.json": KIT_MANIFEST });
+    const broken: ProjectFileReader = {
+      ...memory,
+      async readdir(path, options) {
+        const entries = await memory.readdir(path, options);
+        return entries.map((entry) =>
+          entry.name === "site" ? { name: entry.name, isDirectory: false, isFile: false } : entry
+        );
+      },
+      async stat(path, options) {
+        if (path === "/repo/apps/site") throw new Error("ELOOP: too many symbolic links");
+        return memory.stat(path, options);
+      },
+    };
+
+    const discovery = await discoverSvelteKitApps(broken, "/repo");
+
+    expect(discovery.apps).toEqual([]);
+    expect(discovery.complete).toBe(false);
+  });
 });
 
 describe("closing the workspace stops the scan", () => {

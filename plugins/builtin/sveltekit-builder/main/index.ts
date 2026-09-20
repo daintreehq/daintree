@@ -222,7 +222,7 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
           if (!scan.complete) {
             warnIssue(
               "APP_SCAN_TRUNCATED",
-              "This worktree is too large to scan completely and no SvelteKit app turned up in the part we read. Open the preview from the app's own directory.",
+              "This worktree was too large to search all of it, and no SvelteKit app turned up in the part that was. Open the preview from the app's own directory.",
               args.previewPanelId
             );
           }

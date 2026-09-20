@@ -2,7 +2,9 @@ import type { RouteDiagnostic, RouteNode, RoutesDirectorySource } from "../proto
 import {
   type ProjectFileReader,
   type ProjectReadOptions,
+  isWithin,
   joinPath,
+  normalisePath,
   readBoundedTextFile,
   readDirectory,
   readJsonFile,
@@ -203,6 +205,10 @@ async function collectDirs(
   state.visited += 1;
   const entries = await readDirectory(reader, dir.absPath, { signal: state.signal });
   const children: RouteDir[] = [];
+  // One directory is one truncation, however many of its children were cut:
+  // the diagnostic names the directory, so N copies of it are N identical
+  // messages on the wire.
+  let truncatedHere = false;
 
   for (const entry of entries) {
     const abs = joinPath(dir.absPath, entry.name);
@@ -226,7 +232,10 @@ async function collectDirs(
     if (isDirectory) {
       if (NON_ROUTE_DIRECTORIES.has(entry.name)) continue;
       if (depth >= maxDepth || state.visited + children.length >= state.budget) {
-        state.truncated.push(dir);
+        if (!truncatedHere) {
+          truncatedHere = true;
+          state.truncated.push(dir);
+        }
         continue;
       }
       children.push(emptyRouteDir(abs, [...dir.segments, entry.name], dir));
@@ -453,6 +462,12 @@ export interface KitConfigReadOptions extends ProjectReadOptions {
    * passed to the Vite plugin is read at all. Absent means unknown, not old.
    */
   kitVersion?: string | null;
+  /**
+   * The worktree the app belongs to, which bounds where a config may point the
+   * route walk. Absent means the app root bounds it — the honest default for a
+   * caller that has not said what the tree is.
+   */
+  worktreeRoot?: string;
 }
 
 export interface RoutesDirectory {
@@ -1360,8 +1375,25 @@ function viteConfigBypasses(kitVersion: string | null | undefined): boolean | nu
   return major > 2 || (major === 2 && minor >= 62);
 }
 
+/**
+ * The flag itself, matched inside one command rather than across a whole
+ * script. The command is split off first because a single pattern spanning
+ * `vite` and the flag backtracks over every whitespace position when no flag
+ * follows, and a manifest read is bounded at 256 KiB, not at a shell line.
+ */
+const VITE_CONFIG_FLAG = /(?:^|\s)["']?(?:--config|-c)["']?[\s=]/;
+
+/** Long enough for any real script; past it the string is not a command line. */
+const MAX_SCRIPT_BYTES = 4096;
+
 /** A build script that points Vite at a config file we would never look for. */
-const VITE_CONFIG_FLAG = /\bvite\b[^&|;]*\s["']?(?:--config|-c)["']?[\s=]/;
+function scriptNamesAnotherViteConfig(script: string): boolean {
+  if (script.length > MAX_SCRIPT_BYTES) return false;
+  return script.split(/[&|;]/).some((command) => {
+    const vite = /\bvite\b/.exec(command);
+    return vite !== null && VITE_CONFIG_FLAG.test(command.slice(vite.index + vite[0].length));
+  });
+}
 
 async function namesAnotherViteConfig(
   reader: ProjectFileReader,
@@ -1372,7 +1404,7 @@ async function namesAnotherViteConfig(
   const scripts = manifest?.["scripts"];
   if (typeof scripts !== "object" || scripts === null) return false;
   return Object.values(scripts as Record<string, unknown>).some(
-    (script) => typeof script === "string" && VITE_CONFIG_FLAG.test(script)
+    (script) => typeof script === "string" && scriptNamesAnotherViteConfig(script)
   );
 }
 
@@ -1512,8 +1544,12 @@ async function routesUnderSrc(
   const src = read.value;
   if (src.trim().length === 0) return { path: fallback, source: "unresolved" };
   const base = isAbsolutePath(src, appRoot) ? src : joinPath(appRoot, src);
+  const path = normalisePath(joinPath(base, "routes"));
+  if (!isWithin(options.worktreeRoot ?? appRoot, path)) {
+    return { path: fallback, source: "unresolved" };
+  }
   return {
-    path: joinPath(base, "routes"),
+    path,
     source: from === "unresolved" || from === "default" ? "unresolved" : from,
   };
 }
@@ -1536,8 +1572,18 @@ export async function resolveRoutesDirectory(
   // name. A value that is only whitespace names no directory at all.
   const configured = read.value;
   if (configured.trim().length === 0) return { path: fallback, source: "unresolved" };
+  const path = normalisePath(
+    isAbsolutePath(configured, appRoot) ? configured : joinPath(appRoot, configured)
+  );
+  // `joinPath` strips `.` but not `..`, and the config belongs to a repository
+  // the user may not have chosen to trust. A route walk outside the tree — and
+  // the absolute paths `toWorktreeRelative` would then put on the wire — is a
+  // config we report as unreadable rather than one we follow.
+  if (!isWithin(options.worktreeRoot ?? appRoot, path)) {
+    return { path: fallback, source: "unresolved" };
+  }
   return {
-    path: isAbsolutePath(configured, appRoot) ? configured : joinPath(appRoot, configured),
+    path,
     source: from === "unresolved" || from === "default" ? "unresolved" : from,
   };
 }

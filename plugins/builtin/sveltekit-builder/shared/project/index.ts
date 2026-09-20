@@ -80,9 +80,9 @@ export async function inspectProject(
   const declared = manifest ? declaredDependencies(manifest) : {};
 
   const [versionReport, packageManager, installStyle] = await Promise.all([
-    readInstalledVersionReport(reader, appRoot, worktreeRoot),
-    detectPackageManager(reader, appRoot, worktreeRoot),
-    detectInstallStyle(reader, appRoot, worktreeRoot),
+    readInstalledVersionReport(reader, appRoot, worktreeRoot, reads),
+    detectPackageManager(reader, appRoot, worktreeRoot, reads),
+    detectInstallStyle(reader, appRoot, worktreeRoot, reads),
   ]);
 
   const { versions, resolutions } = versionReport;
@@ -95,7 +95,7 @@ export async function inspectProject(
   // calling the same file unauthoritative and authoritative at once.
   const authoritativeKit =
     installStyle === "pnp" || resolutions?.kit === "unresolved" ? null : versions.kit;
-  const configReads = { ...reads, kitVersion: authoritativeKit };
+  const configReads = { ...reads, kitVersion: authoritativeKit, worktreeRoot };
   const [routesDirectory, basePath] = await Promise.all([
     resolveRoutesDirectory(reader, appRoot, configReads),
     resolveBasePath(reader, appRoot, configReads),

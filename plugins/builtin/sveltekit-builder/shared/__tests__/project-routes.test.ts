@@ -245,6 +245,26 @@ describe("buildRouteTree", () => {
     expect(diagnostics.some((d) => d.code === "traversal-truncated")).toBe(true);
   });
 
+  it("reports one truncation per directory, not one per child it could not follow", async () => {
+    const memory = createMemoryReader({
+      "/repo/src/routes/+page.svelte": "<h1>Home</h1>",
+      "/repo/src/routes/a/+page.svelte": "<h1>A</h1>",
+      "/repo/src/routes/b/+page.svelte": "<h1>B</h1>",
+      "/repo/src/routes/c/+page.svelte": "<h1>C</h1>",
+    });
+
+    const { diagnostics } = await analyzeRoutes(memory, {
+      appRoot: "/repo",
+      worktreeRoot: "/repo",
+      routesDir: "/repo/src/routes",
+      maxDepth: 0,
+    });
+
+    const truncations = diagnostics.filter((d) => d.code === "traversal-truncated");
+    expect(truncations).toHaveLength(1);
+    expect(truncations[0]?.files).toEqual(["src/routes"]);
+  });
+
   it("follows a routes subtree reached through a symlink", async () => {
     const memory = createMemoryReader({
       "/repo/src/routes/+page.svelte": "<h1>Home</h1>",
@@ -297,6 +317,48 @@ describe("buildRouteTree", () => {
       expect(resolved.source).toBe("unresolved");
       expect(resolved.path).toBe("/repo/src/routes");
     }
+  });
+
+  it("refuses a configured routes directory that climbs out of the worktree", async () => {
+    // `joinPath` strips `.` but not `..`, so containment is the only thing
+    // standing between an untrusted repo's config and a walk of the tree above
+    // the worktree.
+    const memory = createMemoryReader({
+      "/repo/app/svelte.config.js": `export default { kit: { files: { routes: "../../elsewhere" } } };`,
+    });
+
+    const escaping = await resolveRoutesDirectory(memory, "/repo/app", { worktreeRoot: "/repo" });
+    const absolute = await resolveRoutesDirectory(
+      createMemoryReader({
+        "/repo/app/svelte.config.js": `export default { kit: { files: { routes: "/etc" } } };`,
+      }),
+      "/repo/app",
+      { worktreeRoot: "/repo" }
+    );
+
+    expect([escaping.source, escaping.path]).toEqual(["unresolved", "/repo/app/src/routes"]);
+    expect([absolute.source, absolute.path]).toEqual(["unresolved", "/repo/app/src/routes"]);
+  });
+
+  it("still reads a routes directory outside the app but inside the worktree", async () => {
+    const memory = createMemoryReader({
+      "/repo/app/svelte.config.js": `export default { kit: { files: { routes: "../shared/routes" } } };`,
+      "/repo/shared/routes/+page.svelte": "<h1>Home</h1>",
+    });
+
+    const resolved = await resolveRoutesDirectory(memory, "/repo/app", { worktreeRoot: "/repo" });
+
+    expect([resolved.source, resolved.path]).toEqual(["svelte.config", "/repo/shared/routes"]);
+  });
+
+  it("refuses a files.src that climbs out of the worktree", async () => {
+    const memory = createMemoryReader({
+      "/repo/app/svelte.config.js": `export default { kit: { files: { src: "../../elsewhere" } } };`,
+    });
+
+    const resolved = await resolveRoutesDirectory(memory, "/repo/app", { worktreeRoot: "/repo" });
+
+    expect([resolved.source, resolved.path]).toEqual(["unresolved", "/repo/app/src/routes"]);
   });
 
   it("does not read a routes key that is not inside kit.files", async () => {
@@ -862,6 +924,51 @@ describe("resolveRoutesDirectory when the Vite plugin carries the config", () =>
     );
 
     expect(resolved.source).toBe("unresolved");
+  });
+
+  it("does not backtrack over a script far longer than a command line", async () => {
+    // A manifest is read up to 256 KiB, so the scripts in it are only as
+    // short as their author chose. A pattern spanning `vite` and the flag
+    // backtracks over every whitespace position in between; this script has
+    // 40,000 of them and no flag at the end of any of them.
+    const resolved = await resolveRoutesDirectory(
+      createMemoryReader({
+        ...viteAndSvelte("export default { plugins: [sveltekit()] };"),
+        "/repo/package.json": JSON.stringify({ scripts: { dev: "vite ".repeat(40000) } }),
+      }),
+      "/repo",
+      CURRENT_KIT
+    );
+
+    expect(resolved.source).toBe("svelte.config");
+  }, 2000);
+
+  it("reads the flag only where it follows vite, in the command vite runs in", async () => {
+    const chained = await resolveRoutesDirectory(
+      createMemoryReader({
+        ...viteAndSvelte("export default { plugins: [sveltekit()] };"),
+        "/repo/package.json": JSON.stringify({
+          scripts: { build: "svelte-kit sync && vite build --config build/vite.ts" },
+        }),
+      }),
+      "/repo",
+      CURRENT_KIT
+    );
+    // The flag belongs to the other command: `tsc -c` says nothing about which
+    // config Vite reads.
+    const elsewhere = await resolveRoutesDirectory(
+      createMemoryReader({
+        ...viteAndSvelte("export default { plugins: [sveltekit()] };"),
+        "/repo/package.json": JSON.stringify({
+          scripts: { build: "tsc -c tsconfig.json && vite build" },
+        }),
+      }),
+      "/repo",
+      CURRENT_KIT
+    );
+
+    expect(chained.source).toBe("unresolved");
+    expect(elsewhere.source).toBe("svelte.config");
   });
 
   it("refuses a plugin handed to something else, and is not fooled by an import inside a string", async () => {

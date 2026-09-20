@@ -153,6 +153,29 @@ export function toWorktreeRelative(worktreeRoot: string, target: string): string
     .join("/");
 }
 
+/**
+ * The same place, spelled without `.` or `..`.
+ *
+ * {@link joinPath} drops `.` but keeps `..`, because a segment it was handed is
+ * a segment the caller meant. A containment check cannot work on that spelling:
+ * `/repo/app/../../elsewhere` starts with `/repo` and is not inside it. A `..`
+ * at the root is dropped rather than kept, which is what the filesystem does.
+ */
+export function normalisePath(target: string): string {
+  const sep = separatorOf(target);
+  const [root = "", ...segments] = target.split(/[\\/]+/);
+  const kept: string[] = [];
+  for (const segment of segments) {
+    if (segment.length === 0 || segment === ".") continue;
+    if (segment === "..") {
+      kept.pop();
+      continue;
+    }
+    kept.push(segment);
+  }
+  return kept.length === 0 ? `${root}${sep}` : [root, ...kept].join(sep);
+}
+
 /** True when `candidate` is `root` or lives under it. */
 export function isWithin(root: string, candidate: string): boolean {
   const base = normaliseSeparators(root).replace(/\/+$/, "");
@@ -295,7 +318,10 @@ export async function readDirectoryBounded(
       : { entries, truncated: false };
   } catch (error) {
     rethrowIfAborted(error, options.signal);
-    return { entries: [], truncated: false };
+    // A directory we could not list is not an empty directory. Reported as
+    // truncation because that is what it is to the caller: whatever was in
+    // there went unread, so the scan above cannot call itself complete.
+    return { entries: [], truncated: true };
   }
 }
 
