@@ -278,26 +278,41 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
  * re-verification between proving readiness and submitting.
  *
  * `agentId` is the terminal's detected agent, falling back to what it was
- * launched as, so a plain shell is `null` and refused. `spawnedAt` is the
+ * launched as — so a shell with no agent and no launch hint is `null` and
+ * refused, while a shell an agent was launched into keeps naming it. `spawnedAt` is the
  * stamp the panel takes when a pty starts under it, and every restart path
  * re-stamps it (`panelRegistry/restart.ts`), so it is the pty generation for
- * every generation there is one for. A slot holding no pty at all — a
+ * every generation the panel was there to see start. It is the renderer's
+ * account of the generation rather than the host's, and the two come apart in
+ * both directions: a pty-host crash replays the pty under the same id without
+ * the panel re-stamping, and reconnecting to a pty that never stopped stamps a
+ * new panel time. A replayed pty also starts its own count again, so a run
+ * that lived through one can find every field back where it bound them — which
+ * is why a look that names a different session ends the run then and there
+ * rather than being weighed again at the end. A slot holding no pty at all — a
  * recovery hold, which `addPanel.ts` deliberately leaves unstamped — has no
  * generation to name, and is refused rather than compared: two absent stamps
  * are equal to each other, and that equality would be the whole check passing
  * on nothing.
  *
- * Together they are the strongest claim this surface can make, and they are
- * still not a claim about the *process* inside the pty. An agent that exits
- * leaving its shell keeps both, and so does the `claude` a user then types
- * into that shell — a different session with the same slot, the same pty and
- * the same launch id, invisible to anything observable from here. That gap is
- * why the host treats every submission as text typed at whatever is listening
- * rather than as a message delivered to a known conversation.
+ * `agentIncarnation` is what neither of those can be: the count of times the
+ * pty-host has *seen* a new agent take over this pty after a prior one exited.
+ * An agent that quits leaving its shell, and the `claude` a user then types
+ * into that shell, share the slot, the pty and the launch id — and differ
+ * here (#12535). It is an observation of the boundaries the detector caught,
+ * not proof of process identity. A relaunch it never classified still moves
+ * nothing — an agent the terminal was launched as holds its detected identity
+ * through a disappearance that never looked like a prompt returning, and a
+ * second one started under it is the same identity again, not a new one. The
+ * window between this last look and the write is still a window, too. That
+ * residue is why the host goes on treating every submission as text typed at
+ * whatever is listening rather than as a message delivered to a known
+ * conversation.
  */
 interface DestinationIdentity {
   agentId: string;
   spawnedAt: number;
+  agentIncarnation: number;
 }
 
 /** The identity an entry supports, or `null` when it supports none. */
@@ -321,11 +336,23 @@ function identityOf(entry: TerminalStatusEntry | undefined): DestinationIdentity
   // Same reading applied to the generation stamp: unobserved is not "a session
   // that started at no time", and it must not compare equal to the next one.
   if (typeof entry.spawnedAt !== "number") return null;
-  return { agentId: entry.agentId, spawnedAt: entry.spawnedAt };
+  // And to the session count. Zero is a reading — no relaunch seen in this pty
+  // generation — so it is only absence that refuses here. A surface that cannot
+  // observe it cannot tell this session from its successor, which is the one
+  // thing this identity is for; two absent counts comparing equal is the shape
+  // #12441 had to fix once already.
+  const agentIncarnation = entry.agentIncarnation;
+  if (agentIncarnation === undefined || !Number.isSafeInteger(agentIncarnation)) return null;
+  if (agentIncarnation < 0) return null;
+  return { agentId: entry.agentId, spawnedAt: entry.spawnedAt, agentIncarnation };
 }
 
 function sameSession(bound: DestinationIdentity, now: DestinationIdentity): boolean {
-  return bound.agentId === now.agentId && bound.spawnedAt === now.spawnedAt;
+  return (
+    bound.agentId === now.agentId &&
+    bound.spawnedAt === now.spawnedAt &&
+    bound.agentIncarnation === now.agentIncarnation
+  );
 }
 
 /** One terminal's current status entry, or `undefined` when none is readable. */
@@ -553,10 +580,28 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
         // the wait is the queue doing its job, however long the work takes.
         // The clock runs while it is not — unreadable, finished, or asking.
         if (busy) readyBy = Date.now() + LAUNCH_READY_TIMEOUT_MS;
+        // Bound at the first look that can name a session, not at the one that
+        // proves readiness, and never rebound after (#12535). A request waiting
+        // out an agent's work is a request for the session it was asked of; if
+        // that one ends and another starts in the same pty while the wait runs,
+        // binding at the prompt would quietly adopt the replacement, and so
+        // would re-reading the identity on a loop re-entry. Both are the thing
+        // the final check exists to refuse. A launch destination simply has no
+        // identity to bind to yet, so it binds on the first look that does.
+        const seen = identityOf(entry);
+        if (bound === null) bound = seen;
+        // Latched, not sampled twice. Once a look has named a different session
+        // the run is over, however the slot reads later: a pty replayed under
+        // the same id after a host crash starts its count again, so a session
+        // that has already been seen to change can climb back to the numbers
+        // the run bound to and match them (#12535). Only a look that *named* a
+        // session counts against it — an unreadable one is no evidence, and
+        // waiting through it is what the readiness loop is for.
+        else if (seen !== null && !sameSession(bound, seen)) {
+          report({ status: "failed", message: sessionChanged(title, seen) }, terminalId);
+          return;
+        }
         if (readiness === "ready" || run.forced) {
-          // Bound from the same observation that proved readiness, so the two
-          // cannot disagree about which session they are about.
-          bound = identityOf(entry);
           if (bound === null) {
             report({ status: "failed", message: unbindable(title, entry) }, terminalId);
             return;

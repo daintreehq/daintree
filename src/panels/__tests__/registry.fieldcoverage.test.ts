@@ -136,6 +136,10 @@ const PTY_FIELD_CLASSIFICATION = {
   lastCheckResult: false,
   // Handback marker (#12488) — same live-only lifecycle as lastCheckResult.
   lastHandback: false,
+  // Observed respawn count (#12535) — a live reading of the running pty that
+  // the host re-derives from zero for every new one, so persisting it would
+  // restore a session count for a session that no longer exists.
+  agentIncarnation: false,
   // BasePanelData carrier-bookkeeping timestamps — written by the base
   // serialization layer in panelToSnapshot, not the PTY serializer.
   createdAt: false,

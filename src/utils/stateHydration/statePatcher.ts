@@ -259,6 +259,11 @@ interface BackendTerminalData {
   agentPresetColor?: string;
   originalAgentPresetId?: string;
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
   detectedAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
 }
@@ -281,6 +286,11 @@ interface ReconnectedTerminalData {
   agentPresetColor?: string;
   originalAgentPresetId?: string;
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
   detectedAgentId?: BuiltInAgentId;
   detectedProcessId?: string;
 }
@@ -383,6 +393,7 @@ export function buildArgsForBackendTerminal(
     // to prefer here the way `agentModelId` does (#12419).
     spawnedBy: saved.spawnedBy,
     everDetectedAgent: backendTerminal.everDetectedAgent,
+    agentIncarnation: backendTerminal.agentIncarnation,
     detectedAgentId: backendTerminal.detectedAgentId,
     detectedProcessId: backendTerminal.detectedProcessId,
     agentPresetId: readPresetId(saved) ?? backendTerminal.agentPresetId,
@@ -466,6 +477,7 @@ export function buildArgsForReconnectedFallback(
     // to prefer here the way `agentModelId` does (#12419).
     spawnedBy: saved.spawnedBy,
     everDetectedAgent: reconnectedTerminal.everDetectedAgent,
+    agentIncarnation: reconnectedTerminal.agentIncarnation,
     detectedAgentId: reconnectedTerminal.detectedAgentId,
     detectedProcessId: reconnectedTerminal.detectedProcessId,
     agentPresetId: readPresetId(saved) ?? reconnectedTerminal.agentPresetId,
@@ -1007,6 +1019,7 @@ export function buildArgsForOrphanedTerminal(
     agentLaunchFlags: terminal.agentLaunchFlags,
     agentModelId: terminal.agentModelId,
     everDetectedAgent: terminal.everDetectedAgent,
+    agentIncarnation: terminal.agentIncarnation,
     detectedAgentId: terminal.detectedAgentId,
     detectedProcessId: terminal.detectedProcessId,
     agentPresetId: terminal.agentPresetId,

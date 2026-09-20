@@ -425,6 +425,44 @@ describe("terminal.getStatus", () => {
     expect(terminals[1]?.spawnedAt).toBe(1_700_000_001_000);
   });
 
+  it("surfaces the observed session count, zero when none has been recorded (#12535)", async () => {
+    // The pty generation cannot move for a relaunch inside an unchanged pty, so
+    // this is what tells a bound session from its successor. Reported as zero
+    // for a pty panel with none recorded, because the row is born with the pty
+    // and this surface subscribes to every event that moves the count — absent
+    // would read as unobservable and refuse every delivery it answers for.
+    panelStoreMock.getState.mockReturnValue({
+      panelIds: ["t1", "t2", "t3"],
+      panelsById: {
+        t1: {
+          id: "t1",
+          kind: "terminal",
+          location: "grid",
+          agentState: "waiting",
+          launchAgentId: "claude",
+          startedAt: 1_700_000_000_000,
+        },
+        t2: {
+          id: "t2",
+          kind: "terminal",
+          location: "grid",
+          agentState: "waiting",
+          launchAgentId: "claude",
+          startedAt: 1_700_000_000_000,
+          agentIncarnation: 3,
+        },
+        t3: { id: "t3", kind: "browser", location: "grid" },
+      },
+    });
+
+    const { terminals } = await callGetStatus(setupActions(), {
+      terminalIds: ["t1", "t2", "t3"],
+    });
+    expect(terminals[0]?.agentIncarnation).toBe(0);
+    expect(terminals[1]?.agentIncarnation).toBe(3);
+    expect(terminals[2]?.agentIncarnation).toBeUndefined();
+  });
+
   it("surfaces lastCheckResult from the panel, undefined when absent (#10682)", async () => {
     const checkResult = {
       command: "npm run check",

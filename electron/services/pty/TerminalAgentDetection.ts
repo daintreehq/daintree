@@ -128,6 +128,9 @@ export function handleAgentDetection(
         processName: result.processName || detectedAgentId,
         defaultTitle: nextTitle,
         timestamp: Date.now(),
+        // Read after the respawn above, so a relaunch into a shell its last
+        // agent left behind ships the count it just advanced (#12535).
+        agentIncarnation: terminal.agentIncarnation,
       });
     }
   } else if (isDetected && !result.agentType && result.processIconId) {
@@ -148,6 +151,7 @@ export function handleAgentDetection(
         processIconId: result.processIconId,
         processName: result.processName || result.processIconId,
         timestamp: Date.now(),
+        agentIncarnation: terminal.agentIncarnation,
       });
     }
   } else if (!isDetected && (terminal.detectedAgentId || host.lastDetectedProcessIconId)) {

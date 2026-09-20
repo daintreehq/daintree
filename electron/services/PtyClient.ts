@@ -169,6 +169,12 @@ interface TerminalInfoResponse {
   originalAgentPresetId?: string;
   /** Set once on first runtime agent detection; never cleared. Sticky across agent exit/re-enter within session. */
   everDetectedAgent?: boolean;
+  /**
+   * Observed count of new agent sessions taking over this PTY after a prior
+   * one exited (#12535). Absent means the surface could not observe it; zero
+   * means none was observed. Reset with the record when the PTY is replaced.
+   */
+  agentIncarnation?: number;
   /** Runtime-detected agent identity (cleared when the agent exits). */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */

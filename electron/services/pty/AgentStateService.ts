@@ -313,11 +313,23 @@ export class AgentStateService {
       timestamp
     );
 
+    // A respawn is the detector seeing a new agent take over a PTY whose last
+    // one exited, and it is the only boundary `spawnedAt` cannot express — the
+    // PTY never restarted (#12535). Computed here so the event carries the
+    // value the commit block is about to store; every other event carries the
+    // count unchanged, so a subscriber reading it never has to guess whether a
+    // transition was a new session.
+    // `?? 0` guards a record built before the field existed: NaN here would
+    // fail the payload schema and drop every transition this terminal makes,
+    // which is a far worse failure than counting its first session as zero.
+    const nextIncarnation = (terminal.agentIncarnation ?? 0) + (event.type === "respawn" ? 1 : 0);
+
     const stateChangePayload = {
       agentId: effectiveAgentId,
       state: newState,
       previousState,
       timestamp,
+      agentIncarnation: nextIncarnation,
       traceId: terminal.traceId,
       terminalId: terminal.id,
       cwd: terminal.cwd,
@@ -375,6 +387,10 @@ export class AgentStateService {
     // Commit all mutations atomically.
     terminal.agentState = newState;
     terminal.lastStateChange = timestamp;
+    // Moves only on an accepted respawn, and only once the transition has
+    // passed every gate above — a dropped or schema-invalid transition must not
+    // advance the session count it never published (#12535).
+    terminal.agentIncarnation = nextIncarnation;
 
     // Persist the parsed check result post-validation (#10682). A respawn
     // starts a new session, so any prior run's result is dropped — even though

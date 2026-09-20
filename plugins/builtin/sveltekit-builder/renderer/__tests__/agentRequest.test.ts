@@ -46,6 +46,7 @@ function terminal(agentState: string | null = null) {
               // binds to these and refuses a slot that stopped being this one.
               agentId: "claude",
               spawnedAt: 1_000,
+              agentIncarnation: 0,
               agentState: state,
               submission: args.submissionToken ? { phase: "pty_written" } : undefined,
             },
@@ -209,7 +210,13 @@ describe("deliverAgentRequest", () => {
           ok: true,
           result: {
             terminals: [
-              { terminalId: "t1", agentId: "claude", spawnedAt: 1_000, agentState: "waiting" },
+              {
+                terminalId: "t1",
+                agentId: "claude",
+                spawnedAt: 1_000,
+                agentIncarnation: 0,
+                agentState: "waiting",
+              },
             ],
           },
         };

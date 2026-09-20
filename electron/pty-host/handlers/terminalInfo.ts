@@ -82,6 +82,7 @@ export function mapTerminalInfo(
     agentPresetColor: t.agentPresetColor,
     originalAgentPresetId: t.originalAgentPresetId,
     everDetectedAgent: t.everDetectedAgent,
+    agentIncarnation: t.agentIncarnation,
     detectedAgentId: narrowDetectedAgentId(t.detectedAgentId),
     detectedProcessId: t.detectedProcessIconId,
     // Read here so a status or wait answered from main reports it without a

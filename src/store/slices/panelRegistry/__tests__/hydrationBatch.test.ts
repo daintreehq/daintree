@@ -338,6 +338,35 @@ describe("hydration batch (#5196)", () => {
     expect(result?.spawnedBy).toBe("quickrun");
   });
 
+  // Zero is a real backend reading — the count of respawns this pty has seen —
+  // so the merge uses `??`. With `||` the panel would keep its stale non-zero
+  // count and go on naming a session the host no longer has (#12535).
+  it("lets a backend reading of zero overwrite a non-zero incarnation on reconnect", async () => {
+    const { addPanel } = usePanelStore.getState();
+
+    seedTerminal("term-5", { agentIncarnation: 3 });
+
+    await addPanel({
+      kind: "terminal",
+      existingId: "term-5",
+      cwd: "/",
+      bypassLimits: true,
+      agentIncarnation: 0,
+    });
+
+    expect(usePanelStore.getState().panelsById["term-5"]).toMatchObject({ agentIncarnation: 0 });
+  });
+
+  it("keeps the existing incarnation when the reconnect payload carries none", async () => {
+    const { addPanel } = usePanelStore.getState();
+
+    seedTerminal("term-6", { agentIncarnation: 3 });
+
+    await addPanel({ kind: "terminal", existingId: "term-6", cwd: "/", bypassLimits: true });
+
+    expect(usePanelStore.getState().panelsById["term-6"]).toMatchObject({ agentIncarnation: 3 });
+  });
+
   it("leaves an unattributed panel unattributed across reconnect", async () => {
     const { addPanel } = usePanelStore.getState();
 

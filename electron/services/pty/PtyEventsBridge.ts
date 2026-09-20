@@ -79,6 +79,9 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         waitingReason: event.waitingReason,
         sessionCost: event.sessionCost,
         sessionTokens: event.sessionTokens,
+        ...(event.agentIncarnation !== undefined
+          ? { agentIncarnation: event.agentIncarnation }
+          : {}),
         // Exit metadata on completed/exited transitions. exitCode may be null
         // (signal kill), so forward on presence rather than truthiness. #10638
         ...(event.exitCode !== undefined ? { exitCode: event.exitCode } : {}),
@@ -125,6 +128,9 @@ export function bridgePtyEvent(event: PtyHostEvent, config?: PtyEventsBridgeConf
         processIconId: event.processIconId,
         processName: event.processName,
         timestamp: event.timestamp,
+        ...(event.agentIncarnation !== undefined
+          ? { agentIncarnation: event.agentIncarnation }
+          : {}),
       });
       return true;
 

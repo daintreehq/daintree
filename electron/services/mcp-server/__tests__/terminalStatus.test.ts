@@ -121,9 +121,33 @@ describe("buildViewlessTerminalStatus results", () => {
       lastTransitionAt: 2000,
       spawnedAt: 1000,
     });
+    // Counted on the pty-host record, so this surface reports it straight
+    // through; an older record without one stays absent rather than zero
+    // (#12535).
+    expect(result.terminals[0]).not.toHaveProperty("agentIncarnation");
     expect(result.terminals[0]).not.toHaveProperty("armed");
     expect(result.terminals[0]).not.toHaveProperty("lastCheckResult");
     expect(result.terminals[0]).not.toHaveProperty("exitCode");
+  });
+
+  it("reports the observed session count off the record (#12535)", async () => {
+    // Zero is a reading — no relaunch observed in this pty generation — and it
+    // has to survive the builder rather than be dropped as falsy.
+    const zero = await buildViewlessTerminalStatus(
+      deps([record({ agentIncarnation: 0 })]),
+      WORKSPACE,
+      {
+        terminalIds: ["t-1"],
+      }
+    );
+    expect(zero.terminals[0]?.agentIncarnation).toBe(0);
+
+    const relaunched = await buildViewlessTerminalStatus(
+      deps([record({ agentIncarnation: 2 })]),
+      WORKSPACE,
+      { terminalIds: ["t-1"] }
+    );
+    expect(relaunched.terminals[0]?.agentIncarnation).toBe(2);
   });
 
   it("prefers the detected agent over the launch agent, matching the renderer", async () => {

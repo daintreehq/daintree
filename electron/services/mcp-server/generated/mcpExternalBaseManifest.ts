@@ -1566,6 +1566,13 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
                   "Wall-clock spawn time in epoch milliseconds, for run-duration and staleness checks.",
                 type: "number",
               },
+              agentIncarnation: {
+                description:
+                  "Times a new agent was seen taking over this PTY after one exited — the relaunch `spawnedAt` cannot see. 0 is none observed; absent is unobserved, not 0.",
+                type: "integer",
+                minimum: 0,
+                maximum: 9007199254740991,
+              },
               lastCheckResult: {
                 description:
                   "A best-effort reading of the agent's most recent test, lint, or build summary, parsed from its output rather than from a process exit code — the check runs inside the terminal, so its real exit status is unobservable. Absence means no recognized summary was seen, which is not the same as no check running and not the same as passing. Check the run time for freshness before trusting it.",

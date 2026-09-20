@@ -13,6 +13,7 @@ function createTerminal(overrides: Partial<TerminalInfo> = {}): TerminalInfo {
     lastInputTime: 0,
     lastOutputTime: 0,
     lastCheckTime: 0,
+    agentIncarnation: 0,
     restartCount: 0,
     launchAgentId: "claude",
     agentState: "idle",
@@ -186,6 +187,46 @@ describe("AgentStateService", () => {
     expect(stateChanges).toHaveLength(0);
     expect(dropped).toHaveLength(1);
     expect((dropped[0] as { outcome: string }).outcome).toBe("no-op");
+  });
+
+  it("counts a respawn as a new session and carries the count on the event", () => {
+    // #12535: the only observable that moves when an agent is relaunched inside
+    // a pty that never restarted. Carried on the transition itself so a
+    // subscriber applies the session and the state it belongs to together.
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "exited", agentIncarnation: 0 });
+    const counts: Array<number | undefined> = [];
+    events.on("agent:state-changed", (payload) => counts.push(payload.agentIncarnation));
+
+    expect(service.updateAgentState(terminal, { type: "respawn" })).toBe(true);
+
+    expect(terminal.agentIncarnation).toBe(1);
+    expect(counts).toEqual([1]);
+  });
+
+  it("leaves the session count alone on ordinary transitions", () => {
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "idle", agentIncarnation: 2 });
+    const counts: Array<number | undefined> = [];
+    events.on("agent:state-changed", (payload) => counts.push(payload.agentIncarnation));
+
+    service.updateAgentState(terminal, { type: "busy" });
+    service.updateAgentState(terminal, { type: "prompt" });
+
+    expect(terminal.agentIncarnation).toBe(2);
+    expect(counts).toEqual([2, 2]);
+  });
+
+  it("does not advance the session count on a dropped respawn", () => {
+    // A respawn from a state the machine will not leave is a no-op, and a count
+    // that moved for a transition nobody published would name a session that
+    // never started.
+    const service = new AgentStateService();
+    const terminal = createTerminal({ agentState: "working", agentIncarnation: 1 });
+
+    expect(service.updateAgentState(terminal, { type: "respawn" })).toBe(false);
+
+    expect(terminal.agentIncarnation).toBe(1);
   });
 
   it("transitions exited → idle on respawn (Issue #5767 — agent re-detected in same PTY)", () => {

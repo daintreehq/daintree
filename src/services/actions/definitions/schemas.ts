@@ -535,6 +535,14 @@ export const TerminalStatusEntrySchema = z.object({
     .describe(
       "Wall-clock spawn time in epoch milliseconds, for run-duration and staleness checks."
     ),
+  agentIncarnation: z
+    .number()
+    .int()
+    .nonnegative()
+    .optional()
+    .describe(
+      "Times a new agent was seen taking over this PTY after one exited — the relaunch `spawnedAt` cannot see. 0 is none observed; absent is unobserved, not 0."
+    ),
   lastCheckResult: z
     .object({
       command: z.string().nullable(),
