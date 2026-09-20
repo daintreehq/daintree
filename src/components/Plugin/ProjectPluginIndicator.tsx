@@ -114,11 +114,18 @@ export function ProjectPluginIndicator() {
         <button
           type="button"
           aria-label={`Project plugins — ${summary}`}
-          className="px-4 py-2 border-t border-divider surface-chrome flex items-center shrink-0 w-full hover:bg-text-primary/[0.02] transition-colors cursor-pointer"
+          // Same strip as the resource readout directly beneath it: identical
+          // chrome, row height, dot and type. These two are the only rows in
+          // the sidebar footer, so any divergence between them is visible in a
+          // single glance.
+          className="px-4 py-1.5 min-h-7 border-t border-divider surface-chrome flex items-center shrink-0 w-full hover:bg-overlay-soft transition-colors cursor-pointer"
         >
           <div className="flex items-center gap-2 min-w-0">
-            <span className="inline-flex h-2 w-2 rounded-full bg-text-primary/25 shrink-0" />
-            <span className="text-3xs text-text-secondary font-medium truncate">{summary}</span>
+            {/* Hollow, matching the footer's idle mark: staged plugins are a
+                standing fact, not work in flight. `bg-text-primary/25` read
+                about 2:1 — under the 3:1 a state indicator owes. */}
+            <span className="inline-flex h-2 w-2 rounded-full border border-text-secondary shrink-0" />
+            <span className="text-2xs text-text-secondary font-medium truncate">{summary}</span>
           </div>
         </button>
       </PopoverTrigger>

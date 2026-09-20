@@ -244,8 +244,10 @@ describe("ProjectPluginIndicator", () => {
     const dot = screen
       .getByRole("button", { name: /Project plugins/ })
       .querySelector("span.rounded-full");
-    expect(dot?.className).toContain("bg-text-primary/25");
-    expect(dot?.className).not.toContain("status-danger");
+    // The rule, not the colour: the mark stays neutral whatever went wrong —
+    // the summary line is what carries the signal. Pinning the exact class
+    // here only forced an edit every time the footer's palette moved.
+    expect(dot?.className).not.toMatch(/status-(danger|error|warning)/);
   });
 
   it("gives an unreadable manifest and a failed one the same chrome", async () => {
