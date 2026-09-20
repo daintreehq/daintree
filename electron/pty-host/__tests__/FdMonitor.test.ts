@@ -14,7 +14,14 @@ vi.mock("node:fs", () => ({
   fstatSync: (fd: number) => mockFstatSync(fd),
 }));
 
-import { FdMonitor, classifyFds, isProcessAlive, type FdSample } from "../FdMonitor.js";
+import {
+  FdMonitor,
+  classifyFds,
+  isProcessAlive,
+  MAX_SAMPLE_GAP_MS,
+  type FdSample,
+} from "../FdMonitor.js";
+import { FD_SAMPLE_INTERVAL_MS, FD_SAMPLE_POWER_MULTIPLIER } from "../ResourceGovernor.js";
 
 const INTERVAL = 30_000;
 const WARMUP = 2 * 60_000;
@@ -40,7 +47,10 @@ function fakeStats(kind: "char" | "socket" | "fifo" | "file" | "dir" | "other") 
 /**
  * Drives a monitor through a simulated host: every `sample()` advances the
  * clock one interval and reads `fds` descriptors against the current owners.
- * `null` makes the descriptor listing fail for that sample.
+ * `null` makes the descriptor listing fail for that sample. `skip()` moves the
+ * clock without taking a reading, the way a sleeping machine does — the next
+ * `sample()` lands one interval after that, as the timer's first firing on
+ * wake would.
  */
 function harness(platform: NodeJS.Platform = "darwin") {
   const monitor = new FdMonitor({ fdPath: "/dev/fd", platform, startedAt: 0 });
@@ -59,7 +69,10 @@ function harness(platform: NodeJS.Platform = "darwin") {
     if (result?.transition) transitions.push(result.transition);
     return result;
   };
-  return { sample, transitions, now: () => now };
+  const skip = (ms: number) => {
+    now += ms;
+  };
+  return { sample, skip, transitions, now: () => now };
 }
 
 describe("FdMonitor", () => {
@@ -329,6 +342,176 @@ describe("FdMonitor", () => {
       const { sample } = calibratedAt(40);
       for (let i = 0; i < 100; i++) sample(60, owners());
       expect(sample(60, owners())?.baselineFds).toBe(40);
+    });
+  });
+
+  describe("gaps between readings", () => {
+    // Comfortably past MAX_SAMPLE_GAP_MS once the resuming sample's own
+    // interval is added: a lid shut over lunch.
+    const GAP = 60 * 60_000;
+
+    /** Calibrated at a baseline of 40 on an empty host, the clock at 210s. */
+    function calibrated() {
+      const h = harness();
+      for (let i = 0; i < 6; i++) h.sample(40, owners());
+      expect(h.sample(40, owners())?.baselineFds).toBe(40);
+      return h;
+    }
+
+    it("does not stitch an elevated streak across a gap", () => {
+      const { sample, skip, transitions, now } = calibrated();
+      // One short of an episode when the machine goes to sleep.
+      for (let i = 0; i < 4; i++) sample(80, owners());
+      expect(transitions).toEqual([]);
+
+      skip(GAP);
+      sample(80, owners());
+      const firstAfterGap = now();
+      // Had the streak carried across, this fifth reading would have reported.
+      expect(transitions).toEqual([]);
+
+      for (let i = 0; i < 3; i++) sample(80, owners());
+      expect(transitions).toEqual([]);
+
+      sample(80, owners());
+      expect(transitions).toHaveLength(1);
+      expect(transitions[0]).toMatchObject({ state: "elevated", sustainedSamples: 5 });
+      expect(transitions[0]?.episodeStartedAt).toBe(firstAfterGap);
+    });
+
+    it("counts a streak at the stretched cadence of a deep power policy", () => {
+      const { sample, transitions, skip } = calibrated();
+      // Five minutes between readings, plus the timer tick that realises it:
+      // stretched on purpose, and still a run.
+      for (let i = 0; i < 5; i++) {
+        skip(300_000);
+        sample(80, owners());
+      }
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+    });
+
+    it("treats a clock stepped backwards as a gap", () => {
+      const { sample, skip, transitions } = calibrated();
+      for (let i = 0; i < 4; i++) sample(80, owners());
+
+      skip(-2 * INTERVAL);
+      sample(80, owners());
+      expect(transitions).toEqual([]);
+
+      for (let i = 0; i < 4; i++) sample(80, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+    });
+
+    it("keeps the baseline across a gap rather than recalibrating on top of growth", () => {
+      const { sample, skip, transitions } = calibrated();
+      // Descriptors already retained when the machine slept. Were the baseline
+      // retaken on the other side it would absorb them, and the growth they
+      // represent would never be reported again.
+      for (let i = 0; i < 4; i++) sample(80, owners());
+      skip(GAP);
+      for (let i = 0; i < 5; i++) sample(80, owners());
+
+      expect(transitions).toHaveLength(1);
+      expect(transitions[0]).toMatchObject({
+        state: "elevated",
+        baselineFds: 40,
+        growth: 40,
+      });
+    });
+
+    it("keeps an episode already reported open across a gap", () => {
+      const { sample, skip, transitions } = calibrated();
+      for (let i = 0; i < 5; i++) sample(80, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+      const episodeStartedAt = transitions[0]!.episodeStartedAt;
+
+      skip(GAP);
+      // Still elevated on the other side: nothing released the descriptors,
+      // and this is the same episode, not a second one.
+      for (let i = 0; i < 10; i++) sample(80, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+
+      sample(40, owners());
+      sample(40, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated", "recovered"]);
+      expect(transitions[1]?.episodeStartedAt).toBe(episodeStartedAt);
+    });
+
+    it("needs two fresh low readings to recover after a gap", () => {
+      const { sample, skip, transitions } = calibrated();
+      for (let i = 0; i < 5; i++) sample(80, owners());
+      sample(40, owners());
+
+      skip(GAP);
+      sample(40, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+
+      sample(40, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated", "recovered"]);
+    });
+
+    it("does not lower the baseline on readings split by a gap", () => {
+      const { sample, skip } = calibrated();
+      expect(sample(35, owners())?.baselineFds).toBe(40);
+      expect(sample(36, owners())?.baselineFds).toBe(40);
+
+      skip(GAP);
+      // Without the reset this third lower reading would have lowered the
+      // baseline to 36, the highest of a run that never happened.
+      expect(sample(34, owners())?.baselineFds).toBe(40);
+      expect(sample(33, owners())?.baselineFds).toBe(40);
+      expect(sample(32, owners())?.baselineFds).toBe(34);
+    });
+
+    it("discards settling readings taken before a gap", () => {
+      const { sample, skip } = harness();
+      // Warm-up ends on the fourth sample, which is the first settled one.
+      for (let i = 0; i < 3; i++) sample(40, owners());
+      expect(sample(20, owners())?.baselineFds).toBeNull();
+      expect(sample(30, owners())?.baselineFds).toBeNull();
+
+      skip(GAP);
+      // Past the calibration deadline now, so this reading takes the baseline
+      // on its own — the stale low ones from before the gap are not part of it.
+      expect(sample(40, owners())?.baselineFds).toBe(40);
+    });
+
+    it("measures the gap from the last successful listing, not the last attempt", () => {
+      const { sample, transitions } = calibrated();
+      for (let i = 0; i < 4; i++) sample(80, owners());
+
+      // Twenty failures, each one interval after the last: no two attempts are
+      // far apart, but the readings either side of them are, and it is the
+      // readings a streak compares.
+      for (let i = 0; i < 20; i++) expect(sample(null, owners())).toBeNull();
+
+      sample(80, owners());
+      expect(transitions).toEqual([]);
+      for (let i = 0; i < 4; i++) sample(80, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+    });
+
+    it("holds a streak together when the readings either side sit on the limit", () => {
+      const { sample, transitions } = calibrated();
+      for (let i = 0; i < 4; i++) sample(80, owners());
+
+      // One failure fewer leaves exactly MAX_SAMPLE_GAP_MS between the
+      // readings, which is still close enough to be consecutive.
+      for (let i = 0; i < 19; i++) expect(sample(null, owners())).toBeNull();
+
+      sample(80, owners());
+      expect(transitions.map((t) => t.state)).toEqual(["elevated"]);
+    });
+
+    it("tolerates the longest cadence the governor will ever ask for", () => {
+      // FdMonitor cannot import the governor without a cycle, so the limit is
+      // sized against its constants here instead: the deepest power policy
+      // stretches the sample tenfold, and the timer realising it lands a tick
+      // late. Were the limit ever the smaller of the two, growth under that
+      // policy would reset every sample and never be reported at all.
+      expect(FD_SAMPLE_INTERVAL_MS * (FD_SAMPLE_POWER_MULTIPLIER.deep + 1)).toBeLessThan(
+        MAX_SAMPLE_GAP_MS
+      );
     });
   });
 

@@ -37,6 +37,13 @@ const RECOVERED_SAMPLES = 2;
 // up, so growth is always measured against the settled post-restore state
 // and a slow leak cannot be absorbed into a moving floor.
 const LOWER_BASELINE_SAMPLES = 3;
+// A streak is evidence that something held across consecutive readings, which
+// says nothing once the readings stop coming. Sampling already stretches to
+// five minutes under a deep power policy; past twice that the interval did not
+// stretch, it stopped — the machine slept, or the host went that long without
+// a reading it could take — and the readings either side are two moments, not
+// a run. A clock stepped backwards leaves the same hole.
+export const MAX_SAMPLE_GAP_MS = 10 * 60_000;
 const MAX_INSPECTED_FDS = 1024;
 
 export type FdGrowthObservation = Omit<
@@ -75,6 +82,7 @@ export class FdMonitor {
   private elevatedSince = 0;
   private recoveredStreak = 0;
   private episodeStartedAt: number | null = null;
+  private lastSampleAt: number | null = null;
 
   constructor(options: FdMonitorOptions = {}) {
     const platform = options.platform ?? process.platform;
@@ -109,11 +117,19 @@ export class FdMonitor {
   /**
    * Takes one reading and returns a transition only when an episode starts or
    * ends. Returns null when the descriptor listing failed; that reading
-   * neither extends nor breaks a streak.
+   * neither extends nor breaks a streak, though the gap it leaves behind
+   * still can — what counts is how far apart the readings a streak compares
+   * actually were.
    */
   sample(owners: FdOwnerCounts, now: number): FdSample | null {
     const entries = this.listFds();
     if (entries === null) return null;
+
+    // Measured between successful readings, so a run of failed listings cannot
+    // anchor the clock and hide the hours nothing was observed.
+    const gap = this.lastSampleAt === null ? 0 : now - this.lastSampleAt;
+    this.lastSampleAt = now;
+    if (gap < 0 || gap > MAX_SAMPLE_GAP_MS) this.discardStreaks();
 
     const fdCount = entries.length;
     const expectedFds = this.expectedFds(owners);
@@ -173,6 +189,22 @@ export class FdMonitor {
     }
 
     return { fdCount, expectedFds, baselineFds, transition };
+  }
+
+  /**
+   * Drops what was counted across consecutive readings and keeps what stands
+   * on its own. The calibrated baseline stays: readings nobody took are no
+   * evidence the floor moved, and retaking it here would let growth that
+   * accrued unseen settle into the very level it is measured against. An
+   * episode already reported stays open for the same reason — a gap is not
+   * evidence that it ended.
+   */
+  private discardStreaks(): void {
+    this.settling = [];
+    this.lowerReadings = [];
+    this.elevatedStreak = 0;
+    this.elevatedSince = 0;
+    this.recoveredStreak = 0;
   }
 
   private calibrate(excess: number, owners: FdOwnerCounts, now: number): void {

@@ -3085,6 +3085,25 @@ describe("ResourceGovernor", () => {
       governor.dispose();
     });
 
+    it("takes a reading after a clock stepped backwards instead of waiting out the rollback", () => {
+      mockMemoryUsage(100);
+      const governor = new ResourceGovernor(createMockDeps());
+      governor.setPowerLevel("deep");
+      governor.start();
+
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+      expect(mockSample).toHaveBeenCalledTimes(1);
+
+      // Stepping the clock back an hour would otherwise hold the next reading
+      // off until real time caught up, leaving the monitor to compare readings
+      // an hour apart without ever being told they were.
+      vi.setSystemTime(Date.now() - 60 * 60_000);
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+
+      expect(mockSample).toHaveBeenCalledTimes(2);
+      governor.dispose();
+    });
+
     it("samples on every interval while the memory warning is raised", () => {
       // 75% of the process budget: above the 70% warning, below the 85% engage.
       mockMemoryUsage(300, 276);
