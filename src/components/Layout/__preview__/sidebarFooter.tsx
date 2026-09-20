@@ -160,7 +160,7 @@ function baseline(): void {
     isLoading: false,
     error: null,
   });
-  usePanelStore.setState({ panelsById: new Map(), panelIds: [] } as never);
+  usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
   useKeepAwakeStore.setState({
     visible: true,
     state: { isBlocking: true, revision: 1 } as never,
@@ -269,8 +269,11 @@ export const FIXTURES: Record<string, Fixture> = {
           startedAt: Date.now() - 41_000,
         }),
       ];
+      // `panelsById` is a Record, not a Map — `getNarrowPanel` indexes it
+      // directly, so a Map here silently yields no tasks and the fixture
+      // photographs the default state.
       usePanelStore.setState({
-        panelsById: new Map(panels.map((p) => [p.id, p])),
+        panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
         panelIds: panels.map((p) => p.id),
       } as never);
     },
