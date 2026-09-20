@@ -52,6 +52,7 @@ vi.mock("../../utils/logger.js", () => ({
     warn: vi.fn(),
     error: vi.fn(),
   }),
+  ingestHostLogEvent: vi.fn(),
 }));
 
 function monitorConfigsSentTo(child: MockUtilityChild): unknown[] {

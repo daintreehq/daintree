@@ -16,7 +16,7 @@ import type {
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { BrokerError, RequestResponseBroker } from "./rpc/RequestResponseBroker.js";
 import { dispatchForgeRpc } from "./forgeRpcServer.js";
-import { createLogger } from "../utils/logger.js";
+import { createLogger, ingestHostLogEvent } from "../utils/logger.js";
 import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
@@ -69,6 +69,12 @@ interface DisposeTrace {
   } | null;
   kill: { sentAt: number; reason: DisposeKillReason } | null;
 }
+
+// Caps on the raw stdout/stderr we mirror from the host. The buffer bound stops
+// a host that never emits a newline from growing without limit; the line bound
+// keeps one runaway line from dominating a log record.
+const HOST_LOG_BUFFER_LIMIT = 64 * 1024;
+const HOST_LOG_LINE_LIMIT = 4_000;
 
 const RESTART_FLOOR_MS = 100;
 const RESTART_CAP_BASE_MS = 1_000;
@@ -203,8 +209,12 @@ export class WorkspaceHostProcess extends EventEmitter {
    * with `stdio:"pipe"` (instead of `"inherit"`) isolates the host from the
    * main process's fd 2 — critical on AppImage GUI launches where fd 2 points
    * to a dead pty that returns EIO on write. See issue #5588. */
-  private hostStdoutBuffer = "";
-  private hostStderrBuffer = "";
+  /**
+   * Drains the *current* child's stdout/stderr remainders. Replaced on every
+   * fork, so buffers belong to one child and one stream and can never be
+   * flushed into a successor's output.
+   */
+  private flushCurrentHostOutput: (() => void) | null = null;
 
   constructor(projectPath: string, config: Required<WorkspaceClientConfig>) {
     super();
@@ -654,77 +664,70 @@ export class WorkspaceHostProcess extends EventEmitter {
     );
   }
 
-  private forwardHostOutput(kind: "stdout" | "stderr", chunk: Buffer): void {
-    const text = chunk.toString("utf8");
-    if (kind === "stdout") {
-      this.hostStdoutBuffer += text;
-    } else {
-      this.hostStderrBuffer += text;
-    }
-
-    const MAX_BUFFER = 64 * 1024;
-    if (this.hostStdoutBuffer.length > MAX_BUFFER)
-      this.hostStdoutBuffer = this.hostStdoutBuffer.slice(-MAX_BUFFER);
-    if (this.hostStderrBuffer.length > MAX_BUFFER)
-      this.hostStderrBuffer = this.hostStderrBuffer.slice(-MAX_BUFFER);
-
-    const current = kind === "stdout" ? this.hostStdoutBuffer : this.hostStderrBuffer;
-    const lines = current.split(/\r?\n/);
-    const remainder = lines.pop() ?? "";
-    if (kind === "stdout") {
-      this.hostStdoutBuffer = remainder;
-    } else {
-      this.hostStderrBuffer = remainder;
-    }
-
-    for (const line of lines) {
-      const trimmed = line.trimEnd();
-      if (!trimmed) continue;
-      const message = `[WorkspaceHost] ${trimmed.length > 4000 ? `${trimmed.slice(0, 4000)}…` : trimmed}`;
-      if (kind === "stderr") {
-        logWarn(message);
-      } else {
-        logInfo(message);
-      }
-    }
-  }
-
   private installHostLogForwarding(): void {
     if (!this.child) return;
-    this.hostStdoutBuffer = "";
-    this.hostStderrBuffer = "";
+
+    // Buffers live with the child that produced them. A restart installs a
+    // fresh pair, so a dead pipe draining late can neither be silently
+    // dropped nor flush its successor's partial line.
+    const buffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+
+    const append = (kind: "stdout" | "stderr", chunk: Buffer): void => {
+      buffers[kind] += chunk.toString("utf8");
+      if (buffers[kind].length > HOST_LOG_BUFFER_LIMIT) {
+        buffers[kind] = buffers[kind].slice(-HOST_LOG_BUFFER_LIMIT);
+      }
+
+      const lines = buffers[kind].split(/\r?\n/);
+      buffers[kind] = lines.pop() ?? "";
+      for (const line of lines) {
+        const trimmed = line.trimEnd();
+        if (!trimmed) continue;
+        this.logHostOutputLine(kind, trimmed);
+      }
+    };
+
+    // Flush one stream only: the other may still be mid-line, and clearing it
+    // here would split a crash trace across two records.
+    const flush = (kind: "stdout" | "stderr"): void => {
+      const remainder = buffers[kind].trim();
+      buffers[kind] = "";
+      if (remainder) this.logHostOutputLine(kind, remainder);
+    };
+
+    this.flushCurrentHostOutput = () => {
+      flush("stdout");
+      flush("stderr");
+    };
 
     const stdout = (this.child as unknown as { stdout?: NodeJS.ReadableStream }).stdout;
     const stderr = (this.child as unknown as { stderr?: NodeJS.ReadableStream }).stderr;
 
-    stdout?.on("data", (chunk: Buffer) => this.forwardHostOutput("stdout", chunk));
-    stderr?.on("data", (chunk: Buffer) => this.forwardHostOutput("stderr", chunk));
+    stdout?.on("data", (chunk: Buffer) => append("stdout", chunk));
+    stderr?.on("data", (chunk: Buffer) => append("stderr", chunk));
     // Swallow post-exit pipe errors so an unhandled Readable error can't
     // surface as an uncaughtException after the host is already shutting down.
     stdout?.on("error", () => {});
     stderr?.on("error", () => {});
-    // Flush any partial line buffered at close — 'exit' fires before pipes
-    // fully drain, so the tail of a crash stack trace can arrive after the
-    // exit-time flush would otherwise clear the buffer.
-    stdout?.on("close", () => this.flushHostOutputBuffers());
-    stderr?.on("close", () => this.flushHostOutputBuffers());
+    // 'exit' fires before the pipes fully drain, so the tail of a crash stack
+    // trace can arrive after the exit-time flush would otherwise clear it.
+    stdout?.on("close", () => flush("stdout"));
+    stderr?.on("close", () => flush("stderr"));
+  }
+
+  private logHostOutputLine(kind: "stdout" | "stderr", line: string): void {
+    const clamped =
+      line.length > HOST_LOG_LINE_LIMIT ? `${line.slice(0, HOST_LOG_LINE_LIMIT)}…` : line;
+    const message = `[WorkspaceHost] ${clamped}`;
+    if (kind === "stderr") {
+      logWarn(message);
+    } else {
+      logInfo(message);
+    }
   }
 
   private flushHostOutputBuffers(): void {
-    const stdoutRemainder = this.hostStdoutBuffer.trim();
-    if (stdoutRemainder) {
-      logInfo(
-        `[WorkspaceHost] ${stdoutRemainder.length > 4000 ? `${stdoutRemainder.slice(0, 4000)}…` : stdoutRemainder}`
-      );
-    }
-    const stderrRemainder = this.hostStderrBuffer.trim();
-    if (stderrRemainder) {
-      logWarn(
-        `[WorkspaceHost] ${stderrRemainder.length > 4000 ? `${stderrRemainder.slice(0, 4000)}…` : stderrRemainder}`
-      );
-    }
-    this.hostStdoutBuffer = "";
-    this.hostStderrBuffer = "";
+    this.flushCurrentHostOutput?.();
   }
 
   private startHost(): void {
@@ -1041,6 +1044,14 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   private processHostEvent(event: WorkspaceHostEvent): void {
+    // The host already wrote this entry to the shared log file; Main only
+    // mirrors it into its buffer and the renderer's live view. Handled ahead
+    // of the dispose guard so a teardown's own logs still arrive, and ahead of
+    // the domain switch so a log can never reach the broker or the plugin bus.
+    if (event.type === "log") {
+      ingestHostLogEvent(event);
+      return;
+    }
     // Teardown reports only exist after dispose, so they precede the guard.
     if (event.type === "dispose-progress" || event.type === "disposed") {
       this.handleDisposeReport(event);

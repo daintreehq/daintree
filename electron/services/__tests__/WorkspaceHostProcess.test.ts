@@ -14,7 +14,7 @@ function serviceNameFor(projectPath: string): string {
   return `daintree-workspace-host:${safeName}-${pathHash}`;
 }
 
-const { forkMock, mockChildren, loggerCalls, appMock } = vi.hoisted(() => {
+const { forkMock, mockChildren, loggerCalls, ingestedLogs, appMock } = vi.hoisted(() => {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   const { EventEmitter } = require("events") as typeof import("events");
   const forkMock = vi.fn();
@@ -24,11 +24,12 @@ const { forkMock, mockChildren, loggerCalls, appMock } = vi.hoisted(() => {
     message: string;
     context?: Record<string, unknown>;
   }[] = [];
+  const ingestedLogs: unknown[] = [];
   const appEmitter = new EventEmitter();
   const appMock = Object.assign(appEmitter, {
     getPath: vi.fn(() => "/tmp/userData"),
   });
-  return { forkMock, mockChildren, loggerCalls, appMock };
+  return { forkMock, mockChildren, loggerCalls, ingestedLogs, appMock };
 });
 
 class MockUtilityChild extends EventEmitter {
@@ -71,6 +72,7 @@ vi.mock("../../utils/logger.js", () => ({
       loggerCalls.push({ level: "warn", message, context }),
     error: vi.fn(),
   }),
+  ingestHostLogEvent: (event: unknown) => ingestedLogs.push(event),
 }));
 
 async function loadModule(): Promise<typeof import("../WorkspaceHostProcess.js")> {
@@ -83,6 +85,7 @@ describe("WorkspaceHostProcess", () => {
     forkMock.mockReset();
     mockChildren.length = 0;
     loggerCalls.length = 0;
+    ingestedLogs.length = 0;
     appMock.removeAllListeners();
     forkMock.mockImplementation(() => new MockUtilityChild());
   });
@@ -222,6 +225,175 @@ describe("WorkspaceHostProcess", () => {
     // Without an "error" listener Node would throw; we've added a silencer.
     expect(() => child.stdout.emit("error", new Error("pipe gone"))).not.toThrow();
     expect(() => child.stderr.emit("error", new Error("pipe gone"))).not.toThrow();
+
+    host.dispose();
+  });
+
+  describe("structured host log events (#12544)", () => {
+    const logEvent = {
+      type: "log" as const,
+      timestamp: 1_700_000_000_000,
+      level: "info" as const,
+      source: "workspace-host:Topology",
+      message: "PR detected for worktree",
+      contextJson: '{"worktree":"feature/x"}',
+    };
+
+    function makeHost(WorkspaceHostProcess: any) {
+      const host = new WorkspaceHostProcess("/tmp/project", {
+        maxRestartAttempts: 3,
+        healthCheckIntervalMs: 30000,
+      } as any);
+      host.waitForReady().catch(() => {});
+      return host;
+    }
+
+    it("mirrors the entry through the logger's ingest path exactly once", async () => {
+      const { WorkspaceHostProcess } = await loadModule();
+      const host = makeHost(WorkspaceHostProcess);
+      const hostEvents: unknown[] = [];
+      host.on("host-event", (event: unknown) => hostEvents.push(event));
+
+      mockChildren[0].emit("message", logEvent);
+
+      expect(ingestedLogs).toEqual([logEvent]);
+      // A log must not reach the plugin bus, the broker, or the domain relay —
+      // and must not be re-logged, which is what produced the second record.
+      expect(hostEvents).toHaveLength(0);
+      expect(loggerCalls).toHaveLength(0);
+
+      host.dispose();
+    });
+
+    it("keeps delivering log events after dispose", async () => {
+      const { WorkspaceHostProcess } = await loadModule();
+      const host = makeHost(WorkspaceHostProcess);
+
+      host.dispose();
+      mockChildren[0].emit("message", logEvent);
+
+      // Handled ahead of the isDisposed guard: a host's teardown logs are the
+      // ones most worth keeping.
+      expect(ingestedLogs).toEqual([logEvent]);
+    });
+  });
+
+  it("captures the final partial line when the pipe closes after exit", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    // 'exit' fires before the pipes drain, so the tail of a native crash
+    // trace lands after the exit-time flush has already run.
+    child.emit("exit", 139);
+    child.stderr.emit("data", Buffer.from("FATAL ERROR: unterminated tail"));
+    child.stderr.emit("close");
+
+    const warnMessages = loggerCalls.filter((c) => c.level === "warn").map((c) => c.message);
+    expect(warnMessages).toContain("[WorkspaceHost] FATAL ERROR: unterminated tail");
+
+    host.dispose();
+  });
+
+  it("does not split one stream's partial line when the other closes", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.stderr.emit("data", Buffer.from("FATAL ERROR: out of mem"));
+    child.stdout.emit("close");
+    child.stderr.emit("data", Buffer.from("ory\n"));
+
+    const warnMessages = loggerCalls.filter((c) => c.level === "warn").map((c) => c.message);
+    // A close on the other pipe must not truncate this one mid-line.
+    expect(warnMessages).toContain("[WorkspaceHost] FATAL ERROR: out of memory");
+    expect(warnMessages).not.toContain("[WorkspaceHost] FATAL ERROR: out of mem");
+
+    host.dispose();
+  });
+
+  it("flushes a tail exactly once across exit and both stream closes", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.stderr.emit("data", Buffer.from("crash tail"));
+    child.emit("exit", 1);
+    child.stdout.emit("close");
+    child.stderr.emit("close");
+
+    const matching = loggerCalls.filter((c) => c.message === "[WorkspaceHost] crash tail");
+    expect(matching).toHaveLength(1);
+
+    host.dispose();
+  });
+
+  it("keeps a dead child's tail and a successor's partial line apart", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const firstChild = mockChildren[0] as MockUtilityChild;
+    firstChild.emit("exit", 1);
+
+    // manualRestart forks synchronously, bypassing the backoff timer.
+    host.manualRestart();
+    host.waitForReady().catch(() => {});
+    const secondChild = mockChildren[1] as MockUtilityChild;
+    secondChild.stdout.emit("data", Buffer.from("successor partial"));
+
+    // The dead pipe delivers its crash tail only now, with a replacement
+    // already running — the ordering that makes this hard.
+    firstChild.stderr.emit("data", Buffer.from("FATAL: dying child tail"));
+    firstChild.stderr.emit("close");
+
+    const messages = loggerCalls.map((c) => c.message);
+    // The old child's diagnostics must not be dropped just because a
+    // successor exists...
+    expect(messages.filter((m) => m === "[WorkspaceHost] FATAL: dying child tail")).toHaveLength(1);
+    // ...and must not consume the successor's still-incomplete line.
+    expect(messages).not.toContain("[WorkspaceHost] successor partial");
+
+    secondChild.stdout.emit("data", Buffer.from(" line\n"));
+    expect(loggerCalls.map((c) => c.message)).toContain("[WorkspaceHost] successor partial line");
+
+    host.dispose();
+  });
+
+  it("keeps repeated raw lines repeated, including ones shaped like log prefixes", async () => {
+    const { WorkspaceHostProcess } = await loadModule();
+    const host = new WorkspaceHostProcess("/tmp/project", {
+      maxRestartAttempts: 3,
+      healthCheckIntervalMs: 30000,
+    } as any);
+    host.waitForReady().catch(() => {});
+
+    const child = mockChildren[0] as MockUtilityChild;
+    child.stdout.emit("data", Buffer.from("[INFO] [workspace-host:default] retrying\n"));
+    child.stdout.emit("data", Buffer.from("[INFO] [workspace-host:default] retrying\n"));
+
+    // Nothing classifies stdout by its text — the fix removes structured
+    // entries from the stream rather than filtering them out of it, so a line
+    // that merely looks like one is still forwarded, twice.
+    const repeats = loggerCalls.filter(
+      (c) => c.message === "[WorkspaceHost] [INFO] [workspace-host:default] retrying"
+    );
+    expect(repeats).toHaveLength(2);
 
     host.dispose();
   });

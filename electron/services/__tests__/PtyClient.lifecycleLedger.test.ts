@@ -17,6 +17,7 @@ const shared = vi.hoisted(() => {
       clearAll: vi.fn(),
     },
     appMock,
+    ingestHostLogEvent: vi.fn(),
   };
 });
 
@@ -43,6 +44,7 @@ vi.mock("../../utils/logger.js", () => ({
   logInfo: vi.fn(),
   logWarn: vi.fn(),
   isValidLogOverrideLevel: vi.fn(() => true),
+  ingestHostLogEvent: shared.ingestHostLogEvent,
 }));
 
 interface MockUtilityProcess extends EventEmitter {
@@ -123,6 +125,27 @@ describe("PtyClient lifecycle ledger", () => {
     worktreeId: "wt-a",
     env: { ANTHROPIC_BASE_URL: "https://proxy.example" },
   };
+
+  it("delivers a host log event all the way to the logger's ingest path (#12544)", () => {
+    const client = createReadyClient();
+    const logEvent = {
+      type: "log" as const,
+      timestamp: 1_700_000_000_000,
+      level: "warn" as const,
+      source: "pty-host:Graceful",
+      message: "Graceful capture drain ended",
+      contextJson: '{"drained":true}',
+    };
+
+    mockChild.emit("message", logEvent);
+
+    // Proves the whole chain — PtyHostLifecycle intercept, the PtyShard
+    // callback, and PtyClient's wiring — not just the interception.
+    expect(shared.ingestHostLogEvent).toHaveBeenCalledTimes(1);
+    expect(shared.ingestHostLogEvent).toHaveBeenCalledWith(logEvent);
+
+    client.dispose();
+  });
 
   it("mints and stamps launchGeneration on every spawn of an id", () => {
     const client = createReadyClient();

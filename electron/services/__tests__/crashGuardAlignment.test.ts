@@ -26,6 +26,7 @@ vi.mock("../../utils/logger.js", () => ({
     warn: () => undefined,
     error: () => undefined,
   }),
+  ingestHostLogEvent: vi.fn(),
 }));
 
 describe("crash-loop guard alignment", () => {
