@@ -13,10 +13,12 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { QuickRun } from "@/components/Project/QuickRun";
+import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
 import { SidebarStatusBar } from "../SidebarStatusBar";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
-import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
-import type { RunCommand } from "@shared/types";
+import type { PtyPanelData } from "@shared/types/panel";
+import type { Project, RunCommand } from "@shared/types";
+import type { ProjectStatusMap } from "@shared/types/ipc/project";
 import "@/index.css";
 
 /**
@@ -46,6 +48,14 @@ import "@/index.css";
  */
 
 const PROJECT_ID = "proj-daintree";
+
+const PROJECT: Project = {
+  id: PROJECT_ID,
+  path: "/Users/greg/Projects/daintree",
+  name: "Daintree",
+  emoji: "\u{1F333}",
+  lastOpened: Date.now(),
+};
 
 const WORKTREES: WorktreeSnapshot[] = [
   {
@@ -94,8 +104,8 @@ const SAVED_RUNNERS: RunCommand[] = [
   },
 ];
 
-/** `PtyPanelData` pins `kind`; a fixture needs to set the rest. */
-function task(id: string, title: string, extra: Partial<PtyPanelData> = {}): PanelInstance {
+/** One QuickRun-spawned task panel. */
+function task(id: string, title: string, extra: Partial<PtyPanelData> = {}): PtyPanelData {
   return {
     id,
     title,
@@ -104,14 +114,13 @@ function task(id: string, title: string, extra: Partial<PtyPanelData> = {}): Pan
     cols: 120,
     rows: 40,
     worktreeId: "wt-status-bar",
-    projectId: PROJECT_ID,
     location: "dock",
     hasPty: true,
     spawnedBy: "quickrun",
     runtimeStatus: "running",
     startedAt: Date.now() - 92_000,
     ...extra,
-  } as PanelInstance;
+  };
 }
 
 interface Fixture {
@@ -126,11 +135,20 @@ function seedStats(runningProjects: number, totalMemoryMB: number): void {
     id: `proj-${i}`,
     name: ["Daintree", "Assistant", "Backend", "Site builder"][i]!,
   }));
-  const stats: Record<string, { processCount: number }> = {};
+  const stats: ProjectStatusMap = {};
   projects.forEach((p, i) => {
-    stats[p.id] = { processCount: i < runningProjects ? 2 : 0 };
+    const running = i < runningProjects;
+    stats[p.id] = {
+      processCount: running ? 2 : 0,
+      activeAgentCount: running ? 1 : 0,
+      waitingAgentCount: 0,
+      blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
+    };
   });
-  useProjectStatsStore.setState({ stats: stats as never });
+  useProjectStatsStore.setState({ stats });
   PROJECT_LIST = projects;
   APP_MEMORY_MB = totalMemoryMB;
 }
@@ -151,7 +169,7 @@ function baseline(): void {
   CURRENT_STORE = worktreeStore;
 
   useWorktreeSelectionStore.setState({ activeWorktreeId: "wt-status-bar" });
-  useProjectStore.setState({ currentProject: { id: PROJECT_ID, name: "Daintree" } as never });
+  useProjectStore.setState({ currentProject: PROJECT });
   useProjectSettingsStore.setState({
     projectId: PROJECT_ID,
     settings: { runCommands: SAVED_RUNNERS },
@@ -160,10 +178,10 @@ function baseline(): void {
     isLoading: false,
     error: null,
   });
-  usePanelStore.setState({ panelsById: {}, panelIds: [] } as never);
+  usePanelStore.setState({ panelsById: {}, panelIds: [] });
   useKeepAwakeStore.setState({
     visible: true,
-    state: { isBlocking: true, revision: 1 } as never,
+    state: { config: { enabled: true, onBattery: false }, isBlocking: true, revision: 1 },
     loadError: null,
   });
   seedStats(1, 1240);
@@ -178,22 +196,40 @@ export const FIXTURES: Record<string, Fixture> = {
     seed: baseline,
   },
 
-  /** The wake lock released — the strip's other everyday shape. */
+  /** No work in flight — the mark's other half, and the reason the row stays. */
   idle: {
-    what: "no wake lock, one project running",
+    what: "no work in flight, one project still holding processes",
     seed: () => {
       baseline();
-      useKeepAwakeStore.setState({ visible: false, state: null });
+      useKeepAwakeStore.setState({
+        visible: false,
+        state: { config: { enabled: true, onBattery: false }, isBlocking: false, revision: 2 },
+      });
     },
   },
 
-  /** Nothing running at all: the readout hides and the whole row should vanish. */
+  /** Nothing running at all: the row stays and says so. */
   "nothing-running": {
-    what: "no projects running and no wake lock — the row should not render",
+    what: "nothing running and no work in flight — the row reads Idle",
     seed: () => {
       baseline();
-      useKeepAwakeStore.setState({ visible: false, state: null });
+      useKeepAwakeStore.setState({
+        visible: false,
+        state: { config: { enabled: true, onBattery: false }, isBlocking: false, revision: 2 },
+      });
       seedStats(0, 380);
+    },
+  },
+
+  /** Keep-awake switched off: the hold says nothing, so presence answers instead. */
+  "keep-awake-off": {
+    what: "keep-awake disabled — the mark falls back to process presence",
+    seed: () => {
+      baseline();
+      useKeepAwakeStore.setState({
+        visible: false,
+        state: { config: { enabled: false, onBattery: false }, isBlocking: false, revision: 2 },
+      });
     },
   },
 
@@ -213,12 +249,6 @@ export const FIXTURES: Record<string, Fixture> = {
       baseline();
       seedStats(4, 24_000);
     },
-  },
-
-  /** The state the owner says he wants: QuickRun folded away. */
-  collapsed: {
-    what: "QuickRun collapsed to its header",
-    seed: baseline,
   },
 
   /** Both toggles lit, so their active treatment can be compared to their rest one. */
@@ -275,7 +305,7 @@ export const FIXTURES: Record<string, Fixture> = {
       usePanelStore.setState({
         panelsById: Object.fromEntries(panels.map((p) => [p.id, p])),
         panelIds: panels.map((p) => p.id),
-      } as never);
+      });
     },
   },
 };
@@ -376,8 +406,13 @@ function Preview() {
       style={{ width: `${width}px` }}
     >
       <TreeTail />
+      {/* The real stacking order, from `Sidebar.tsx`. `ProjectPluginIndicator`
+          renders null unless the project stages plugins, which is the usual
+          case — it is here so the two strips are reviewed as the pair they
+          form, since they share chrome, row height, dot and type. */}
       <div data-footer-region className="flex flex-col">
         <QuickRun projectId={PROJECT_ID} />
+        <ProjectPluginIndicator />
         <SidebarStatusBar />
       </div>
     </div>

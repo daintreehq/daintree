@@ -94,10 +94,24 @@ describe("QuickRun", () => {
     vi.clearAllMocks();
     addTerminalResolver = null;
     addTerminalRejecter = null;
+    // The disclosure persists per project, so one test opening the panel would
+    // otherwise hand the next test an already-open one.
+    localStorage.clear();
   });
 
+  /**
+   * The panel is collapsed by default now, so every test that needs the input
+   * opens it first. These tests are about the spawn guard, not the disclosure.
+   */
+  function openPanel() {
+    if (screen.queryByPlaceholderText("Run a command") === null) {
+      fireEvent.click(screen.getByRole("button", { name: /run command/i }));
+    }
+    return screen.getByPlaceholderText("Run a command");
+  }
+
   function typeAndEnter(text: string) {
-    const input = screen.getByPlaceholderText("Execute command...");
+    const input = openPanel();
     fireEvent.change(input, { target: { value: text } });
     fireEvent.keyDown(input, { key: "Enter" });
   }
@@ -106,7 +120,7 @@ describe("QuickRun", () => {
     setupPendingTerminal();
     render(<QuickRun projectId="test-project" />);
 
-    const input = screen.getByPlaceholderText("Execute command...");
+    const input = openPanel();
     fireEvent.change(input, { target: { value: "npm test" } });
 
     // Fire Enter twice before the first addPanel resolves
@@ -123,7 +137,7 @@ describe("QuickRun", () => {
     setupPendingTerminal();
     render(<QuickRun projectId="test-project" />);
 
-    const input = screen.getByPlaceholderText("Execute command...");
+    const input = openPanel();
     fireEvent.change(input, { target: { value: "npm test" } });
 
     // Enter via keyboard
@@ -181,15 +195,38 @@ describe("QuickRun", () => {
   it("does not call addPanel for blank input", () => {
     render(<QuickRun projectId="test-project" />);
 
-    const input = screen.getByPlaceholderText("Execute command...");
+    const input = openPanel();
     fireEvent.change(input, { target: { value: "   " } });
     fireEvent.keyDown(input, { key: "Enter" });
 
     expect(mockAddTerminal).not.toHaveBeenCalled();
   });
 
+  it("stays closed until asked, and remembers the answer per project", () => {
+    const { unmount } = render(<QuickRun projectId="test-project" />);
+
+    // Closed is the resting state: this launcher is opt-in, and it used to
+    // spend the footer's vertical budget on every session that never ran a
+    // command.
+    expect(screen.queryByPlaceholderText("Run a command")).toBeNull();
+
+    openPanel();
+    expect(screen.queryByPlaceholderText("Run a command")).not.toBeNull();
+    unmount();
+
+    // Reopening the same project honours the choice...
+    const again = render(<QuickRun projectId="test-project" />);
+    expect(screen.queryByPlaceholderText("Run a command")).not.toBeNull();
+    again.unmount();
+
+    // ...while a different project starts from the default again.
+    render(<QuickRun projectId="other-project" />);
+    expect(screen.queryByPlaceholderText("Run a command")).toBeNull();
+  });
+
   it("renders all main buttons with type='button'", () => {
     render(<QuickRun projectId="test-project" />);
+    openPanel();
 
     const allButtons = screen.getAllByRole("button");
     for (const button of allButtons) {

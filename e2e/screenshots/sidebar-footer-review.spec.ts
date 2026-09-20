@@ -40,9 +40,13 @@ import { startPreviewServer, stubViteHmrClient, makeSnap } from "../helpers/prev
 
 const ENABLED = !!process.env.DAINTREE_SHOT_FOOTER;
 
-/** The sidebar's canonical width, and the narrowest it is worth shipping. */
+/**
+ * The sidebar's canonical width, and its actual floor — `MIN_SIDEBAR_WIDTH` in
+ * `AppLayout.tsx`. Reviewing at a comfortable "narrow" is how a surface ships
+ * broken at the width the resizer really stops at.
+ */
 const DEFAULT_WIDTH = 320;
-const NARROW_WIDTH = 240;
+const NARROW_WIDTH = 200;
 
 const OUT_DIR = path.resolve(
   process.env.DAINTREE_SHOT_DIR ?? path.join(process.cwd(), "artifacts", "sidebar-footer-shots")
@@ -60,14 +64,29 @@ const FIXTURES = [
   "default",
   "idle",
   "nothing-running",
+  "keep-awake-off",
   "many-projects",
   "memory-critical",
-  "collapsed",
   "toggles-active",
   "no-worktree",
   "long-branch",
   "running-tasks",
 ] as const;
+
+/**
+ * Fixtures whose point is the open panel.
+ *
+ * QuickRun now rests collapsed and keeps `isExpanded` in a `useState` seeded
+ * from localStorage, so the only honest way to photograph the open state is to
+ * click the disclosure the way a user would. `default` deliberately stays shut
+ * — that is the shape the footer actually wears.
+ */
+const EXPANDED: ReadonlySet<string> = new Set([
+  "toggles-active",
+  "no-worktree",
+  "long-branch",
+  "running-tasks",
+]);
 
 let server: Awaited<ReturnType<typeof startPreviewServer>> | undefined;
 let baseURL = "";
@@ -98,7 +117,9 @@ async function open(
 ): Promise<Locator> {
   await stubViteHmrClient(page);
   await page.setViewportSize({ width: width + 40, height: 760 });
-  await page.goto(`${baseURL}/sidebar-footer-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`);
+  await page.goto(
+    `${baseURL}/sidebar-footer-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`
+  );
   const shell = page.locator("[data-preview-shell]");
   await expect(shell, `fixture "${fixture}" rendered no shell`).toBeAttached();
   // Type metrics drive every measurement in a strip this dense, so a capture
@@ -111,6 +132,22 @@ async function open(
 /** The footer alone, for the tight crops; the shell for the in-context ones. */
 function footer(page: Page): Locator {
   return page.locator("[data-footer-region]");
+}
+
+/**
+ * Open QuickRun's disclosure and wait for the panel itself.
+ *
+ * Not for the input: the no-worktree state deliberately renders the guard
+ * sentence in its place, so waiting on the field would fail on exactly the
+ * fixture that exists to photograph its absence.
+ */
+async function expandPanel(page: Page): Promise<void> {
+  await page
+    .getByRole("button", { name: /run command/i })
+    .first()
+    .click();
+  await expect(page.locator("#quick-run-panel")).toBeVisible();
+  await page.waitForTimeout(200);
 }
 
 test("Sidebar footer — states, widths and themes", async ({ page }) => {
@@ -132,8 +169,16 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
       // keeps `isExpanded` in a `useState` with no store and no persistence, so
       // the only way to reach the state is to click the header the way a user
       // would.
-      if (fixture === "collapsed") {
-        await page.getByRole("button", { expanded: true }).first().click();
+      if (EXPANDED.has(fixture)) {
+        await expandPanel(page);
+      }
+
+      // The output-location toggle is a plain `useState` with no store and no
+      // persistence, so the Dock half of the pair is only reachable by clicking
+      // it. Without this the fixture shows one lit toggle and one at rest, and
+      // reads as a missing affordance rather than a state.
+      if (fixture === "toggles-active") {
+        await page.getByRole("button", { name: /run in the dock/i }).click();
         await page.waitForTimeout(200);
       }
 
@@ -149,6 +194,7 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
     // Something typed: the run button leaves its disabled treatment and the
     // suggestion menu opens upward over the tree.
     await open(page, "default", theme);
+    await expandPanel(page);
     const input = page.getByLabel("Command input");
     await input.click();
     await input.fill("npm run dev");
@@ -158,6 +204,7 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
     // Focused with an empty input: the suggestion list at its fullest, which is
     // where the footer's real occupied height shows up.
     await open(page, "default", theme);
+    await expandPanel(page);
     await page.getByLabel("Command input").click();
     await page.waitForTimeout(250);
     written.push(await snap(page.locator("[data-preview-shell]"), `suggestions-${theme}.png`));
@@ -165,9 +212,7 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
     // The status row on its own, at 3x the size, so the dot and the cup can be
     // judged as glyphs rather than as smudges.
     await open(page, "many-projects", theme);
-    written.push(
-      await snap(page.locator("[data-sidebar-status-bar]"), `status-row-${theme}.png`)
-    );
+    written.push(await snap(page.locator("[data-sidebar-status-bar]"), `status-row-${theme}.png`));
   }
 
   // The pressure case: the narrowest column worth shipping, default theme.
@@ -175,6 +220,7 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
     const theme = THEMES[0]!;
     for (const fixture of ["default", "long-branch", "running-tasks"] as const) {
       await open(page, fixture, theme, NARROW_WIDTH);
+      if (EXPANDED.has(fixture)) await expandPanel(page);
       written.push(await snap(footer(page), `${fixture}-${theme}-narrow.png`));
     }
   }
