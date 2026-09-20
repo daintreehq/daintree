@@ -83,7 +83,7 @@ describe("terminal event handlers — fd-growth (#12520)", () => {
     expect(message).toContain("140 open descriptors, 60 expected");
     expect(message).toContain("25 terminals, 2 pooled PTYs, 0 plugin PTYs, 3 analysis workers");
     expect(message).toContain("growth 43 over the post-restore baseline of 37");
-    expect(message).toContain("for 3 samples 30s apart");
+    expect(message).toContain("for 3 samples at the current 30s sample interval");
     expect(message).toContain("file 70");
     expect(message).not.toContain("other 0");
   });
@@ -106,6 +106,17 @@ describe("terminal event handlers — fd-growth (#12520)", () => {
     expect(message).toContain("FD count back near baseline");
     expect(message).toContain("growth 2 over the post-restore baseline of 37");
     expect(message).toContain("12 min after it rose");
+  });
+
+  it("reports the configured cadence without claiming the samples were spread that way", () => {
+    // A deep power policy stretches the interval, and a streak can span a
+    // level change — so the line names the interval in force, not a spacing it
+    // cannot know.
+    ptyClient.emit("fd-growth", makePayload({ sustainedSamples: 5, sampleIntervalMs: 300_000 }));
+
+    const [message] = logWarn.mock.calls[0] as [string];
+    expect(message).toContain("for 5 samples at the current 300s sample interval");
+    expect(message).not.toContain("apart");
   });
 
   it("omits the type breakdown when the elevation carries none", () => {

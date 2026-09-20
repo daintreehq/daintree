@@ -229,9 +229,12 @@ function formatFdGrowth(payload: FdGrowthPayload): string {
   const owners =
     `${payload.terminals} terminals, ${payload.pooledPtys} pooled PTYs, ` +
     `${payload.pluginPtys} plugin PTYs, ${payload.analysisWorkers} analysis workers`;
+  // The configured cadence, not a measured spacing: the monitor guarantees the
+  // samples were consecutive, not that they were evenly spread — the level can
+  // change mid-streak, and pressure overrides it outright.
   const span =
-    `for ${payload.sustainedSamples} samples ` +
-    `${Math.round(payload.sampleIntervalMs / 1000)}s apart`;
+    `for ${payload.sustainedSamples} samples at the current ` +
+    `${Math.round(payload.sampleIntervalMs / 1000)}s sample interval`;
   const counts =
     `${payload.fdCount} open descriptors, ${payload.expectedFds} expected for ${owners}; ` +
     `growth ${payload.growth} over the post-restore baseline of ${payload.baselineFds}`;
