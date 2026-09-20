@@ -91,6 +91,23 @@ export const PUSH_CHANNELS = {
  * about its own `__svelte_meta` can at worst point the inspector at the wrong
  * element of its own project, never at another file.
  */
+/**
+ * A label is a tag, an id and class tokens, none of which can hold a line
+ * break — so one that arrives with a break was not built from the element, and
+ * the rest of it is not a second line of anything. Collapsed rather than
+ * rejected: the label is how the user recognises what they clicked, and the
+ * host decides it is one line, not whatever is running in the page.
+ *
+ * Only the breaks go. A no-break space is legal inside an id, at either end of
+ * it as much as in the middle, and an id of `save\u00a0` is not the id `save`
+ * — so nothing here trims, and no other whitespace is touched.
+ */
+export function singleLineLabel(label: string): string {
+  return label
+    .replace(/^[\n\r\f\u0085\u2028\u2029]+|[\n\r\f\u0085\u2028\u2029]+$/gu, "")
+    .replace(/[\n\r\f\u0085\u2028\u2029]+/gu, " ");
+}
+
 export const GuestNodeObservationSchema = z
   .object({
     runtimeOccurrenceId: z.string().min(1).max(128),

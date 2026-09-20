@@ -103,6 +103,12 @@ export type Rect = z.infer<typeof RectSchema>;
  */
 export const DefinitionSchema = z
   .object({
+    /**
+     * The coordinate this element was found at, in the page's own spelling of
+     * the file — kept verbatim because it is also the key the page is asked
+     * for this element by, and the page only knows its own spelling. Never
+     * cite it: use {@link Definition.sourceFile}.
+     */
     location: SourceLocationSchema,
     range: SourceRangeSchema,
     tagName: z.string().min(1),
@@ -151,6 +157,15 @@ export const SelectedNodeSchema = z
      */
     runtimeOccurrenceId: z.string().min(1),
     definition: DefinitionSchema.nullable(),
+    /**
+     * The file the definition's location resolved to, app-relative and POSIX,
+     * in the host's spelling rather than the page's. It sits here with the
+     * host's other conclusions about the node — `invocation`, `mapping` —
+     * because `definition.location` is the page's coordinate and has to stay
+     * that way. Anything naming the file to a person or an agent names this.
+     * Absent when nothing was traced, or from a resolve that predates it.
+     */
+    sourceFile: z.string().min(1).optional(),
     /** Nearest `component` ancestry entry: the call site that rendered this copy. */
     invocation: AncestryEntrySchema.nullable(),
     /** Full chain, innermost first, generated frames included but flagged. */

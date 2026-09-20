@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { AncestryEntry as ModelAncestryEntry, SelectedNode } from "../shared/model.js";
-import type {
-  GuestNodeObservation,
-  SelectionResolveArgs,
-  SelectionResolveResult,
-  SelectionMismatch,
+import {
+  singleLineLabel,
+  type GuestNodeObservation,
+  type SelectionResolveArgs,
+  type SelectionResolveResult,
+  type SelectionMismatch,
 } from "../shared/protocol.js";
 import type { ResolvedElement } from "@daintreehq/svelte-source-model";
 import { loadParse, loadSourceModel, type SourceModel } from "./engine.js";
@@ -58,19 +59,6 @@ export function redactUrl(raw: string): string {
   return `${url.toString()}?${keys.map((key) => `${encodeURIComponent(key)}=`).join("&")}`;
 }
 
-/**
- * A label is a tag, an id and class tokens, none of which can hold a line
- * break — so one that arrives with a break was not built from the element, and
- * the rest of it is not a second line of anything. Collapsed rather than
- * rejected: the label is how the user recognises what they clicked, and it is
- * the host that decides it is one line, not whatever is running in the page.
- * Only the breaks go: a no-break space is legal inside an id, and turning it
- * into a space would name an element that isn't there.
- */
-function singleLine(label: string): string {
-  return label.replace(/[\n\r\f\u0085\u2028\u2029]+/gu, " ").trim();
-}
-
 interface NodeContext {
   workspace: Workspace;
   model: SourceModel;
@@ -113,7 +101,7 @@ async function resolveNode(
     runtimeOccurrenceId: observation.runtimeOccurrenceId,
     invocation,
     ancestry,
-    label: singleLine(observation.label),
+    label: singleLineLabel(observation.label),
     bounds: observation.bounds,
   };
   const inspectOnly = (): NodeOutcome => ({
@@ -246,6 +234,13 @@ async function resolveNode(
     status: "ok",
     node: {
       ...base,
+      // What the page spelled got us here; it is not what we found. A reported
+      // path may carry `..` segments, and anything short of a control
+      // character, and still resolve onto a real file — so the spelling can
+      // hold text the resolved path does not. The coordinate stays as
+      // reported, because that is how the page is asked for this element
+      // again; everything that cites the file cites this instead.
+      sourceFile: target.appRelative,
       definition: {
         location,
         range: element.range,
