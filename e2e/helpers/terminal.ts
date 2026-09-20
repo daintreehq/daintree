@@ -391,7 +391,7 @@ async function dispatchXtermContextMenu(xterm: Locator): Promise<boolean> {
 async function dispatchTerminalTriggerContextMenu(
   page: Page,
   panelLocator: Locator,
-  xterm: Locator
+  _xterm: Locator
 ): Promise<boolean> {
   const panelId = await getPanelId(panelLocator);
   if (!panelId) return false;

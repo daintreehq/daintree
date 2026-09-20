@@ -690,7 +690,10 @@ export function installTerminalBoundListeners(
     deps.notifyParsed(id);
     if (!managed.isUserScrolledBack && !managed.isAltBuffer) {
       if (!managed.terminal.hasSelection()) {
-        deps.scrollToBottomSafe(managed);
+        // xterm refreshes the whole viewport even for a zero-distance scroll.
+        // A prompt/spinner repaint already marks its changed rows dirty.
+        const buffer = terminal.buffer.active;
+        if (buffer.viewportY !== buffer.baseY) deps.scrollToBottomSafe(managed);
       } else {
         managed.isUserScrolledBack = true;
         deps.updateScrollState(id, true);

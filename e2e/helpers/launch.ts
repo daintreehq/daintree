@@ -358,7 +358,7 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
 
     let app: ElectronApplication | null = null;
     try {
-      const launchEnv = {
+      const launchEnv: NodeJS.ProcessEnv = {
         ...process.env,
         ...options.env,
         NODE_ENV: "production",
@@ -415,7 +415,11 @@ export async function launchApp(options: LaunchOptions = {}): Promise<AppContext
       // connecting, which flakes under release-runner fanout.
       app = await electron.launch({
         args,
-        env: launchEnv,
+        env: Object.fromEntries(
+          Object.entries(launchEnv).filter(
+            (entry): entry is [string, string] => entry[1] !== undefined
+          )
+        ),
         timeout: attemptTimeout(attempt),
       });
 

@@ -1,0 +1,248 @@
+{
+  "complete": false,
+  "excludedOrPendingCases": {
+    "redundant": "Screen saver began at21:25:25 local; four affected readings excluded. Requires unlocked foreground repeat."
+  },
+  "referenceSource": "c67e86d959b3768fd89d75273906e0f1a2828bbc",
+  "apparatusHashes": ["4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"],
+  "candidateProductDiffSha256": "36b124acf113a9713e1d6531a093df71ec15c8c012a8cfdf0f42029cf39e02af",
+  "machine": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "release": "25.3.0",
+    "cpu": "Apple M4 Max"
+  },
+  "macOS": "26.3.1",
+  "logicalCPUs": 16,
+  "memoryGiB": 64,
+  "protocol": {
+    "order": "original/candidate/candidate/original",
+    "secondsPerWindow": 30,
+    "windowsPerArmPerCase": 2,
+    "window": {
+      "width": 1728,
+      "height": 1000
+    },
+    "scale": "2",
+    "fontFamily": "Menlo",
+    "warmupSeconds": 8,
+    "cpuUnit": "percent of one core",
+    "gpuUnit": "accumulated device GPU time / wall time, percent; not percent of all GPU cores",
+    "classification": {
+      "kind": "mechanism",
+      "family": "foreground agent terminal",
+      "fidelity": {
+        "entryPoint": "user-event",
+        "renderer": "real",
+        "electronTransport": "real",
+        "pty": "real",
+        "processTopology": "e2e-build",
+        "externalDependencies": "hermetic"
+      },
+      "claim": "App-process CPU and device GPU time while a fixture agent launched through the toolbar renders deterministic output in visible WebGL terminals. Real working/waiting transitions are checked using OSC heartbeats. This does not measure model inference, arbitrary live-agent detection accuracy, other applications, or WindowServer's compositing cost. GPU time is not GPU-core occupancy."
+    }
+  },
+  "results": {
+    "idle": {
+      "before": {
+        "windows": 2,
+        "cpuPercent": 4.693997501525969,
+        "gpuPercent": 0.13355586188377608,
+        "cpuRange": [4.517283325931437, 4.870763646555602],
+        "gpuRange": [0.12386102403688316, 0.14325465154585912],
+        "renderRowsPerSecond": 0.0,
+        "rendersPerSecond": 0.0,
+        "inputSamples": 0,
+        "inputMedianMs": null,
+        "inputP95Ms": null,
+        "inputMaxMs": null,
+        "waitingLatenciesMs": [217.55275000000256, 220.27049999999872],
+        "geometry": [[189, 55, 1344, 12, 2]],
+        "buildHash": "bd1f7baa3336d6acfb3d8e9b1073e8d42a7b7845bb11415ea7017029e16041f9",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "after": {
+        "windows": 2,
+        "cpuPercent": 4.756532484111004,
+        "gpuPercent": 0.13542039878601134,
+        "cpuRange": [4.570369432589558, 4.942686614088912],
+        "gpuRange": [0.1341135135101448, 0.13672719729584942],
+        "renderRowsPerSecond": 0.914160842605334,
+        "rendersPerSecond": 0.01662110622918789,
+        "inputSamples": 0,
+        "inputMedianMs": null,
+        "inputP95Ms": null,
+        "inputMaxMs": null,
+        "waitingLatenciesMs": [222.5, 220.9622079999972],
+        "geometry": [[189, 55, 1344, 12, 2]],
+        "buildHash": "a72a9df3b25ab59ed94b96dd2e4eb1d6a782e4315db3bfe979c229eb960d0faf",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "cpuReductionPercent": -1.3322329755119267,
+      "gpuReductionPercent": -1.3960726814505664
+    },
+    "spinner": {
+      "before": {
+        "windows": 2,
+        "cpuPercent": 21.68090735680103,
+        "gpuPercent": 3.436280789650522,
+        "cpuRange": [21.20241688167397, 22.159435592737502],
+        "gpuRange": [3.4361974789982943, 3.4363641100412132],
+        "renderRowsPerSecond": 593.2946506068934,
+        "rendersPerSecond": 10.787175465579878,
+        "inputSamples": 0,
+        "inputMedianMs": null,
+        "inputP95Ms": null,
+        "inputMaxMs": null,
+        "waitingLatenciesMs": [9115.948083999996, 9126.282166999998],
+        "geometry": [[183, 55, 1344, 12, 2]],
+        "buildHash": "bd1f7baa3336d6acfb3d8e9b1073e8d42a7b7845bb11415ea7017029e16041f9",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "after": {
+        "windows": 2,
+        "cpuPercent": 18.86468908203409,
+        "gpuPercent": 2.575354508855194,
+        "cpuRange": [18.33792936180798, 19.39109983466411],
+        "gpuRange": [2.562956121927333, 2.587761455068217],
+        "renderRowsPerSecond": 50.367779559927946,
+        "rendersPerSecond": 10.738477094294868,
+        "inputSamples": 0,
+        "inputMedianMs": null,
+        "inputP95Ms": null,
+        "inputMaxMs": null,
+        "waitingLatenciesMs": [9119.963041000003, 8105.802000000003],
+        "geometry": [[183, 55, 1344, 12, 2]],
+        "buildHash": "a72a9df3b25ab59ed94b96dd2e4eb1d6a782e4315db3bfe979c229eb960d0faf",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "cpuReductionPercent": 12.989393056391286,
+      "gpuReductionPercent": 25.054014310713136
+    },
+    "redundant": {},
+    "stream": {
+      "before": {
+        "windows": 2,
+        "cpuPercent": 24.56197028795288,
+        "gpuPercent": 4.255064760377642,
+        "cpuRange": [24.187910836201787, 24.93588541018094],
+        "gpuRange": [4.2133398987363195, 4.296805859349749],
+        "renderRowsPerSecond": 1109.9731236094667,
+        "rendersPerSecond": 20.18132952017212,
+        "inputSamples": 0,
+        "inputMedianMs": null,
+        "inputP95Ms": null,
+        "inputMaxMs": null,
+        "waitingLatenciesMs": [9129.768833000002, 9117.809292000005],
+        "geometry": [[183, 55, 1344, 12, 2]],
+        "buildHash": "bd1f7baa3336d6acfb3d8e9b1073e8d42a7b7845bb11415ea7017029e16041f9",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "after": {
+        "windows": 2,
+        "cpuPercent": 23.39793391750346,
+        "gpuPercent": 3.5699269677783034,
+        "cpuRange": [22.53484166490345, 24.260783762091037],
+        "gpuRange": [3.532663020610513, 3.6071830554724507],
+        "renderRowsPerSecond": 1074.9278382604339,
+        "rendersPerSecond": 20.262208403178835,
+        "inputSamples": 0,
+        "inputMedianMs": null,
+        "inputP95Ms": null,
+        "inputMaxMs": null,
+        "waitingLatenciesMs": [8118.5740000000005, 8116.857457999999],
+        "geometry": [[183, 55, 1344, 12, 2]],
+        "buildHash": "a72a9df3b25ab59ed94b96dd2e4eb1d6a782e4315db3bfe979c229eb960d0faf",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "cpuReductionPercent": 4.739181575430673,
+      "gpuReductionPercent": 16.10170070686613
+    },
+    "typing": {
+      "before": {
+        "windows": 2,
+        "cpuPercent": 11.667985174949349,
+        "gpuPercent": 0.8999822077692866,
+        "cpuRange": [11.543838053357272, 11.792190158163358],
+        "gpuRange": [0.8996284739660554, 0.9003358030746346],
+        "renderRowsPerSecond": 268.9741772339297,
+        "rendersPerSecond": 4.89043958607145,
+        "inputSamples": 294,
+        "inputMedianMs": 1.905000001192093,
+        "inputP95Ms": 5.25,
+        "inputMaxMs": 36.96000000834465,
+        "waitingLatenciesMs": [9910.17237500001, 9926.067875000008],
+        "geometry": [[189, 55, 1344, 12, 2]],
+        "buildHash": "bd1f7baa3336d6acfb3d8e9b1073e8d42a7b7845bb11415ea7017029e16041f9",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "after": {
+        "windows": 2,
+        "cpuPercent": 10.445467510035584,
+        "gpuPercent": 0.8609233636961947,
+        "cpuRange": [10.291679120246414, 10.599177772645675],
+        "gpuRange": [0.8522399861186494, 0.8696118578383291],
+        "renderRowsPerSecond": 24.346185869464644,
+        "rendersPerSecond": 4.879163408883622,
+        "inputSamples": 294,
+        "inputMedianMs": 1.3275000154972076,
+        "inputP95Ms": 5.229999989271164,
+        "inputMaxMs": 34.0799999833107,
+        "waitingLatenciesMs": [9903.993875, 9914.349915999992],
+        "geometry": [[189, 55, 1344, 12, 2]],
+        "buildHash": "a72a9df3b25ab59ed94b96dd2e4eb1d6a782e4315db3bfe979c229eb960d0faf",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "cpuReductionPercent": 10.47753872312468,
+      "gpuReductionPercent": 4.339957360924274
+    },
+    "two-spinner": {
+      "before": {
+        "windows": 2,
+        "cpuPercent": 25.816968234205813,
+        "gpuPercent": 4.328980342076373,
+        "cpuRange": [25.616023560474734, 26.017829739197516],
+        "gpuRange": [4.276288249527479, 4.38169787445731],
+        "renderRowsPerSecond": 1183.9716450582632,
+        "rendersPerSecond": 21.52675718287751,
+        "inputSamples": 0,
+        "inputMedianMs": null,
+        "inputP95Ms": null,
+        "inputMaxMs": null,
+        "waitingLatenciesMs": [
+          8118.161416000003, 8115.016166000001, 8116.521541000002, 8118.702041000004
+        ],
+        "geometry": [
+          [91, 55, 656, 12, 2],
+          [91, 55, 656, 12, 2]
+        ],
+        "buildHash": "bd1f7baa3336d6acfb3d8e9b1073e8d42a7b7845bb11415ea7017029e16041f9",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "after": {
+        "windows": 2,
+        "cpuPercent": 22.754800228567305,
+        "gpuPercent": 3.414170634393335,
+        "cpuRange": [22.75455356768224, 22.755046929823067],
+        "gpuRange": [3.3002268110213016, 3.5281409987604024],
+        "renderRowsPerSecond": 104.31839834940553,
+        "rendersPerSecond": 21.541847866467272,
+        "inputSamples": 0,
+        "inputMedianMs": null,
+        "inputP95Ms": null,
+        "inputMaxMs": null,
+        "waitingLatenciesMs": [
+          8114.744125000005, 8117.912208000002, 8116.220125, 8114.122834000002
+        ],
+        "geometry": [
+          [91, 55, 656, 12, 2],
+          [91, 55, 656, 12, 2]
+        ],
+        "buildHash": "a72a9df3b25ab59ed94b96dd2e4eb1d6a782e4315db3bfe979c229eb960d0faf",
+        "apparatusHash": "4a4f60723c1ae6053ef0603b6c96b146001f491695e67a6f7e8b5cab92722b09"
+      },
+      "cpuReductionPercent": 11.861067410623892,
+      "gpuReductionPercent": 21.13222134070154
+    }
+  }
+}

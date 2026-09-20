@@ -162,6 +162,11 @@ function playwrightBench({ summary, kind, project, spec, gate, build }: Playwrig
 }
 
 export const REGISTRY: Record<string, Command> = {
+  "foreground-terminal": {
+    summary: "Visible single/two-agent terminal CPU and GPU time (macOS, explicit scenario)",
+    kind: "mechanism",
+    runner: tsxScript("foreground-terminal.ts"),
+  },
   // Modes set iteration counts and which scenarios are eligible; each needs
   // `--scenario <ONE-ID>`. Nothing schedules these — there is no perf CI.
   smoke: {
