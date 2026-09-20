@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, relative, resolve } from "node:path";
+import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
@@ -21,9 +21,12 @@ function staticSpecifiers(source: string): string[] {
   const body = stripComments(source);
   const out: string[] = [];
   for (const match of body.matchAll(
-    /(?:^|[\n;])\s*(?:import|export)\b[^;]*?from\s*["']([^"']+)["']/g
+    /(?:^|[\n;])\s*(?:import|export)\b(?!\s+type\b)([^;]*?)from\s*["']([^"']+)["']/g
   )) {
-    if (match[1]) out.push(match[1]);
+    // `import type`/`export type` is erased before a bundler sees it, so it is
+    // not an eager edge. The negative lookahead covers the statement form; the
+    // inline `{ type X }` form still names a real module and stays an edge.
+    if (match[2]) out.push(match[2]);
   }
   for (const match of body.matchAll(/(?:^|[\n;])\s*import\s*["']([^"']+)["']/g)) {
     if (match[1]) out.push(match[1]);
@@ -62,7 +65,10 @@ function eagerPluginGraph(): { files: string[]; bare: Map<string, string[]> } {
   return { files, bare };
 }
 
-const reachedFiles = () => eagerPluginGraph().files.map((file) => relative(pluginRoot, file));
+/** Posix separators: `relative()` yields `renderer\x.ts` on Windows, and the
+ * assertions below name files the one way they read in the repo. */
+const reachedFiles = () =>
+  eagerPluginGraph().files.map((file) => relative(pluginRoot, file).split(sep).join("/"));
 
 // The builtin renderer glob imports this entry eagerly for every user, so
 // whatever it reaches statically lands in the first-render graph. zod is the
@@ -73,7 +79,7 @@ describe("eager renderer entry graph", () => {
   it("never reaches zod", () => {
     const offenders = [...eagerPluginGraph().bare]
       .filter(([, specifiers]) => specifiers.some((specifier) => /^zod(\/|$)/.test(specifier)))
-      .map(([file]) => relative(pluginRoot, file));
+      .map(([file]) => relative(pluginRoot, file).split(sep).join("/"));
     expect(offenders).toEqual([]);
   });
 
