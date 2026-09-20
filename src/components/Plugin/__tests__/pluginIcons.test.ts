@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { categoryIconFor, pluginIconForIdentity } from "../pluginIcons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
-import { GitHubIcon } from "@/components/icons";
+import { GitHubIcon, SvelteIcon } from "@/components/icons";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId } from "@shared/types/plugin";
 
@@ -20,6 +20,13 @@ describe("pluginIconForIdentity", () => {
 
   it("prefers a brand mark over the category fallback", () => {
     expect(pluginIconForIdentity("daintree.github", "other")).toBe(GitHubIcon);
+  });
+
+  it("identifies the SvelteKit builder by its framework mark", () => {
+    expect(pluginIconForIdentity("daintree.sveltekit-builder", "workspace")).toBe(SvelteIcon);
+    expect(pluginIconForIdentity("daintree.sveltekit-builder", "workspace")).not.toBe(
+      categoryIconFor("workspace")
+    );
   });
 
   it("keeps the brand mark regardless of the resolved category", () => {

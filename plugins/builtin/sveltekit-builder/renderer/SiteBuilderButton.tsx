@@ -1,9 +1,11 @@
-import { SquareDashedMousePointer } from "lucide-react";
 import type {
   DevPreviewToolButtonProps,
   DevPreviewToolContext,
 } from "@/registry/devPreviewToolRegistry";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+// The module, not the `@/components/icons` barrel: this file is in the eager
+// renderer bundle and the barrel reaches every glyph in the app.
+import { SvelteIcon } from "@/components/icons/brands/SvelteIcon";
 import { cn } from "@/lib/utils";
 
 // Literals, not `shared/protocol.ts`: this button is in the eager bundle and the
@@ -119,7 +121,7 @@ export function SiteBuilderButton({ active, onToggle }: DevPreviewToolButtonProp
             active && "bg-overlay-soft text-text-primary"
           )}
         >
-          <SquareDashedMousePointer className="h-4 w-4" />
+          <SvelteIcon className="h-4 w-4" />
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom">

@@ -30,6 +30,7 @@ export { BunIcon } from "./BunIcon";
 export { NodeIcon } from "./NodeIcon";
 export { DenoIcon } from "./DenoIcon";
 export { ViteIcon } from "./ViteIcon";
+export { SvelteIcon } from "./SvelteIcon";
 export { WebpackIcon } from "./WebpackIcon";
 export { EsbuildIcon } from "./EsbuildIcon";
 export { TurboIcon } from "./TurboIcon";
