@@ -117,12 +117,56 @@ describe("startLongTaskMonitor", () => {
     expect(observerDisconnected).toBe(true);
   });
 
-  it("subscribes to long-animation-frame with the configured durationThreshold", () => {
+  it("subscribes to long-animation-frame", () => {
     startLongTaskMonitor(120);
-    expect(lastObserveOptions).toEqual({
-      type: "long-animation-frame",
-      durationThreshold: 120,
-    });
+    expect(lastObserveOptions).toEqual({ type: "long-animation-frame" });
+  });
+
+  it("does not warn for frames below the default threshold", () => {
+    mockNow = 6000;
+    startLongTaskMonitor();
+    emitLoafEntry({ duration: 99.9999 });
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("warns for frames at the default threshold", () => {
+    mockNow = 6000;
+    startLongTaskMonitor();
+    emitLoafEntry({ duration: 100 });
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(
+      "Renderer long animation frame detected",
+      expect.objectContaining({ durationMs: 100 })
+    );
+  });
+
+  it("does not warn for frames below the configured threshold", () => {
+    mockNow = 6000;
+    startLongTaskMonitor(120);
+    emitLoafEntry({ duration: 119.9999 });
+    expect(logWarn).not.toHaveBeenCalled();
+  });
+
+  it("warns for frames at the configured threshold", () => {
+    mockNow = 6000;
+    startLongTaskMonitor(120);
+    emitLoafEntry({ duration: 120 });
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(
+      "Renderer long animation frame detected",
+      expect.objectContaining({ durationMs: 120 })
+    );
+  });
+
+  it("warns below the default threshold when a lower threshold is configured", () => {
+    mockNow = 6000;
+    startLongTaskMonitor(80);
+    emitLoafEntry({ duration: 80 });
+    expect(logWarn).toHaveBeenCalledTimes(1);
+    expect(logWarn).toHaveBeenCalledWith(
+      "Renderer long animation frame detected",
+      expect.objectContaining({ durationMs: 80 })
+    );
   });
 
   it("suppresses warnings during first 5 seconds", () => {
@@ -220,6 +264,24 @@ describe("startLongTaskMonitor", () => {
     expect(logWarn).toHaveBeenCalledTimes(2);
   });
 
+  it("does not consume the warning cooldown for below-threshold frames", () => {
+    mockNow = 6000;
+    startLongTaskMonitor();
+
+    emitLoafEntry({ duration: 75 });
+    expect(logWarn).toHaveBeenCalledTimes(0);
+
+    emitLoafEntry({ duration: 100 });
+    expect(logWarn).toHaveBeenCalledTimes(1);
+
+    mockNow = 16000;
+    emitLoafEntry({ duration: 75 });
+    expect(logWarn).toHaveBeenCalledTimes(1);
+
+    emitLoafEntry({ duration: 100 });
+    expect(logWarn).toHaveBeenCalledTimes(2);
+  });
+
   it("emits a renderer_long_animation_frame mark with top-3 scripts when capture is enabled", () => {
     mockIsRendererPerfCaptureEnabled.mockReturnValue(true);
     mockNow = 6000;
@@ -261,6 +323,21 @@ describe("startLongTaskMonitor", () => {
     const call = mockMarkRendererPerformance.mock.calls[0]!;
     const meta = call[1];
     expect(meta).toMatchObject({ scriptCount: 0, topScripts: [] });
+  });
+
+  it("emits a mark for below-threshold frames when capture is enabled", () => {
+    mockIsRendererPerfCaptureEnabled.mockReturnValue(true);
+    mockNow = 6000;
+    startLongTaskMonitor();
+    emitLoafEntry({ duration: 75, scripts: [{ duration: 40, sourceFunctionName: "belowGate" }] });
+
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(mockMarkRendererPerformance).toHaveBeenCalledTimes(1);
+    const meta = mockMarkRendererPerformance.mock.calls[0]![1];
+    expect(meta).toMatchObject({ durationMs: 75, blockingDurationMs: 25, scriptCount: 1 });
+    const topScripts = (meta as { topScripts: Array<Record<string, unknown>> }).topScripts;
+    expect(topScripts).toHaveLength(1);
+    expect(topScripts[0]).toMatchObject({ sourceFunctionName: "belowGate", durationMs: 40 });
   });
 
   it("does not call markRendererPerformance when capture is disabled", () => {
