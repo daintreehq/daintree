@@ -2,8 +2,8 @@ import { z } from "zod";
 import { RectSchema, SiteSelectionSchema, SourceLocationSchema, ViewportSchema } from "./model.js";
 
 /**
- * The Site Builder wire contract. Three boundaries meet here and all three are
- * frozen for the life of a protocol version:
+ * The Site Builder wire contract. Three boundaries meet here, and every message
+ * across them is validated at both ends:
  *
  * - renderer view → plugin main, over the plugin channel bridge (`CHANNELS`);
  * - plugin main → renderer view, pushed (`PUSH_CHANNELS`);
@@ -311,8 +311,12 @@ export const WorkspaceOpenResultSchema = z.discriminatedUnion("status", [
       appRoots: z.array(z.string().min(1)).min(2),
     })
     .strict(),
-  /** No SvelteKit app found under this worktree. */
-  z.object({ status: z.literal("no-app") }).strict(),
+  /**
+   * No SvelteKit app found under this worktree. `scanComplete` is false when
+   * the walk hit its budget, which makes this "we did not find one", not
+   * "there is none" — a distinction the user needs to retry differently.
+   */
+  z.object({ status: z.literal("no-app"), scanComplete: z.boolean().optional() }).strict(),
 ]);
 export type WorkspaceOpenResult = z.infer<typeof WorkspaceOpenResultSchema>;
 
@@ -397,7 +401,15 @@ export const DetectAppsArgsSchema = z
   })
   .strict();
 export const DetectAppsResultSchema = z
-  .object({ appCount: z.number().int().nonnegative() })
+  .object({
+    appCount: z.number().int().nonnegative(),
+    /**
+     * False when discovery stopped at its depth or directory budget. A zero
+     * count on an incomplete walk is a scan that ran out, not a worktree
+     * without a SvelteKit app.
+     */
+    complete: z.boolean().optional(),
+  })
   .strict();
 
 /** Args for the channels that only need to name their workspace. */
@@ -469,6 +481,31 @@ export const RouteNodeSchema = z
   .strict();
 export type RouteNode = z.infer<typeof RouteNodeSchema>;
 
+/**
+ * Where the routes directory came from. `svelte.config` and `vite.config` are
+ * readings; `default` is Kit's own fallback applying to a config that sets
+ * nothing; `unresolved` is the refusal — a config exists that we would have to
+ * execute to read, so the path beside it is a fallback and not a finding.
+ */
+export const RoutesDirectorySourceSchema = z.enum([
+  "svelte.config",
+  "vite.config",
+  "default",
+  "unresolved",
+]);
+export type RoutesDirectorySource = z.infer<typeof RoutesDirectorySourceSchema>;
+
+/** Something the routes tree says that SvelteKit would reject, or that we could not read. */
+export const RouteDiagnosticSchema = z
+  .object({
+    code: z.enum(["unresolved-layout-reset", "duplicate-route-id", "traversal-truncated"]),
+    message: z.string().min(1),
+    /** Worktree-relative paths the diagnostic is about. */
+    files: z.array(z.string().min(1)),
+  })
+  .strict();
+export type RouteDiagnostic = z.infer<typeof RouteDiagnosticSchema>;
+
 export const ProjectModelResultSchema = z
   .object({
     appRoot: z.string().min(1),
@@ -485,6 +522,22 @@ export const ProjectModelResultSchema = z
     routes: z.array(RouteNodeSchema),
     /** `kit.paths.base`: "" when unset, null when the config computes it. */
     basePath: z.string().nullable().optional(),
+    /**
+     * Where `routes` was read from. Without it a caller cannot tell a route
+     * list read out of the project's own config from one walked in the default
+     * directory because the config was unreadable — and an agent told the
+     * second is being told something we never established.
+     */
+    routesDirectory: z
+      .object({
+        /** Worktree-relative, like every other path on the wire. */
+        path: z.string().min(1),
+        source: RoutesDirectorySourceSchema,
+      })
+      .strict()
+      .optional(),
+    /** Walks that stopped early and trees SvelteKit would reject. */
+    routeDiagnostics: z.array(RouteDiagnosticSchema).optional(),
   })
   .strict();
 export type ProjectModel = z.infer<typeof ProjectModelResultSchema>;

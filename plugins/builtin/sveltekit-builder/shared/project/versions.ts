@@ -8,7 +8,7 @@ import {
   readJsonFileResult,
 } from "./fs.js";
 
-/** Wire key → npm package name. The wire keys are frozen by `ProjectModelResultSchema`. */
+/** Wire key → npm package name. The wire keys are the ones `ProjectModelResultSchema` names. */
 export const TRACKED_PACKAGES = {
   svelte: "svelte",
   kit: "@sveltejs/kit",

@@ -1,5 +1,11 @@
 import type { ProjectModel } from "../protocol.js";
-import { type ProjectFileReader, joinPath, readJsonFile, toWorktreeRelative } from "./fs.js";
+import {
+  type ProjectFileReader,
+  type ProjectReadOptions,
+  joinPath,
+  readJsonFile,
+  toWorktreeRelative,
+} from "./fs.js";
 import {
   declaredDependencies,
   discoverSvelteKitApps,
@@ -32,9 +38,12 @@ export * from "./versions.js";
  *
  * The extras are not decoration: `missingInstall` separates "run install" from
  * "installed at a version we never tested against", `packageManager.conflict`
- * is what turns an ambiguous tree into a question for the user, and
- * `routesDirectory.source` says whether the routes path was read or assumed. `ProjectModelResultSchema` is strict and frozen, so
- * they travel beside it rather than inside it.
+ * is what turns an ambiguous tree into a question for the user.
+ *
+ * `routesDirectory` and `routeDiagnostics` are here in the richer form the
+ * resolver returns — absolute paths — and also on `model`, worktree-relative:
+ * a consumer on the far side of IPC needs to know whether the route list was
+ * read or assumed just as much as the setup card does.
  */
 export interface ProjectInspection {
   model: ProjectModel;
@@ -49,6 +58,8 @@ export interface ProjectInspection {
 export interface InspectProjectArgs {
   worktreeRoot: string;
   appRoot: string;
+  /** Ends the inspection as an abort rather than as an empty reading. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -62,26 +73,34 @@ export interface InspectProjectArgs {
  */
 export async function inspectProject(
   reader: ProjectFileReader,
-  { worktreeRoot, appRoot }: InspectProjectArgs
+  { worktreeRoot, appRoot, signal }: InspectProjectArgs
 ): Promise<ProjectInspection> {
-  const manifest = await readJsonFile(reader, joinPath(appRoot, "package.json"));
+  const reads: ProjectReadOptions = signal ? { signal } : {};
+  const manifest = await readJsonFile(reader, joinPath(appRoot, "package.json"), reads);
   const declared = manifest ? declaredDependencies(manifest) : {};
 
-  const [versionReport, packageManager, routesDirectory, installStyle, basePath] =
-    await Promise.all([
-      readInstalledVersionReport(reader, appRoot, worktreeRoot),
-      detectPackageManager(reader, appRoot, worktreeRoot),
-      resolveRoutesDirectory(reader, appRoot),
-      detectInstallStyle(reader, appRoot, worktreeRoot),
-      resolveBasePath(reader, appRoot),
-    ]);
+  const [versionReport, packageManager, installStyle] = await Promise.all([
+    readInstalledVersionReport(reader, appRoot, worktreeRoot),
+    detectPackageManager(reader, appRoot, worktreeRoot),
+    detectInstallStyle(reader, appRoot, worktreeRoot),
+  ]);
 
   const { versions, resolutions } = versionReport;
+  // The installed Kit decides whether a config handed to the Vite plugin is
+  // read at all, so the version has to be known before the config is.
+  const configReads = { ...reads, kitVersion: versions.kit };
+  const [routesDirectory, basePath] = await Promise.all([
+    resolveRoutesDirectory(reader, appRoot, configReads),
+    resolveBasePath(reader, appRoot, configReads),
+  ]);
+
   const support = assessSupport(versions, declared, { installStyle, resolutions });
+
   const { routes, diagnostics } = await analyzeRoutes(reader, {
     appRoot,
     worktreeRoot,
     routesDir: routesDirectory.path,
+    ...(signal && { signal }),
   });
 
   const name = manifest?.["name"];
@@ -93,6 +112,11 @@ export async function inspectProject(
       support: support.verdict,
       routes,
       basePath,
+      routesDirectory: {
+        path: toWorktreeRelative(worktreeRoot, routesDirectory.path),
+        source: routesDirectory.source,
+      },
+      routeDiagnostics: diagnostics,
     },
     app: manifest
       ? {
@@ -118,11 +142,16 @@ export async function inspectProject(
 export async function inspectWorktree(
   reader: ProjectFileReader,
   worktreeRoot: string,
-  requestedAppRoot?: string
+  requestedAppRoot?: string,
+  options: ProjectReadOptions = {}
 ): Promise<{ apps: SvelteKitApp[]; complete: boolean; inspection: ProjectInspection | null }> {
-  const discovery = await discoverSvelteKitApps(reader, worktreeRoot);
+  const discovery = await discoverSvelteKitApps(reader, worktreeRoot, options);
   const app = selectApp(discovery, requestedAppRoot);
   if (!app) return { ...discovery, inspection: null };
-  const inspection = await inspectProject(reader, { worktreeRoot, appRoot: app.appRoot });
+  const inspection = await inspectProject(reader, {
+    worktreeRoot,
+    appRoot: app.appRoot,
+    ...(options.signal && { signal: options.signal }),
+  });
   return { ...discovery, inspection: { ...inspection, app } };
 }

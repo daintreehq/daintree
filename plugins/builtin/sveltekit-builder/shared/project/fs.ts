@@ -91,7 +91,7 @@ export const MAX_DIRECTORY_ENTRIES = 4096;
  * need not look like an abort. The name check is the fallback for a reader
  * that rejected on its own signal without telling us which one.
  */
-function rethrowIfAborted(error: unknown, signal?: AbortSignal): void {
+export function rethrowIfAborted(error: unknown, signal?: AbortSignal): void {
   if (signal?.aborted) throw error;
   if (error instanceof Error && (error.name === "AbortError" || error.name === "TimeoutError")) {
     throw error;

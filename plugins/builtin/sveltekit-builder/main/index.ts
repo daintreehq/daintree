@@ -204,7 +204,10 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
       try {
         scan = await scans.run(
           null,
-          () => inspectWorktree(workspaceReader, worktreePath, requested),
+          () =>
+            inspectWorktree(workspaceReader, worktreePath, requested, {
+              signal: lifetime.signal,
+            }),
           lifetime.signal
         );
       } catch (error) {
@@ -214,7 +217,16 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
       if (!scan.inspection) {
         if (requested !== undefined || scan.apps.length === 0) {
           lifetime.abort();
-          return { status: "no-app" as const };
+          // A walk that ran out of budget found no app; it did not establish
+          // that there is none, and the caller is told which of the two it is.
+          if (!scan.complete) {
+            warnIssue(
+              "APP_SCAN_TRUNCATED",
+              "This worktree is too large to scan completely and no SvelteKit app turned up in the part we read. Open the preview from the app's own directory.",
+              args.previewPanelId
+            );
+          }
+          return { status: "no-app" as const, scanComplete: scan.complete };
         }
         if (scan.apps.length > 1) {
           lifetime.abort();
@@ -227,7 +239,10 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
         try {
           scan = await scans.run(
             null,
-            () => inspectWorktree(workspaceReader, worktreePath, only.appRoot),
+            () =>
+              inspectWorktree(workspaceReader, worktreePath, only.appRoot, {
+                signal: lifetime.signal,
+              }),
             lifetime.signal
           );
         } catch (error) {
@@ -236,7 +251,7 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
         }
         if (!scan.inspection) {
           lifetime.abort();
-          return { status: "no-app" as const };
+          return { status: "no-app" as const, scanComplete: scan.complete };
         }
         warnIssue(
           "APP_SCAN_TRUNCATED",
@@ -298,7 +313,10 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
         `detect:${args.projectId}:${args.worktreeId}:${worktreePath}`,
         () => discoverSvelteKitApps(scopedReader, worktreePath)
       );
-      return { appCount: discovery.apps.length };
+      // `complete` is not decoration: zero apps on a truncated walk is a scan
+      // that ran out, and a caller that reads it as "no SvelteKit here" is
+      // reporting a conclusion we never reached.
+      return { appCount: discovery.apps.length, complete: discovery.complete };
     }
   );
 
@@ -405,6 +423,7 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
           inspectProject(projectReader(workspace.fs, workspace.lifetime.signal), {
             worktreeRoot: workspace.worktreePath,
             appRoot: workspace.appRoot,
+            signal: workspace.lifetime.signal,
           }),
         workspace.lifetime.signal
       );
