@@ -119,6 +119,8 @@ import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
+import { getPowerPolicy } from "../window/powerPolicy.js";
 import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
 import type { TerminalSubmissionRecord } from "../../shared/types/terminalSubmission.js";
@@ -875,6 +877,14 @@ export class PtyClient extends EventEmitter {
       type: "set-plugin-process-tool-registry",
       registry: getPluginProcessToolRegistry(),
     });
+    // Power policy on every ready — the default host's first one included,
+    // which gets no config replay, and a host whose client was created after
+    // the policy moved. Read live: main's policy is authoritative and a host
+    // boots at `active`, so only a saving level needs sending.
+    const powerLevel = getPowerPolicy().level;
+    if (powerLevel !== "active") {
+      shard.send({ type: "set-power-policy", level: powerLevel });
+    }
     // A project shard forked mid-session missed every earlier config setter
     // (resource profile, monitoring, persistence suppression) — those are
     // host-process-wide, so replay the caches on its first ready. The default
@@ -1932,6 +1942,12 @@ export class PtyClient extends EventEmitter {
     this.lastProcessTreePollIntervalMs = null;
     for (const shard of this.shards.values()) {
       shard.send({ type: "set-resource-profile", profile });
+    }
+  }
+
+  setPowerPolicy(level: PowerPolicyLevel): void {
+    for (const shard of this.shards.values()) {
+      shard.send({ type: "set-power-policy", level });
     }
   }
 

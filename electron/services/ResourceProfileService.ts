@@ -11,6 +11,10 @@ import { CHANNELS } from "../ipc/channels.js";
 import { getFocusThrottlePollMultiplier } from "../window/focusThrottleState.js";
 import { logInfo } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
+import {
+  EVENT_LOOP_HISTOGRAM_RESOLUTION_MS,
+  readExcessEventLoopDelay,
+} from "../utils/eventLoopDelay.js";
 import { getAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { getCachedMemoryRollup } from "./memoryAccounting.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -85,7 +89,6 @@ const WARMUP_TICKS = 2;
 // (p99 + ELU both still elevated) the moderate entry path will re-latch
 // within 10s, which is correct.
 const LAG_SAMPLE_INTERVAL_MS = 5_000;
-const LAG_HISTOGRAM_RESOLUTION_MS = 10;
 const LAG_ENTRY_P99_MS = 250;
 const LAG_ENTRY_ELU = 0.7;
 const LAG_ESCALATE_P99_MS = 500;
@@ -501,7 +504,7 @@ export class ResourceProfileService {
     if (this.lagInterval) return;
     try {
       this.lagHistogram = monitorEventLoopDelay({
-        resolution: LAG_HISTOGRAM_RESOLUTION_MS,
+        resolution: EVENT_LOOP_HISTOGRAM_RESOLUTION_MS,
       });
       this.lagHistogram.enable();
     } catch {
@@ -544,12 +547,14 @@ export class ResourceProfileService {
     let p99Ms = 0;
     let maxMs = 0;
     try {
-      const rawP99 = this.lagHistogram.percentile(99) / 1_000_000;
-      if (Number.isFinite(rawP99)) p99Ms = rawP99;
-      // max is diagnostic-only — never gates entry/exit. Pairs with p99 in logs
-      // so a single long block (which barely moves p99) is still visible.
-      const rawMax = this.lagHistogram.max / 1_000_000;
-      if (Number.isFinite(rawMax)) maxMs = rawMax;
+      // Excess over the sampling period, so the thresholds below read the same
+      // at the coarse resolution as they did at 10ms. max is diagnostic-only —
+      // never gates entry/exit. Pairs with p99 in logs so a single long block
+      // (which barely moves p99) is still visible.
+      ({ p99Ms, maxMs } = readExcessEventLoopDelay(
+        this.lagHistogram,
+        EVENT_LOOP_HISTOGRAM_RESOLUTION_MS
+      ));
     } catch {
       // Read failure: histogram still needs reset below so the window stays bounded.
     }

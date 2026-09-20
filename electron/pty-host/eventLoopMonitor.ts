@@ -1,5 +1,9 @@
 import { monitorEventLoopDelay, performance, type IntervalHistogram } from "node:perf_hooks";
 import type { PtyHostEventLoopStats } from "../../shared/types/pty-host.js";
+import {
+  EVENT_LOOP_HISTOGRAM_RESOLUTION_MS,
+  readExcessEventLoopDelay,
+} from "../utils/eventLoopDelay.js";
 
 /**
  * Self-measurement of the pty-host UtilityProcess event loop. The main
@@ -11,7 +15,8 @@ import type { PtyHostEventLoopStats } from "../../shared/types/pty-host.js";
  * CPU-saturation signature, as opposed to queue backpressure).
  *
  * Snapshot reads reset the histogram so each pull reports the window since
- * the previous pull rather than an all-time high-water mark.
+ * the previous pull rather than an all-time high-water mark. Values are delay
+ * beyond the sampling period, so an idle loop reads ~0 at any resolution.
  */
 
 let histogram: IntervalHistogram | null = null;
@@ -19,15 +24,14 @@ let lastEluSample: ReturnType<typeof performance.eventLoopUtilization> | null = 
 
 export function startEventLoopMonitor(): void {
   if (histogram) return;
-  histogram = monitorEventLoopDelay({ resolution: 20 });
+  histogram = monitorEventLoopDelay({ resolution: EVENT_LOOP_HISTOGRAM_RESOLUTION_MS });
   histogram.enable();
   lastEluSample = performance.eventLoopUtilization();
 }
 
 export function getEventLoopStats(): PtyHostEventLoopStats | null {
   if (!histogram) return null;
-  const p99Ms = histogram.percentile(99) / 1e6;
-  const maxMs = histogram.max / 1e6;
+  const { p99Ms, maxMs } = readExcessEventLoopDelay(histogram, EVENT_LOOP_HISTOGRAM_RESOLUTION_MS);
   const elu = performance.eventLoopUtilization(lastEluSample ?? undefined);
   lastEluSample = performance.eventLoopUtilization();
   histogram.reset();

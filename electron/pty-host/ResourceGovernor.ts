@@ -6,6 +6,7 @@ import type {
   TerminalFlowStatus,
 } from "../../shared/types/pty-host.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
+import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
 import { SCROLLBACK_MIN } from "../../shared/config/scrollback.js";
 import type { WorkerMemoryAccounting } from "../services/pty/analysis/AnalysisWorkerPool.js";
 import { FdMonitor, isProcessAlive } from "./FdMonitor.js";
@@ -139,6 +140,17 @@ const TOTAL_PROCESS_BUDGET_MB = HEAP_BUDGET_MB + EXTERNAL_HEADROOM_MB;
 // delayed ticks on a busy worker event loop without letting a wedged worker's
 // last reading steer trims/pauses forever.
 const WORKER_SAMPLE_MAX_AGE_MS = 10_000;
+// How far the descriptor sample's own interval stretches by power-policy
+// level. The sample is a readdir of the process FD table — diagnostic work
+// that can run far less often while nobody is watching, but never stops: a
+// laptop spends most of its life on battery, and a leak that only shows up
+// unplugged is exactly the one worth seeing. Same floors as
+// `powerPolicyPollMultiplier` gives each level. The orphan-PID sweep and the
+// memory and bounded-pause checks stay on every 2s tick.
+const FD_SAMPLE_POWER_MULTIPLIER: Record<Exclude<PowerPolicyLevel, "active">, number> = {
+  saving: 2,
+  deep: 10,
+};
 
 export class ResourceGovernor {
   private readonly MEMORY_LIMIT_PERCENT = 85;
@@ -179,6 +191,8 @@ export class ResourceGovernor {
   private readonly fdMonitor: FdMonitor;
   private readonly killedPids = new Map<number, number>();
   private readonly ORPHAN_GRACE_MS = 4000;
+  private powerLevel: PowerPolicyLevel = "active";
+  private lastFdSampleAt = 0;
   private hasThroughputBaseline = false;
   private prevPauseCount = 0;
   private readonly pausedTerminalIds = new Set<string>();
@@ -236,6 +250,31 @@ export class ResourceGovernor {
     } else {
       console.log(`[ResourceGovernor] Profile set to ${profile} — using default thresholds`);
     }
+  }
+
+  setPowerLevel(level: PowerPolicyLevel): void {
+    this.powerLevel = level;
+  }
+
+  /** The descriptor sample's effective spacing at the current power level. */
+  private get fdSampleIntervalMs(): number {
+    if (this.powerLevel === "active") return this.FD_SAMPLE_INTERVAL_MS;
+    return this.FD_SAMPLE_INTERVAL_MS * FD_SAMPLE_POWER_MULTIPLIER[this.powerLevel];
+  }
+
+  /**
+   * Sample on every interval at the `active` level and whenever something is
+   * already going wrong — memory pressure or a warning, where descriptor
+   * growth is evidence — otherwise at the level's stretched cadence.
+   */
+  private isFdSampleDue(now: number): boolean {
+    const due =
+      this.powerLevel === "active" ||
+      this.isThrottling ||
+      this.isWarning ||
+      now - this.lastFdSampleAt >= this.fdSampleIntervalMs;
+    if (due) this.lastFdSampleAt = now;
+    return due;
   }
 
   private get memoryLimitPercent(): number {
@@ -624,6 +663,11 @@ export class ResourceGovernor {
 
   private sampleFdUsage(): void {
     const now = Date.now();
+    // The timer keeps its 30s period; the power level decides which firings
+    // actually take a reading, so a level change takes effect on the next one
+    // without rearming the interval.
+    if (!this.isFdSampleDue(now)) return;
+
     let owners: FdOwnerCounts;
     try {
       owners = this.deps.getFdOwners();
@@ -658,7 +702,7 @@ export class ResourceGovernor {
         type: "fd-growth",
         ...sample.transition,
         hostPid: process.pid,
-        sampleIntervalMs: this.FD_SAMPLE_INTERVAL_MS,
+        sampleIntervalMs: this.fdSampleIntervalMs,
         timestamp: now,
       });
     }

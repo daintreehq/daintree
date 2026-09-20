@@ -2369,6 +2369,33 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   backdrop-filter: none !important;
 }
 
+/* Power saving (#12515) — battery, blurred, locked or hidden window, the
+ * efficiency profile, or a cached view (usePowerSavingMotion). Stops only what
+ * LOOPS: one looping element keeps the compositor producing frames at display
+ * rate for as long as it runs. An explicit list, never a wildcard, so one-shot
+ * transitions and Radix Presence exits are untouched. Each glyph keeps its
+ * resting frame and colour, so a working agent still reads as working — the
+ * same static rendering reduced motion already uses. Transient loaders
+ * (`animate-spin`, the gated skeleton pulses) are left alone: they end on
+ * their own, and a frozen one would read as a hang. */
+body[data-power-saving="true"] .animate-spin-slow,
+body[data-power-saving="true"] .animate-activity-pulse,
+body[data-power-saving="true"] .animate-breathe,
+body[data-power-saving="true"] .animate-pulse,
+body[data-power-saving="true"] .motion-safe\:animate-pulse,
+body[data-power-saving="true"] .status-working,
+body[data-power-saving="true"] .forge-status-error {
+  animation: none;
+  will-change: auto;
+}
+
+/* `animation: none` alone leaves the shimmer's gradient stripe parked mid-bone. */
+body[data-power-saving="true"] .animate-skeleton-shimmer::after,
+body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
+  display: none;
+  will-change: auto;
+}
+
 /* Windows High Contrast / forced-colors support
    In forced-colors mode the UA overrides color, background-color, border-color,
    outline-color and removes box-shadow entirely. We ensure critical UI boundaries

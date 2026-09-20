@@ -3048,4 +3048,96 @@ describe("ResourceGovernor", () => {
       governor.dispose();
     });
   });
+
+  describe("FD sample cadence under the power policy (#12515)", () => {
+    it("samples on every 30s interval at the active level", () => {
+      mockMemoryUsage(100);
+      const governor = new ResourceGovernor(createMockDeps());
+      governor.start();
+
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 3);
+
+      expect(mockSample).toHaveBeenCalledTimes(3);
+      governor.dispose();
+    });
+
+    it("stretches to 60s while saving and 300s when deep", () => {
+      mockMemoryUsage(100);
+      const governor = new ResourceGovernor(createMockDeps());
+      governor.setPowerLevel("saving");
+      governor.start();
+
+      // Interval firings at 30s/60s/90s; samples at 30s and 90s.
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+      expect(mockSample).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+      expect(mockSample).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+      expect(mockSample).toHaveBeenCalledTimes(2);
+
+      mockSample.mockClear();
+      governor.setPowerLevel("deep");
+      // Last sample at 90s; the next is due 300s later, at 390s.
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 9);
+      expect(mockSample).toHaveBeenCalledTimes(0);
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+      expect(mockSample).toHaveBeenCalledTimes(1);
+      governor.dispose();
+    });
+
+    it("samples on every interval while the memory warning is raised", () => {
+      // 75% of the process budget: above the 70% warning, below the 85% engage.
+      mockMemoryUsage(300, 276);
+      const governor = new ResourceGovernor(createMockDeps());
+      governor.setPowerLevel("deep");
+      governor.start();
+
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS * 3);
+
+      expect(mockSample).toHaveBeenCalledTimes(3);
+      governor.dispose();
+    });
+
+    it("reports the stretched cadence on the growth event", () => {
+      mockMemoryUsage(100);
+      const deps = createMockDeps();
+      const governor = new ResourceGovernor(deps);
+      governor.setPowerLevel("saving");
+      governor.start();
+
+      mockSample.mockReturnValueOnce({
+        ...defaultFdSample,
+        transition: {
+          state: "elevated",
+          ...defaultOwners,
+          fdCount: 120,
+          expectedFds: 0,
+          baselineFds: 40,
+          growth: 80,
+          sustainedSamples: 5,
+          episodeStartedAt: Date.now(),
+        },
+      });
+      vi.advanceTimersByTime(FD_SAMPLE_INTERVAL_MS);
+
+      expect(fdGrowthEvents(deps)[0]?.sampleIntervalMs).toBe(FD_SAMPLE_INTERVAL_MS * 2);
+      governor.dispose();
+    });
+
+    it("keeps the orphan-PID sweep on every tick whatever the level", () => {
+      mockMemoryUsage(100);
+      mockIsProcessAlive.mockReturnValue(true);
+      const governor = new ResourceGovernor(createMockDeps());
+      governor.setPowerLevel("deep");
+      governor.start();
+
+      governor.trackKilledPid(4242);
+      // Grace is 4s, so the 6s tick is the first that sees the PID past it.
+      vi.advanceTimersByTime(6_000);
+
+      expect(mockIsProcessAlive.mock.calls).toEqual([[4242]]);
+      expect(mockSample).not.toHaveBeenCalled();
+      governor.dispose();
+    });
+  });
 });

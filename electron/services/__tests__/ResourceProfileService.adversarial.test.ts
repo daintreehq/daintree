@@ -66,6 +66,7 @@ import { broadcastToRenderer } from "../../ipc/utils.js";
 import { logInfo } from "../../utils/logger.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
+import { EVENT_LOOP_HISTOGRAM_RESOLUTION_MS } from "../../utils/eventLoopDelay.js";
 
 const EIGHT_GB = 8 * 1024 * 1024 * 1024;
 
@@ -184,11 +185,13 @@ function createDeps(overrides?: Partial<ResourceProfileDeps>): {
   };
 }
 
+// The service reads delay beyond the histogram's sampling period, so a raw
+// sample is the period plus the lag a test means to express.
 function setLag(p99Ms: number, utilization: number, maxMs?: number): void {
-  lagState.p99Nanoseconds = p99Ms * 1_000_000;
+  lagState.p99Nanoseconds = (p99Ms + EVENT_LOOP_HISTOGRAM_RESOLUTION_MS) * 1_000_000;
   // Default max to p99 so existing tests stay realistic (max ≥ p99 always);
   // tests that need to discriminate pass an explicit value.
-  lagState.maxNanoseconds = (maxMs ?? p99Ms) * 1_000_000;
+  lagState.maxNanoseconds = ((maxMs ?? p99Ms) + EVENT_LOOP_HISTOGRAM_RESOLUTION_MS) * 1_000_000;
   lagState.utilization = utilization;
 }
 

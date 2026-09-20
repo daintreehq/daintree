@@ -281,6 +281,23 @@ describe("AnalysisWorkerPool", () => {
     expect(workers[1].messagesOfType("plugin-agent-registry")).toHaveLength(1);
   });
 
+  it("forwards power-policy changes to live workers and replays a saving level to new ones", () => {
+    pool.createBackend(makeSpec("t1"), makeDelegate());
+    // A worker boots at `active`, so the pool only speaks up for a change.
+    expect(workers[0].messagesOfType("power-policy")).toHaveLength(0);
+
+    pool.setPowerLevel("deep");
+    pool.setPowerLevel("deep");
+    expect(workers[0].messagesOfType("power-policy")).toEqual([
+      { type: "power-policy", level: "deep" },
+    ]);
+
+    pool.createBackend(makeSpec("t2"), makeDelegate());
+    expect(workers[1].messagesOfType("power-policy")).toEqual([
+      { type: "power-policy", level: "deep" },
+    ]);
+  });
+
   it("holds feeds above the high watermark and flushes them coalesced once acks drop below low", () => {
     const backend = pool.createBackend(
       {

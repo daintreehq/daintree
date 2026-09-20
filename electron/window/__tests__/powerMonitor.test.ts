@@ -86,6 +86,14 @@ describe("setupPowerMonitor", () => {
     const mod = await import("../powerMonitor.js");
     setupPowerMonitor = mod.setupPowerMonitor;
     clearResumeTimeout = mod.clearResumeTimeout;
+    // Resume re-reads window state before re-enabling workspace polling, so the
+    // app needs one visible registered window; focus comes from the mock above.
+    mod.registerWindowForFocusThrottle({
+      isDestroyed: () => false,
+      isVisible: () => true,
+      isMinimized: () => false,
+      on: vi.fn(),
+    } as unknown as Electron.BrowserWindow);
     // Imported after `resetModules` + the powerMonitor import so this is the
     // same bus instance powerMonitor closed over; the top-level singleton from
     // a previous registry would silently never receive the emit.
@@ -339,7 +347,7 @@ describe("setupPowerMonitor", () => {
     // Scenario: user blurs app → blur-throttle pauses polling → machine
     // suspends → wakes while no window is focused. Resume must NOT
     // re-enable polling, otherwise the blur pause is silently undone.
-    // removeThrottle() will re-enable polling on the next focus event.
+    // The power policy re-enables polling on the next focus event.
     mockGetFocusedWindow.mockReturnValue(null);
     const workspaceClient = createMockWorkspaceClient();
     setupPowerMonitor({
@@ -352,9 +360,49 @@ describe("setupPowerMonitor", () => {
 
     expect(workspaceClient.waitForReady).toHaveBeenCalledTimes(1);
     expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
-    // The rest of the resume sequence still runs.
     expect(workspaceClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
-    expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
+    // The wake refresh is owed to the next focus rather than run unseen — the
+    // power policy pays it once when the user comes back.
+    expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
+  });
+
+  it("does not re-enable polling on resume while the screen is still locked", async () => {
+    // A laptop usually wakes to the lock screen, with Daintree still the
+    // focused app. Nobody can see it yet, so polling stays paused until unlock.
+    const workspaceClient = createMockWorkspaceClient();
+    setupPowerMonitor({
+      getPtyClient: () => createMockPtyClient(),
+      getWorkspaceClient: () => workspaceClient,
+    });
+
+    powerHandlers.get("lock-screen")!();
+    powerHandlers.get("resume")!();
+    await vi.advanceTimersByTimeAsync(2000);
+
+    expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
+  });
+
+  it("records battery, AC, lock and unlock as power observations", async () => {
+    const { getPowerPolicy } = await import("../powerPolicy.js");
+    setupPowerMonitor({
+      getPtyClient: () => null,
+      getWorkspaceClient: () => null,
+    });
+
+    powerHandlers.get("on-battery")!();
+    expect(getPowerPolicy()).toMatchObject({ onBattery: true, level: "saving" });
+
+    powerHandlers.get("lock-screen")!();
+    expect(getPowerPolicy()).toMatchObject({ screenLocked: true, level: "deep" });
+
+    powerHandlers.get("unlock-screen")!();
+    powerHandlers.get("on-ac")!();
+    expect(getPowerPolicy()).toMatchObject({
+      onBattery: false,
+      screenLocked: false,
+      level: "active",
+    });
   });
 
   it("skips SYSTEM_WAKE for a window whose webContents is destroyed", async () => {

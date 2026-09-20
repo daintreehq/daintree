@@ -15,6 +15,7 @@ import { scratchStore } from "../../../services/ScratchStore.js";
 import { isValidScratchId } from "../../../services/scratchStorePaths.js";
 import { CompletionAcknowledgementService } from "../../../services/CompletionAcknowledgementService.js";
 import { getWindowRegistry } from "../../../window/windowRef.js";
+import { getPowerPolicy, subscribePowerPolicy } from "../../../window/powerPolicy.js";
 import { BrowserWindow } from "electron";
 
 let projectStatsServiceInstance: ProjectStatsService | null = null;
@@ -142,8 +143,15 @@ export function registerProjectStatsHandlers(deps: HandlerDependencies): () => v
     },
     onAcknowledged: () => projectStatsService.refresh(),
   });
+  completionAcknowledger.setObserving(getPowerPolicy().canObserve);
   completionAcknowledger.start();
-  handlers.push(() => completionAcknowledger.stop());
+  const unsubscribeAcknowledgerPower = subscribePowerPolicy((policy) =>
+    completionAcknowledger.setObserving(policy.canObserve)
+  );
+  handlers.push(() => {
+    unsubscribeAcknowledgerPower();
+    completionAcknowledger.stop();
+  });
 
   const handleProjectGetStats = async (projectId: string) => {
     if (typeof projectId !== "string" || !projectId) {

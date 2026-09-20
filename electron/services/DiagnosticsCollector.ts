@@ -10,6 +10,7 @@ import { scrubSecrets } from "../../shared/utils/secretScrubber.js";
 import { store, windowStatesStore } from "../store.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
 import { getFocusThrottlePollMultiplier, isFocusThrottled } from "../window/focusThrottleState.js";
+import { getPowerPolicy } from "../window/powerPolicy.js";
 import { getRendererTerminalDiagnosticsSamples } from "./RendererTerminalDiagnosticsCache.js";
 import type { HandlerDependencies } from "../ipc/types.js";
 import type {
@@ -728,7 +729,11 @@ async function collectWhySlowResource(): Promise<WhySlowResourceSnapshot | null>
 
 function collectWhySlowFocusThrottle(): WhySlowFocusThrottleSnapshot {
   try {
-    return { throttled: isFocusThrottled(), pollMultiplier: getFocusThrottlePollMultiplier() };
+    return {
+      throttled: isFocusThrottled(),
+      pollMultiplier: getFocusThrottlePollMultiplier(),
+      powerLevel: getPowerPolicy().level,
+    };
   } catch {
     return { throttled: false, pollMultiplier: 1 };
   }

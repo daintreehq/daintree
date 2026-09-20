@@ -27,6 +27,7 @@ import {
   isWindowRecreating,
 } from "../lifecycle/windowRecreationState.js";
 import { evictDeadView, getAvailableMemoryMb } from "./ProjectViewEvictionController.js";
+import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 import type { ViewEntry } from "./ProjectViewManagerTypes.js";
 
@@ -132,6 +133,9 @@ export function setupViewHandlers(
   // the PTY MessagePort from the currently visible view.
   const handleDidFinishLoad = () => {
     if (wc.isDestroyed()) return;
+    // Every view, active or not: a view restored in the background under a
+    // saving policy would otherwise animate at full rate once activated.
+    deliverPowerPolicy(wc);
     const projectId = host.webContentsToProject.get(wc.id);
     if (projectId && projectId === host.activeProjectId) {
       host.onViewReady?.(wc);

@@ -43,6 +43,8 @@ import {
 import { CpuHighStateTracker } from "./pty/CpuHighStateTracker.js";
 import { WaitingWatchdog } from "./pty/WaitingWatchdog.js";
 import type { WaitingReason } from "../../shared/types/agent.js";
+import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
+import { getPtyPowerLevel, subscribePtyPowerLevel } from "./pty/ptyPowerPolicy.js";
 
 const PROMPT_DEBOUNCE_MS = 500;
 const PROMPT_QUIET_MS = 200;
@@ -69,6 +71,22 @@ const SIMPLE_SNAPSHOT_MIN_INTERVAL_MS = 250;
 // transitions are always preceded by output.
 export const FSM_IDLE_BACKOFF_SETTLE_MS = 3000;
 export const FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS = 2000;
+// Backed-off cadence by power-policy level (#12515): a settled agent polls less
+// often while main reports `saving`/`deep`. Only the quiet cadence stretches —
+// output still restores the visibility tier's interval instantly at every
+// level, so detection of an agent that starts producing output stays fast.
+export const QUIET_POLLING_INTERVAL_MS: Record<PowerPolicyLevel, number> = {
+  active: FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS,
+  saving: 5000,
+  deep: 10000,
+};
+// Waiting-watchdog cadence. Its verdict needs consecutive probes, so a slower
+// cadence only lengthens the confirmation window — it never fires sooner.
+export const WAITING_WATCHDOG_INTERVAL_MS: Record<PowerPolicyLevel, number> = {
+  active: 5000,
+  saving: 10000,
+  deep: 15000,
+};
 const WORKING_INDICATOR_TTL_MS = 5000;
 const CPU_HIGH_THRESHOLD = 10;
 const CPU_LOW_THRESHOLD = 3;
@@ -289,6 +307,7 @@ export class ActivityMonitor {
   private requestedPollingIntervalMs: number;
   private fsmIdleBackoffTimer?: ReturnType<typeof setTimeout>;
   private fsmIdleBackoffActive = false;
+  private readonly unsubscribePowerLevel: () => void;
 
   // Tier-aware recovery thresholds (#6641). The output volume detector is now
   // sample-cadence invariant (#6666), so only the working-signal debouncer
@@ -422,11 +441,34 @@ export class ActivityMonitor {
     // any output arrives.
     this.applyTier(this.tierForInterval(this.POLLING_INTERVAL_MS));
 
-    // Lightweight watchdog interval: runs the waiting watchdog check periodically
-    // even when there's no output/activity. 5s keeps overhead negligible while
-    // ensuring hung waiting states are caught within a reasonable window.
-    this.watchdogInterval = setInterval(() => this.runWaitingWatchdogCheck(Date.now()), 5000);
+    this.scheduleWaitingWatchdog();
+    this.unsubscribePowerLevel = subscribePtyPowerLevel(() => this.onPowerLevelChange());
+  }
+
+  // Runs the waiting watchdog on its own timer, even with no output/activity,
+  // at the power level's cadence. A monitor without onWaitingTimeout has
+  // nothing to fire, so it gets no timer at all.
+  private scheduleWaitingWatchdog(): void {
+    if (this.watchdogInterval) {
+      clearInterval(this.watchdogInterval);
+      this.watchdogInterval = undefined;
+    }
+    if (this.isDisposed || !this.onWaitingTimeout) return;
+    this.watchdogInterval = setInterval(
+      () => this.runWaitingWatchdogCheck(Date.now()),
+      WAITING_WATCHDOG_INTERVAL_MS[getPtyPowerLevel()]
+    );
     this.watchdogInterval.unref();
+  }
+
+  // A level change re-times the watchdog and a live backoff — forward only,
+  // nothing missed is replayed.
+  private onPowerLevelChange(): void {
+    if (this.isDisposed) return;
+    this.scheduleWaitingWatchdog();
+    if (this.fsmIdleBackoffActive) {
+      this.applyPollingInterval(QUIET_POLLING_INTERVAL_MS[getPtyPowerLevel()]);
+    }
   }
 
   private tierForInterval(intervalMs: number): "active" | "background" {
@@ -1000,6 +1042,7 @@ export class ActivityMonitor {
     }
     this.waitingWatchdog.reset();
     this.idleSince = 0;
+    this.unsubscribePowerLevel();
     if (this.watchdogInterval) {
       clearInterval(this.watchdogInterval);
       this.watchdogInterval = undefined;
@@ -1663,7 +1706,8 @@ export class ActivityMonitor {
 
   // Arms the idle-backoff settle timer for a settled simple-output agent. After
   // FSM_IDLE_BACKOFF_SETTLE_MS of continued silence the polling cadence drops to
-  // FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS. Any onData/busy transition cancels it.
+  // the power level's QUIET_POLLING_INTERVAL_MS. Any onData/busy transition
+  // cancels it.
   private armFsmIdleBackoff(): void {
     if (this.isDisposed) return;
     // Only agents (simpleOutputState) do the per-tick temperature work this
@@ -1685,7 +1729,7 @@ export class ActivityMonitor {
       // moved the clock without clearing the timer.
       if (this.lastDataTimestamp !== armedAtData) return;
       this.fsmIdleBackoffActive = true;
-      this.applyPollingInterval(FSM_IDLE_BACKOFF_POLLING_INTERVAL_MS);
+      this.applyPollingInterval(QUIET_POLLING_INTERVAL_MS[getPtyPowerLevel()]);
     }, FSM_IDLE_BACKOFF_SETTLE_MS);
     this.fsmIdleBackoffTimer.unref();
   }

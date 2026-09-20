@@ -21,6 +21,7 @@ import { runFreezeHarness } from "../services/freezeHarness.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { deliverOpenSystemMemoryPressure } from "./systemMemoryPressureDelivery.js";
+import { deliverPowerPolicy } from "./powerPolicyDelivery.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
 import {
@@ -268,6 +269,7 @@ export async function setupWindowServices(
         });
       }
       deliverOpenSystemMemoryPressure(win, appWc);
+      deliverPowerPolicy(appWc);
     });
 
     opts.loadRenderer(reason, opts.initialProjectId);
