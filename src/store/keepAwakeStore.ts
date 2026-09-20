@@ -7,7 +7,7 @@ interface KeepAwakeStoreState {
   /** Why the last read failed, cleared by the next state that lands. */
   loadError: string | null;
   /**
-   * Whether the toolbar shows the indicator. Trails `state.isBlocking` by the
+   * Whether the sidebar footer shows the indicator. Trails `state.isBlocking` by the
    * Doherty gate on the way up, so a hold shorter than the gate never renders,
    * and drops with it. Owned by `useKeepAwakeSync`.
    */

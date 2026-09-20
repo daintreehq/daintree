@@ -26,7 +26,7 @@ export function loadKeepAwakeState(): Promise<void> {
 
 /**
  * Keeps this view's keep-awake state in step with main and derives whether the
- * toolbar shows it (#12516).
+ * sidebar footer shows it (#12516).
  *
  * Main broadcasts every change to every view, cached ones included, so the push
  * alone keeps a view current; the read on mount covers a view created while the
@@ -35,7 +35,7 @@ export function loadKeepAwakeState(): Promise<void> {
  *
  * The first state a view learns shows at once — it describes a hold already
  * under way. A later start waits out the Doherty gate, so an agent that flickers
- * through `working` doesn't flash the toolbar; a release hides it at once.
+ * through `working` doesn't flash the footer; a release hides it at once.
  */
 export function useKeepAwakeSync(): void {
   useEffect(() => {

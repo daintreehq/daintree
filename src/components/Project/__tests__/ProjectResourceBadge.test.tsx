@@ -578,6 +578,82 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(container.textContent ?? "").not.toContain("project active");
   });
 
+  it("pins status items to the right of the readout without nesting them in the trigger", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+
+    const { container, getByTestId } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+
+    await flush();
+
+    const trigger = container.querySelector("button");
+    expect(trigger?.textContent).toBe("1 project active");
+    // A button inside the trigger button is invalid markup and would open the
+    // popover on every status click.
+    expect(trigger?.contains(getByTestId("status-item"))).toBe(false);
+  });
+
+  it("keeps a showing status mounted when the readout arrives beside it", async () => {
+    let resolveProjects: (projects: Project[]) => void = () => {};
+    mockGetAll.mockReturnValue(
+      new Promise<Project[]>((resolve) => {
+        resolveProjects = resolve;
+      })
+    );
+    statsStoreState.stats = { p1: { processCount: 1 } };
+
+    const { container, getByTestId } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+
+    // Still loading: the status shows on its own, and takes focus.
+    const before = getByTestId("status-item");
+    expect(container.querySelectorAll("button").length).toBe(1);
+    before.focus();
+
+    await act(async () => {
+      resolveProjects([makeProject({ id: "p1", name: "Proj One" })]);
+    });
+    await flush();
+
+    expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
+    // Same node, not a lookalike: a remount would have dropped focus to the body.
+    expect(getByTestId("status-item")).toBe(before);
+    expect(document.activeElement).toBe(before);
+  });
+
+  it("still shows status items while there is no readout to show", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = {};
+
+    const { container, getByTestId } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+
+    await flush();
+
+    // The status is the only control: no "0 projects active" trigger beside it.
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons).toEqual([getByTestId("status-item")]);
+    expect(container.querySelector("[data-status-readout]")).toBeNull();
+  });
+
+  it("drops the row when the last status leaves and there is no readout", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = {};
+
+    const { container, rerender } = render(
+      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
+    );
+    await flush();
+
+    rerender(<ProjectResourceBadge statusItems={null} />);
+
+    expect(container.firstElementChild).toBeNull();
+  });
+
   it("removes visibility listener on unmount", () => {
     const { unmount } = render(<ProjectResourceBadge />);
     expect(visibilityListeners.length).toBeGreaterThan(0);

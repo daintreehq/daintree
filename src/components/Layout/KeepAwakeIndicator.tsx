@@ -1,3 +1,4 @@
+import { useLayoutEffect, useRef } from "react";
 import { Coffee } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,28 +10,34 @@ import { actionService } from "@/services/ActionService";
  * would keep the machine up with nothing running, so the hold itself is shown.
  *
  * Tier-1 ambient: a neutral icon with no pip or accent, since holding is the
- * setting doing what it says. Fixed chrome rather than a registry button, like
- * the memory pause beside it — it only exists while the hold does.
+ * setting doing what it says. It lives in the sidebar footer's status cluster
+ * rather than the toolbar: it comes and goes with every agent turn, and there
+ * it can do so without moving a button or holding an empty slot open.
  */
-/**
- * Holds the indicator's footprint while keep-awake is on but not holding, so
- * the buttons to its left don't move every time an agent starts or stops
- * working. No `data-toolbar-item`: it must stay out of the roving tab order.
- */
-export function KeepAwakeIndicatorPlaceholder() {
-  return (
-    <div className="toolbar-icon-button h-8 w-8 opacity-0 pointer-events-none" aria-hidden="true" />
-  );
-}
-
 export function KeepAwakeIndicator() {
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  // The hold ends on its own schedule, so this can unmount under a keyboard
+  // user. Hand focus to the readout beside it rather than dropping it to the
+  // body; focus that already moved on (into Settings, say) is left alone.
+  useLayoutEffect(() => {
+    const button = buttonRef.current;
+    return () => {
+      if (button === null || document.activeElement !== button) return;
+      button
+        .closest("[data-sidebar-status-bar]")
+        ?.querySelector<HTMLElement>("[data-status-readout]")
+        ?.focus();
+    };
+  }, []);
+
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <Button
+          ref={buttonRef}
           variant="ghost"
-          size="icon"
-          data-toolbar-item=""
+          size="icon-xs"
           data-testid="keep-awake-indicator"
           onClick={() =>
             void actionService.dispatch(
@@ -39,13 +46,12 @@ export function KeepAwakeIndicator() {
               { source: "user" }
             )
           }
-          className="toolbar-icon-button text-text-secondary"
           aria-label="Keeping this machine awake, open keep-awake settings"
         >
           <Coffee aria-hidden="true" />
         </Button>
       </TooltipTrigger>
-      <TooltipContent side="bottom" className="max-w-xs">
+      <TooltipContent side="top" align="end" className="max-w-xs">
         <div className="flex flex-col gap-0.5">
           <span className="font-medium">Keeping this machine awake</span>
           <span>
