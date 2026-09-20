@@ -264,7 +264,7 @@ describe("built-in panel views", () => {
     // Worker chrome stays out of the way — a plugin nobody asked to run has no
     // running to report, and "Restart plugin" over this would be nonsense.
     expect(screen.getByText("Enable this plugin")).not.toBeNull();
-    expect(screen.getByText(/turned off/)).not.toBeNull();
+    expect(screen.getByText(/This plugin's turned off/)).not.toBeNull();
     expect(screen.queryByTestId("runtime-status")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Manage plugins" }));

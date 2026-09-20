@@ -857,7 +857,10 @@ export function makePluginViewContent(
               className="my-auto w-full shrink-0"
               icon={<Package />}
               title="Enable this plugin"
-              description={`${displayName} is turned off. Turn it back on in the plugin manager to use this view.`}
+              // Unnamed on purpose: `displayName` is the panel kind's name, not
+              // the plugin's, so naming it here would send the user looking for
+              // "Site Inspector" in a manager that lists "Site Builder".
+              description="This plugin's turned off. Enable it in the plugin manager to use this view."
               action={
                 <Button
                   variant="secondary"

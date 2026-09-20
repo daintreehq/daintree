@@ -368,7 +368,7 @@ export function createSiteBuilderGuest(
     });
     if (byteLength(payload) > MAX_MESSAGE_BYTES) {
       if (event.type !== "runtimeIssue") {
-        issue("internal", "dropped an oversized " + event.type + " envelope");
+        issue("capacity", "dropped an oversized " + event.type + " envelope");
       }
       return false;
     }
@@ -386,7 +386,13 @@ export function createSiteBuilderGuest(
   }
 
   function issue(
-    code: "no-svelte-meta" | "not-dev-build" | "overlay-blocked" | "internal",
+    /**
+     * `capacity` is a limit the page ran into and the host can do nothing
+     * about; `internal` is the runtime itself failing. They are separate codes
+     * because the host offers to rebuild the session for one and not the
+     * other, and rebuilding costs the user their selection.
+     */
+    code: "no-svelte-meta" | "not-dev-build" | "overlay-blocked" | "capacity" | "internal",
     detail: string
   ): void {
     send({ type: "runtimeIssue", code, detail: clamp(detail, MAX_DETAIL) });
@@ -799,7 +805,7 @@ export function createSiteBuilderGuest(
     const ancestry = readAncestry(nearestMapped(target) ?? target);
     if (ancestry.truncated) {
       issue(
-        "internal",
+        "capacity",
         "ancestry truncated to " + MAX_ANCESTRY + " frames for " + describe(target)
       );
     }
@@ -1209,7 +1215,7 @@ export function createSiteBuilderGuest(
     if (send({ type: "selectionChanged", nodes, cause, ...scopeField })) return true;
     const trimmed = nodes.map((node) => ({ ...node, ancestry: node.ancestry.slice(0, 4) }));
     if (send({ type: "selectionChanged", nodes: trimmed, cause, ...scopeField })) {
-      issue("internal", "ancestry shortened to fit the selection into one envelope");
+      issue("capacity", "ancestry shortened to fit the selection into one envelope");
       return true;
     }
     return false;
@@ -1307,7 +1313,7 @@ export function createSiteBuilderGuest(
         selection = selection.filter((entry) => entry.target !== target);
       } else {
         if (selection.length >= MAX_NODES) {
-          issue("internal", "multi-selection capped at " + MAX_NODES + " nodes");
+          issue("capacity", "multi-selection capped at " + MAX_NODES + " nodes");
           return;
         }
         selection = selection.concat([{ target, hit }]);
@@ -1319,7 +1325,7 @@ export function createSiteBuilderGuest(
       selection = previous;
       selectionScope = previousScope;
       selectedFrame = previousFrame;
-      issue("internal", "selection left unchanged: the observation did not fit one envelope");
+      issue("capacity", "selection left unchanged: the observation did not fit one envelope");
     }
     schedulePaint();
   }

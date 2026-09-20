@@ -539,15 +539,32 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
   const composer = useComposerMemory(memoryKey);
   const collapsed = useDrawerCollapsed(props.panelId);
   const drawerRef = useRef<HTMLElement | null>(null);
+  const open = drawerHasDetails(
+    state,
+    composer.deliveries.length > 0 || composer.draft.trim() !== ""
+  );
+  const resolving = state.selection.status === "resolving";
   // Both halves of the loading contract, owned here rather than inside
   // `ResolvingHeader`: the onset gate suppresses a skeleton for a resolve that
   // beats 400ms, and the floor holds one that appeared for its minimum dwell.
   // The header unmounts the instant the source lands, so a floor living in it
   // would go with it — source resolution settles right around the gate, which
   // is exactly the window a floorless skeleton flashes in.
-  const resolvingSkeleton = useSkeletonFloor(
-    useDohertyGate(state.selection.status === "resolving")
-  );
+  //
+  // Gated on the drawer being on screen as well: both halves measure time the
+  // user spent looking at something, and a drawer folded away shows nothing to
+  // dwell on. Without it a resolve started behind a shut drawer opens the gate
+  // and starts the floor against a skeleton nobody can see, leaving it a few
+  // real milliseconds when the drawer is opened late.
+  const onScreen = controller !== null && open && !collapsed;
+  const gate = useDohertyGate(onScreen && resolving);
+  const floored = useSkeletonFloor(gate);
+  // `gate ||`, not the floor alone: the floor only learns its input in an
+  // effect, so on the commit the gate opens it still reads false. An answer
+  // landing in that same commit would put the identity up, spend the crumb's
+  // focus intent on it, and then have it replaced by a skeleton one commit
+  // later — the flash the floor exists to prevent, arriving backwards.
+  const resolvingSkeleton = gate || floored;
   const selectCrumb = useSelectCrumb(
     controller,
     state,
@@ -559,10 +576,6 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
   );
   if (!controller) return null;
   const selection = state.selection;
-  const open = drawerHasDetails(
-    state,
-    composer.deliveries.length > 0 || composer.draft.trim() !== ""
-  );
   if (!open || collapsed) return null;
 
   return (
@@ -578,10 +591,10 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
     >
       {/* Pinned. A desktop inspector always says what is selected; a form
           scrolls it away. */}
-      {resolvingSkeleton || selection.status === "resolving" ? (
+      {resolvingSkeleton || resolving ? (
         // The held skeleton outranks a ready identity: releasing it the frame
         // the answer lands is the tear-down the floor exists to stop.
-        <ResolvingHeader skeleton={resolvingSkeleton} />
+        <ResolvingHeader skeleton={resolvingSkeleton} resolving={resolving} />
       ) : selection.status === "ready" ? (
         <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3">
           <SelectionIdentity
@@ -619,7 +632,9 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
                 </Button>
               ) : undefined
             }
-          />
+          >
+            {state.issue.detail}
+          </InspectorNotice>
         ) : null}
         <WorkspaceStatus state={state} controller={controller} worktreePath={props.worktreePath} />
         {selection.status === "ready" ? null : <SelectionBody state={state} />}
@@ -847,8 +862,11 @@ function readyHasSomethingToSay(workspace: Extract<WorkspaceState, { status: "re
  * because this unmounts the moment the source lands and a floor kept here
  * would never get to hold anything.
  */
-function ResolvingHeader({ skeleton }: { skeleton: boolean }) {
-  const slow = useDeferredLoading(true, UI_STILL_WORKING_MS);
+function ResolvingHeader({ skeleton, resolving }: { skeleton: boolean; resolving: boolean }) {
+  // The live status, not `true`: the floor can keep this mounted across a run
+  // of quick picks, and a timer started at mount would eventually call a
+  // selection that has only just begun "still working".
+  const slow = useDeferredLoading(resolving, UI_STILL_WORKING_MS);
   return (
     <div className="shrink-0 border-b border-border-subtle px-3 pb-2 pt-3" aria-busy="true">
       {skeleton ? (

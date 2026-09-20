@@ -283,6 +283,12 @@ export interface InspectorIssue {
   /** The page's own verdict, when it came from the page. */
   code?: string;
   /**
+   * The diagnostic behind the title. Separate, because a raw error message is
+   * evidence, not a headline, and the notice needs a headline to put a
+   * recovery action under.
+   */
+  detail?: string;
+  /**
    * Present on every issue that has a way forward. An error must offer one —
    * a mode change replays its target, and a fault inside the page is repaired
    * by rebuilding the session that carries the inspector. Warnings describe a
@@ -343,6 +349,7 @@ const RUNTIME_ISSUE_COPY: Record<string, string> = {
     "This page carries no Svelte source locations. Run the app with the Vite dev server to select elements.",
   "not-dev-build": "This preview is a production build, so elements can't be traced to source",
   "overlay-blocked": "The page blocked the selection overlay",
+  capacity: "Part of this was too large to send in one message, so the builder left some of it out",
   internal: "The inspector hit a problem inside the page",
   "metadata-shape":
     "This page's Svelte metadata has a shape the builder doesn't recognise, so elements can't be traced to source. Check the Svelte version against the supported baseline.",
@@ -851,7 +858,11 @@ export class InspectorController implements DevPreviewToolSession {
         modePending: false,
         issue: {
           severity: "error",
-          message: formatErrorMessage(error, "Couldn't switch the preview mode"),
+          // `formatErrorMessage` hands back the error's own message and only
+          // falls back when there isn't one, so it belongs in the body — used
+          // as the title it puts a raw diagnostic where the headline goes.
+          message: "Couldn't switch the preview mode",
+          detail: formatErrorMessage(error, "") || undefined,
           // The target, not the reverted current mode: retrying has to ask for
           // the switch that failed.
           recovery: { kind: "set-mode", mode },

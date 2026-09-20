@@ -2445,6 +2445,29 @@ describe("issue recovery", () => {
     await waitFor(() => expect(host.sitePreview.bind).toHaveBeenCalled());
   });
 
+  it("does not offer to rebuild the session over a limit rebuilding cannot lift", async () => {
+    // Reconnecting stales and then clears the selection. Offering it for a
+    // truncation would cost the user their pick and leave the limit in place.
+    await mountSelected();
+    await act(async () =>
+      host.pushPreview({
+        kind: "guest-event",
+        sessionId: "session-1",
+        panelId: "preview-1",
+        projectId: "p1",
+        documentEpoch: 0,
+        sequence: 6,
+        event: { type: "runtimeIssue", code: "capacity", detail: "capped at 24 nodes" },
+      })
+    );
+
+    await waitFor(() => expect(text()).toContain("too large to send in one message"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Reconnect" })).toBeNull();
+    // And the selection it was about is still there.
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+  });
+
   it("lets a warning be acknowledged without pretending anything can repair it", async () => {
     await mountBound();
     await act(async () =>
@@ -2538,8 +2561,11 @@ describe("resolving skeleton", () => {
 
     release();
     await settle(0);
+    // Ready, on screen, and never a skeleton: the floor has nothing to hold
+    // because the gate never let anything through.
+    expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
+    expect(skeleton()).toBeNull();
     await settle(GATE_MS + FLOOR_MS);
-    // Nothing was ever shown, so there is nothing for the floor to hold.
     expect(skeleton()).toBeNull();
     expect(screen.queryByRole("region", { name: "Selected element" })).not.toBeNull();
   });
@@ -2590,9 +2616,10 @@ describe("resolving skeleton", () => {
 
     release();
     await settle(10);
-    expect(document.activeElement).not.toBe(
-      screen.queryByRole("region", { name: "Selected element" })
-    );
+    // The answer is in, but the floor still owns the slot — so the landing the
+    // intent is aimed at has not been rendered yet.
+    expect(skeleton()).not.toBeNull();
+    expect(screen.queryByRole("region", { name: "Selected element" })).toBeNull();
 
     await settle(FLOOR_MS);
     const landed = screen.getByRole("region", { name: "Selected element" });
