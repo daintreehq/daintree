@@ -1,13 +1,15 @@
 import { lazy } from "react";
 import { registerBuiltinView } from "@/registry/builtinRendererRegistry";
 import { registerFileEditor } from "@/registry/fileEditorRegistry";
+// `../shared/ids.js`, never `../shared/protocol.js`: this entry is globbed
+// eagerly into the host bundle for every user, and protocol.ts imports zod.
 import {
   EDITABLE_EXTENSIONS,
   EDITOR_CONTRIBUTION_ID,
   EDITOR_SLOT,
   MAX_EDITABLE_BYTES,
   PLUGIN_ID,
-} from "../shared/protocol.js";
+} from "../shared/ids.js";
 import { subscribeRecoverDrafts } from "./recoverDrafts.js";
 
 // Registration is synchronous, at module eval (the builtin renderer glob
@@ -35,6 +37,21 @@ registerFileEditor({
   maxBytes: MAX_EDITABLE_BYTES,
 });
 
+// Recovery has to be listening before any editor exists — the push is what
+// opens the editor — so the subscription stays eager. Only the disposer is new:
+// the entry used to drop it, leaving the listener unreachable. Nothing calls
+// this yet; the host glob imports entries for their side effects and has no
+// teardown hook, so it is the seam a future one attaches to, and calling it
+// early silently ends recovery for this view (a cached re-import does not
+// resubscribe). It releases the recovery listener only, not the registrations.
+let recoverDraftsSubscription: (() => void) | null = null;
+
 if (typeof window !== "undefined" && window.electron?.plugin) {
-  subscribeRecoverDrafts();
+  recoverDraftsSubscription = subscribeRecoverDrafts();
+}
+
+export function disposeRecoverDraftsSubscription(): void {
+  const dispose = recoverDraftsSubscription;
+  recoverDraftsSubscription = null;
+  dispose?.();
 }

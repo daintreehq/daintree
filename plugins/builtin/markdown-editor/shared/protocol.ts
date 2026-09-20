@@ -1,44 +1,16 @@
 import { z } from "zod";
+import type { DocumentIdentity } from "./ids.js";
 
 /**
  * The contract between the Markdown editor's main-side handlers and its
  * renderer view (#12323). Everything the renderer sends names the document by
  * its full identity, fixed when Edit mode opened, so no handler ever acts on
  * whichever project or worktree happens to be active when a call lands.
+ *
+ * The zod-free ids, channels and helpers live in `./ids.js` and are re-exported
+ * here, so the eagerly-globbed renderer entry can reach them without zod.
  */
-export const PLUGIN_ID = "daintree.markdown-editor";
-export const EDITOR_SLOT = "markdown.editor";
-export const EDITOR_CONTRIBUTION_ID = "markdown";
-
-/** Lower-case extensions the editor accepts. MDX is deliberately absent. */
-export const EDITABLE_EXTENSIONS = ["md", "markdown", "mkd"] as const;
-/** Byte ceiling applied at open, to draft growth and at the write boundary. */
-export const MAX_EDITABLE_BYTES = 2 * 1024 * 1024;
-
-export const DRAFT_RECORD_LIMIT = 50;
-export const DRAFT_STORAGE_LIMIT_BYTES = 16 * 1024 * 1024;
-
-export const CHANNELS = {
-  read: "document.read",
-  attach: "document.attach",
-  save: "document.save",
-  saveAs: "document.saveAs",
-  revalidate: "document.revalidate",
-  release: "document.release",
-  draftPut: "drafts.put",
-  draftGet: "drafts.get",
-  draftList: "drafts.list",
-  draftDelete: "drafts.delete",
-  recoverAck: "recover.ack",
-} as const;
-
-/** Main → renderer pushes, subscribed with `window.electron.plugin.on`. */
-export const PUSH_CHANNELS = {
-  documentChanged: "document-changed",
-  recoverDraft: "recover-draft",
-} as const;
-
-export const RECOVER_DRAFTS_ACTION_ID = "recover-drafts";
+export * from "./ids.js";
 
 export const DocumentIdentitySchema = z
   .object({
@@ -47,19 +19,22 @@ export const DocumentIdentitySchema = z
     filePath: z.string().min(1),
   })
   .strict();
-export type DocumentIdentity = z.infer<typeof DocumentIdentitySchema>;
 
-/** One opaque key per identity; the recovery file name is its sha256. */
-export function identityKey(identity: DocumentIdentity): string {
-  return `${identity.projectId}\u0000${identity.worktreePath ?? ""}\u0000${identity.filePath}`;
-}
-
-export function isEditableFilePath(filePath: string): boolean {
-  const name = filePath.split(/[/\\]/).pop() ?? "";
-  const dot = name.lastIndexOf(".");
-  if (dot <= 0 || dot === name.length - 1) return false;
-  return (EDITABLE_EXTENSIONS as readonly string[]).includes(name.slice(dot + 1).toLowerCase());
-}
+type Assert<T extends true> = T;
+/**
+ * Strict identity, not mutual assignability: this form also catches `any`, a
+ * readonly modifier, an index signature and an extra optional property, all of
+ * which survive a plain `extends` pair in both directions.
+ */
+type Identical<A, B> =
+  (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2 ? true : false;
+/**
+ * The identity type is hand-written in `ids.ts` to keep zod out of the eager
+ * graph; this fails the build if the schema and the interface drift apart.
+ */
+export type DocumentIdentityMatchesSchema = Assert<
+  Identical<z.infer<typeof DocumentIdentitySchema>, DocumentIdentity>
+>;
 
 export const EolSchema = z.enum(["\n", "\r\n"]);
 export type Eol = z.infer<typeof EolSchema>;
@@ -208,12 +183,3 @@ export const DraftDeleteResultSchema = z.object({ deleted: z.boolean() }).strict
 
 export const RecoverAckArgsSchema = z.object({ requestId: z.string().min(1) }).strict();
 export const RecoverAckResultSchema = z.object({ acknowledged: z.boolean() }).strict();
-
-export interface DocumentChangedPush {
-  identityKey: string;
-}
-
-export interface RecoverDraftPush {
-  requestId: string;
-  identity: DocumentIdentity;
-}
