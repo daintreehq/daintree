@@ -173,7 +173,7 @@ Custom elements are the strict case because registration is irreversible. Other 
 
 ## Working with a live dev preview
 
-`window.electron.sitePreview` lets a view attach to one of the project's running dev-preview panels and receive structured observations from the page inside it — which element was hovered or clicked, and what the page reported about it. The SvelteKit Site Builder is built on it; nothing about it is Svelte-specific.
+`window.electron.sitePreview` lets a view attach to one of the project's running dev-preview panels and receive structured observations from the page inside it — which element was hovered or clicked, and what the page reported about it. SvelteKit Tools is built on it; nothing about it is Svelte-specific.
 
 | Call | What it does |
 | --- | --- |
@@ -223,7 +223,7 @@ A dev preview tool is one registration — `registerDevPreviewTool({ id, pluginI
 
 **The drawer's chrome is the host's.** Your `Drawer` fills a host-owned frame (`src/components/DevPreview/DevPreviewToolDrawerChrome.tsx`) and declares nothing about its own width: no width classes, no `@container` — the chrome declares `@container/drawer`, so your rows still answer to the drawer's real width. The frame is 360px by default and drag-resizable between 280px and 560px from its page-facing edge (the width is shared by every preview for the session); in a preview too narrow to share it floats over the page instead, capped so a strip of the page always stays clear, which can render it below the nominal minimum. It hides itself entirely while your drawer renders nothing, which is how a tool stays shut until it has something to say. The policy for a cramped preview is the host's too: while docking the drawer would leave the page under 480px, the drawer floats over the page instead of squeezing it — a page pushed through its own responsive breakpoints stops being the thing the user is building. Closing a tool from inside one of its surfaces returns focus to the toolbar toggle that opened it.
 
-**What the surfaces are for.** Rendering the session and calling it. They may not own its lifetime, and they should not reconstruct host events from the panel store or the tool store — the session hears those from the host. `src/services/devPreviewTools/sessionManager.ts` is the implementation, and the SvelteKit Site Builder is the worked example.
+**What the surfaces are for.** Rendering the session and calling it. They may not own its lifetime, and they should not reconstruct host events from the panel store or the tool store — the session hears those from the host. `src/services/devPreviewTools/sessionManager.ts` is the implementation, and SvelteKit Tools is the worked example.
 
 ## What doesn't work inline
 

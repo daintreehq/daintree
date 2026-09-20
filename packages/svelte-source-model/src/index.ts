@@ -1,5 +1,5 @@
 /**
- * Svelte source semantics for the SvelteKit Site Builder.
+ * Svelte source semantics for SvelteKit Tools.
  *
  * Deliberately free of Daintree concepts: give it a `.svelte` file's bytes and
  * a location from Svelte's dev runtime, and it tells you which element of the

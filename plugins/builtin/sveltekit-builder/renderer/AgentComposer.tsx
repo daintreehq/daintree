@@ -523,7 +523,7 @@ export function AgentComposer({
       {scopes.length > 1 ? (
         <PropertyRow label="About" align="start">
           {fitsSegments(scopes) ? (
-            // The same segmented control the strip uses for Browse/Select: one
+            // The same segmented control the strip uses for Browse/Inspect: one
             // choice among peers, with the chosen one carried by a thumb rather
             // than by the others going bare. Its thumb needs stable geometry so
             // the control does not shrink; the wrapper keeps any overflow

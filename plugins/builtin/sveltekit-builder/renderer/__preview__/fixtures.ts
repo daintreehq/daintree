@@ -16,7 +16,7 @@ export const WORKTREE_ID = "wt-1";
 const MEMORY_KEY = composerMemoryKey(PANEL_ID, WORKTREE_ID);
 
 /**
- * One named state of the Site Builder, reached the way the app reaches it:
+ * One named state of SvelteKit Tools, reached the way the app reaches it:
  * fixtures reshape the host's answers and then push the same guest events the
  * real bridge pushes, so the controller, its state machine and both surfaces
  * are the real ones. Nothing here draws a picture of a state — it drives one.
@@ -48,7 +48,7 @@ const SAMPLE_REQUEST = [
   "",
   "---",
   "",
-  "Context from the Daintree Site Builder — file references only; read the files for the code:",
+  "Context from Daintree's SvelteKit Tools — file references only; read the files for the code:",
   "- Worktree: /Users/you/code/orchid-studio",
   "- App: the worktree root (SvelteKit 2.36.0, Svelte 5.38.1, Tailwind 4.1.12)",
   "- Page: http://localhost:5173/pricing (route /pricing)",
@@ -119,7 +119,7 @@ export const FIXTURES = {
   },
 
   picking: {
-    title: "Select mode, waiting for a click on the page",
+    title: "Inspect mode, waiting for a click on the page",
     settled: "text=Click an element to ask an agent about it",
     act: async (host) => {
       await bind(host);

@@ -177,7 +177,7 @@ describe("built-in panel views", () => {
     expect(documentViews.calls).toEqual([]);
   });
 
-  // The Site Builder registers `lazy(() => import("./SiteInspectorView"))` to keep
+  // SvelteKit Tools registers `lazy(() => import("./SiteInspectorView"))` to keep
   // its view out of the host bundle. Handing that straight back from the host's
   // own `lazy()` is a lazy resolving to a lazy, which React refuses (#306) — the
   // panel mounted and showed only the diagnostics fallback.

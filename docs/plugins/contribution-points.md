@@ -847,7 +847,7 @@ The host offers Edit inside the file browser’s existing content area and in st
 
 ## Preview tools — _Shipped (built-in only)_
 
-Declares a tool the dev-preview panel offers in its toolbar: a toggle, a strip under the toolbar and a drawer beside the page, with the host owning the chrome and the session lifecycle. The SvelteKit Site Builder (`plugins/builtin/sveltekit-builder/`) is the one contributor.
+Declares a tool the dev-preview panel offers in its toolbar: a toggle, a strip under the toolbar and a drawer beside the page, with the host owning the chrome and the session lifecycle. SvelteKit Tools (`plugins/builtin/sveltekit-builder/`) is the one contributor.
 
 The components stay a renderer-side registration — `registerDevPreviewTool` in the plugin's renderer entry, because they are compiled into the host bundle and nothing else can supply them. This declaration is what makes the tool **admissible**: `src/registry/devPreviewToolRegistry.ts` hides a registered tool whose plugin's manifest does not name its id, so a module side effect alone can no longer put a tool in the preview toolbar. [Views → Dev preview tools](./views.md#dev-preview-tools) is the lifecycle.
 
@@ -857,7 +857,7 @@ The components stay a renderer-side registration — `registerDevPreviewTool` in
     "previewTools": [
       {
         "id": "daintree.sveltekit-builder.builder",
-        "title": "Site Builder",
+        "title": "SvelteKit Tools",
         "iconId": "square-dashed-mouse-pointer",
         "guestAdapter": "daintree.sveltekit-builder.guest"
       }

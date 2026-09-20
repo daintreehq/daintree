@@ -1746,7 +1746,7 @@ describe("a hostile page", () => {
       expect(events("runtimeIssue")).toEqual([expect.objectContaining({ code: "not-dev-build" })]);
 
       // The first look after the verdict spends the probe's one-shot; on a
-      // production build in Select mode every later one used to sweep the whole
+      // production build in Inspect mode every later one used to sweep the whole
       // document again, for every mutation batch, forever.
       runtime.setMode("browse");
       runtime.setMode("select");

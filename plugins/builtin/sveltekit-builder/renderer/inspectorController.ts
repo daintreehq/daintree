@@ -45,7 +45,7 @@ import {
 import type { SiteSelection, Viewport } from "../shared/model.js";
 
 /**
- * One controller per dev preview with the Site Builder switched on — the
+ * One controller per dev preview with SvelteKit Tools switched on — the
  * host's tool session for that preview. It holds the preview binding, the
  * source workspace and the selection, and lives exactly as long as the host
  * keeps the builder on for the preview, surfaces or no surfaces.
@@ -1495,7 +1495,7 @@ export class InspectorController implements DevPreviewToolSession {
       this.failReprove();
       return;
     }
-    // The page answers only in Select mode; the ask waits for it to come back.
+    // The page answers only in Inspect mode; the ask waits for it to come back.
     if (this.state.mode !== "select" || this.state.modePending) return;
     // An answer is still being resolved: this firing is only its deadline.
     if (this.quietResolve !== null) {
@@ -2000,8 +2000,8 @@ export class InspectorController implements DevPreviewToolSession {
 }
 
 /**
- * The builder for one dev preview, as the host's session for its Site Builder
- * tool. The host owns its lifetime — created when the builder is switched on,
+ * The builder for one dev preview, as the host's session for SvelteKit
+ * Tools. The host owns its lifetime — created when the builder is switched on,
  * kept across surface unmounts, disposed when the tool goes off or the preview
  * or plugin does — so nothing here reconstructs those events.
  */
@@ -2012,7 +2012,7 @@ export function createBuilderSession(
   // The chunk can land after the host let this preview go. Disposing what we
   // would build here cancels agent requests and forgets composer drafts for the
   // whole panel — which by then may belong to the next session.
-  if (context.signal.aborted) throw new Error("The Site Builder was switched off while it loaded");
+  if (context.signal.aborted) throw new Error("SvelteKit Tools was switched off while it loaded");
   const controller = new InspectorController(context.panelId, deps(context.panelId));
   controller.update(context);
   return controller;

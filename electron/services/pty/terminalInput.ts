@@ -30,7 +30,7 @@ export function delay(ms: number): Promise<void> {
  * point: bracketed paste already defended itself, but the soft-newline branch
  * (agents that declare no bracketed paste, Gemini among them) and the plain
  * short-text branch wrote the body through untouched, so page-derived text —
- * DOM ids and class names the Site Builder quotes into a prompt — could reach
+ * DOM ids and class names SvelteKit Tools quotes into a prompt — could reach
  * the agent as terminal input rather than as prompt text.
  *
  * Trusted protocol bytes are added AFTER this runs, by the caller that means

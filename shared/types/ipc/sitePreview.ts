@@ -1,6 +1,6 @@
 /**
  * Wire types for the site-preview bridge — the host-owned channel between a
- * dev-preview guest page and the Site Builder plugin.
+ * dev-preview guest page and the SvelteKit Tools plugin.
  *
  * Structural only, and deliberately free of any `electron/` import: the zod
  * schemas that actually validate the envelope live in

@@ -26,7 +26,7 @@ export const SVELTEKIT_VERSIONS = {
 export const PAGE_FILE = "src/routes/+page.svelte";
 
 export const PAGE_SOURCE = `<main class="flex flex-col gap-4 p-6">
-  <h1 class="text-4xl font-bold">Daintree site builder</h1>
+  <h1 class="text-4xl font-bold">Daintree SvelteKit Tools</h1>
   <p class="text-base">Point at an element to find the source that owns it.</p>
   <section class="grid grid-cols-3 gap-4">
     {#each features as feature}

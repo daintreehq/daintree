@@ -343,7 +343,7 @@ export function buildAgentTaskPrompt(context: AgentTaskContext): string {
   lines.push("---");
   lines.push("");
   lines.push(
-    "Context from the Daintree Site Builder — file references only; read the files for the code:"
+    "Context from Daintree's SvelteKit Tools — file references only; read the files for the code:"
   );
   // The quotes are the boundary: everything the page said about itself is a
   // JSON string, everything resolved from the worktree is bare. Said once, in

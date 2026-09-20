@@ -107,7 +107,7 @@ export function siteBuilderApplies(context: DevPreviewToolContext): Promise<bool
 
 /** Why a command is refused where the builder does not apply. */
 export const SITE_BUILDER_UNAVAILABLE_REASON =
-  "The Site Builder needs a SvelteKit app in this worktree";
+  "SvelteKit Tools needs a SvelteKit app in this worktree";
 
 /**
  * The dev preview toolbar toggle. Where it is shown is the host's call — it
@@ -120,7 +120,7 @@ export function SiteBuilderButton({ active, onToggle }: DevPreviewToolButtonProp
         <button
           type="button"
           onClick={onToggle}
-          aria-label="Site Builder"
+          aria-label="SvelteKit Tools"
           aria-pressed={active}
           className={cn(
             "toolbar-icon-button rounded-[var(--radius-md)] p-1.5",
@@ -131,7 +131,9 @@ export function SiteBuilderButton({ active, onToggle }: DevPreviewToolButtonProp
         </button>
       </TooltipTrigger>
       <TooltipContent side="bottom">
-        {active ? "Close Site Builder" : "Trace an element to its source, or ask an agent about it"}
+        {active
+          ? "Close SvelteKit Tools"
+          : "Trace an element to its source, or ask an agent about it"}
       </TooltipContent>
     </Tooltip>
   );

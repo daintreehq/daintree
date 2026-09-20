@@ -1512,7 +1512,7 @@ export function createSiteBuilderGuest(
     if (keyboard.key === "Escape") {
       if (selection.length === 0) return;
       // Only swallow Escape when it had something of ours to clear; otherwise
-      // the host still owns it for leaving Select mode.
+      // the host still owns it for leaving Inspect mode.
       suppress(event);
       selection = [];
       selectionScope = "element";

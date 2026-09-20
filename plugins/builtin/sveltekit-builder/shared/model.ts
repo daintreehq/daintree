@@ -1,7 +1,7 @@
 import { z } from "zod";
 
 /**
- * The Site Builder domain model — the frozen vocabulary every part of the
+ * The SvelteKit Tools domain model — the frozen vocabulary every part of the
  * plugin shares: what a selection is, and what the source underneath it is.
  *
  * The one rule this file exists to enforce, which the specification treats as

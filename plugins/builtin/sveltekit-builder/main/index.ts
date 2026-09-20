@@ -41,7 +41,7 @@ import { SourceTracker } from "./tracker.js";
 import { ScanGate, WorkspaceRegistry, type Workspace } from "./workspace.js";
 
 /**
- * Main-side half of the SvelteKit Site Builder: source truth. It resolves the
+ * Main-side half of SvelteKit Tools: source truth. It resolves the
  * app and turns guest observations into source identity against current bytes.
  * It never writes — the agent the selection is handed to does that, and the
  * source tracker is how the view learns of it. The live preview is the
@@ -156,13 +156,13 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
   await host.registerAction(
     {
       id: TOGGLE_BUILDER_ACTION_ID,
-      title: "Toggle Site Builder",
+      title: "Toggle SvelteKit Tools",
       description:
-        "Switch the Site Builder on or off in this worktree's dev preview, opening the preview if none is running.",
+        "Switch SvelteKit Tools on or off in this worktree's dev preview, opening the preview if none is running.",
       category: "panels",
       kind: "command",
       danger: "safe",
-      keywords: ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "agent"],
+      keywords: ["svelte", "sveltekit", "tools", "inspect", "inspector", "preview", "agent"],
       // Toggling a preview tool exercises none of the plugin's capabilities, so
       // it asks for none: the host elevates a command to a confirm prompt from
       // what it requires, and a dialog on every toolbar click is not that.

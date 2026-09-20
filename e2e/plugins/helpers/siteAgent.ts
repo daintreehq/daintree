@@ -5,7 +5,7 @@ export const SITE_AGENT_READY = "SITE_AGENT_READY";
 export const SITE_AGENT_EDITED = "SITE_AGENT_EDITED";
 
 /**
- * A fake `claude` that does what a real agent would with a Site Builder task,
+ * A fake `claude` that does what a real agent would with a SvelteKit Tools task,
  * deterministically: it reads the submitted prompt, takes the source location
  * the Inspector put in it, and makes the requested text change in that file.
  *

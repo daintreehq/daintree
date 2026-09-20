@@ -72,7 +72,7 @@ import { SelectionTrail, trailFor, type PickedCrumb } from "./SelectionTrail.js"
 
 const MODE_OPTIONS = [
   { value: "browse" as const, label: "Browse" },
-  { value: "select" as const, label: "Select" },
+  { value: "select" as const, label: "Inspect" },
 ];
 
 /**
@@ -222,11 +222,11 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       <div
         ref={stripRef}
         role="toolbar"
-        aria-label="Site Builder"
+        aria-label="SvelteKit Tools"
         onKeyDown={onStripKeyDown}
         className="flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
       >
-        <WaitingRow label="Starting the Site Builder" />
+        <WaitingRow label="Starting SvelteKit Tools" />
       </div>
     );
   }
@@ -235,7 +235,7 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
     <div
       ref={stripRef}
       role="toolbar"
-      aria-label="Site Builder"
+      aria-label="SvelteKit Tools"
       onKeyDown={onStripKeyDown}
       className="@container/strip flex h-8 shrink-0 items-center gap-2 border-b border-overlay bg-surface px-2"
     >
@@ -259,8 +259,8 @@ export function SiteBuilderToolbar(props: DevPreviewToolSurfaceProps<InspectorCo
       <Button
         variant="ghost"
         size="icon-xs"
-        aria-label="Close Site Builder"
-        title="Close Site Builder"
+        aria-label="Close SvelteKit Tools"
+        title="Close SvelteKit Tools"
         onClick={props.onClose}
       >
         <X aria-hidden="true" />
@@ -558,7 +558,7 @@ export function SiteBuilderDrawer(props: DevPreviewToolSurfaceProps<InspectorCon
   return (
     <aside
       ref={drawerRef}
-      aria-label="Site Builder details"
+      aria-label="SvelteKit Tools details"
       // Width, resizing, the narrow-pane policy and the `@container/drawer` the
       // rows below answer to all belong to the host's drawer chrome
       // (`src/components/DevPreview/DevPreviewToolDrawerChrome.tsx`); this fills

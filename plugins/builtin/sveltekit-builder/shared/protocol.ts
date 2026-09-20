@@ -2,7 +2,7 @@ import { z } from "zod";
 import { RectSchema, SiteSelectionSchema, SourceLocationSchema, ViewportSchema } from "./model.js";
 
 /**
- * The Site Builder wire contract. Three boundaries meet here, and every message
+ * The SvelteKit Tools wire contract. Three boundaries meet here, and every message
  * across them is validated at both ends:
  *
  * - renderer view → plugin main, over the plugin channel bridge (`CHANNELS`);

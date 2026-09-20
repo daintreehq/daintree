@@ -47,7 +47,7 @@ export function shouldUseBracketedPaste(
  *
  * The bytes matter because the destination is a parser, not a text field. ESC
  * introduces a sequence: `\x1b[201~` — legal in a POSIX filename, and also
- * reachable from a DOM id the Site Builder quotes into a prompt — closes a
+ * reachable from a DOM id SvelteKit Tools quotes into a prompt — closes a
  * bracketed paste early and hands the remainder over as typed input. The rest
  * of the block is worse: `\x03` interrupts, `\x04` closes stdin, `\x15` clears
  * the line. A length limit does not touch any of this, and neither does
