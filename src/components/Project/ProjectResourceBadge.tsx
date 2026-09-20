@@ -591,7 +591,12 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
   // "this strip isn't here" the same picture — and idle is half of the question
   // the footer exists to answer. It now stays put once the first read lands and
   // says so.
-  const showReadout = !isLoading;
+  //
+  // `|| isWorking` because the two halves arrive on different channels: the
+  // count comes from the memory poll, agent activity from the stats push. A
+  // machine whose metrics read is failing would otherwise hide known activity
+  // behind an unrelated outage.
+  const showReadout = !isLoading || isWorking;
 
   // The Popover root outlives its trigger, and Radix's anchor ref never clears
   // on unmount — so an open popover would stay anchored to a detached node with
@@ -605,12 +610,19 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
   }
 
   // The count is a separate fact from the activity state and stays in words;
-  // the mark carries working versus idle. With nothing running at all there is
-  // no count worth printing, so the state becomes the label.
+  // the mark carries working versus idle.
+  //
+  // The empty-count branch reads from `isWorking`, not from the count alone.
+  // The mark turns over on the stats push while the count waits on the 10s
+  // memory poll, so the first agent started after an idle spell put a filled
+  // mark beside the word "Idle" for up to ten seconds — the label contradicting
+  // the mark right beside it. Both now come from the same verdict.
   const readoutLabel =
     stats.runningProjects > 0
       ? `${stats.runningProjects} project${stats.runningProjects !== 1 ? "s" : ""} active`
-      : "Idle";
+      : isWorking
+        ? "Working"
+        : "Idle";
 
   // What assistive technology gets. The mark is the only thing that shows the
   // working state visually, so without spelling it out here a session that goes

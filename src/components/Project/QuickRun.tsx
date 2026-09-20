@@ -645,19 +645,19 @@ export function QuickRun({ projectId }: QuickRunProps) {
                                 {item.type === "saved" ? item.label : item.value}
                               </span>
                               {item.type === "script" && item.label !== item.value && (
-                                <span className="ml-2 text-2xs font-sans text-text-muted">
+                                <span className="ml-2 text-2xs font-sans text-text-secondary">
                                   ({item.label})
                                 </span>
                               )}
                               {item.type === "saved" && item.label !== item.value && (
-                                <span className="ml-2 text-2xs font-sans text-text-muted">
+                                <span className="ml-2 text-2xs font-sans text-text-secondary">
                                   {item.value}
                                 </span>
                               )}
                               {(item.type === "script" || item.type === "saved") &&
                                 "description" in item &&
                                 item.description && (
-                                  <span className="mt-0.5 block truncate text-2xs font-sans text-text-muted">
+                                  <span className="mt-0.5 block truncate text-2xs font-sans text-text-secondary">
                                     {item.description}
                                   </span>
                                 )}

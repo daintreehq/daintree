@@ -131,9 +131,6 @@ const DURABLE_ALLOWLIST = new Set([
   // Theme browser accent display (theme content, not app chrome)
   "src/components/ThemeBrowser/ThemeBrowser.tsx",
 
-  // Primary CTA (QuickRun button) + bg-accent-soft autocomplete + fill-daintree-accent Pin icon
-  "src/components/Project/QuickRun.tsx",
-
   // The plugin manager's two row components used to sit here for their
   // selected-row accent stripe. Selection is neutral now: it persists while
   // focus moves, so an accent stripe on one row plus an accent focus ring on
