@@ -859,7 +859,7 @@ export function makePluginViewContent(
               title="Enable this plugin"
               // Unnamed on purpose: `displayName` is the panel kind's name, not
               // the plugin's, so naming it here would send the user looking for
-              // "Site Inspector" in a manager that lists "Site Builder".
+              // "Site Inspector" in a manager that lists "SvelteKit Tools".
               description="This plugin's turned off. Enable it in the plugin manager to use this view."
               action={
                 <Button
