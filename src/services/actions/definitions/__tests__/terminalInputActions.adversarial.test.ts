@@ -37,7 +37,13 @@ vi.mock("@/services/terminal/TerminalInstanceService", () => ({
   terminalInstanceService: terminalInstanceMock,
 }));
 vi.mock("@/clients", () => ({ terminalClient: terminalClientMock }));
-vi.mock("@shared/utils/terminalInputProtocol", () => bracketedMock);
+// Only the wrapper is stubbed, so the assertions can tell the two branches
+// apart. `neutralizeControlCharacters` stays real: what the unbracketed branch
+// hands the parser is the thing under test, not a stand-in for it.
+vi.mock("@shared/utils/terminalInputProtocol", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@shared/utils/terminalInputProtocol")>()),
+  ...bracketedMock,
+}));
 vi.mock("@/hooks/useSendToAgentPalette", () => sendToAgentMock);
 vi.mock("@/store/terminalInputStore", () => terminalInputStoreMock);
 vi.mock("@/store/fleetArmingStore", () => fleetArmingMock);
@@ -205,6 +211,44 @@ describe("terminalInputActions adversarial", () => {
     await run("terminal.paste");
 
     expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "a\rb\rc");
+  });
+
+  it("paste without bracketed mode neutralises control characters", async () => {
+    // A clipboard off a web page. ESC starts a sequence, \x03 interrupts and
+    // \x15 clears the line — all three reach a parser, not a text field.
+    clipboardText = "ls\x1b[201~\x03rm -rf /\x15";
+    setPanelState({
+      focusedId: "t1",
+      panelsById: { t1: { isInputLocked: false, kind: "terminal" } },
+    });
+    terminalInstanceMock.get.mockReturnValue({
+      terminal: { getSelection: () => "", modes: { bracketedPasteMode: false } },
+      isInputLocked: false,
+    });
+
+    const { run } = setupActions();
+    await run("terminal.paste");
+
+    expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "ls␛[201~␃rm -rf /␕");
+  });
+
+  it("paste without bracketed mode keeps a bare CR a submit, not a glyph", async () => {
+    // The one character this branch means: folded to \n before neutralisation
+    // and re-encoded after, so line structure survives the sanitiser.
+    clipboardText = "one\rtwo";
+    setPanelState({
+      focusedId: "t1",
+      panelsById: { t1: { isInputLocked: false, kind: "terminal" } },
+    });
+    terminalInstanceMock.get.mockReturnValue({
+      terminal: { getSelection: () => "", modes: { bracketedPasteMode: false } },
+      isInputLocked: false,
+    });
+
+    const { run } = setupActions();
+    await run("terminal.paste");
+
+    expect(terminalClientMock.write).toHaveBeenCalledWith("t1", "one\rtwo");
   });
 
   it("paste with empty clipboard does not call write or notifyUserInput", async () => {

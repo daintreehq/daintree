@@ -2,9 +2,14 @@ import { BrowserWindow, webContents } from "electron";
 import { getWindowForWebContents } from "../../window/webContentsRegistry.js";
 import { CHANNELS } from "../channels.js";
 import { getWebviewDialogService } from "../../services/WebviewDialogService.js";
-import { broadcastToRenderer, sendToRenderer, typedHandle } from "../utils.js";
+import {
+  broadcastToRenderer,
+  sendToRenderer,
+  typedHandle,
+  typedHandleWithContext,
+} from "../utils.js";
 import { startOAuthLoopback } from "../../services/OAuthLoopbackService.js";
-import type { HandlerDependencies } from "../types.js";
+import type { HandlerDependencies, IpcContext } from "../types.js";
 import type {
   CdpRemoteArg,
   CdpStackTrace,
@@ -16,12 +21,23 @@ import type {
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { logError, logWarn } from "../../utils/logger.js";
-import { freezeWebContents, unfreezeWebContents } from "../../utils/webContentsLifecycle.js";
+import {
+  ensureAttached,
+  freezeWebContents,
+  unfreezeWebContents,
+} from "../../utils/webContentsLifecycle.js";
+import { acquireCdpLease, type CdpLease } from "../../services/cdp/WebContentsCdpService.js";
 import { MAX_CONSOLE_ROWS } from "../../../shared/config/devPreviewConsole.js";
 
 interface CdpSession {
-  runtimeEnabled: boolean;
-  logEnabled: boolean;
+  /**
+   * Domain leases, one per domain, held for as long as a pane is capturing.
+   * Leases rather than a private enabled flag because the site preview bridge
+   * instruments the same guest over the same debugger session: the last console
+   * pane leaving must not take `Runtime` away from a live binding.
+   */
+  runtimeLease: CdpLease | null;
+  logLease: CdpLease | null;
   paneIds: Set<string>;
   navigationGeneration: number;
   groupDepthByPane: Map<string, number>;
@@ -130,12 +146,34 @@ function shouldAllowLogEntry(session: CdpSession, key: string): boolean {
   return false;
 }
 
+/**
+ * Whether this session has anywhere to put a row.
+ *
+ * With no pane capturing, the domains used to be off and the listener inert.
+ * They can now stay on for another consumer's lease — the site preview bridge's
+ * — so the listener has to stop emitting by itself. It must NOT stop counting:
+ * the watermarks are positions in the guest's append-only buffer, and an event
+ * that reached us without being shown still occupies one. Skipping it would
+ * make a later enable's replay resume short and re-deliver rows the renderer
+ * already has.
+ *
+ * The cost is the other direction, and it predates leases: an enable this
+ * session did not ask for — the bridge's, on a guest with no pane — replays the
+ * buffer past an unbracketed listener, which counts those positions twice and
+ * loses that many unseen rows from the next real replay. Duplicating rows the
+ * user can see is the worse failure of the two, and only a bounded main-side
+ * backlog fixes both.
+ */
+function isCapturing(session: CdpSession): boolean {
+  return session.paneIds.size > 0;
+}
+
 function getOrCreateSession(wcId: number): CdpSession {
   let session = sessions.get(wcId);
   if (!session) {
     session = {
-      runtimeEnabled: false,
-      logEnabled: false,
+      runtimeLease: null,
+      logLease: null,
       paneIds: new Set(),
       navigationGeneration: 0,
       groupDepthByPane: new Map(),
@@ -154,12 +192,6 @@ function getOrCreateSession(wcId: number): CdpSession {
     sessions.set(wcId, session);
   }
   return session;
-}
-
-function ensureAttached(wc: Electron.WebContents): void {
-  if (!wc.debugger.isAttached()) {
-    wc.debugger.attach("1.3");
-  }
 }
 
 // Map CDP consoleAPICalled type to our ConsoleLevel
@@ -457,8 +489,23 @@ function detachSessionListeners(wcId: number): void {
   session.messageListener = null;
   session.detachListener = null;
   session.destroyListener = null;
-  session.runtimeEnabled = false;
-  session.logEnabled = false;
+  releaseSessionLeases(session);
+}
+
+/**
+ * Drop this session's claim on the CDP domains. The refs are cleared before the
+ * release is awaited, so a start queued behind this acquires its own lease
+ * rather than adopting one that is on its way out.
+ */
+function releaseSessionLeases(session: CdpSession): void {
+  const leases = [session.logLease, session.runtimeLease];
+  session.runtimeLease = null;
+  session.logLease = null;
+  for (const lease of leases) {
+    void lease?.release().catch(() => {
+      // Release never surfaces a CDP failure worth acting on here.
+    });
+  }
 }
 
 function cleanupSession(wcId: number): void {
@@ -525,32 +572,56 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
     if (currentUrl !== null) session.lastKnownUrl = currentUrl;
 
-    if (!session.runtimeEnabled) {
-      openReplayWindow(session.consoleWatermark, session.exceptionWatermark);
-      try {
-        await wc.debugger.sendCommand("Runtime.enable");
-        session.runtimeEnabled = true;
-      } finally {
-        closeReplayWindow(session.consoleWatermark, session.exceptionWatermark);
+    if (!session.runtimeLease) {
+      // The replay window is opened by the lease, and only when this
+      // acquisition is the one that actually sends `Runtime.enable`. A guest the
+      // site preview bridge already holds Runtime on replays nothing, and
+      // bracketing that would reconcile live events away as duplicates.
+      const lease = await acquireCdpLease(wc, ["Runtime"], {
+        onDomainEnable: () => {
+          openReplayWindow(session.consoleWatermark, session.exceptionWatermark);
+          return () => closeReplayWindow(session.consoleWatermark, session.exceptionWatermark);
+        },
+        onInvalidated: () => {
+          session.runtimeLease = null;
+        },
+      });
+      // Handler teardown or the guest's `destroyed` hook can drop the session
+      // under this await; a lease adopted by a dead session is never released.
+      if (sessions.get(webContentsId) !== session) {
+        await lease.release();
+        return;
       }
+      session.runtimeLease = lease;
     }
 
     // Log surfaces browser-emitted entries (CSP violations, network failures,
     // deprecations) that never reach Runtime.consoleAPICalled. Its own
     // try/catch so a Log.enable failure degrades to "no log-entry rows" rather
     // than silently breaking the already-working consoleAPICalled capture.
-    if (!session.logEnabled) {
+    // Leased separately from Runtime for exactly that reason: one acquisition
+    // for both domains would fail whole.
+    if (!session.logLease) {
       try {
-        openReplayWindow(session.logEntryWatermark);
-        await wc.debugger.sendCommand("Log.enable");
-        session.logEnabled = true;
+        const lease = await acquireCdpLease(wc, ["Log"], {
+          onDomainEnable: () => {
+            openReplayWindow(session.logEntryWatermark);
+            return () => closeReplayWindow(session.logEntryWatermark);
+          },
+          onInvalidated: () => {
+            session.logLease = null;
+          },
+        });
+        if (sessions.get(webContentsId) !== session) {
+          await lease.release();
+          return;
+        }
+        session.logLease = lease;
       } catch (logErr) {
         console.warn(
           `[webview] CDP Log.enable failed for id=${webContentsId}:`,
           formatErrorMessage(logErr, "Log.enable failed")
         );
-      } finally {
-        closeReplayWindow(session.logEntryWatermark);
       }
     }
   }
@@ -669,8 +740,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       if (!session.detachListener) {
         const detachListener = (_event: Electron.Event, _reason: string) => {
           try {
-            session.runtimeEnabled = false;
-            session.logEnabled = false;
+            // The domain leases are not touched here: the CDP lease service
+            // watches the same `detach` and invalidates them, which clears this
+            // session's refs through their `onInvalidated`.
             // Debugger detach automatically removes all listeners, so just null our refs
             session.messageListener = null;
             session.detachListener = null;
@@ -719,7 +791,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       // instrumented is not left with dangling debugger listeners. The session
       // object itself stays: another start may already be queued behind this
       // one and holds a reference to it.
-      if (boundListenersHere && !session.runtimeEnabled && session.paneIds.size <= 1) {
+      if (boundListenersHere && !session.runtimeLease && session.paneIds.size <= 1) {
         detachSessionListeners(webContentsId);
       }
       const message = formatErrorMessage(err, "CDP console capture start failed");
@@ -745,7 +817,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // stop/start cycle (a dev-preview tab switch unmounts the pane while the
     // store keeps its rows) would duplicate everything still on screen. Only
     // the enable window is reconciled, so messages logged while capture was
-    // stopped still arrive.
+    // stopped arrive with the replay — when there is one. A restart that finds
+    // the domain still enabled for another lease holder gets no replay: those
+    // messages are gone with the pane that would have shown them, but they are
+    // still counted below, so nothing the renderer holds arrives twice.
     if (!admitEvent(session.consoleWatermark)) return;
 
     // Read the raw protocol type for this check: `clear` is not part of
@@ -756,6 +831,10 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       session.consoleWatermark.delivered = 1;
       resetReplayWatermark(session.exceptionWatermark);
     }
+
+    // Counted and reconciled above, emitted only from here: with no pane there
+    // is no row to build and no remote-object walk worth doing.
+    if (!isCapturing(session)) return;
 
     const cdpType = (p.type ?? "log") as CdpConsoleType;
 
@@ -831,6 +910,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // these need their own reconciliation — the console watermark's progress
     // says nothing about which exceptions the renderer already has.
     if (!admitEvent(session.exceptionWatermark)) return;
+    if (!isCapturing(session)) return;
 
     const summaryText: string =
       details.exception?.description ?? details.text ?? "Uncaught (unknown exception)";
@@ -866,6 +946,9 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     // the renderer still displays. Reconciled before the rate limiter, so a
     // replay can't consume the allowance a live failure needs.
     if (!admitEvent(session.logEntryWatermark)) return;
+    // Before the rate limiter, so a pane-less stretch cannot spend the
+    // allowance a live failure needs.
+    if (!isCapturing(session)) return;
 
     const source = normalizeLogEntrySource(entry.source);
     const level = logEntryLevelToLevel(entry.level);
@@ -925,29 +1008,22 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     session.groupDepthByPane.delete(paneId);
     session.rowObjectIdsByPane.delete(paneId);
 
-    // If no more panes are capturing, disable the domains but keep the session.
-    // Its listeners are inert while the domains are off, and holding it keeps
-    // the replay bookkeeping so the replay a later Runtime.enable triggers can
-    // be reconciled against what the renderer already displays. The session is
-    // disposed by the guest's `destroyed` hook or by handler teardown. No start
-    // can interleave here — transitions are serialized per guest.
-    if (session.paneIds.size === 0 && wc && !wc.isDestroyed()) {
-      if (session.runtimeEnabled) {
-        try {
-          await wc.debugger.sendCommand("Runtime.disable");
-        } catch {
-          // Ignore
-        }
-        session.runtimeEnabled = false;
-      }
-      if (session.logEnabled) {
-        try {
-          await wc.debugger.sendCommand("Log.disable");
-        } catch {
-          // Ignore
-        }
-        session.logEnabled = false;
-      }
+    // If no more panes are capturing, give up the domain leases but keep the
+    // session. Holding it keeps the replay bookkeeping, so the replay a later
+    // `Runtime.enable` triggers can be reconciled against what the renderer
+    // already displays. The session is disposed by the guest's `destroyed` hook
+    // or by handler teardown. No start can interleave here — transitions are
+    // serialized per guest.
+    //
+    // Releasing, not disabling: a domain the site preview bridge still holds
+    // stays on, so its binding keeps receiving context and binding events.
+    if (session.paneIds.size === 0) {
+      const runtimeLease = session.runtimeLease;
+      const logLease = session.logLease;
+      session.runtimeLease = null;
+      session.logLease = null;
+      await logLease?.release();
+      await runtimeLease?.release();
     }
   }
 
@@ -1068,7 +1144,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
     }
   };
 
-  const handleRegisterPanel = async (payload: unknown): Promise<void> => {
+  const handleRegisterPanel = async (ctx: IpcContext, payload: unknown): Promise<void> => {
     if (
       !payload ||
       typeof payload !== "object" ||
@@ -1082,6 +1158,35 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
       panelId: string;
       kind?: unknown;
     };
+
+    // The registration is what other subsystems read a guest's identity out
+    // of — `SitePreviewBridge` gates a bind on `getPanelKind(id)` being
+    // `dev-preview`, and `protocols.ts` gates permission prompts on it — so
+    // the sender has to own the webContents it is naming. A `<webview>`'s
+    // `hostWebContents` is the renderer that embeds it, and every legitimate
+    // caller registers a webview from the view rendering it.
+    const target = webContents.fromId(webContentsId);
+    // Gone already: the service's own `destroyed` hook drops whatever was
+    // registered for this id, and there is nothing left to prove ownership
+    // against, so there is no registration to make either.
+    if (!target || target.isDestroyed()) return;
+    const embedder = target.hostWebContents;
+    if (!embedder || embedder.isDestroyed() || embedder.id !== ctx.webContentsId) {
+      throw new AppError({
+        code: "PERMISSION",
+        message: "That webContents is not a webview this view embeds",
+        context: { webContentsId, panelId },
+      });
+    }
+
+    // What this does NOT prove is `kind`. A panel's kind is renderer state —
+    // main has no model of the grid — so the host cannot contradict a sender
+    // that calls its own webview a dev preview. The residual is bounded and
+    // accepted: with ownership enforced, the only thing a renderer can
+    // mislabel is a webview it already embeds, and a bind on it still has to
+    // pass `resolveGuestProject` (same project) and the guest origin policy
+    // (a local dev-server document). Proving the kind would need a host-side
+    // panel model, which is a different change.
     getWebviewDialogService().registerPanel(
       webContentsId,
       panelId,
@@ -1488,7 +1593,7 @@ export function registerWebviewHandlers(_deps: HandlerDependencies): () => void 
 
   const cleanups: Array<() => void> = [
     typedHandle(CHANNELS.WEBVIEW_SET_LIFECYCLE_STATE, handleSetLifecycleState),
-    typedHandle(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
+    typedHandleWithContext(CHANNELS.WEBVIEW_REGISTER_PANEL, handleRegisterPanel),
     typedHandle(CHANNELS.WEBVIEW_DIALOG_RESPONSE, handleDialogResponse),
     typedHandle(CHANNELS.WEBVIEW_START_CONSOLE_CAPTURE, handleStartConsoleCapture),
     typedHandle(CHANNELS.WEBVIEW_STOP_CONSOLE_CAPTURE, handleStopConsoleCapture),

@@ -52,6 +52,25 @@ Tests are split into twelve Playwright projects:
 
 It is a second config rather than a thirteenth project on purpose: `npm run test:e2e` is a bare `npx playwright test`, which runs _every_ project in `playwright.config.ts`, and these generate several hundred megabytes of encoded fixtures per run. Don't fold it in.
 
+### Live plugin checks (separate config)
+
+`playwright.plugins.config.ts` drives a plugin through the real app against the real toolchain it targets, on request only — never in a suite, a release gate or `npm run test:e2e`, for the same reason as the mechanism checks. One spec per plugin under `e2e/plugins/`:
+
+```bash
+npm run build:e2e && npm run test:e2e:plugins                                                         # every plugin
+npm run build:e2e && npx playwright test --config=playwright.plugins.config.ts e2e/plugins/sveltekit-builder.spec.ts
+```
+
+- **`sveltekit-builder.spec.ts`** creates a throwaway SvelteKit 2 + Svelte 5 + Tailwind 4 app and installs its dependencies from the registry (network on a cold npm cache), runs it in a dev preview, and walks the Site Builder: enable, switch it on from the plugin tray so it opens a dev preview and starts the site, close it and switch it back on from the preview's own toolbar button, click an element in the preview, walk up to the component that drew it with Option+Up, then send the component to an agent terminal and wait for the site to change. The agent is a deterministic fake `claude` (`e2e/plugins/helpers/siteAgent.ts`) that applies the requested edit only at the source location the prompt names, so a pass proves the context the Site Builder sent.
+
+Things these specs have to handle that bucket specs don't:
+
+- **Plugin commands can confirm.** A plugin whose manifest holds a high-risk capability (any `fs:*-write`, for one) gets a "Run '…'?" dialog on every command unless the command declares the capabilities it actually uses with `requires` — `[]` for one that only opens a panel. The dispatch stays pending until the dialog is answered.
+- **Built-ins are default-off.** Enable with `window.electron.plugin.setEnabled(id, true)` and poll `getPanelKinds()` / `getActions()`.
+- **The preview's page is only reachable from main.** The host renderer's Trusted Types policy rejects `webview.executeJavaScript`; use `app.evaluate` over `webContents.getAllWebContents()` filtered to `getType() === "webview"`. Click at the element's real position: the webview's bounding box plus the element's client rect.
+- **A fixture project's `package.json` type applies to scripts in it.** An extensionless fake CLI inside a `"type": "module"` project loads as ESM, so `require` throws; use `process.getBuiltinModule`.
+- **Print diagnostics on failure.** A blank panel or a silent preview has no assertion message worth reading; the Site Builder spec dumps the builder's text, the renderer console, the preview's console (collected from `web-contents-created`) and what the agent received.
+
 | Project         | testDir                 | retries (CI) | workers |
 | --------------- | ----------------------- | ------------ | ------- |
 | core            | `./e2e/core`            | 2            | 1-2     |

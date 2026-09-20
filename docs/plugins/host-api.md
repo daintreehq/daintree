@@ -255,12 +255,14 @@ const result = await invoke({});
 
 **Channel naming rules:**
 
-- No colons (reserved for Daintree's internal namespacing).
+- No colons (reserved for Daintree's internal namespacing). The host enforces this in two places: `registerHandler` throws `Plugin channel must not contain colons`, which fails `activate()` on its first registration, and `postToPanel` rejects the push. **`createMockHost` only enforces the second**, so a colon in a request channel passes every activation test and then breaks the first time the plugin runs in the app. Pin the rule with a test over your own channel constants.
 - Plugin-registered channels are addressed as `{pluginId}:{channel}` internally; the SDK handles the prefix.
 
 Handlers are unregistered on plugin unload.
 
 **Typed overload (preferred for new code):** pass a `PluginChannelSchema` with Zod `args`/`result` schemas and a `requires` capability list. The host rejects registration if any `requires` capability is missing from `manifest.capabilities` (fail-closed at the registration boundary). At dispatch, args are `safeParse`d before the handler runs and the result is `safeParse`d before returning to the renderer — schema failures throw with a `SCHEMA_ERROR:` prefix, missing capabilities throw with a `PERMISSION_REQUIRED:` prefix, and the renderer-side `useHostChannel` hook discriminates on those prefixes. The untyped overload above does no host-side validation and is retained only for plugins that haven't migrated to per-channel schemas.
+
+**The mock host does not validate typed channels.** `createMockHost().registerHandler` records the handler but neither keeps nor applies its schema, so a handler that returns a shape your own protocol rejects still passes. Wrap it in tests: keep the schema, parse args on the way in and the result on the way out, and invoke through that wrapper — then a schema mismatch fails in the test exactly as it would at the host boundary.
 
 ## `postToPanel`
 
@@ -895,6 +897,18 @@ const dispose = await host.fs.watch(["/Users/me/.acme/data"], (changedPath) => {
 `writeFile(path, contents, options?)` resolves `{ revision }` — the sha256 hex of the bytes written — for every call. Without `options` it is the plain write it has always been. Passing an options object (even `{}`) selects the **checked write**: the host serialises writes per resolved path, re-proves containment inside that critical section, refuses a symlink leaf (`TARGET_IS_SYMLINK`), and replaces the file atomically through a sibling temp file, flush and rename with the original mode preserved. `options.expectedRevision` compares the file's current bytes before anything is touched: a mismatch rejects with `REVISION_MISMATCH` and the error carries `currentRevision` so the caller can enter a conflict state without a second read; a missing target rejects with `TARGET_UNAVAILABLE`; `expectedRevision: null` means the file must not exist yet (`TARGET_EXISTS` otherwise). The `code` rides on the error object in-process and prefixes the message across the worker port. What the checked write does not promise is a lock against an uncooperative external process — a write that lands between the hash check and the rename is overwritten. The window is small, and callers that care keep their own copy of what they asked to write (the built-in Markdown editor keeps its draft until a save is verified).
 
 **Honest scope note:** `host.fs` gates the host-mediated path only. Your `main` is still un-sandboxed Node code (it runs in the plugin worker with full filesystem privileges) and can call raw `node:fs` directly, which the host cannot intercept without a real sandbox (see the [trust model](./trust-model.md)). `host.fs` gives a contained, audited path; it does not seal the un-mediated one.
+
+### What `host.fs` does not do
+
+These are not bugs, but each one has cost a plugin author a debugging cycle.
+
+- **Six methods, no more.** `readFile`, `readFileBytes`, `writeFile`, `readdir`, `stat`, `watch`. There is no `rm`, `rename`, `mkdir` or `copyFile`. Keep drafts, journals and caches in `host.storage` or under a user-data path rather than planning around deleting project files.
+- **Containment is to a declared root, not to the directory you meant.** A path is realpath-contained to one of your `scopes.fs.allowedPaths` roots. If your plugin works inside a narrower directory — an app inside a monorepo worktree — a symlinked directory inside that narrower directory can still reach elsewhere in the root, and the checked write's symlink refusal only looks at the leaf. Resolve the path on disk and check it against your own narrower root before reading or writing.
+- **A bare `readdir` reports a symlinked directory as neither a file nor a directory.** Code that walks a tree on `isFile`/`isDirectory` silently loses those subtrees. Either pass `{ detail: true }` or `stat` entries whose kind is unknown.
+- **`readFile` cannot tell missing from denied.** A read that fails is not proof the file is absent. Code that climbs a directory chain looking for a manifest must decide what a failure means, and should stop climbing on an unreadable file rather than silently reporting a hoisted copy further up.
+- **A rejected checked write does not prove the bytes did not land.** Never record a write as yours because the file now happens to match what you planned; treat a rejection as a failure and re-read if you need to know the truth.
+- **`watch` events can arrive before `writeFile` resolves.** If you watch files you also write, track the revisions of your in-flight writes, or your own edits come back as external changes. `watch` is non-recursive and undebounced: one subscription per directory.
+- **Decode text with care about the BOM.** `TextDecoder`'s default strips a byte-order mark, which shifts every offset by one against tools that count it. Decide which convention your offsets use and keep it on both sides — and note that some compilers (Svelte's among them) strip it too.
 
 ### `readdir` and the detailed listing
 

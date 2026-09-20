@@ -47,6 +47,21 @@ export function validatePluginManifests(roots: PluginRoot[]): ManifestError[] {
           .map((issue) => `  - ${issue.path.join(".") || "(root)"}: ${issue.message}`)
           .join("\n");
         errors.push({ file: manifestPath, message: issues });
+        continue;
+      }
+      // Samples borrow the built-in origin for the namespace guard, but the
+      // guest build and the startup adapter registration scan only the real
+      // built-in root: a sample declaring a preview tool or guest adapter would
+      // validate and then ship with neither a bundle nor an adapter.
+      if (path.basename(dir) !== "builtin") {
+        const contributes = result.data.contributes;
+        for (const group of ["previewTools", "guestAdapters"] as const) {
+          if (contributes[group].length === 0) continue;
+          errors.push({
+            file: manifestPath,
+            message: `  - contributes.${group}: only plugins under plugins/builtin/ are bundled and registered as preview tools or guest adapters`,
+          });
+        }
       }
     }
   }

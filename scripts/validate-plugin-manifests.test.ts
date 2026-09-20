@@ -88,6 +88,21 @@ describe("validate-plugin-manifests CLI", () => {
     expect(code).toBe(0);
   });
 
+  it("rejects a preview tool or guest adapter declared outside plugins/builtin", async () => {
+    // Samples validate on the built-in footing, but only the real built-in root
+    // is bundled and registered: a sample declaring either would ship with
+    // neither a bundle nor an adapter.
+    writeManifest(base, "sample", "daintree-probe", {
+      name: "daintree.probe",
+      version: "0.1.0",
+      contributes: { guestAdapters: [{ id: "daintree.probe.guest", entry: "guest-src/entry.ts" }] },
+    });
+    const { code, stderr } = await run(base);
+    expect(code).toBe(1);
+    expect(stderr).toContain("contributes.guestAdapters");
+    expect(stderr).toContain("plugins/builtin/");
+  });
+
   it("accepts a scope:project manifest under sample-project", async () => {
     // The third root exists because a project plugin is never sideloaded, so it
     // has no builtin footing to borrow — it is validated against the same

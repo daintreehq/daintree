@@ -541,6 +541,19 @@ export const CHANNELS = {
   DEV_PREVIEW_STATE_CHANGED: "dev-preview:state-changed",
   DEV_PREVIEW_ALL_SESSIONS_CHANGED: "dev-preview:all-sessions-changed",
 
+  // Site-preview bridge — binding a caller to a dev-preview guest and receiving
+  // validated observations back from the runtime installed inside it. There is
+  // deliberately no "evaluate in guest" channel; see handlers/sitePreview.ts.
+  SITE_PREVIEW_LIST_CANDIDATES: "site-preview:list-candidates",
+  SITE_PREVIEW_BIND: "site-preview:bind",
+  SITE_PREVIEW_DETACH: "site-preview:detach",
+  SITE_PREVIEW_SET_MODE: "site-preview:set-mode",
+  SITE_PREVIEW_RESELECT: "site-preview:reselect",
+  SITE_PREVIEW_CLEAR_SELECTION: "site-preview:clear-selection",
+  SITE_PREVIEW_CLEAR_HOVER: "site-preview:clear-hover",
+  SITE_PREVIEW_GET_STATE: "site-preview:get-state",
+  SITE_PREVIEW_EVENT: "site-preview:event",
+
   COMMANDS_LIST: "commands:list",
   COMMANDS_GET: "commands:get",
   COMMANDS_EXECUTE: "commands:execute",

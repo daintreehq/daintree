@@ -85,7 +85,10 @@ import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
-import { formatWithBracketedPaste } from "@shared/utils/terminalInputProtocol";
+import {
+  formatWithBracketedPaste,
+  neutralizeControlCharacters,
+} from "@shared/utils/terminalInputProtocol";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
@@ -1201,7 +1204,15 @@ function TerminalPaneComponent({
 
     const managed = terminalInstanceService.get(helpTid);
     if (managed && !managed.terminal.modes.bracketedPasteMode) {
-      terminalClient.write(helpTid, text.replace(/\r?\n/g, "\r"));
+      // Buffer text is whatever the agent printed, escape sequences included,
+      // so it can't reach the parser as it stands. Unwrapped, `\r` submits:
+      // every line ending is folded to `\n` first, neutralised, and only then
+      // turned back into the `\r` we mean — the same order as
+      // `primarySelection.ts`, and for the same reason.
+      terminalClient.write(
+        helpTid,
+        neutralizeControlCharacters(text.replace(/\r\n|\r/g, "\n")).replace(/\n/g, "\r")
+      );
     } else {
       terminalClient.write(helpTid, formatWithBracketedPaste(text));
     }

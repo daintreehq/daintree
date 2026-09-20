@@ -54,7 +54,9 @@ export function FindBar({ find }: FindBarProps) {
       : "No results";
 
   return (
-    <div className="absolute top-2 right-2 z-20 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-floating)] px-2 py-1">
+    // `z-40`: above a dev preview tool drawer floating over the page (`z-30`),
+    // which otherwise covers this corner while Find has the focus.
+    <div className="absolute top-2 right-2 z-40 flex items-center gap-1 rounded-md bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-floating)] px-2 py-1">
       <input
         ref={inputRef}
         type="text"

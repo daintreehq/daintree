@@ -41,6 +41,7 @@ From there, follow the architecture doc nearest the surface you're changing. Eac
 | [notification-system.md](./architecture/notification-system.md) | How a runtime signal reaches the user — the five-surface taxonomy and routing machinery. |
 | [destructive-action-safeguards.md](./architecture/destructive-action-safeguards.md) | Living per-action audit and rubric for destructive UI surfaces. |
 | [dev-preview-event-routing.md](./architecture/dev-preview-event-routing.md) | Per-event routing audit for dev-preview lifecycle signals. |
+| [sveltekit-site-builder.md](./architecture/sveltekit-site-builder.md) | The Site Builder: how a click in a dev preview resolves to a source node, and the four operations allowed to write it. |
 | [terminal-identity.md](./architecture/terminal-identity.md) | The single PTY-backed panel shape — plain vs agent terminal as runtime states. |
 | [terminal-lifecycle.md](./architecture/terminal-lifecycle.md) | Runtime lifecycle status for terminals across renderer, main, and PTY host. |
 | [pty-host-fabric.md](./architecture/pty-host-fabric.md) | Per-project PTY host shards behind `DAINTREE_PTY_FABRIC` — placement, port routing, crash isolation, idle retirement. |

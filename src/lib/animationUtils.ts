@@ -112,6 +112,23 @@ export const UI_INLINE_LOADING_GATE_MS = 200;
  *  Not an animation token — a perceptual floor, same family as the gates. */
 export const UI_SKELETON_FLOOR_MS = DURATION_250;
 
+/** When an inline wait has gone on long enough that a skeleton becomes
+ *  mandatory. The loading contract runs: nothing under 400ms, a spinner or a
+ *  skeleton from 400ms, and a skeleton REQUIRED past a second — an inline
+ *  status line is no longer an honest stand-in for a panel by then, and
+ *  swapping one for the other at resolve time is a second layout shift on top
+ *  of the wait. A surface that starts with a spinner (because its shape was not
+ *  yet known, or the wait was expected to be short) uses this to take over with
+ *  the shape it is going to become. Not an animation token — a perceptual
+ *  threshold, same family as the Doherty and skeleton gates. */
+export const UI_SKELETON_TAKEOVER_MS = 1000;
+
+/** When a wait has gone on long enough to say so in words. The loading contract
+ *  ends "over 5s add Still working…": past this a skeleton or spinner alone
+ *  reads as stuck, and the copy is what tells the user the app has not. Not an
+ *  animation token — a perceptual threshold, same family as the gates. */
+export const UI_STILL_WORKING_MS = 5000;
+
 /** One full rotation of Tailwind's built-in `.animate-spin` utility, which runs
  *  `spin 1s linear infinite` (`--animate-spin` in tailwindcss/theme.css, not
  *  overridden in this repo). `SpinningIcon` uses this as the backstop timer that

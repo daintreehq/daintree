@@ -1,0 +1,17 @@
+{
+  "loc": { "file": "src/lib/Card.svelte", "line": 5, "column": 2 },
+  "parent": {
+    "type": "component",
+    "file": "src/routes/+page.svelte",
+    "line": 8,
+    "column": 4,
+    "componentTag": "Card",
+    "parent": {
+      "type": "each",
+      "file": "src/routes/+page.svelte",
+      "line": 7,
+      "column": 2,
+      "parent": null
+    }
+  }
+}

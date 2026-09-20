@@ -68,6 +68,16 @@ export interface DaintreeTerminalMetadata {
   worktreeId?: string;
 }
 
+/**
+ * Daintree's own runtime mode, not the user's. Inherited, it decides how every
+ * project tool in a terminal behaves: Daintree run under `NODE_ENV=production`
+ * made `vite dev` compile Svelte for production, stripping the source locations
+ * the Site Inspector reads, and `npm run dev` of Daintree turned a user's
+ * `next build` into a development build. A user who wants it still gets it from
+ * their shell profile or a project's terminal env.
+ */
+const HOST_RUNTIME_VARS = new Set(["NODE_ENV"]);
+
 export function isSensitiveVar(name: string): boolean {
   return SENSITIVE_EXACT.has(name.toUpperCase()) || SENSITIVE_PATTERN.test(name);
 }
@@ -159,7 +169,8 @@ export function mergeEnvVars(
 }
 
 /**
- * Filter an environment object, removing sensitive variables and DAINTREE_* vars.
+ * Filter an environment object, removing sensitive variables, DAINTREE_* vars and
+ * Daintree's own runtime mode (`NODE_ENV`).
  * Undefined values are also stripped (node-pty requires Record<string, string>).
  *
  * Use this on **inherited `process.env`** to defend against spoofing — DAINTREE_*
@@ -177,6 +188,7 @@ export function filterEnvironment(env: Record<string, string | undefined>): Reco
     // `DAINTREE_PANE_ID` injected below as a second key the OS treats as the
     // same variable.
     if (foldEnvKey(key).startsWith(DAINTREE_PREFIX)) continue;
+    if (HOST_RUNTIME_VARS.has(foldEnvKey(key))) continue;
     if (isSensitiveVar(key)) continue;
     setEnvVar(result, key, value);
   }

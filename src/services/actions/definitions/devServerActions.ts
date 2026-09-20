@@ -8,6 +8,17 @@ import { usePanelStore } from "@/store/panelStore";
 import { useProjectStore } from "@/store/projectStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { isDevPreviewPanel } from "@shared/types/panel";
+import { useDevPreviewToolStore } from "@/store/devPreviewToolStore";
+import {
+  getAvailableDevPreviewTool,
+  type DevPreviewTool,
+  type DevPreviewToolContext,
+} from "@/registry/devPreviewToolRegistry";
+import {
+  seedDevPreviewToolContext,
+  startDevPreviewToolSessions,
+} from "@/services/devPreviewTools/sessionManager";
+import { actionService } from "@/services/ActionService";
 
 /**
  * Palette gate for `devPreview.stop`: its `run()` needs an open project and a
@@ -43,6 +54,15 @@ const devServerStartArgsSchema = z
 
 type DevServerStartArgs = z.infer<typeof devServerStartArgsSchema>;
 
+/**
+ * The created panel's id, so a caller can bind to the preview it just started
+ * rather than re-deriving it from the panel list. Null when the panel was
+ * rejected or removed during `addPanel`'s async tail.
+ */
+const devServerStartResultSchema = z
+  .object({ panelId: z.string().nullable() })
+  .describe("The dev preview panel that was opened");
+
 function readActiveWorktreePath(activeWorktreeId: string | undefined): string | undefined {
   if (!activeWorktreeId) return undefined;
   try {
@@ -54,6 +74,53 @@ function readActiveWorktreePath(activeWorktreeId: string | undefined): string | 
 
 function firstAbsolutePath(...candidates: Array<string | undefined>): string | undefined {
   return candidates.find((candidate) => typeof candidate === "string" && isAbsolute(candidate));
+}
+
+/**
+ * What a command can tell a tool's availability predicate about a preview. The
+ * page and its readiness are the pane's to know — a command runs wherever it was
+ * dispatched from — so this carries the last URL the panel recorded and reports
+ * the webview as not ready. A predicate whose answer turns on the live page must
+ * treat that as "not yet", which is what the toolbar button already does.
+ */
+function devPreviewToolContext(panelId: string, ctx: ActionContext): DevPreviewToolContext {
+  const panel = usePanelStore.getState().panelsById[panelId];
+  const worktreeId = (panel && isDevPreviewPanel(panel) ? panel.worktreeId : undefined) ?? null;
+  return {
+    panelId,
+    projectId: ctx.projectId ?? null,
+    worktreeId,
+    worktreePath: (worktreeId ? readActiveWorktreePath(worktreeId) : undefined) ?? null,
+    url: (panel && isDevPreviewPanel(panel) ? (panel.browserUrl ?? panel.devServerUrl) : "") ?? "",
+    isWebviewReady: false,
+  };
+}
+
+/**
+ * The same answer the toolbar button gets, so a palette or an agent can never
+ * switch on a tool the button is hiding. The tool owns the refusal's wording.
+ */
+async function refuseUnlessToolApplies(
+  tool: DevPreviewTool,
+  panelId: string,
+  ctx: ActionContext
+): Promise<void> {
+  const isAvailable = tool.isAvailable;
+  if (!isAvailable) return;
+  const asked = devPreviewToolContext(panelId, ctx);
+  // Inside the chain: a predicate that throws synchronously is a refusal with
+  // the tool's own wording, not an unhandled error from the action.
+  const applies = await Promise.resolve()
+    .then(() => isAvailable(asked))
+    .catch(() => false);
+  // Detection takes a round trip, and the preview can move worktrees inside it.
+  // An answer about the worktree we no longer have is not an answer.
+  if (applies && devPreviewToolContext(panelId, ctx).worktreePath !== asked.worktreePath) {
+    throw new Error(`${tool.label} is no longer about this preview's worktree — try again`);
+  }
+  if (!applies) {
+    throw new Error(tool.unavailableReason ?? `${tool.label} does not apply to this dev preview`);
+  }
 }
 
 export function registerDevServerActions(
@@ -69,6 +136,7 @@ export function registerDevServerActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: devServerStartArgsSchema,
+    resultSchema: devServerStartResultSchema,
     run: async (args: DevServerStartArgs, ctx: ActionContext) => {
       // Grid stays the default, so every caller that predates the dock
       // launcher keeps landing exactly where it did.
@@ -93,7 +161,9 @@ export function registerDevServerActions(
         throw new Error("No absolute project path is available for Dev Preview");
       }
 
-      await usePanelStore.getState().addPanel({
+      // Returned so a caller that just started a preview can bind to the exact
+      // panel it created instead of guessing from the panel list.
+      const panelId = await usePanelStore.getState().addPanel({
         kind: "dev-preview",
         title: "Dev Server",
         cwd,
@@ -104,6 +174,100 @@ export function registerDevServerActions(
         ...(location === "dock" && { activateDockOnCreate: args?.activateDockOnCreate === true }),
         devCommand: devServerCommand,
       });
+      return { panelId };
+    },
+  }));
+
+  actions.set("devPreview.toggleTool", () => ({
+    id: "devPreview.toggleTool",
+    title: "Toggle Dev Preview Tool",
+    description:
+      "Switch a plugin-contributed dev preview tool on or off in a dev preview of the active worktree — the focused one, else the first open one — opening a dev preview when the worktree has none. Returns the panel it acted on.",
+    category: "devServer",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      toolId: z.string().min(1).describe("The tool's registered id, e.g. a plugin's builder tool."),
+      panelId: z
+        .string()
+        .min(1)
+        .optional()
+        .describe(
+          "The dev preview to act on. Defaults to the focused or first one in the worktree."
+        ),
+    }),
+    resultSchema: z.object({ panelId: z.string().nullable(), active: z.boolean() }),
+    run: async (args: { toolId: string; panelId?: string }, ctx: ActionContext) => {
+      // A command can switch a tool on before any preview pane has mounted —
+      // the pane is what normally starts the session manager — and the tool
+      // would then sit switched on with no session behind it until one did.
+      startDevPreviewToolSessions();
+      // Registration is unconditional for built-ins; only an enabled plugin's
+      // tool may start or focus anything.
+      const tool = getAvailableDevPreviewTool(args.toolId);
+      if (!tool) {
+        throw new Error(
+          `No dev preview tool "${args.toolId}" is available — is its plugin enabled?`
+        );
+      }
+      const panels = usePanelStore.getState();
+      const isLivePreview = (id: string): boolean => {
+        const panel = panels.panelsById[id];
+        return panel !== undefined && isDevPreviewPanel(panel) && panel.location !== "trash";
+      };
+      const inWorktree = (id: string): boolean =>
+        isLivePreview(id) &&
+        (ctx.activeWorktreeId === undefined ||
+          panels.panelsById[id]?.worktreeId === ctx.activeWorktreeId);
+      if (args.panelId !== undefined && !isLivePreview(args.panelId)) {
+        throw new Error("That panel is not an open dev preview");
+      }
+      let panelId =
+        args.panelId ??
+        (panels.focusedId && inWorktree(panels.focusedId) ? panels.focusedId : undefined) ??
+        panels.panelIds.find(inWorktree);
+      const store = useDevPreviewToolStore.getState();
+      // Nested dispatches keep the caller's source, so an agent's call isn't
+      // recorded as the user's last action.
+      const source = ctx.dispatchSource ?? "user";
+      if (!panelId) {
+        // Same context as this dispatch, so the preview opens in the worktree
+        // the caller targeted rather than whichever one is live by then.
+        const started = await actionService.dispatch<{ panelId: string | null }>(
+          "devServer.start",
+          undefined,
+          { source, contextOverride: ctx }
+        );
+        if (!started.ok || !started.result.panelId) return { panelId: null, active: false };
+        panelId = started.result.panelId;
+        await refuseUnlessToolApplies(tool, panelId, ctx);
+        // Detection took a round trip: the plugin may have been disabled and
+        // the preview trashed in it, and the session manager clears an
+        // activation for either. Say what the store says, never what was asked.
+        const live = usePanelStore.getState().panelsById[panelId];
+        if (!getAvailableDevPreviewTool(args.toolId) || !live || live.location === "trash") {
+          return { panelId, active: false };
+        }
+        // The pane for a preview started a moment ago may not have mounted;
+        // the session should not start worktree-less because of it.
+        seedDevPreviewToolContext(devPreviewToolContext(panelId, ctx));
+        store.setActive(panelId, args.toolId);
+        const activated = useDevPreviewToolStore.getState().activeByPanel[panelId] === args.toolId;
+        if (activated) void actionService.dispatch("panel.focus", { panelId }, { source });
+        return { panelId, active: activated };
+      }
+      // Switching a tool off is always allowed: a preview that stopped applying
+      // while the tool was on must still be switchable back to plain browsing.
+      if (store.activeByPanel[panelId] !== args.toolId) {
+        await refuseUnlessToolApplies(tool, panelId, ctx);
+        seedDevPreviewToolContext(devPreviewToolContext(panelId, ctx));
+      }
+      store.toggle(panelId, args.toolId);
+      const active = useDevPreviewToolStore.getState().activeByPanel[panelId] === args.toolId;
+      if (active) void actionService.dispatch("panel.focus", { panelId }, { source });
+      return { panelId, active };
     },
   }));
 

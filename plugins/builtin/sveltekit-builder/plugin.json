@@ -1,0 +1,55 @@
+{
+  "name": "daintree.sveltekit-builder",
+  "version": "0.1.0",
+  "displayName": "SvelteKit Site Builder",
+  "description": "Build your SvelteKit site visually with your own Claude Code, Codex or Gemini CLI: switch on the Site Builder in the dev preview, click any element or component, and ask your agent to change it.",
+  "tagline": "Point at your site, ask your own agent to change it",
+  "category": "workspace",
+  "main": "main/index.js",
+  "engines": {
+    "daintree": ">=0.36.0"
+  },
+  "capabilities": ["fs:project-read"],
+  "scopes": {
+    "fs": {
+      "allowedPaths": ["${project}", "${worktree}"]
+    }
+  },
+  "contributes": {
+    "commands": [
+      {
+        "id": "toggle-builder",
+        "title": "Toggle Site Builder",
+        "description": "Switch the Site Builder on or off in this worktree's dev preview, opening the preview if none is running.",
+        "category": "panels",
+        "kind": "command",
+        "danger": "safe",
+        "keywords": ["svelte", "sveltekit", "site", "builder", "inspector", "preview", "agent"],
+        "requires": []
+      }
+    ],
+    "previewTools": [
+      {
+        "id": "daintree.sveltekit-builder.builder",
+        "title": "Site Builder",
+        "iconId": "square-dashed-mouse-pointer",
+        "guestAdapter": "daintree.sveltekit-builder.guest"
+      }
+    ],
+    "guestAdapters": [
+      {
+        "id": "daintree.sveltekit-builder.guest",
+        "entry": "renderer/guest/entry.ts"
+      }
+    ],
+    "toolbarButtons": [
+      {
+        "id": "toggle",
+        "label": "Toggle Site Builder",
+        "iconId": "monitor-play",
+        "actionId": "daintree.sveltekit-builder.toggle-builder",
+        "priority": 1
+      }
+    ]
+  }
+}

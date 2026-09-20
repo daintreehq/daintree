@@ -1,8 +1,11 @@
 /**
  * Keeps the two halves of the built-in view seam honest: every
- * `forgeProviders.slots` ref and every `fileEditors[].slot` (#12323) in a
- * built-in plugin's manifest must have a matching `registerBuiltinView` call in
- * that plugin's renderer entry, under the declaring plugin's own id.
+ * `forgeProviders.slots` ref, every `fileEditors[].slot` (#12323) and every
+ * panel view in a built-in plugin's manifest must have a matching
+ * `registerBuiltinView` call in that plugin's renderer entry, under the
+ * declaring plugin's own id. A built-in panel view has no `plugin://` bundle to
+ * fall back on, so its slot is the runtime panel kind id `{name}.{viewId}`; a
+ * missing registration is a panel that opens onto an import error.
  *
  * Nothing else checks this. The main process validates `slots` for shape only —
  * it cannot see the renderer bundle the ids resolve against (see
@@ -72,7 +75,17 @@ function readSlotRefs(manifest: unknown): string[] {
           : []
       )
     : [];
-  return [...forgeRefs, ...editorRefs];
+  const name = typeof manifest.name === "string" ? manifest.name : null;
+  const views = contributes.views;
+  const viewRefs =
+    name !== null && Array.isArray(views)
+      ? views.flatMap((view) =>
+          isRecord(view) && typeof view.id === "string" && view.id !== ""
+            ? [`${name}.${view.id}`]
+            : []
+        )
+      : [];
+  return [...forgeRefs, ...editorRefs, ...viewRefs];
 }
 
 function readManifestName(manifest: unknown, fallback: string): string {
