@@ -9,7 +9,7 @@ import {
   PLUGIN_ID,
   PUSH_CHANNELS,
   type RecoverDraftPush,
-} from "../shared/protocol.js";
+} from "../shared/ids.js";
 
 const DRAFT_LOAD_TIMEOUT_MS = 5000;
 
