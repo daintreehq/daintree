@@ -20,6 +20,35 @@ export const DETECT_APPS_CHANNEL = "detect-apps";
 const DETECTION_TTL_MS = 15_000;
 const detected = new Map<string, { at: number; pending: Promise<boolean> }>();
 
+/**
+ * Main refuses a scan outright once its queue is full, so an overloaded host
+ * answers "ask again", not "there is no app here". Nothing re-asks on its own:
+ * the host re-runs availability when the preview's page changes, which may be
+ * minutes away or never, and until then the toggle is hidden and any command
+ * is refused with {@link SITE_BUILDER_UNAVAILABLE_REASON} — a statement about
+ * the worktree we never actually established.
+ *
+ * One delayed retry is what closes that gap. The refusal is immediate and the
+ * queue drains in scan time, so a second ask usually lands on capacity; if it
+ * does not, the answer is still only "no" until the next lookup, never cached.
+ */
+const SCAN_BUSY_RETRY_MS = 750;
+
+function isScanOverloaded(error: unknown): boolean {
+  return error instanceof Error && error.message.includes("SCAN_BUSY");
+}
+
+function askMain(projectId: string, worktreeId: string, worktreePath: string): Promise<unknown> {
+  // The ids, not just the path: main scans through a filesystem handle bound
+  // to this workspace, so a preview on a worktree the focused window does not
+  // own still gets a real answer rather than a denied read.
+  return window.electron.plugin.invoke(BUTTON_PLUGIN_ID, DETECT_APPS_CHANNEL, {
+    projectId,
+    worktreeId,
+    worktreePath,
+  });
+}
+
 function hasSvelteKitApp(
   projectId: string,
   worktreeId: string,
@@ -30,11 +59,13 @@ function hasSvelteKitApp(
   const key = `${projectId}\n${worktreeId}\n${worktreePath}`;
   const cached = detected.get(key);
   if (cached && Date.now() - cached.at < DETECTION_TTL_MS) return cached.pending;
-  const pending = window.electron.plugin
-    // The ids, not just the path: main scans through a filesystem handle bound
-    // to this workspace, so a preview on a worktree the focused window does not
-    // own still gets a real answer rather than a denied read.
-    .invoke(BUTTON_PLUGIN_ID, DETECT_APPS_CHANNEL, { projectId, worktreeId, worktreePath })
+  const pending = askMain(projectId, worktreeId, worktreePath)
+    .catch((error: unknown) => {
+      if (!isScanOverloaded(error)) throw error;
+      return new Promise((resolve) => setTimeout(resolve, SCAN_BUSY_RETRY_MS)).then(() =>
+        askMain(projectId, worktreeId, worktreePath)
+      );
+    })
     .then((result) => {
       const count = (result as { appCount?: unknown }).appCount;
       const found = typeof count === "number" && count > 0;
