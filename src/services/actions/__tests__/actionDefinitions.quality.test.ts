@@ -441,7 +441,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // does not move. Its description predates this change and is the whole of the
   // increase, not an allowance. `agentCapabilities.get` stays off every tier until its
   // source read is contained, and costs nothing here until then.
-  const MAX_COHORT_TOTAL_BYTES = 56_057;
+  // 56_057 → 56_300 for this branch, measured at 56_279 B — 222 B over the 56_057
+  // before it, from `agentCapabilities.search` (which shipped with its contract but on
+  // no tier, so `tools/list` never offered the assistant the action it was told to use)
+  // and the `closed` idle reason the wait tools now report. Both are workbench-side, so
+  // the external total above does not move.
+  const MAX_COHORT_TOTAL_BYTES = 56_300;
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
   async function cohortDefinitions() {
