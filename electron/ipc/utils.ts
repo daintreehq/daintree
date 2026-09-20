@@ -403,8 +403,32 @@ export function broadcastToProjectRenderers(
   channel: string,
   ...args: unknown[]
 ): void {
+  broadcastToProjectRenderersExcept(projectId, null, channel, ...args);
+}
+
+/**
+ * {@link broadcastToProjectRenderers} minus a set of WebContents ids.
+ *
+ * The one caller is TERMINAL_DATA (#12557). A cached duplicate view has no
+ * MessagePort of its own, so the pty-host keeps the IPC fallback open for it
+ * even when a sibling window's port already took the chunk — and names the
+ * windows it fed. Their port-holder views must be excluded here or the chunk
+ * lands in the same xterm twice (terminalClient.onData subscribes to both the
+ * port and the IPC path).
+ *
+ * `exclude` is ignored on the unscoped fallback path: that branch only runs
+ * when no project views are registered at all, in which case there is no
+ * per-view port routing to double-deliver against.
+ */
+export function broadcastToProjectRenderersExcept(
+  projectId: string | null,
+  exclude: ReadonlySet<number> | null,
+  channel: string,
+  ...args: unknown[]
+): void {
   if (projectId !== null && hasRegisteredProjectViews()) {
     for (const wc of getWebContentsForProject(projectId)) {
+      if (exclude?.has(wc.id)) continue;
       try {
         wc.send(channel, ...args);
       } catch {

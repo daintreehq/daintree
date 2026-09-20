@@ -497,6 +497,15 @@ const rendererConnections = new Map<number, RendererConnection>();
 // everything else in the window stays on the shared per-window port.
 const terminalWorkerConnections = new Map<number, Map<string, TerminalWorkerConnection>>();
 const windowProjectMap = new Map<number, string | null>();
+
+// Projects with a cached (deactivated) project view in some window, pushed by
+// Main (#12557). A cached view lost its window's MessagePort to whichever view
+// went active, so the project-scoped IPC fallback is its only remaining
+// transport — but `visualWritten` suppresses that fallback as soon as ANY
+// window's batcher accepts the chunk. Without this set the host cannot tell a
+// project whose every consumer is already fed from one that still has a
+// starving cached copy, so it suppressed both alike.
+const cachedViewProjects = new Set<string>();
 // Per-window UI-focused terminal id (from the renderer's focusedId). Read by
 // each window's PortQueueManager/PortBatcher to prioritize the focused pane.
 const windowFocusedTerminalMap = new Map<number, string | null>();
@@ -923,6 +932,12 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // Skip MessagePort for smoke test terminals — the smoke test monitors data via PtyClient
   // (IPC events in the main process), so these must always use the IPC fallback path.
   let visualWritten = isSuspended;
+  // A cached duplicate of this terminal's project is only reachable over the
+  // IPC fallback, so the fallback must run even when a sibling window's port
+  // accepted the chunk. Main filters the delivered windows back out.
+  const termProjectId = terminalInfo?.projectId ?? null;
+  const needsCachedFallback = termProjectId !== null && cachedViewProjects.has(termProjectId);
+  const portDeliveredWindowIds: number[] = [];
 
   if (
     !isSuspended &&
@@ -930,11 +945,10 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     rendererConnections.size > 0 &&
     !isSmokeTestTerminalId(id)
   ) {
-    const termProject = terminalInfo?.projectId ?? null;
     const targets: Array<{ windowId: number; conn: RendererConnection }> = [];
     for (const [windowId, conn] of rendererConnections) {
       const windowProject = windowProjectMap.get(windowId) ?? null;
-      const filtered = windowProject !== null && termProject !== windowProject;
+      const filtered = windowProject !== null && termProjectId !== windowProject;
       if (filtered) continue;
       targets.push({ windowId, conn });
     }
@@ -985,6 +999,7 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
         const sink = workerConn?.engaged ? workerConn : conn;
         if (sink.batcher.write(id, chunk, byteCount, owned, interactive, recentInput)) {
           visualWritten = true;
+          portDeliveredWindowIds.push(windowId);
         } else {
           // The data-loss pulse rides the WINDOW port either way — the
           // renderer's terminal-status subscribers only listen there.
@@ -1008,7 +1023,13 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
       // Mirrored terminals are no exception: the IPC data mirror below is
       // Main-process-only (`data-mirror` is never re-broadcast to renderers),
       // so a starved window really does lose the chunk and needs the pulse.
-      if (visualWritten && saturated.length > 0) {
+      //
+      // `needsCachedFallback` exempts the whole loop: the fallback below is
+      // about to run for the cached duplicate's sake, and it is project-scoped
+      // rather than port-scoped, so a saturated window's view receives the
+      // chunk on the IPC path after all. Pulsing data-loss there would paint a
+      // yellow discontinuity marker over bytes that did arrive.
+      if (visualWritten && !needsCachedFallback && saturated.length > 0) {
         for (const conn of saturated) {
           // Counter is unconditional — regression detection must work even when
           // metrics are gated off (mirrors the IPC at-capacity path).
@@ -1190,6 +1211,12 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     }
   }
 
+  // A cached duplicate view (#12557) keeps the project-scoped fallback running
+  // even though a sibling window's port took the chunk. Main strips the
+  // delivered windows' port holders out of the fan-out, so the only views that
+  // parse it are the ones that never saw it.
+  const sendIpcFallback = (!visualWritten || needsCachedFallback) && !isBackgrounded && !isSuspended;
+
   // IPC Data Mirror: send a Main-process-only copy for terminals that need
   // main-process monitoring (e.g., UrlDetector for dev preview URL detection),
   // even when the visual path already delivered the chunk. Background
@@ -1199,14 +1226,17 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
   // so a `data` event here would be re-broadcast to every WebContents and
   // dispatched into the same xterm a second time. The genuinely-undelivered
   // case (visualWritten false, not backgrounded) falls through to the
-  // accounted IPC fallback below, which UrlDetector also receives.
-  if (ipcDataMirrorTerminals.has(id) && !isSuspended && (visualWritten || isBackgrounded)) {
+  // accounted IPC fallback below, which UrlDetector also receives — so the
+  // mirror is keyed off whether that fallback actually runs, not off
+  // `visualWritten`. Sending both would hand Main-side monitors the same
+  // chunk twice whenever a cached duplicate keeps the fallback alive.
+  if (ipcDataMirrorTerminals.has(id) && !isSuspended && !sendIpcFallback) {
     sendEvent({ type: "data-mirror", id, data: toStringForIpc(data) });
   }
 
   // Fallback: If ring buffer failed or isn't set up, use IPC with backpressure
   // Skip IPC fallback for backgrounded or suspended terminals (wake will resync via snapshot)
-  if (!visualWritten && !isBackgrounded && !isSuspended) {
+  if (sendIpcFallback) {
     const dataString = toStringForIpc(data);
     const dataBytes = Buffer.byteLength(dataString, "utf8");
 
@@ -1260,8 +1290,14 @@ ptyManager.on("data", (id: string, data: string | Uint8Array) => {
     ipcQueueManager.addBytes(id, dataBytes);
     const utilization = ipcQueueManager.getUtilization(id);
 
-    // Send the data via IPC
-    sendEvent({ type: "data", id, data: dataString });
+    // Send the data via IPC. The delivered-window list is omitted entirely in
+    // the ordinary case so the wire shape and Main's fan-out are untouched
+    // whenever no cached duplicate forced the fallback open.
+    sendEvent(
+      portDeliveredWindowIds.length > 0
+        ? { type: "data", id, data: dataString, portDeliveredWindowIds }
+        : { type: "data", id, data: dataString }
+    );
 
     // Apply backpressure if queue exceeds high watermark
     ipcQueueManager.applyBackpressure(id, utilization);
@@ -1655,6 +1691,7 @@ const hostContext: HostContext = {
   rendererConnections,
   terminalWorkerConnections,
   windowProjectMap,
+  cachedViewProjects,
   windowFocusedTerminalMap,
   ipcDataMirrorTerminals,
   analysisWorkerPool,

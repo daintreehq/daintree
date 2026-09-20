@@ -52,6 +52,59 @@ const projectViewDestroyListeners = new Map<
 // reactivation (#9490).
 const cachedViewWebContents = new Set<number>();
 
+// Last set published to `cachedViewProjectsListener`, so redundant mutations
+// (the common case — most register/unregister calls don't change which
+// PROJECTS have a cached view) stay silent.
+let publishedCachedViewProjects = "";
+let cachedViewProjectsListener: ((projectIds: string[]) => void) | null = null;
+
+/**
+ * Projects with at least one cached (deactivated) view, in any window. The PTY
+ * host needs this to keep its IPC fallback open for a cached duplicate whose
+ * window port went to another view (#12557) — it cannot derive it, because it
+ * only tracks one active project per window.
+ */
+export function getCachedViewProjectIds(): string[] {
+  const projectIds = new Set<string>();
+  for (const wcId of cachedViewWebContents) {
+    const projectId = viewToProject.get(wcId);
+    if (projectId !== undefined) projectIds.add(projectId);
+  }
+  return Array.from(projectIds);
+}
+
+/**
+ * Observe {@link getCachedViewProjectIds} changes. Fires immediately with the
+ * current set so the consumer starts in sync, then on every real change. One
+ * listener — this is a process-wide registry with a single main-process
+ * consumer, and a set/replace is easier to reason about than a subscriber list
+ * nothing unsubscribes from.
+ */
+export function setCachedViewProjectsListener(
+  listener: ((projectIds: string[]) => void) | null
+): void {
+  cachedViewProjectsListener = listener;
+  if (!listener) return;
+  const projectIds = getCachedViewProjectIds();
+  publishedCachedViewProjects = JSON.stringify([...projectIds].sort());
+  listener(projectIds);
+}
+
+/**
+ * Publish the cached-view project set if it changed. Safe to over-call; the
+ * read-path prunes deliberately don't, because a project lingering in the set
+ * only costs a redundant fallback until the next real mutation, whereas a
+ * missed publish starves a live cached view.
+ */
+function notifyCachedViewProjectsChanged(): void {
+  if (!cachedViewProjectsListener) return;
+  const projectIds = getCachedViewProjectIds();
+  const serialized = JSON.stringify([...projectIds].sort());
+  if (serialized === publishedCachedViewProjects) return;
+  publishedCachedViewProjects = serialized;
+  cachedViewProjectsListener(projectIds);
+}
+
 // Memoized getAllAppWebContents() result. broadcastToRenderer() calls it on
 // every relayed event (terminal data/status/activity, events:push), but the
 // recipient set only changes on view register/unregister/destroy — every
@@ -270,6 +323,7 @@ export function registerProjectView(projectId: string, webContents: WebContents)
   const wcId = webContents.id;
   viewToProject.set(wcId, projectId);
   invalidateAllAppWebContentsCache();
+  notifyCachedViewProjectsChanged();
 
   if (!projectViewDestroyListeners.has(wcId)) {
     const onDestroyed = () => {
@@ -277,6 +331,7 @@ export function registerProjectView(projectId: string, webContents: WebContents)
       cachedViewWebContents.delete(wcId);
       projectViewDestroyListeners.delete(wcId);
       invalidateAllAppWebContentsCache();
+      notifyCachedViewProjectsChanged();
     };
     projectViewDestroyListeners.set(wcId, { webContents, listener: onDestroyed });
     webContents.once("destroyed", onDestroyed);
@@ -290,6 +345,7 @@ export function unregisterProjectView(webContentsId: number): void {
   viewToProject.delete(webContentsId);
   cachedViewWebContents.delete(webContentsId);
   invalidateAllAppWebContentsCache();
+  notifyCachedViewProjectsChanged();
 
   const registration = projectViewDestroyListeners.get(webContentsId);
   if (registration) {
@@ -304,6 +360,7 @@ export function unregisterProjectView(webContentsId: number): void {
  */
 export function registerCachedViewWebContents(webContents: WebContents): void {
   cachedViewWebContents.add(webContents.id);
+  notifyCachedViewProjectsChanged();
 }
 
 /**
@@ -311,6 +368,7 @@ export function registerCachedViewWebContents(webContents: WebContents): void {
  */
 export function unregisterCachedViewWebContents(webContentsId: number): void {
   cachedViewWebContents.delete(webContentsId);
+  notifyCachedViewProjectsChanged();
 }
 
 /**

@@ -247,7 +247,13 @@ export interface TerminalInfo extends TerminalPublicState {
 }
 
 export interface PtyManagerEvents {
-  data: (id: string, data: string | Uint8Array) => void;
+  /**
+   * `portDeliveredWindowIds` is set only when the host kept the IPC fallback
+   * open for a cached duplicate view that a sibling window's MessagePort
+   * acceptance would otherwise have starved (#12557). Consumers that fan the
+   * chunk out to renderers must drop those windows' port holders.
+   */
+  data: (id: string, data: string | Uint8Array, portDeliveredWindowIds?: number[]) => void;
   exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;

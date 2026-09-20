@@ -35,8 +35,10 @@ vi.mock("electron", () => ({
 }));
 
 import {
+  __resetPortHoldersForTests,
   distributePortsToView,
   distributeTerminalWorkerPortToView,
+  getPortHolderWebContentsId,
   releaseTerminalWorkerPort,
 } from "../portDistribution.js";
 import type { WindowContext } from "../WindowRegistry.js";
@@ -49,8 +51,10 @@ function makeMockWin(destroyed = false) {
   } as unknown as BrowserWindow;
 }
 
+let nextWcId = 1;
 function makeMockWc(destroyed = false) {
   return {
+    id: nextWcId++,
     isDestroyed: vi.fn(() => destroyed),
     postMessage: vi.fn(),
   };
@@ -78,6 +82,7 @@ let warnSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   madeChannels.length = 0;
+  __resetPortHoldersForTests();
   warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 
@@ -105,6 +110,49 @@ describe("distributePortsToView", () => {
     expect(second[0]).toBe("terminal-port");
     expect(second[2]).toEqual([port1]);
     expect((first[1] as { token: string }).token).toBe((second[1] as { token: string }).token);
+  });
+
+  it("records the receiving view as the window's port holder (#12557)", () => {
+    // Main needs this to drop the view that already read a chunk off its port
+    // from the `terminal:data` fan-out, without dropping the window's other
+    // (cached) views along with it.
+    const ctx = makeCtx(4);
+    const wc = makeMockWc();
+
+    distributePortsToView(makeMockWin(), ctx, asWc(wc), asPty(makeMockPtyClient()));
+
+    expect(getPortHolderWebContentsId(4)).toBe(wc.id);
+  });
+
+  it("moves the port holder to the new view on a project switch (#12557)", () => {
+    const ctx = makeCtx(4);
+    const outgoing = makeMockWc();
+    const incoming = makeMockWc();
+    const pty = makeMockPtyClient();
+
+    distributePortsToView(makeMockWin(), ctx, asWc(outgoing), asPty(pty));
+    distributePortsToView(makeMockWin(), ctx, asWc(incoming), asPty(pty));
+
+    // The outgoing view is now a cached duplicate with no port of its own, so
+    // it must NOT still be excluded from the IPC fallback that now feeds it.
+    expect(getPortHolderWebContentsId(4)).toBe(incoming.id);
+  });
+
+  it("records the holder even when delivery throws (#12557)", () => {
+    // The pty-host is already routing to this pair (connectMessagePort ran), so
+    // a failed postMessage must not leave Main crediting the previous view.
+    const ctx = makeCtx(4);
+    const first = makeMockWc();
+    const pty = makeMockPtyClient();
+    distributePortsToView(makeMockWin(), ctx, asWc(first), asPty(pty));
+
+    const throwing = makeMockWc();
+    throwing.postMessage.mockImplementation(() => {
+      throw new Error("frame disposed");
+    });
+    distributePortsToView(makeMockWin(), ctx, asWc(throwing), asPty(pty));
+
+    expect(getPortHolderWebContentsId(4)).toBe(throwing.id);
   });
 
   it("closes the previous pair before minting a replacement", () => {

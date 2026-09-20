@@ -1016,6 +1016,34 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
               .poll(() => readLastSteps(cachedMirror!), { timeout: T_LONG })
               .toEqual(expectedLastSteps);
             mirrorRevealMs = Date.now() - started;
+
+            // #12557 restored the cached duplicate by keeping the host's IPC
+            // fallback open for it while a sibling window's MessagePort took
+            // the same chunk. The hazard of that shape is the opposite of the
+            // original bug: a view fed on BOTH paths parses every line twice.
+            // Matching final step numbers cannot see that, so check the
+            // mirror's own buffer for repeated step lines.
+            const duplicateSteps = await cachedMirror.evaluate(
+              (ids) =>
+                ids.map((id) => {
+                  const terminal = (window as any).__daintreeGetTerminalForE2E(id);
+                  const buffer = terminal.buffer.active;
+                  const seen = new Set<string>();
+                  const repeated: string[] = [];
+                  for (let i = 0; i < buffer.length; i++) {
+                    const match = buffer
+                      .getLine(i)
+                      ?.translateToString(true)
+                      .match(/^working\.\.\. step (\d+)$/);
+                    if (!match) continue;
+                    if (seen.has(match[1])) repeated.push(match[1]);
+                    else seen.add(match[1]);
+                  }
+                  return repeated.length;
+                }),
+              cachedIds.filter((id) => id !== flipPanelId)
+            );
+            expect(duplicateSteps).toEqual(duplicateSteps.map(() => 0));
           }
           console.log(
             "BACKGROUND_ENERGY " +

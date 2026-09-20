@@ -28,6 +28,7 @@ function makeCtx(stateRef: {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    cachedViewProjects: new Set(),
     windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     // Mirror the production wiring: getter/setter pairs read & write the
@@ -137,6 +138,41 @@ describe("init-buffers handler", () => {
     expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledTimes(1);
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledWith("proj-a");
+  });
+
+  it("set-cached-view-projects replaces the set and ignores junk entries (#12557)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["set-cached-view-projects"]({ projectIds: ["proj-a", "proj-b"] });
+    expect([...ctx.cachedViewProjects]).toEqual(["proj-a", "proj-b"]);
+
+    // Main recomputes the whole set from its registry, so this is a replace:
+    // merging would keep the IPC fallback open for proj-b forever.
+    handlers["set-cached-view-projects"]({ projectIds: ["proj-a", "", 7, null] });
+    expect([...ctx.cachedViewProjects]).toEqual(["proj-a"]);
+  });
+
+  it("set-cached-view-projects leaves the set alone when projectIds is not an array (#12557)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+    ctx.cachedViewProjects.add("proj-a");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    handlers["set-cached-view-projects"]({});
+    warn.mockRestore();
+
+    expect([...ctx.cachedViewProjects]).toEqual(["proj-a"]);
   });
 
   it("project-switch handler updates the window→project map and recomputes activity tiers scoped to the new project (#10857)", () => {

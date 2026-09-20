@@ -162,6 +162,19 @@ describe("routeHostEvent", () => {
     expect(errorListener).toHaveBeenCalledWith("t1", "boom");
   });
 
+  it("forwards the host's delivered-window list on a data event (#12557)", () => {
+    // Main uses it to drop the views that already read the chunk off their
+    // MessagePort, so the cached duplicate the fallback exists for is the only
+    // one that parses it. Dropping the list here would double-deliver instead.
+    const { deps, emitter } = makeDeps();
+    const dataListener = vi.fn();
+    emitter.on("data", dataListener);
+
+    routeHostEvent({ type: "data", id: "t1", data: "x", portDeliveredWindowIds: [3] }, deps);
+
+    expect(dataListener).toHaveBeenCalledWith("t1", "x", [3]);
+  });
+
   it("emits submit-status as a single typed payload, not an error string", () => {
     // #11875. The state has to survive the host->Main hop as a closed union the
     // renderer can switch on; folding it into the `error` string carrier is

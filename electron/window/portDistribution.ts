@@ -12,6 +12,29 @@ import { randomBytes } from "crypto";
 import type { WindowContext } from "./WindowRegistry.js";
 import type { PtyClient } from "../services/PtyClient.js";
 
+// windowId → the WebContents currently holding that window's renderer-side PTY
+// port. Because the pty-host keeps one connection per window, this is exactly
+// the view its `portDeliveredWindowIds` refers to — so when the host reports a
+// window as already fed on its port, Main drops this WebContents from the IPC
+// fan-out and every other view of the project (cached duplicates included)
+// still receives the chunk (#12557).
+//
+// Entries are only ever replaced, never cleared on teardown: a stale id names a
+// destroyed or re-registered WebContents that no project fan-out will return
+// anyway, and clearing on close would need a teardown hook this module has no
+// other reason to own.
+const windowPortHolders = new Map<number, number>();
+
+/** WebContents id currently holding `windowId`'s PTY MessagePort, if any. */
+export function getPortHolderWebContentsId(windowId: number): number | undefined {
+  return windowPortHolders.get(windowId);
+}
+
+/** Test seam — the map is module state shared by every window. */
+export function __resetPortHoldersForTests(): void {
+  windowPortHolders.clear();
+}
+
 /**
  * Create a MessagePort pair and send it to a specific WebContents.
  * Each call replaces the window's active port pair — the pty-host only
@@ -50,6 +73,11 @@ export function distributePortsToView(
 
   ctx.services.activeRendererPort = port1;
   ctx.services.activePtyHostPort = port2;
+
+  // Recorded before delivery, alongside the host-side connect: the host starts
+  // routing to this pair immediately, so a failed postMessage below must not
+  // leave Main believing the previous view still owns the window's port.
+  windowPortHolders.set(ctx.windowId, targetWc.id);
 
   if (ptyClient) {
     ptyClient.connectMessagePort(ctx.windowId, port2);

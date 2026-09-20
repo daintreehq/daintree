@@ -150,7 +150,15 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     }
 
     case "data":
-      emitter.emit("data", event.id, event.data);
+      // The delivered-window list only exists when the host kept the fallback
+      // open for a cached duplicate (#12557); emitting it as a trailing
+      // `undefined` otherwise would change the arity every listener sees on
+      // the ordinary path for no gain.
+      if (event.portDeliveredWindowIds !== undefined) {
+        emitter.emit("data", event.id, event.data, event.portDeliveredWindowIds);
+      } else {
+        emitter.emit("data", event.id, event.data);
+      }
       return true;
 
     // Main-process-only mirror copy (the renderer already received this chunk

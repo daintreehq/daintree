@@ -3,7 +3,12 @@
  */
 
 import { CHANNELS } from "../../channels.js";
-import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
+import {
+  broadcastToProjectRenderers,
+  broadcastToProjectRenderersExcept,
+  broadcastToRenderer,
+} from "../../utils.js";
+import { getPortHolderWebContentsId } from "../../../window/portDistribution.js";
 import { logInfo, logWarn } from "../../../utils/logger.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
@@ -33,9 +38,26 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   // and JSON/base64 churn; see lessons #4899/#4862/#4639). Project-scoped: only
   // the owning project's views host a panel for the terminal, and its cached
   // views must still get every byte, since there is no resync on reactivation.
-  const handlePtyData = (id: string, data: string | Uint8Array) => {
-    broadcastToProjectRenderers(
+  const handlePtyData = (
+    id: string,
+    data: string | Uint8Array,
+    portDeliveredWindowIds?: number[]
+  ) => {
+    // The host only sends this list when it deliberately kept the fallback open
+    // for a cached duplicate that its MessagePort routing cannot reach
+    // (#12557). Those windows' port holders already have the chunk; every other
+    // view of the project — cached ones included — still needs it.
+    let exclude: Set<number> | null = null;
+    if (portDeliveredWindowIds && portDeliveredWindowIds.length > 0) {
+      exclude = new Set<number>();
+      for (const windowId of portDeliveredWindowIds) {
+        const holder = getPortHolderWebContentsId(windowId);
+        if (holder !== undefined) exclude.add(holder);
+      }
+    }
+    broadcastToProjectRenderersExcept(
       ptyClient.getTerminalProjectId(id),
+      exclude,
       CHANNELS.TERMINAL_DATA,
       id,
       data

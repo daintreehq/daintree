@@ -408,8 +408,13 @@ class TerminalInstanceService {
    * The view was cached (#12514): stop painting and demote every terminal to
    * BACKGROUND, which also moves the pty-host's activity polling to the
    * background cadence. Parsing, acknowledgements and ledgers keep running —
-   * the owning view still receives its bytes, so reactivation is a repaint of
-   * an already-current buffer, never a resync.
+   * this view still receives its bytes over the project-scoped IPC fallback,
+   * so reactivation is a repaint of an already-current buffer, never a resync.
+   *
+   * That holds for a duplicate of a project open in another window too, but
+   * only since #12557: the host used to suppress the fallback as soon as the
+   * sibling window's MessagePort accepted a chunk, and a cached view has no
+   * port of its own, so it received neither path and went permanently silent.
    */
   private handleViewCached(): void {
     for (const [id, managed] of this.instances) {

@@ -29,6 +29,14 @@ vi.mock("../../../../services/events.js", () => ({
   events: { on: vi.fn(() => vi.fn()), emit: vi.fn() },
 }));
 
+// The real map is populated by `distributePortsToView`, which needs a live
+// MessageChannelMain. Stub the lookup so the tests can state directly which
+// view holds each window's port.
+const { portHolders } = vi.hoisted(() => ({ portHolders: new Map<number, number>() }));
+vi.mock("../../../../window/portDistribution.js", () => ({
+  getPortHolderWebContentsId: (windowId: number) => portHolders.get(windowId),
+}));
+
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalEventHandlers } from "../events.js";
 import {
@@ -95,6 +103,7 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
     for (const id of projectViewIds.splice(0)) unregisterProjectView(id);
     for (const win of windows.splice(0)) unregisterAppView(win as never);
     liveWebContents.clear();
+    portHolders.clear();
   });
 
   describe("with project views registered", () => {
@@ -134,6 +143,42 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
       expect(ptyClient.getTerminalProjectId).toHaveBeenCalledWith("term-a");
       expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", chunk]]);
       expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", chunk]]);
+    });
+
+    it("skips the port holder of a window the host already fed (#12557)", () => {
+      // Window 1's active project-A view read the chunk off its MessagePort, so
+      // the host named window 1 while keeping the fallback open for window 2's
+      // cached copy. Re-sending to the port holder would dispatch the same
+      // bytes into its xterm a second time — terminalClient.onData subscribes
+      // to both transports.
+      portHolders.set(1, activeA.id);
+      portHolders.set(2, activeB.id);
+
+      ptyClient.emit("data", "term-a", "working... step 1", [1]);
+
+      expect(dataSends(activeA)).toHaveLength(0);
+      expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "working... step 1"]]);
+    });
+
+    it("delivers to every project view when the host fed no window on a port", () => {
+      // No port acceptance anywhere: the list is absent and routing is exactly
+      // what it was before #12557.
+      portHolders.set(1, activeA.id);
+
+      ptyClient.emit("data", "term-a", "output");
+
+      expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
+      expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
+    });
+
+    it("still delivers to a named window whose port holder is unknown", () => {
+      // Mid-switch a window can be named before Main has recorded its new port
+      // holder. Dropping nothing is the safe direction: a duplicated chunk is
+      // recoverable noise, a silently starved view is the bug being fixed.
+      ptyClient.emit("data", "term-a", "output", [1]);
+
+      expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
+      expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
     });
 
     it("never reaches another project's views, visible or cached", () => {

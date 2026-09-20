@@ -19,6 +19,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     rendererConnections,
     terminalWorkerConnections,
     windowProjectMap,
+    cachedViewProjects,
     windowFocusedTerminalMap,
     disconnectWindow,
     disconnectTerminalWorkerPort,
@@ -306,6 +307,22 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
       // PortBatcher (flush-first). Keyed by windowId — never global — so each
       // WebContentsView/project view keeps its own focus.
       windowFocusedTerminalMap.set(msg.windowId, msg.id);
+    },
+
+    // Authoritative replace, never a merge: Main recomputes the whole set from
+    // its view registry on every cache/reactivate/teardown, so a stale entry
+    // here would keep the IPC fallback open for a project that no longer has a
+    // cached consumer — a permanent double-path for that project's output.
+    "set-cached-view-projects": (msg) => {
+      const projectIds: unknown = msg.projectIds;
+      if (!Array.isArray(projectIds)) {
+        console.warn("[PtyHost] set-cached-view-projects missing projectIds, ignoring");
+        return;
+      }
+      cachedViewProjects.clear();
+      for (const projectId of projectIds) {
+        if (typeof projectId === "string" && projectId) cachedViewProjects.add(projectId);
+      }
     },
 
     "disconnect-port": (msg) => {

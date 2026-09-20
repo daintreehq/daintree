@@ -368,6 +368,79 @@ describe("webContentsRegistry", () => {
     expect(isCachedViewWebContents(wc.id)).toBe(false);
   });
 
+  describe("cached-view project set (#12557)", () => {
+    it("reports the projects whose views are cached, not every registered project", async () => {
+      const { getCachedViewProjectIds, registerProjectView, registerCachedViewWebContents } =
+        await loadRegistry();
+      const active = createWebContents(201);
+      const cached = createWebContents(202);
+
+      registerProjectView("project-a", active as unknown as WebContents);
+      registerProjectView("project-b", cached as unknown as WebContents);
+      registerCachedViewWebContents(cached as unknown as WebContents);
+
+      expect(getCachedViewProjectIds()).toEqual(["project-b"]);
+    });
+
+    it("collapses two windows' cached views of the same project to one entry", async () => {
+      const { getCachedViewProjectIds, registerProjectView, registerCachedViewWebContents } =
+        await loadRegistry();
+      const first = createWebContents(211);
+      const second = createWebContents(212);
+
+      for (const wc of [first, second]) {
+        registerProjectView("project-a", wc as unknown as WebContents);
+        registerCachedViewWebContents(wc as unknown as WebContents);
+      }
+
+      expect(getCachedViewProjectIds()).toEqual(["project-a"]);
+    });
+
+    it("publishes the current set on subscribe, then only on real changes", async () => {
+      const {
+        setCachedViewProjectsListener,
+        registerProjectView,
+        registerCachedViewWebContents,
+        unregisterCachedViewWebContents,
+      } = await loadRegistry();
+      const wc = createWebContents(221);
+      registerProjectView("project-a", wc as unknown as WebContents);
+
+      const listener = vi.fn();
+      setCachedViewProjectsListener(listener);
+      expect(listener.mock.calls).toEqual([[[]]]);
+
+      registerCachedViewWebContents(wc as unknown as WebContents);
+      expect(listener.mock.calls).toEqual([[[]], [["project-a"]]]);
+
+      // Re-caching an already-cached view changes nothing — the host must not
+      // be re-told on every switch.
+      registerCachedViewWebContents(wc as unknown as WebContents);
+      expect(listener).toHaveBeenCalledTimes(2);
+
+      unregisterCachedViewWebContents(wc.id);
+      expect(listener.mock.calls).toEqual([[[]], [["project-a"]], [[]]]);
+    });
+
+    it("drops a project when its cached view is destroyed", async () => {
+      // Without this the host keeps the IPC fallback open for a project with no
+      // cached consumer left, paying a second main-process hop per chunk.
+      const { setCachedViewProjectsListener, registerProjectView, registerCachedViewWebContents } =
+        await loadRegistry();
+      const wc = createWebContents(231);
+      registerProjectView("project-a", wc as unknown as WebContents);
+      registerCachedViewWebContents(wc as unknown as WebContents);
+
+      const listener = vi.fn();
+      setCachedViewProjectsListener(listener);
+      expect(listener.mock.calls).toEqual([[["project-a"]]]);
+
+      wc.emitDestroyed();
+
+      expect(listener.mock.calls).toEqual([[["project-a"]], [[]]]);
+    });
+  });
+
   it("allows unregister and later re-register without leaving stale listener state", async () => {
     const { registerWebContents, unregisterWebContents } = await loadRegistry();
     const firstWindow = createWindow(1);

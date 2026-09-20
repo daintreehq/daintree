@@ -1249,6 +1249,133 @@ describe("pty-host adversarial", () => {
     expect(terminal.ptyProcess.resume).toHaveBeenCalledTimes(1);
   });
 
+  it("CACHED_DUPLICATE_KEEPS_THE_IPC_FALLBACK_OPEN (#12557)", async () => {
+    // A project open in two windows, where the second window switched away and
+    // now holds it CACHED. That cached view lost its window's MessagePort to
+    // whichever view went active, so the project-scoped IPC fallback is its
+    // only transport — but window 1's batcher accepting the chunk sets
+    // `visualWritten`, which used to suppress that fallback for everyone. The
+    // cached copy then received neither path and went permanently silent.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
+    // Main's view registry — not the host — is what knows window 2 kept a
+    // cached copy of project-1; `windowProjectMap` only holds active projects.
+    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: ["project-1"] });
+    await flushMicrotasks();
+
+    const batcher = hostState.batchers[0];
+    batcher.write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "working... step 1\r\n");
+    await flushMicrotasks();
+
+    // Window 1 still gets it on its port — the fast path is untouched.
+    expect(batcher.write).toHaveBeenCalled();
+    // And the fallback runs anyway, naming window 1 so Main can drop its
+    // port-holding view from the fan-out instead of double-delivering.
+    expect(dataPayloads(parentPort)).toEqual([
+      expect.objectContaining({
+        type: "data",
+        id: "t1",
+        data: "working... step 1\r\n",
+        portDeliveredWindowIds: [1],
+      }),
+    ]);
+  });
+
+  it("NO_CACHED_DUPLICATE_LEAVES_THE_FALLBACK_SUPPRESSED (#12557)", async () => {
+    // The common case must not change: with no cached view of the terminal's
+    // project anywhere, a port acceptance still suppresses the IPC fallback
+    // entirely. Otherwise every chunk would pay a second main-process hop.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: ["project-9"] });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+  });
+
+  it("CACHED_VIEW_PROJECTS_IS_A_REPLACE_NOT_A_MERGE (#12557)", async () => {
+    // Main recomputes the whole set from its registry, so a later push that
+    // omits project-1 means its cached view is gone. Merging would leave the
+    // fallback open for that project forever.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: ["project-1"] });
+    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: [] });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+  });
+
+  it("CACHED_DUPLICATE_FALLBACK_SUPPRESSES_THE_SATURATION_PULSE (#12557)", async () => {
+    // A window whose batcher rejected the chunk normally gets a data-loss
+    // pulse, which paints a yellow discontinuity marker. When the cached-view
+    // fallback runs, that window's view receives the bytes over IPC after all
+    // — the marker would be a lie about data that did arrive.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const portA = createRendererPort();
+    const portB = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: ["project-1"] });
+    await flushMicrotasks();
+
+    // Window 1's batcher accepts, window 2's rejects.
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.batchers[1].write.mockReturnValue(false);
+    portA.postMessage.mockClear();
+    portB.postMessage.mockClear();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    const pulses = portB.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown) =>
+          typeof m === "object" && m !== null && (m as { status?: string }).status === "data-loss"
+      );
+    expect(pulses).toHaveLength(0);
+    // Only window 1 took it on a port, so only window 1 is excluded downstream.
+    expect(dataPayloads(parentPort)).toEqual([
+      expect.objectContaining({ type: "data", id: "t1", portDeliveredWindowIds: [1] }),
+    ]);
+  });
+
   it("TIER_CHANGED_BROADCAST_RESPECTS_PROJECT_FILTER", async () => {
     // recomputeActivityTiers must push a tier-changed reconciliation message to
     // exactly the renderer ports that also receive the terminal's data — i.e.

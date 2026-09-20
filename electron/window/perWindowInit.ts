@@ -1,7 +1,7 @@
 import { session, type BrowserWindow } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
-import { getAppWebContents } from "./webContentsRegistry.js";
+import { getAppWebContents, setCachedViewProjectsListener } from "./webContentsRegistry.js";
 import { distributePortsToView, releaseAllTerminalWorkerPorts } from "./portDistribution.js";
 import { resolveInitialColorSchemeId } from "./skeletonCss.js";
 import { resolveAppTheme } from "../../shared/theme/index.js";
@@ -146,6 +146,15 @@ export async function initPerWindowServices(
       deferStart: true,
     });
     setPtyClientRef(ptyClient);
+
+    // Keep the host's cached-view project set current (#12557). The registry
+    // spans every window, and `ptyClient` is a process-wide singleton, so this
+    // is installed once beside its construction rather than per window. Fires
+    // immediately with the current set, which is empty this early — the real
+    // value arrives on the first project cache.
+    setCachedViewProjectsListener((projectIds) => {
+      ptyClient?.setCachedViewProjects(projectIds);
+    });
 
     const versionSvc = new AgentVersionService(cliAvailabilityService);
     setAgentVersionService(versionSvc);
