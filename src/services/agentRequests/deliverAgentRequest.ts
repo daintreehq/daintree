@@ -278,10 +278,13 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
  * re-verification between proving readiness and submitting.
  *
  * `agentId` is the terminal's detected agent, falling back to what it was
- * launched as, so a plain shell is `null` and refused. `spawnedAt` is the
+ * launched as — so a shell with no agent and no launch hint is `null` and
+ * refused, while a shell an agent was launched into keeps naming it. `spawnedAt` is the
  * stamp the panel takes when a pty starts under it, and every restart path
  * re-stamps it (`panelRegistry/restart.ts`), so it is the pty generation for
- * every generation there is one for. A slot holding no pty at all — a
+ * every generation the panel was there to see start. A pty-host crash replays
+ * the pty under the same id without the panel re-stamping, so it is the
+ * renderer's account of the generation rather than the host's. A slot holding no pty at all — a
  * recovery hold, which `addPanel.ts` deliberately leaves unstamped — has no
  * generation to name, and is refused rather than compared: two absent stamps
  * are equal to each other, and that equality would be the whole check passing
@@ -292,9 +295,11 @@ function destinationStillEligible(terminalId: string, worktreeId: string | null)
  * An agent that quits leaving its shell, and the `claude` a user then types
  * into that shell, share the slot, the pty and the launch id — and differ
  * here (#12535). It is an observation of the boundaries the detector caught,
- * not proof of process identity: a relaunch it never classified still moves
- * nothing, and the window between this last look and the write is still a
- * window. That residue is why the host goes on treating every submission as
+ * not proof of process identity. A relaunch it never classified still moves
+ * nothing — an agent the terminal was launched as holds its detected identity
+ * through a disappearance that never looked like a prompt returning, and a
+ * second one started under it is the same identity again, not a new one. The
+ * window between this last look and the write is still a window, too. That residue is why the host goes on treating every submission as
  * text typed at whatever is listening rather than as a message delivered to a
  * known conversation.
  */
@@ -569,14 +574,16 @@ async function deliver(run: Run, options: AgentRequestOptions): Promise<void> {
         // the wait is the queue doing its job, however long the work takes.
         // The clock runs while it is not — unreadable, finished, or asking.
         if (busy) readyBy = Date.now() + LAUNCH_READY_TIMEOUT_MS;
+        // Bound at the first look that can name a session, not at the one that
+        // proves readiness, and never rebound after (#12535). A request waiting
+        // out an agent's work is a request for the session it was asked of; if
+        // that one ends and another starts in the same pty while the wait runs,
+        // binding at the prompt would quietly adopt the replacement, and so
+        // would re-reading the identity on a loop re-entry. Both are the thing
+        // the final check exists to refuse. A launch destination simply has no
+        // identity to bind to yet, so it binds on the first look that does.
+        bound ??= identityOf(entry);
         if (readiness === "ready" || run.forced) {
-          // Bound from the same observation that proved readiness, so the two
-          // cannot disagree about which session they are about. Bound once:
-          // the loop re-enters when the last look found the destination off its
-          // prompt, and re-reading the identity there would quietly adopt
-          // whatever is in the slot now — which is the thing the final check
-          // exists to refuse (#12535).
-          bound ??= identityOf(entry);
           if (bound === null) {
             report({ status: "failed", message: unbindable(title, entry) }, terminalId);
             return;

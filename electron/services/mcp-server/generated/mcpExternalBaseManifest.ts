@@ -1568,7 +1568,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
               },
               agentIncarnation: {
                 description:
-                  "How many times a new agent session has been observed taking over this terminal's PTY after a prior one exited. `spawnedAt` cannot move for a relaunch inside an unchanged PTY, so this is what tells a session you saw earlier from its successor. 0 means none observed; absent means unobserved, which is not 0. An observation of what the detector caught, not proof of process identity.",
+                  "Times a new agent was seen taking over this PTY after one exited — the relaunch `spawnedAt` cannot see. 0 is none observed; absent is unobserved, not 0.",
                 type: "integer",
                 minimum: 0,
                 maximum: 9007199254740991,

@@ -227,6 +227,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           agentPresetColor: t.agentPresetColor,
           originalAgentPresetId: t.originalAgentPresetId,
           everDetectedAgent: t.everDetectedAgent,
+          agentIncarnation: t.agentIncarnation,
           detectedAgentId: t.detectedAgentId,
           detectedProcessId: t.detectedProcessId,
         }));
@@ -282,6 +283,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           agentPresetColor: t.agentPresetColor,
           originalAgentPresetId: t.originalAgentPresetId,
           everDetectedAgent: t.everDetectedAgent,
+          agentIncarnation: t.agentIncarnation,
           detectedAgentId: t.detectedAgentId,
           detectedProcessId: t.detectedProcessId,
         }));
@@ -326,6 +328,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
           agentPresetColor: t.agentPresetColor,
           originalAgentPresetId: t.originalAgentPresetId,
           everDetectedAgent: t.everDetectedAgent,
+          agentIncarnation: t.agentIncarnation,
           detectedAgentId: t.detectedAgentId,
           detectedProcessId: t.detectedProcessId,
         }));
@@ -444,6 +447,7 @@ export function registerTerminalSnapshotHandlers(deps: HandlerDependencies): () 
         agentPresetColor: terminal.agentPresetColor,
         originalAgentPresetId: terminal.originalAgentPresetId,
         everDetectedAgent: terminal.everDetectedAgent,
+        agentIncarnation: terminal.agentIncarnation,
         detectedAgentId: terminal.detectedAgentId,
         detectedProcessId: terminal.detectedProcessId,
       };

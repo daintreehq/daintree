@@ -256,6 +256,11 @@ export interface BackendTerminalInfo {
    */
   everDetectedAgent?: boolean;
   /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
+  /**
    * Live detected identity — the agent currently running in this terminal.
    * The single source of truth for chrome. Not persisted; rehydrated here on
    * reconnect. See `docs/architecture/terminal-identity.md`.
@@ -302,6 +307,11 @@ export interface TerminalReconnectResult {
   originalAgentPresetId?: string;
   /** Sticky live-session flag. Rehydrated on reconnect. */
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
   /** Live detected identity; the single chrome source of truth. See `docs/architecture/terminal-identity.md`. */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.). Cleared when the process exits. */
@@ -373,6 +383,11 @@ export interface TerminalInfoPayload {
    * session, even if no agent is currently detected.
    */
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
 }
 
 import type { TerminalActivityPayload } from "../terminal.js";

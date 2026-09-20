@@ -43,12 +43,12 @@ export function reduceAgentDetected(
     timestamp,
   } = input;
 
-  // Forward-only: a detection event overtaken by a later one must not roll the
-  // count back and make a superseded session look current again. A panel with
-  // none yet adopts whatever the host reports, zero included.
+  // Follows the host in both directions. A pty-host crash replays the spawn
+  // under the same terminal id against a record that starts at zero, so a
+  // count held forward-only would outlive the session it names and compare
+  // equal to a later one (#12535). Zero included: it is a reading, not a gap.
   const needsIncarnationUpdate =
-    nextAgentIncarnation !== undefined &&
-    (terminal.agentIncarnation === undefined || nextAgentIncarnation > terminal.agentIncarnation);
+    nextAgentIncarnation !== undefined && nextAgentIncarnation !== terminal.agentIncarnation;
 
   const needsIconUpdate =
     nextDetectedProcessId !== undefined && terminal.detectedProcessId !== nextDetectedProcessId;

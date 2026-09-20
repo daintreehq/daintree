@@ -496,7 +496,14 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // descriptions because the wire strips `minimum`/`maximum`, and a caller that
   // misses them is refused rather than clamped. The tool description is
   // untouched.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 61_950;
+  // 61_950 → 62_200 for #12535, measured at 62_181 B: `agentIncarnation` on
+  // `terminal.getStatus`'s output. It is the only field that moves when an agent
+  // exits and another is launched in the shell it left behind — `spawnedAt` is
+  // the pty generation and holds, as do the pid and the restart count. A caller
+  // holding an earlier reading has nothing else to tell that session from its
+  // successor, and would otherwise go on addressing a conversation that ended.
+  // Its description was written under the property target rather than over it.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 62_200;
   // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
   // Every byte #11909 spends sits on an externally advertised tool, so both
   // totals moved by the identical amount. Only this one needed the ratchet
@@ -613,7 +620,9 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // the wake's standing are read back as structured content, and a client that
   // validates it needs the schema to accept it at all. Their property
   // descriptions were cut to the target before measuring.
-  const MAX_COHORT_PAYLOAD_BYTES = 226_350;
+  // 226_350 → 226_600 for #12535, measured at 226_541 B: the same spend as the
+  // external raise above, on a tool that is on both surfaces.
+  const MAX_COHORT_PAYLOAD_BYTES = 226_600;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 

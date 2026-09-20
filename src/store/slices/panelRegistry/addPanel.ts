@@ -717,6 +717,7 @@ export const createAddPanelActions = (
       agentLaunchFlags: options.agentLaunchFlags,
       agentModelId: options.agentModelId,
       everDetectedAgent: options.everDetectedAgent,
+      agentIncarnation: options.agentIncarnation,
       detectedAgentId: options.detectedAgentId,
       detectedProcessId: options.detectedProcessId,
       runtimeIdentity:
@@ -806,6 +807,9 @@ export const createAddPanelActions = (
                     : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty?.everDetectedAgent,
+                // `??`, not `||`: zero is a real reading of this pty, and the
+                // backend read outranks what the panel learned from an event.
+                agentIncarnation: ptyTerminal.agentIncarnation ?? existingPty?.agentIncarnation,
                 // Stamped once at creation and never re-derivable: an orphan or
                 // partial reconnect payload carries none, so keep what we have
                 // rather than letting the spread blank it (#12419).
@@ -872,6 +876,9 @@ export const createAddPanelActions = (
                     : existing.extensionStateVersion,
                 // Sticky: once detected, never downgrade on a partial reconnect payload.
                 everDetectedAgent: ptyTerminal.everDetectedAgent || existingPty2?.everDetectedAgent,
+                // `??`, not `||`: zero is a real reading of this pty, and the
+                // backend read outranks what the panel learned from an event.
+                agentIncarnation: ptyTerminal.agentIncarnation ?? existingPty2?.agentIncarnation,
                 // Stamped once at creation and never re-derivable: an orphan or
                 // partial reconnect payload carries none, so keep what we have
                 // rather than letting the spread blank it (#12419).

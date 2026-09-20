@@ -70,9 +70,10 @@ export interface TerminalStatusEntry {
    * process identity: a relaunch it never classified leaves this unchanged.
    *
    * Zero is a real reading — none observed in this PTY generation. Absent means
-   * the surface could not observe it, which is not zero. The two surfaces count
-   * independently of each other's uptime, so compare readings from one source
-   * rather than across a `pty`/`renderer` switch.
+   * the surface could not observe it, which is not zero. One counter exists and
+   * the pty-host owns it; the `renderer` answer is a cache of what the host has
+   * told this view, so it can lag a `pty` answer for the same terminal. Compare
+   * readings from one source rather than across a `pty`/`renderer` switch.
    */
   agentIncarnation?: number;
   lastCheckResult?: TerminalCheckResult;

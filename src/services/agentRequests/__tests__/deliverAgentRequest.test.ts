@@ -365,6 +365,80 @@ describe("deliverAgentRequest", () => {
     expect(last(states)?.state.status).toBe("failed");
   });
 
+  it("does not rebind when the destination leaves its prompt and comes back", async () => {
+    // The retry path: the last look finds the agent no longer at its prompt, so
+    // the run goes back to waiting. The session is replaced while it waits. It
+    // must keep the session it bound to — re-reading the identity on the way
+    // round would make the relaunch the thing it thinks it was always
+    // addressing, and it would send into it (#12535).
+    const agent = terminal("waiting");
+    let calls = 0;
+    let offPrompt = false;
+    let relaunched = false;
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      // Called on every settle, so it is where the relaunch lands: once the run
+      // has gone back to waiting, the next one puts a new session at the prompt.
+      stillOwned: () => {
+        if (offPrompt && !relaunched) {
+          relaunched = true;
+          agent.relaunchAgent();
+        }
+        return true;
+      },
+      onState,
+      buildPrompt: async () => "Make it pop",
+      // The second call is the one inside the pre-write window. Take the agent
+      // off its prompt there, so the look after it sends the run round again.
+      verify: async () => {
+        if (++calls === 2) {
+          agent.setState("working");
+          offPrompt = true;
+        }
+        return null;
+      },
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await run;
+
+    expect(relaunched).toBe(true);
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude restarted before the request went out — nothing was sent",
+    });
+  });
+
+  it("binds while the agent is still working, not when it reaches its prompt", async () => {
+    // A request queued behind an agent's work is a request for the session it
+    // was asked of. If that one ends and another starts in the same pty while
+    // the request waits, the prompt it eventually finds belongs to someone else.
+    const agent = terminal("working");
+    const { states, onState } = sink();
+    const run = deliverAgentRequest({
+      ownerKey: "owner-1\nwt-1",
+      destination: { kind: "terminal", terminalId: "t1", title: "Claude" },
+      worktreeId: "wt-1",
+      stillOwned: () => true,
+      onState,
+      buildPrompt: async () => "Make it pop",
+    });
+    // Bound against the working session on the first look, then replaced.
+    await vi.advanceTimersByTimeAsync(1_000);
+    agent.relaunchAgent();
+    await vi.advanceTimersByTimeAsync(5_000);
+    await run;
+
+    expect(agent.sent).toEqual([]);
+    expect(last(states)?.state).toEqual({
+      status: "failed",
+      message: "Claude restarted before the request went out — nothing was sent",
+    });
+  });
+
   it("does not bind to a pane restored without its process", async () => {
     // Both halves of the identity are absent here, and absent compares equal to
     // absent — the session check would pass on nothing at all.

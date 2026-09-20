@@ -91,13 +91,18 @@ export function setupIdentityListeners(): DisposableStore {
 
         // Applied before the state it belongs to, so a fresh `idle` is never
         // briefly readable beside its predecessor's session count (#12535).
-        // The host owns the value; this only ever copies it, and only forward,
-        // so a reordered event cannot resurrect a superseded session.
+        // The host owns the value and this only copies it — including
+        // *downward*. A pty-host crash replays the spawn under the same
+        // terminal id against a fresh record starting at zero, and a panel that
+        // refused to follow it down would go on naming a session that no longer
+        // exists while the replacement climbed back towards it. Out-of-order
+        // events are already dropped above by `lastStateChange`, so following
+        // the host is the safer of the two ways to be wrong: a count that
+        // disagrees refuses the delivery, a count that lies permits it.
         const observedIncarnation = data.agentIncarnation;
         if (
           observedIncarnation !== undefined &&
-          (terminal.agentIncarnation === undefined ||
-            observedIncarnation > terminal.agentIncarnation)
+          observedIncarnation !== terminal.agentIncarnation
         ) {
           usePanelStore.setState((st) => {
             const panel = st.panelsById[terminalId];

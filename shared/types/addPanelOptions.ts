@@ -165,6 +165,11 @@ export interface AddPanelOptionsBase {
   agentModelId?: string;
   /** Sticky "runtime agent ever detected" flag, rehydrated from backend during reconnect. */
   everDetectedAgent?: boolean;
+  /**
+   * Observed respawn count for the live PTY (#12535). Absent when unobserved —
+   * never read absence as zero.
+   */
+  agentIncarnation?: number;
   /** Runtime-detected agent identity at hydration time; cleared when the agent exits. Rehydrated from backend reconnect payload. */
   detectedAgentId?: BuiltInAgentId;
   /** Runtime-detected non-agent process icon id (npm, yarn, etc.) at hydration time; cleared when the process exits. */
