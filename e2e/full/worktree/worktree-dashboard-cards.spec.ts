@@ -102,9 +102,11 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
     ctx.window = await addAndSwitchToProject(ctx.app, ctx.window, fixture!.repoB, "Dashboard B");
 
     await openFilterPopover(ctx.window);
-    await expect(
-      ctx.window.locator(SEL.worktree.filterPopover).getByRole("radio", { name: "Alphabetical" })
-    ).toBeChecked({ timeout: T_LONG });
+    const popover = ctx.window.locator(SEL.worktree.filterPopover);
+    await ensureFilterSectionOpen(popover, "Sort by");
+    await expect(popover.getByRole("radio", { name: "Alphabetical" })).toBeChecked({
+      timeout: T_LONG,
+    });
     await closeFilterPopover(ctx.window);
   });
 });

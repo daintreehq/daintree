@@ -17,6 +17,10 @@ import {
 
 const reader = createFixtureReader();
 
+function withPortableSeparators(value: string): string {
+  return value.replaceAll("\\", "/");
+}
+
 async function routesOf(fixture: string): Promise<RouteNode[]> {
   const worktree = fixtureWorktree(fixture);
   const routesDirectory = await resolveRoutesDirectory(reader, worktree);
@@ -294,12 +298,12 @@ describe("buildRouteTree", () => {
     const routesDirectory = await resolveRoutesDirectory(reader, worktree);
 
     expect(routesDirectory.source).toBe("svelte.config");
-    expect(routesDirectory.path.endsWith("src/pages")).toBe(true);
+    expect(withPortableSeparators(routesDirectory.path).endsWith("src/pages")).toBe(true);
 
     const routes = await routesOf("custom-routes");
     expect(routes.map((route) => route.routeId)).toEqual(["/", "/contact"]);
     for (const route of routes) {
-      expect(route.pageFile).toContain("src/pages/");
+      expect(withPortableSeparators(route.pageFile ?? "")).toContain("src/pages/");
     }
   });
 
@@ -376,7 +380,7 @@ describe("buildRouteTree", () => {
     const routesDirectory = await resolveRoutesDirectory(reader, fixtureWorktree("plain"));
 
     expect(routesDirectory.source).toBe("default");
-    expect(routesDirectory.path.endsWith("src/routes")).toBe(true);
+    expect(withPortableSeparators(routesDirectory.path).endsWith("src/routes")).toBe(true);
   });
 
   it("returns no routes rather than throwing when the routes directory is absent", async () => {

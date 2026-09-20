@@ -74,6 +74,10 @@ const config: KnipConfig = {
     "src/components/Panel/__preview__/preview.tsx",
     "src/components/DragDrop/__preview__/preview.tsx",
     "src/components/Recovery/__preview__/preview.tsx",
+    "src/components/FileViewer/__preview__/preview.tsx",
+    "src/components/Layout/__preview__/preview.tsx",
+    "src/components/Plugin/__preview__/preview.tsx",
+    "src/components/Terminal/__preview__/preview.tsx",
   ],
 
   // Project files Knip considers part of the graph. Includes root-level

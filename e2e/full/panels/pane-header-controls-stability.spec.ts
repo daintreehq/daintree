@@ -348,7 +348,8 @@ test.describe.serial("Pane header: window controls hold still while status chang
     await selectSettingsScope(page, "Global");
     await page.locator(`${SEL.settings.navSidebar} button`, { hasText: "Panel Grid" }).click();
     await page
-      .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: "Performance" })
+      .getByRole("tablist", { name: "Terminal settings sections" })
+      .getByRole("tab", { name: "Performance" })
       .click();
     await page.locator('[aria-label="Resource Monitoring Toggle"]').click();
     await page.keyboard.press("Escape");

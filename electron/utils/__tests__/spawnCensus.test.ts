@@ -81,16 +81,23 @@ describe("spawn census", () => {
     await promisify(childProcess.exec)("true");
     await new Promise((resolve) => childProcess.spawn("true").on("close", resolve));
 
-    expect(totals(readSpawnCensus())).toEqual({ true: 5, "sh -c true": 2 });
+    const defaultShell = process.platform === "win32" ? "cmd.exe" : "sh";
+    expect(totals(readSpawnCensus())).toEqual({ true: 5, [`${defaultShell} -c true`]: 2 });
   });
 
   it("names the shell a sync launch actually ran", () => {
     installSpawnCensus("main", dir);
-    childProcess.spawnSync("true", undefined, { shell: true });
-    childProcess.spawnSync("true", { shell: "/bin/bash" });
-    childProcess.execFileSync("true", { shell: true });
-    childProcess.execSync("true", { shell: "/bin/bash" });
-    expect(totals(readSpawnCensus())).toEqual({ "sh -c true": 2, "bash -c true": 2 });
+    const command = process.platform === "win32" ? "ver" : "true";
+    const explicitShell = process.platform === "win32" ? "cmd.exe" : "/bin/bash";
+    childProcess.spawnSync(command, undefined, { shell: true });
+    childProcess.spawnSync(command, { shell: explicitShell });
+    childProcess.execFileSync(command, { shell: true });
+    childProcess.execSync(command, { shell: explicitShell });
+    expect(totals(readSpawnCensus())).toEqual(
+      process.platform === "win32"
+        ? { "cmd.exe -c ver": 4 }
+        : { "sh -c true": 2, "bash -c true": 2 }
+    );
   });
 
   it("keeps each call's return value and errors", () => {

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import path from "node:path";
 import {
   E2E_SKIP_FIRST_RUN_DIALOGS_ARG,
   IDLE_HARNESS_ARG,
@@ -73,7 +74,7 @@ describe("parseArgs", () => {
       runs: 4,
       windowSeconds: 60,
       settleSeconds: 0,
-      json: "/tmp/idle.json",
+      json: path.resolve("/tmp/idle.json"),
     });
   });
 

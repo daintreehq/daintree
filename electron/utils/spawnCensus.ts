@@ -98,8 +98,11 @@ function syncCommandKey(file: unknown, args: unknown, options: unknown): string 
   const opts = (Array.isArray(args) || args == null ? options : args) as
     { shell?: unknown } | undefined;
   if (!opts?.shell) return commandKey(file, argv);
-  const shell = typeof opts.shell === "string" ? opts.shell : "sh";
-  return commandKey(shell, ["-c", [file, ...argv].join(" ")]);
+  const shell =
+    typeof opts.shell === "string" ? opts.shell : process.platform === "win32" ? "cmd.exe" : "sh";
+  const commandFlag =
+    process.platform === "win32" && /(?:^|[\\/])cmd(?:\.exe)?$/i.test(shell) ? "/c" : "-c";
+  return commandKey(shell, [commandFlag, [file, ...argv].join(" ")]);
 }
 
 /** Snapshot of this process's census, in the on-disk shape. */

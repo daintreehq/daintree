@@ -127,6 +127,17 @@ export function SettingsSubtabBar({
           );
         })}
       </div>
+      {subtabs
+        .filter((subtab) => subtab.id !== activeId)
+        .map((subtab) => (
+          <div
+            key={subtab.id}
+            role="tabpanel"
+            id={panelId(group, subtab.id)}
+            aria-labelledby={tabId(group, subtab.id)}
+            hidden
+          />
+        ))}
     </div>
   );
 }

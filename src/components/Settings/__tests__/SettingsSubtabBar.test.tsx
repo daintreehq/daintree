@@ -277,10 +277,12 @@ describe("SettingsSubtabBar — tab and panel association", () => {
         <div {...subtabPanelProps("g", "two")}>content</div>
       </>
     );
-    const active = screen.getByRole("tab", { selected: true });
-    const panel = screen.getByRole("tabpanel");
-    expect(document.getElementById(active.getAttribute("aria-controls")!)).toBe(panel);
-    expect(document.getElementById(panel.getAttribute("aria-labelledby")!)).toBe(active);
+    const tabs = screen.getAllByRole("tab");
+    for (const tab of tabs) {
+      const panel = document.getElementById(tab.getAttribute("aria-controls")!);
+      expect(panel).toBeTruthy();
+      expect(document.getElementById(panel!.getAttribute("aria-labelledby")!)).toBe(tab);
+    }
     expect(screen.getByRole("tablist", { name: "Group sections" })).toBeTruthy();
   });
 

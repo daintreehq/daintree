@@ -1,6 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -42,12 +43,12 @@ const SCROLL_BACK_BY = 40;
 const REPLAY_SCRIPT = `
 const ESC = "\\x1b";
 const run = process.argv[2] || "0";
-const rows = process.stdout.rows || 24;
+const rows = Number(process.argv[3]) || process.stdout.rows || 24;
 const lines = Array.from({ length: ${TRANSCRIPT_LINES} }, (_, i) => "REPLAY_" + (i + 1));
 const clear = ESC + "[r" + ESC + "[0m" + ESC + "[H" + ESC + "[2J" + ESC + "[3J" + ESC + "[H";
-const layout = ESC + "[1;" + (rows - 1) + "r" + (ESC + "M").repeat(rows - 1);
+const layout = ESC + "[1;" + rows + "r" + (ESC + "M").repeat(rows - 1);
 process.stdout.write(
-  ESC + "[?2026l" + clear + ESC + "[?2026h" + layout + ESC + "[1;10r" +
+  ESC + "[?2026l" + clear + ESC + "[?2026h" + layout + ESC + "[1;" + rows + "r" +
   lines.map((line) => line + "\\r\\n").join("") + ESC + "[r" + ESC + "[?2026l" +
   "\\r\\n" + "REPLAY_" + "DONE_" + run + "\\r\\n"
 );
@@ -176,11 +177,40 @@ test.describe.serial("Core: Terminal reader position survives an ESC[3J redraw",
     // The marker is assembled inside the script so the echoed command line
     // cannot satisfy the wait; the buffer reader sees it on a screen row even
     // while the viewport shows scrollback.
-    await runTerminalCommand(window, panel, "node replay.js 1");
+    await runTerminalCommand(window, panel, `node replay.js 1 ${before.rows}`);
     await waitForTerminalText(panel, "REPLAY_DONE_1", T_LONG);
     await waitForFrames(window);
     await window.waitForTimeout(T_SETTLE);
     await waitForFrames(window);
+
+    let observed: TerminalScrollState | undefined;
+    try {
+      await expect
+        .poll(
+          async () => {
+            observed = await getScrollState(window);
+            return (
+              observed.baseY > 0 &&
+              observed.viewportY > 0 &&
+              observed.isUserScrolledBack &&
+              observed.topLineText === before.topLineText &&
+              isVisuallyAt(observed, observed.viewportY)
+            );
+          },
+          {
+            message: "the replay did not restore the reader's anchored scroll position",
+            timeout: T_LONG,
+            intervals: [100, 250, 500],
+          }
+        )
+        .toBe(true);
+    } catch (error) {
+      const detail = JSON.stringify({ before, observed });
+      throw new Error(
+        `the replay did not restore the reader's anchored scroll position: ${detail}\n${formatErrorMessage(error, "Unknown replay-anchor error")}`,
+        { cause: error }
+      );
+    }
 
     const after = await getScrollState(window);
     const detail = JSON.stringify({ before, after });
@@ -205,7 +235,7 @@ test.describe.serial("Core: Terminal reader position survives an ESC[3J redraw",
     expect(pinned.viewportY).toBe(pinned.baseY);
     expect(pinned.isUserScrolledBack).toBe(false);
 
-    await runTerminalCommand(window, panel, "node replay.js 2");
+    await runTerminalCommand(window, panel, `node replay.js 2 ${pinned.rows}`);
     await waitForTerminalText(panel, "REPLAY_DONE_2", T_LONG);
     await waitForFrames(window);
     await window.waitForTimeout(T_SETTLE);

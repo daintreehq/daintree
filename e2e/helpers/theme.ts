@@ -10,6 +10,19 @@ export interface ThemeChromeMetrics {
   panelVsGridContrast: number;
 }
 
+export async function ensureQuickRunInputVisible(page: Page): Promise<void> {
+  const input = page.getByLabel("Command input");
+  const panelTrigger = page.locator('button[aria-controls="quick-run-panel"]');
+
+  if (!(await input.isVisible())) {
+    await panelTrigger.waitFor({ state: "visible", timeout: T_LONG });
+    if (!(await input.isVisible())) {
+      await panelTrigger.click();
+    }
+  }
+  await input.waitFor({ state: "visible", timeout: T_LONG });
+}
+
 export async function setAppTheme(
   page: Page,
   schemeId: string,
@@ -24,7 +37,7 @@ export async function setAppTheme(
   await page
     .locator(SEL.toolbar.projectSwitcherTrigger)
     .waitFor({ state: "visible", timeout: T_LONG });
-  await page.getByLabel("Command input").waitFor({ state: "visible", timeout: T_LONG });
+  await ensureQuickRunInputVisible(page);
 
   await expect
     .poll(

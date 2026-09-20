@@ -6,7 +6,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo, removePathSync } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
-import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
+import { T_SHORT, T_MEDIUM, T_LONG } from "../../helpers/timeouts";
 import {
   navigateToAgentSettings,
   addCustomPreset,
@@ -16,6 +16,7 @@ import {
   waitForCcrPresetsRemoved,
   getSelectedPresetLabel,
   countPresetOptions,
+  getPresetOptionLabels,
 } from "../../helpers/presets";
 
 // Opens the PresetSelector popover, selects the option at the given index
@@ -121,14 +122,11 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
 
   test("53. Default preset selector appears in settings", async () => {
     await goToClaudeSettings();
-    await addCustomPreset(ctx.window);
-    await addCustomPreset(ctx.window); // Need 2 presets for selector to appear
     await expect(ctx.window.locator(SEL.preset.selectorTrigger)).toBeVisible({ timeout: T_MEDIUM });
   });
 
   test("54. Default preset selector shows Default as default", async () => {
     await goToClaudeSettings();
-    await addCustomPreset(ctx.window); // Add second preset
 
     // Re-select Default, then confirm the trigger label reflects the selection.
     await selectPresetByIndex(ctx.window, 0);
@@ -138,7 +136,6 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
 
   test("55. Selector trigger reflects the configured default preset", async () => {
     await goToClaudeSettings();
-    await addCustomPreset(ctx.window);
 
     const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
     await expect(trigger).toBeVisible({ timeout: T_SHORT });
@@ -201,7 +198,6 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
 
   test("57. Selected default preset persists in settings select value", async () => {
     await goToClaudeSettings();
-    await addCustomPreset(ctx.window);
 
     expect(await countPresetOptions(ctx.window)).toBeGreaterThan(1);
     await selectPresetByIndex(ctx.window, 1);
@@ -218,7 +214,6 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
 
   test("58. Default persists after closing and reopening settings", async () => {
     await goToClaudeSettings();
-    await addCustomPreset(ctx.window);
 
     expect(await countPresetOptions(ctx.window)).toBeGreaterThan(1);
     await selectPresetByIndex(ctx.window, 1);
@@ -239,33 +234,28 @@ test.describe.serial("Presets: Default Preset Selection (53–62)", () => {
 
   test("59. Dropdown includes both CCR and custom presets", async () => {
     writeCcrConfig([{ id: "ccr-default", name: "CCR Default", model: "ccr-default-model" }]);
+
+    // Live CCR refresh is covered by preset-ipc-sync.spec.ts. Restart this
+    // serial suite's isolated profile so this test exercises startup discovery
+    // without inheriting an open popover or focus state from tests 53–58.
+    const { userDataDir } = ctx;
+    await closeApp(ctx.app);
+    ctx = await launchApp({ env: launchEnv(), userDataDir });
     await waitForCcrPresets(ctx.window, ["CCR Default"]);
 
     await goToClaudeSettings();
-    await addCustomPreset(ctx.window);
-    await ctx.window.waitForTimeout(T_SETTLE);
-    await goToClaudeSettings();
+    // beforeAll creates custom presets for this serial suite. Reusing those
+    // avoids racing the CCR config watcher, which can remount this section
+    // while the Add button is being clicked.
+    await expect(ctx.window.locator(SEL.preset.customBadge).first()).toBeVisible({
+      timeout: T_MEDIUM,
+    });
 
-    const trigger = ctx.window.locator(SEL.preset.selectorTrigger);
-    await expect(trigger).toBeVisible({ timeout: T_MEDIUM });
-
-    // Open the popover to inspect options.
-    await trigger.click();
-    const listbox = ctx.window.locator(SEL.preset.selectorListbox);
-    await expect(listbox).toBeVisible({ timeout: T_SHORT });
-
-    const hasCcr = await listbox
-      .locator('[role="option"]', { hasText: "CCR Default" })
-      .first()
-      .count()
-      .catch(() => 0);
-    expect(hasCcr).toBeGreaterThanOrEqual(1);
-
-    const optionCount = await listbox.locator('[role="option"]').count();
-    expect(optionCount).toBeGreaterThanOrEqual(3);
-
-    await ctx.window.keyboard.press("Escape");
-    await expect(listbox).not.toBeVisible({ timeout: T_SHORT });
+    // The CCR watcher may remount this section while settling. Use the shared
+    // selector helper, which retries against the current trigger instance.
+    const optionLabels = await getPresetOptionLabels(ctx.window);
+    expect(optionLabels.some((label) => label.includes("CCR Default"))).toBe(true);
+    expect(optionLabels.length).toBeGreaterThanOrEqual(3);
   });
 
   test("60. First option in dropdown is Default (no overrides)", async () => {

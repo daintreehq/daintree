@@ -43,7 +43,7 @@ describe("readLinuxOnBattery", () => {
 
   it("counts a USB supply as online for any non-zero value", async () => {
     await supply("BAT0", { type: "Battery", status: "Charging" });
-    await supply("ucsi-source-psy-USBC000:001", { type: "USB", online: "2" });
+    await supply("ucsi-source-psy-USBC000_001", { type: "USB", online: "2" });
 
     await expect(readLinuxOnBattery(root)).resolves.toBe(false);
   });

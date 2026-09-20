@@ -1333,7 +1333,7 @@ describe("PluginManagerView", () => {
       expect(sectionExists("Forge providers")).toBe(false);
     });
 
-    it("keeps a disabled plugin in its category section with a Disabled badge", async () => {
+    it("keeps a disabled plugin in its category section with its switch off", async () => {
       (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
         named({
           manifest: { name: "core.github", displayName: "Core GitHub", category: "forge" },
