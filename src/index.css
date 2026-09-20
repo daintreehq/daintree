@@ -2823,6 +2823,25 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     background-color: ButtonText !important;
   }
 
+  /* The one mark whose emptiness IS the state.
+     The sidebar footer's readout says working with a filled dot and idle with a
+     hollow ring, so the shape carries the distinction where colour cannot — and
+     the blanket repaints above, written for marks whose fill would otherwise
+     vanish, would flatten that ring into a solid disc and lose the only signal
+     forced colors had left. Keep its interior the surface colour and let the
+     border do the telling. Matched pair, same reasoning as above: Canvas
+     outside a control, ButtonFace within one. */
+  .status-mark[data-working="false"] {
+    background-color: Canvas !important;
+    border-color: CanvasText !important;
+  }
+
+  button .status-mark[data-working="false"],
+  [role="button"] .status-mark[data-working="false"] {
+    background-color: ButtonFace !important;
+    border-color: ButtonText !important;
+  }
+
   /* Project-switcher row marks. The solid states are a CSS background, which
      forced colors pushes toward Canvas, so the whole 8px slot would read as
      empty. Repaint them as a CanvasText disc: hue is gone here either way, and

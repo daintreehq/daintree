@@ -3,15 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, render } from "@testing-library/react";
 
 vi.mock("@/components/Project", () => ({
-  ProjectResourceBadge: ({ statusItems }: { statusItems: React.ReactNode }) => (
-    <div data-testid="badge" data-has-status={statusItems === null ? "false" : "true"}>
-      {statusItems}
-    </div>
+  ProjectResourceBadge: ({ holdingWakeLock }: { holdingWakeLock?: boolean }) => (
+    <div data-testid="badge" data-holding={String(holdingWakeLock)} />
   ),
-}));
-
-vi.mock("../KeepAwakeIndicator", () => ({
-  KeepAwakeIndicator: () => <span data-testid="keep-awake-indicator" />,
 }));
 
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
@@ -19,26 +13,26 @@ import { SidebarStatusBar } from "../SidebarStatusBar";
 
 afterEach(() => {
   cleanup();
-  useKeepAwakeStore.setState({ visible: false });
+  useKeepAwakeStore.setState({ visible: false, state: null, loadError: null });
 });
 
 describe("SidebarStatusBar", () => {
-  it("passes null, not an empty element, while nothing is held", () => {
-    const { getByTestId, queryByTestId } = render(<SidebarStatusBar />);
-
-    // The badge keys its row on null, so an always-truthy element here would
-    // leave an empty footer row behind.
-    expect(getByTestId("badge").getAttribute("data-has-status")).toBe("false");
-    expect(queryByTestId("keep-awake-indicator")).toBeNull();
-  });
-
-  it("shows the keep-awake indicator while the hold is visible", () => {
-    const { getByTestId, queryByTestId } = render(<SidebarStatusBar />);
+  it("passes the hold through for the popover to explain", () => {
+    const { getByTestId } = render(<SidebarStatusBar />);
+    expect(getByTestId("badge").getAttribute("data-holding")).toBe("false");
 
     act(() => useKeepAwakeStore.getState().setVisible(true));
-    expect(getByTestId("keep-awake-indicator")).not.toBeNull();
+    expect(getByTestId("badge").getAttribute("data-holding")).toBe("true");
+  });
 
-    act(() => useKeepAwakeStore.getState().setVisible(false));
-    expect(queryByTestId("keep-awake-indicator")).toBeNull();
+  it("hands the badge no activity verdict of its own", () => {
+    // The hold looked like a ready-made "is Daintree working", but
+    // PowerSaveBlockerService releases it on battery by default while agents
+    // keep working — so it must not reach the badge as anything but the hold.
+    const { getByTestId } = render(<SidebarStatusBar />);
+    const badge = getByTestId("badge");
+
+    expect(badge.getAttribute("data-working")).toBeNull();
+    expect(badge.getAttribute("data-active")).toBeNull();
   });
 });

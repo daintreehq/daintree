@@ -1,10 +1,12 @@
-import { useEffect, useState, useCallback, useRef, useMemo, type ReactNode } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { ChevronDown, ChevronRight, Coffee, TriangleAlert } from "lucide-react";
 import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { logError } from "@/utils/logger";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
+import { actionService } from "@/services/ActionService";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type {
@@ -13,7 +15,6 @@ import type {
 } from "@shared/types/memoryAccounting";
 import type { Project } from "@shared/types";
 import {
-  type MemoryState,
   type TrendDirection,
   type MemoryThresholds,
   FALLBACK_THRESHOLDS,
@@ -38,11 +39,20 @@ function formatUptime(seconds: number): string {
   return `${m}m`;
 }
 
-const STATE_DOT_CLASSES: Record<MemoryState, string> = {
-  normal: "bg-daintree-text/25",
-  elevated: "bg-daintree-text/25",
-  critical: "bg-daintree-text/25",
-};
+/**
+ * The footer mark, in the app's existing activity vocabulary: filled means work
+ * in flight, a hollow ring means idle. `ActivityLight` established that pairing
+ * so state survives WCAG 1.4.1 on shape alone, and reusing it here means the two
+ * activity marks in the product agree instead of each inventing a language.
+ *
+ * `text-text-secondary` rather than a percentage of the body colour: the old
+ * `bg-daintree-text/25` measured 2.02:1 against the footer in Daintree and
+ * 1.66:1 in Bondi, under the 3:1 floor a graphical state indicator owes. This
+ * token is the theme's own answer to "muted but readable" and is defined in all
+ * fifteen.
+ */
+const WORKING_DOT_CLASS = "bg-text-secondary";
+const IDLE_DOT_CLASS = "border border-text-secondary bg-transparent";
 
 interface AggregateStats {
   runningProjects: number;
@@ -144,7 +154,7 @@ function MemorySummary({
         />
       )}
       {workloadNote !== null && (
-        <div className="text-4xs text-status-warning/70 leading-tight">{workloadNote}</div>
+        <div className="text-4xs text-status-warning leading-tight">{workloadNote}</div>
       )}
       {systemAvailableMB !== null && (
         <MemoryRow label="System available" value={formatMemory(systemAvailableMB)} />
@@ -267,7 +277,11 @@ function DiagnosticsSection({
         className="text-3xs text-text-secondary font-medium hover:text-text-primary transition-colors flex items-center gap-1"
         onClick={() => setExpanded(!expanded)}
       >
-        <span className="text-[8px]">{expanded ? "\u25BC" : "\u25B6"}</span>
+        {expanded ? (
+          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+        ) : (
+          <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+        )}
         Diagnostics
       </button>
       {expanded && (
@@ -275,7 +289,7 @@ function DiagnosticsSection({
           <div>{trendText}</div>
           <div>Uptime: {formatUptime(diagnosticsInfo.uptimeSeconds)}</div>
           {diagnosticsInfo.eventLoopP99Ms > 50 && (
-            <div className="text-status-warning/80">
+            <div className="text-status-warning">
               Event loop P99: {diagnosticsInfo.eventLoopP99Ms}ms
             </div>
           )}
@@ -287,14 +301,21 @@ function DiagnosticsSection({
 
 interface ProjectResourceBadgeProps {
   /**
-   * Ambient status marks pinned to the right of the footer row. Pass null when
-   * there are none — the row exists for either half, so a status can show before
-   * the first stats read lands or while no project is running.
+   * Whether Daintree is currently holding the machine awake. Drives the
+   * popover's explanation only — never the mark.
+   *
+   * It looked like the right source for "is Daintree working", since main
+   * raises the blocker while agents work. It is not: `isAllowedByPolicy` is
+   * `enabled && (!onBatteryPower || config.onBattery)`, and `onBattery`
+   * defaults to false — so on an unplugged laptop the hold is released while
+   * agents keep working, and the mark would have read idle through an entire
+   * session. The hold is the FSM's verdict *plus* a power policy; the mark
+   * wants the verdict alone.
    */
-  statusItems?: ReactNode;
+  holdingWakeLock?: boolean;
 }
 
-export function ProjectResourceBadge({ statusItems = null }: ProjectResourceBadgeProps = {}) {
+export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourceBadgeProps = {}) {
   const [stats, setStats] = useState<AggregateStats>({
     runningProjects: 0,
     totalMemoryMB: 0,
@@ -314,6 +335,24 @@ export function ProjectResourceBadge({ statusItems = null }: ProjectResourceBadg
   const samplesRef = useRef<number[]>([]);
   // Mirror into state so JSX doesn't read the ref during render (React Compiler).
   const [samples, setSamples] = useState<number[]>([]);
+
+  /**
+   * How many agents the FSM currently calls working, across every project.
+   *
+   * Read straight off the store rather than through `fetchStats`: the stats
+   * push arrives on its own channel, so the mark turns over as soon as an agent
+   * starts or settles instead of trailing the badge's 10s poll. It costs no
+   * extra IPC — `ProjectStatusMap` already carries this for every project.
+   *
+   * This is the same passive PTY heuristic the keep-awake service runs on, so
+   * it is no less trustworthy than the hold it replaced, and it has neither the
+   * battery policy nor the enabled flag sitting in front of it.
+   */
+  const activeAgents = useProjectStatsStore((state) => {
+    let total = 0;
+    for (const entry of Object.values(state.stats)) total += entry.activeAgentCount ?? 0;
+    return total;
+  });
 
   const memoryState = getMemoryState(stats.totalMemoryMB, thresholds);
   const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
@@ -546,61 +585,146 @@ export function ProjectResourceBadge({ statusItems = null }: ProjectResourceBadg
     return () => clearInterval(tick);
   }, [open]);
 
-  const showProjects = !isLoading && stats.runningProjects > 0;
+  const isWorking = activeAgents > 0;
 
-  // The Popover root outlives its trigger now that the status cluster keeps the
-  // tree mounted, and Radix's anchor ref never clears on unmount — so an open
-  // popover would stay anchored to a detached node with nowhere to return
-  // focus. Close it ourselves when the readout goes away.
+  // The row used to vanish whenever nothing was running, which made "idle" and
+  // "this strip isn't here" the same picture — and idle is half of the question
+  // the footer exists to answer. It now stays put once the first read lands and
+  // says so.
+  //
+  // `|| isWorking` because the two halves arrive on different channels: the
+  // count comes from the memory poll, agent activity from the stats push. A
+  // machine whose metrics read is failing would otherwise hide known activity
+  // behind an unrelated outage.
+  const showReadout = !isLoading || isWorking;
+
+  // The Popover root outlives its trigger, and Radix's anchor ref never clears
+  // on unmount — so an open popover would stay anchored to a detached node with
+  // nowhere to return focus. Close it ourselves when the readout goes away.
   useEffect(() => {
-    if (!showProjects) setOpen(false);
-  }, [showProjects]);
+    if (!showReadout) setOpen(false);
+  }, [showReadout]);
 
-  if (!showProjects && statusItems === null) {
+  if (!showReadout) {
     return null;
   }
 
-  const statusCluster =
-    statusItems !== null ? (
-      <div
-        data-testid="sidebar-status-items"
-        className="ml-auto flex items-center gap-0.5 pr-2 shrink-0"
-      >
-        {statusItems}
-      </div>
-    ) : null;
+  // The count is a separate fact from the activity state and stays in words;
+  // the mark carries working versus idle.
+  //
+  // The empty-count branch reads from `isWorking`, not from the count alone.
+  // The mark turns over on the stats push while the count waits on the 10s
+  // memory poll, so the first agent started after an idle spell put a filled
+  // mark beside the word "Idle" for up to ten seconds — the label contradicting
+  // the mark right beside it. Both now come from the same verdict.
+  const readoutLabel =
+    stats.runningProjects > 0
+      ? `${stats.runningProjects} project${stats.runningProjects !== 1 ? "s" : ""} active`
+      : isWorking
+        ? "Working"
+        : "Idle";
 
-  // One tree for both shapes: swapping the root when the readout arrives or
-  // leaves would remount a status that is still showing, dropping its focus and
-  // its open tooltip.
+  // What assistive technology gets. The mark is the only thing that shows the
+  // working state visually, so without spelling it out here a session that goes
+  // from working to idle with its project count unchanged announces nothing.
+  const announcement =
+    stats.runningProjects > 0 ? `${isWorking ? "Working" : "Idle"}, ${readoutLabel}` : readoutLabel;
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <div
         data-sidebar-status-bar=""
-        className="border-t border-divider surface-chrome flex items-center shrink-0 w-full min-h-9"
+        className="border-t border-divider surface-chrome flex items-center shrink-0 w-full min-h-7"
       >
-        {showProjects && (
-          <PopoverTrigger asChild>
-            <button
-              data-status-readout=""
-              className="px-4 py-2.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-daintree-text/[0.02] transition-colors cursor-pointer"
-            >
-              <div className="flex items-center gap-2 min-w-0">
-                <span
-                  key={memoryState}
-                  className={`status-mark inline-flex h-2 w-2 rounded-full ${STATE_DOT_CLASSES[memoryState]} animate-diagnostics-flash shrink-0`}
-                />
-                <span className="text-3xs tabular-nums text-text-secondary font-medium truncate">
-                  {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
-                </span>
-              </div>
-            </button>
-          </PopoverTrigger>
+        <PopoverTrigger asChild>
+          <button
+            data-status-readout=""
+            aria-label={`${announcement} — open resource breakdown`}
+            className="px-4 py-1.5 flex items-center flex-1 min-w-0 self-stretch hover:bg-overlay-soft transition-colors cursor-pointer"
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              {/* Decorative: the working/idle state it encodes is carried in
+                  words by the label and the live region, so announcing the mark
+                  as well would say everything twice. */}
+              <span
+                key={`${isWorking}-${memoryState}`}
+                aria-hidden="true"
+                data-working={isWorking ? "true" : "false"}
+                className={`status-mark inline-flex h-2 w-2 rounded-full shrink-0 ${
+                  isWorking ? WORKING_DOT_CLASS : IDLE_DOT_CLASS
+                } animate-diagnostics-flash`}
+              />
+              <span className="text-2xs tabular-nums text-text-secondary font-medium truncate">
+                {readoutLabel}
+              </span>
+            </div>
+          </button>
+        </PopoverTrigger>
+        {/* The live region is a sibling of the trigger, not its child and not
+            its ancestor. Wrapping the button would re-announce the whole strip
+            on every press; nesting the region inside it puts a live region in a
+            control's own subtree. Visually redundant with the label above, so
+            it is screen-reader only.
+
+            It announces the working state in words, not just the count: the
+            mark is the only thing that carries it visually, and a run whose
+            project count never changes would otherwise go from working to idle
+            in complete silence. */}
+        <span role="status" className="sr-only">
+          {announcement}
+        </span>
+        {memoryState === "critical" && (
+          <span
+            data-testid="sidebar-status-items"
+            className="ml-auto flex items-center gap-1 pr-3 shrink-0 text-2xs font-medium text-text-primary"
+          >
+            {/* The triangle carries the severity colour; the words stay neutral.
+                Status-coloured body text misses 4.5:1 on most of the fifteen
+                themes — there is no status *text* ramp — and "High memory" has
+                to be readable on all of them. */}
+            <TriangleAlert className="h-3 w-3 shrink-0 text-status-warning" aria-hidden="true" />
+            High memory
+          </span>
         )}
-        {statusCluster}
       </div>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-72 p-3">
         <div className="space-y-3">
+          {/* The keep-awake hold used to be a coffee cup pinned to the strip,
+              where it cost a permanent unlabelled glyph to say what the mark
+              now says. The explanation and its settings route survive here.
+
+              Mounted unconditionally, with only its wording changing: the hold
+              ends on main's schedule, so a row that appeared only while holding
+              could vanish under a keyboard user mid-popover — the same
+              focus-dropping problem the cup's own `useLayoutEffect` existed to
+              patch. The shared close-time restoration does not cover a child
+              disappearing while the popover stays open. */}
+          <button
+            type="button"
+            onClick={() =>
+              void actionService.dispatch(
+                "app.settings.openTab",
+                { tab: "general", subtab: "overview", sectionId: "general-keep-awake" },
+                { source: "user" }
+              )
+            }
+            className="flex w-full items-start gap-2 rounded-[var(--radius-sm)] p-1 text-left hover:bg-overlay-soft transition-colors"
+          >
+            <Coffee
+              className="h-3.5 w-3.5 shrink-0 mt-0.5 text-text-secondary"
+              aria-hidden="true"
+            />
+            <span className="flex flex-col gap-0.5 min-w-0">
+              <span className="text-2xs font-medium text-text-primary">
+                {holdingWakeLock ? "Keeping this machine awake" : "Not holding sleep off"}
+              </span>
+              <span className="text-3xs text-text-secondary leading-tight">
+                {holdingWakeLock
+                  ? "Idle sleep is held off while an agent is working. The display can still turn off."
+                  : "Idle sleep is allowed right now. Change when Daintree holds it off in settings."}
+              </span>
+            </span>
+          </button>
           {popoverData ? (
             <>
               <MemorySummary

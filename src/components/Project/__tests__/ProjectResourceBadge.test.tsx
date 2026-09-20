@@ -36,12 +36,20 @@ vi.mock("@/clients", () => ({
   },
 }));
 
-const statsStoreState: { stats: Record<string, { processCount: number }> } = { stats: {} };
-vi.mock("@/store/projectStatsStore", () => ({
-  useProjectStatsStore: {
-    getState: () => statsStoreState,
-  },
+// `vi.hoisted` because `vi.mock`'s factory is lifted above every const in the
+// file — a plain top-level binding is still in its temporal dead zone when the
+// factory runs, and the whole suite fails to collect.
+const statsStoreState = vi.hoisted(() => ({
+  stats: {} as Record<string, { processCount: number; activeAgentCount?: number }>,
 }));
+// The badge reads this both ways: `getState()` inside the poll for the project
+// count, and as a hook selector for live agent activity.
+vi.mock("@/store/projectStatsStore", () => {
+  const useProjectStatsStore = (selector: (s: typeof statsStoreState) => unknown) =>
+    selector(statsStoreState);
+  useProjectStatsStore.getState = () => statsStoreState;
+  return { useProjectStatsStore };
+});
 
 // Controlled-popover stub: `open` is mirrored onto the wrapper so tests can see
 // it, and any click inside opens it the way the real trigger would.
@@ -592,109 +600,102 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(container.textContent ?? "").not.toContain("project active");
   });
 
-  it("pins status items to the right of the readout without nesting them in the trigger", async () => {
+  it("keeps the readout in place with nothing running, rather than vanishing", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
-    statsStoreState.stats = { p1: { processCount: 1 } };
+    statsStoreState.stats = {};
 
-    const { container, getByTestId } = render(
-      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
-    );
-
+    const { container } = render(<ProjectResourceBadge />);
     await flush();
 
-    const trigger = container.querySelector("button");
-    expect(trigger?.textContent).toBe("1 project active");
-    // A button inside the trigger button is invalid markup and would open the
-    // popover on every status click.
-    expect(trigger?.contains(getByTestId("status-item"))).toBe(false);
+    // A row that disappears when idle makes "idle" and "this strip isn't here"
+    // the same picture, and idle is half the question the footer answers.
+    const readout = container.querySelector("[data-status-readout]");
+    expect(readout).not.toBeNull();
+    expect(readout?.textContent).toBe("Idle");
   });
 
-  it("keeps a showing status mounted when the readout arrives beside it", async () => {
-    let resolveProjects: (projects: Project[]) => void = () => {};
-    mockGetAll.mockReturnValue(
-      new Promise<Project[]>((resolve) => {
-        resolveProjects = resolve;
-      })
-    );
-    statsStoreState.stats = { p1: { processCount: 1 } };
+  it("marks working and idle differently, by more than colour", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1, activeAgentCount: 1 } };
 
-    const { container, getByTestId } = render(
-      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
-    );
+    const first = render(<ProjectResourceBadge />);
+    await flush();
+    const workingMark = first.container.querySelector(".status-mark")?.className ?? "";
+    first.unmount();
 
-    // Still loading: the status shows on its own, and takes focus.
-    const before = getByTestId("status-item");
-    expect(container.querySelectorAll("button").length).toBe(1);
-    before.focus();
+    statsStoreState.stats = { p1: { processCount: 1, activeAgentCount: 0 } };
+    const second = render(<ProjectResourceBadge />);
+    await flush();
+    const idleMark = second.container.querySelector(".status-mark")?.className ?? "";
 
-    await act(async () => {
-      resolveProjects([makeProject({ id: "p1", name: "Proj One" })]);
-    });
+    // The rule, not the palette: the two states must be distinguishable, and
+    // one of them must differ in shape so the distinction survives WCAG 1.4.1
+    // and a monochrome or forced-colors rendering.
+    expect(workingMark).not.toBe(idleMark);
+    expect(/\bborder\b/.test(workingMark)).not.toBe(/\bborder\b/.test(idleMark));
+  });
+
+  it("reads work from agent activity, not from processes being up", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    // Processes are up but no agent is working — a shell sitting at a prompt.
+    statsStoreState.stats = { p1: { processCount: 4, activeAgentCount: 0 } };
+
+    const { container } = render(<ProjectResourceBadge />);
     await flush();
 
+    const mark = container.querySelector(".status-mark");
+    expect(mark?.getAttribute("data-working")).toBe("false");
+    // ...and the count is still reported, because it is a separate fact.
     expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
-    // Same node, not a lookalike: a remount would have dropped focus to the body.
-    expect(getByTestId("status-item")).toBe(before);
-    expect(document.activeElement).toBe(before);
   });
 
-  it("still shows status items while there is no readout to show", async () => {
+  it("spells the working state out for assistive technology", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
-    statsStoreState.stats = {};
+    statsStoreState.stats = { p1: { processCount: 1, activeAgentCount: 2 } };
 
-    const { container, getByTestId } = render(
-      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
-    );
-
+    const { container } = render(<ProjectResourceBadge />);
     await flush();
 
-    // The status is the only control: no "0 projects active" trigger beside it.
-    const buttons = Array.from(container.querySelectorAll("button"));
-    expect(buttons).toEqual([getByTestId("status-item")]);
-    expect(container.querySelector("[data-status-readout]")).toBeNull();
+    // The mark is the only thing carrying working/idle visually, so a run whose
+    // project count never changes would otherwise flip state in silence.
+    const live = container.querySelector('[role="status"]');
+    expect(live?.textContent).toContain("Working");
+    expect(container.querySelector(".status-mark")?.getAttribute("aria-hidden")).toBe("true");
   });
 
-  it("closes an open popover when the readout that anchors it goes away", async () => {
+  it("announces the count without wrapping the trigger button in a live region", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     statsStoreState.stats = { p1: { processCount: 1 } };
 
-    const { container } = render(
-      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
-    );
+    const { container } = render(<ProjectResourceBadge />);
     await flush();
 
-    const readout = container.querySelector<HTMLButtonElement>("[data-status-readout]");
-    await act(async () => {
-      readout?.click();
-    });
-    expect(container.querySelector("[data-popover-open]")?.getAttribute("data-popover-open")).toBe(
-      "true"
-    );
+    const live = container.querySelector('[role="status"]');
+    expect(live?.textContent).toContain("1 project active");
+    // A live region containing a control re-announces the whole strip every
+    // time that control is pressed.
+    expect(live?.querySelector("button")).toBeNull();
+    // And not inside one either — a live region in a control's own subtree.
+    expect(live?.closest("button")).toBeNull();
+  });
 
-    // The status cluster keeps the Popover root mounted, so the trigger can
-    // leave under an open popover — Radix would keep it anchored to the
-    // detached node with nowhere to return focus.
-    statsStoreState.stats = {};
+  it("raises a memory exception only once the threshold trips, outside the trigger", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+    mockGetHardwareInfo.mockResolvedValue({ totalMemoryBytes: 16 * 1024 ** 3, logicalCpuCount: 8 });
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 100 });
+
+    const { container } = render(<ProjectResourceBadge />);
+    await flush();
+    expect(container.textContent ?? "").not.toContain("High memory");
+
+    // 0.33 of 16GB is ~5.4GB; 9GB is past it.
+    mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 9_000 });
     await advance(10_000);
 
-    expect(container.querySelector("[data-status-readout]")).toBeNull();
-    expect(container.querySelector("[data-popover-open]")?.getAttribute("data-popover-open")).toBe(
-      "false"
-    );
-  });
-
-  it("drops the row when the last status leaves and there is no readout", async () => {
-    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
-    statsStoreState.stats = {};
-
-    const { container, rerender } = render(
-      <ProjectResourceBadge statusItems={<button data-testid="status-item">s</button>} />
-    );
-    await flush();
-
-    rerender(<ProjectResourceBadge statusItems={null} />);
-
-    expect(container.firstElementChild).toBeNull();
+    expect(container.textContent ?? "").toContain("High memory");
+    const trigger = container.querySelector("[data-status-readout]");
+    expect(trigger?.textContent ?? "").not.toContain("High memory");
   });
 
   it("removes visibility listener on unmount", () => {

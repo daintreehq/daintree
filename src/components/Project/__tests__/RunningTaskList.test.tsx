@@ -141,12 +141,31 @@ describe("RunningTaskList overflow", () => {
     expect(counts()).toEqual(commands.map(() => 1));
   });
 
+  it("gives each row action its own keyboard activation", () => {
+    seedTasks(8);
+    render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+    openOverflow();
+
+    const row = within(overflowList()).getByText("cmd-7").closest("[data-task-row]")!;
+    const stop = within(row as HTMLElement).getByLabelText("Stop task");
+
+    // The row used to be a role="button" wrapping these actions, and its
+    // Enter/Space handler preventDefault()ed the keydown on its way up — so
+    // keyboard-stopping a task silently focused its terminal instead. Nothing
+    // above an action may swallow that key.
+    fireEvent.keyDown(stop, { key: "Enter" });
+    fireEvent.click(stop);
+
+    expect(killMock).toHaveBeenCalledWith("task-7");
+    expect(storeState.activateTerminal).not.toHaveBeenCalled();
+  });
+
   it("stops a hidden task, killing that task's own terminal", () => {
     seedTasks(8);
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-7").closest('[role="button"]')!;
+    const row = within(overflowList()).getByText("cmd-7").closest("[data-task-row]")!;
     fireEvent.click(within(row as HTMLElement).getByLabelText("Stop task"));
     expect(killMock).toHaveBeenCalledWith("task-7");
   });
@@ -156,7 +175,7 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-6").closest('[role="button"]')!;
+    const row = within(overflowList()).getByText("cmd-6").closest("[data-task-row]")!;
     fireEvent.click(within(row as HTMLElement).getByLabelText("Restart task"));
     expect(storeState.restartTerminal).toHaveBeenCalledWith("task-6");
   });
@@ -166,7 +185,7 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-7").closest('[role="button"]')!;
+    const row = within(overflowList()).getByText("cmd-7").closest("[data-task-row]")!;
     fireEvent.click(within(row as HTMLElement).getByLabelText("Dismiss"));
     expect(screen.queryByText("cmd-7")).toBeNull();
     expect(screen.getByTestId("running-task-overflow").textContent).toContain("2");
@@ -177,7 +196,7 @@ describe("RunningTaskList overflow", () => {
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
     openOverflow();
 
-    const row = within(overflowList()).getByText("cmd-5").closest('[role="button"]')!;
+    const row = within(overflowList()).getByText("cmd-5").closest("[data-task-row]")!;
     fireEvent.click(within(row as HTMLElement).getByLabelText("Focus terminal"));
     expect(storeState.activateTerminal).toHaveBeenCalledWith("task-5");
     expect(screen.queryByText("cmd-6")).toBeNull();
