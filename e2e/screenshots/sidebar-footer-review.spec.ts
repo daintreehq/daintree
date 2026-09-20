@@ -166,10 +166,8 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
     for (const fixture of FIXTURES) {
       const shell = await open(page, fixture, theme);
 
-      // `collapsed` is a local-state fixture: QuickRun defaults to expanded and
-      // keeps `isExpanded` in a `useState` with no store and no persistence, so
-      // the only way to reach the state is to click the header the way a user
-      // would.
+      // QuickRun rests collapsed, so the open state is only reachable by
+      // clicking the disclosure the way a user would.
       if (EXPANDED.has(fixture)) {
         await expandPanel(page);
       }
@@ -210,8 +208,8 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
     await page.waitForTimeout(250);
     written.push(await snap(page.locator("[data-preview-shell]"), `suggestions-${theme}.png`));
 
-    // The status row on its own, at 3x the size, so the dot and the cup can be
-    // judged as glyphs rather than as smudges.
+    // The status row on its own, at 3x the size, so the dot can be judged as a
+    // glyph rather than as a smudge.
     await open(page, "many-projects", theme);
     written.push(await snap(page.locator("[data-sidebar-status-bar]"), `status-row-${theme}.png`));
   }

@@ -383,7 +383,7 @@ installPreviewShims({
       processes: [],
     }),
     getHardwareInfo: async () => ({ totalMemoryBytes: 64 * 1024 ** 3 }),
-    getDiagnostics: async () => ({
+    getDiagnosticsInfo: async () => ({
       uptimeSeconds: 7_400,
       eventLoopP99Ms: 12,
       systemAvailableMB: 18_400,
