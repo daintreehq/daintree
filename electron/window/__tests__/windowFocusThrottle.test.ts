@@ -7,18 +7,17 @@ import type { IdleTerminalNotificationService } from "../../services/IdleTermina
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Electron's app.on() signature uses any
 type Handler = (...args: any[]) => void;
 
+// These tests pin darwin, so nothing here should reach the sysfs branch at all.
+// The mock is the backstop: unmocked, a stray Linux run would start a real
+// 30s poll against /sys inside the test process.
 const linuxSource = vi.hoisted(() => ({
-  onChange: null as ((onBattery: boolean) => void) | null,
-  refresh: vi.fn(async () => {}),
-  dispose: vi.fn(),
+  watches: [] as Array<{ onChange: (onBattery: boolean) => void }>,
 }));
 
-// Hoisted, so it survives the `vi.resetModules()` each test opens with. Without
-// it the Linux branch of setupPowerMonitor would start a real sysfs poll here.
 vi.mock("../../services/linuxPowerSource.js", () => ({
   watchLinuxPowerSource: vi.fn((onChange: (onBattery: boolean) => void) => {
-    linuxSource.onChange = onChange;
-    return { refresh: linuxSource.refresh, dispose: linuxSource.dispose };
+    linuxSource.watches.push({ onChange });
+    return { refresh: vi.fn(async () => {}), dispose: vi.fn() };
   }),
 }));
 
@@ -138,7 +137,7 @@ describe("WindowFocusThrottle", () => {
     // These tests drive Electron's battery events, which only exist off Linux —
     // and CI runs on Linux, so the platform is named rather than inherited.
     setPlatform("darwin");
-    linuxSource.onChange = null;
+    linuxSource.watches.length = 0;
     appHandlers.clear();
     powerHandlers.clear();
     windows = [];

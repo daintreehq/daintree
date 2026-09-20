@@ -5,18 +5,22 @@ import type { WorkspaceClient } from "../../services/WorkspaceClient.js";
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type PowerHandler = (...args: any[]) => void;
 
+// Every watch is recorded separately: the mocked factory is cached across the
+// `vi.resetModules()` each test opens with, so a shared spy would carry its call
+// history between tests and make order decide whether an assertion holds.
 const linuxSource = vi.hoisted(() => ({
-  onChange: null as ((onBattery: boolean) => void) | null,
-  refresh: vi.fn(async () => {}),
-  dispose: vi.fn(),
+  watches: [] as Array<{
+    onChange: (onBattery: boolean) => void;
+    refresh: ReturnType<typeof vi.fn>;
+    dispose: ReturnType<typeof vi.fn>;
+  }>,
 }));
 
-// Hoisted, so it survives the `vi.resetModules()` each test opens with —
-// that clears the module cache, never the mock registry.
 vi.mock("../../services/linuxPowerSource.js", () => ({
   watchLinuxPowerSource: vi.fn((onChange: (onBattery: boolean) => void) => {
-    linuxSource.onChange = onChange;
-    return { refresh: linuxSource.refresh, dispose: linuxSource.dispose };
+    const watch = { onChange, refresh: vi.fn(async () => {}), dispose: vi.fn() };
+    linuxSource.watches.push(watch);
+    return watch;
   }),
 }));
 
@@ -78,9 +82,7 @@ describe("setupPowerMonitor", () => {
     // platform it means rather than inheriting the runner's.
     setPlatform("darwin");
     mockIsOnBatteryPower = vi.fn(() => false);
-    linuxSource.onChange = null;
-    linuxSource.refresh.mockClear();
-    linuxSource.dispose.mockClear();
+    linuxSource.watches.length = 0;
     powerHandlers.clear();
     vi.resetModules();
 
@@ -131,9 +133,11 @@ describe("setupPowerMonitor", () => {
   });
 
   afterEach(() => {
-    clearResumeTimeout();
-    events.removeAllListeners();
+    // First, and guarded: a beforeEach that threw before the dynamic imports
+    // landed would otherwise strand the faked platform on the next test.
     Object.defineProperty(process, "platform", realPlatform);
+    clearResumeTimeout?.();
+    events?.removeAllListeners();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -597,13 +601,14 @@ describe("setupPowerMonitor", () => {
   describe("battery observation", () => {
     it("seeds from Electron and follows its events off Linux", async () => {
       const { getPowerPolicy } = await import("../powerPolicy.js");
-      const { watchLinuxPowerSource } = await import("../../services/linuxPowerSource.js");
       mockIsOnBatteryPower.mockReturnValue(true);
 
       setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
-
       expect(getPowerPolicy()).toMatchObject({ onBattery: true, level: "saving" });
-      expect(watchLinuxPowerSource).not.toHaveBeenCalled();
+
+      powerHandlers.get("on-ac")!();
+      expect(getPowerPolicy()).toMatchObject({ onBattery: false, level: "active" });
+      expect(linuxSource.watches).toHaveLength(0);
     });
 
     it("takes the reading from sysfs on Linux, where Electron reports AC regardless", async () => {
@@ -611,12 +616,14 @@ describe("setupPowerMonitor", () => {
       const { getPowerPolicy } = await import("../powerPolicy.js");
 
       setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+      const watch = linuxSource.watches[0]!;
+      expect(watch).toBeDefined();
       expect(getPowerPolicy()).toMatchObject({ onBattery: false, level: "active" });
 
-      linuxSource.onChange!(true);
+      watch.onChange(true);
       expect(getPowerPolicy()).toMatchObject({ onBattery: true, level: "saving" });
 
-      linuxSource.onChange!(false);
+      watch.onChange(false);
       expect(getPowerPolicy()).toMatchObject({ onBattery: false, level: "active" });
     });
 
@@ -635,10 +642,33 @@ describe("setupPowerMonitor", () => {
     it("re-reads sysfs on resume rather than waiting out the poll interval", () => {
       setPlatform("linux");
       setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
+      const watch = linuxSource.watches[0]!;
+      // Counted from here, so a refresh moved into setup would not pass for it.
+      watch.refresh.mockClear();
 
       powerHandlers.get("resume")!();
 
-      expect(linuxSource.refresh).toHaveBeenCalledTimes(1);
+      expect(watch.refresh).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a battery reading that lands on resume through the wake recovery", async () => {
+      setPlatform("linux");
+      const { getPowerPolicy } = await import("../powerPolicy.js");
+      const workspaceClient = createMockWorkspaceClient();
+      setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => workspaceClient });
+      const watch = linuxSource.watches[0]!;
+      watch.refresh.mockImplementation(async () => {
+        watch.onChange(true);
+      });
+
+      powerHandlers.get("suspend")!();
+      powerHandlers.get("resume")!();
+      await vi.advanceTimersByTimeAsync(2000);
+
+      // Recovery re-reads the windows; it must not re-read the power source and
+      // overwrite what sysfs reported on the way in.
+      expect(getPowerPolicy()).toMatchObject({ onBattery: true, level: "saving" });
+      expect(mockIsOnBatteryPower).not.toHaveBeenCalled();
     });
 
     it("does not read sysfs on resume off Linux", () => {
@@ -646,17 +676,26 @@ describe("setupPowerMonitor", () => {
 
       powerHandlers.get("resume")!();
 
-      expect(linuxSource.refresh).not.toHaveBeenCalled();
+      expect(linuxSource.watches).toHaveLength(0);
     });
 
-    it("disposes the previous sysfs watch if set up again", () => {
+    it("disposes the previous sysfs watch when set up again and keeps the new one", () => {
       setPlatform("linux");
       setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
-      expect(linuxSource.dispose).not.toHaveBeenCalled();
-
       setupPowerMonitor({ getPtyClient: () => null, getWorkspaceClient: () => null });
 
-      expect(linuxSource.dispose).toHaveBeenCalledTimes(1);
+      expect(linuxSource.watches).toHaveLength(2);
+      const [first, second] = linuxSource.watches as [
+        (typeof linuxSource.watches)[number],
+        (typeof linuxSource.watches)[number],
+      ];
+      expect(first.dispose).toHaveBeenCalledTimes(1);
+      expect(second.dispose).not.toHaveBeenCalled();
+
+      // The surviving watch is the new one, not the disposed one.
+      powerHandlers.get("resume")!();
+      expect(second.refresh).toHaveBeenCalledTimes(1);
+      expect(first.refresh).not.toHaveBeenCalled();
     });
   });
 });
