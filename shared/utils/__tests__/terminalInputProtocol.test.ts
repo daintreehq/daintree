@@ -4,6 +4,7 @@ import {
   BRACKETED_PASTE_START,
   PASTE_THRESHOLD_CHARS,
   containsFullBracketedPaste,
+  formatForTerminalPaste,
   formatWithBracketedPaste,
   neutralizeControlCharacters,
   getSoftNewlineSequence,
@@ -154,5 +155,89 @@ describe("neutralizeControlCharacters", () => {
     const wrapped = formatWithBracketedPaste("one\rtwo\rthree");
     const body = wrapped.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
     expect(body).toBe("one\rtwo\rthree");
+  });
+});
+
+describe("formatForTerminalPaste", () => {
+  const ESC = String.fromCharCode(0x1b);
+  const ETX = String.fromCharCode(0x03);
+  const DEL = String.fromCharCode(0x7f);
+  const unwrapped = { bracketedPasteMode: false };
+  const wrapped = { bracketedPasteMode: true };
+
+  describe("unwrapped", () => {
+    it("passes through text with nothing to fold or neutralize", () => {
+      expect(formatForTerminalPaste("", unwrapped)).toBe("");
+      expect(formatForTerminalPaste("npm run dev", unwrapped)).toBe("npm run dev");
+    });
+
+    it("keeps a tab, which is indentation rather than an action", () => {
+      expect(formatForTerminalPaste("a\tb", unwrapped)).toBe("a\tb");
+    });
+
+    it("submits each line for every line ending in use", () => {
+      // The reason the fold runs before neutralisation: a bare CR is a line
+      // ending here, not an action character, so it has to survive as one.
+      expect(formatForTerminalPaste("one\ntwo", unwrapped)).toBe("one\rtwo");
+      expect(formatForTerminalPaste("one\r\ntwo", unwrapped)).toBe("one\rtwo");
+      expect(formatForTerminalPaste("one\rtwo", unwrapped)).toBe("one\rtwo");
+    });
+
+    it("folds a mixture of line endings to one CR each", () => {
+      expect(formatForTerminalPaste("one\r\ntwo\rthree\nfour", unwrapped)).toBe(
+        "one\rtwo\rthree\rfour"
+      );
+    });
+
+    it("preserves blank lines and edge newlines rather than trimming them", () => {
+      // A dropped trailing newline is a command that does not run; an added one
+      // is a command that runs twice.
+      expect(formatForTerminalPaste("\na\n\nb\n", unwrapped)).toBe("\ra\r\rb\r");
+    });
+
+    it("neutralizes the control characters around the line structure", () => {
+      const safe = formatForTerminalPaste(`ls${ESC}[201~${ETX}\nrm${DEL}`, unwrapped);
+
+      expect(safe).toBe("ls␛[201~␃\rrm␡");
+      expect(safe).not.toContain(ESC);
+      expect(safe).not.toContain(ETX);
+    });
+
+    it("adds no wrapper, whatever the length", () => {
+      const long = "x".repeat(PASTE_THRESHOLD_CHARS + 1);
+
+      expect(formatForTerminalPaste(long, unwrapped)).toBe(long);
+      expect(formatForTerminalPaste(long, unwrapped)).not.toContain(ESC);
+    });
+  });
+
+  describe("wrapped", () => {
+    it("produces the same bytes as the wrapper it delegates to", () => {
+      expect(formatForTerminalPaste("hello", wrapped)).toBe(formatWithBracketedPaste("hello"));
+      expect(formatForTerminalPaste("", wrapped)).toBe(
+        `${BRACKETED_PASTE_START}${BRACKETED_PASTE_END}`
+      );
+    });
+
+    it("leaves the caller's line endings alone inside the wrapper", () => {
+      // Unwrapped, these become submits. Wrapped, `\r` is the separator the
+      // program reads as data, so the mode has to decide and not the caller.
+      const out = formatForTerminalPaste("one\r\ntwo\rthree\nfour", wrapped);
+      const body = out.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+
+      expect(body).toBe("one\r\ntwo\rthree\nfour");
+    });
+
+    it("neutralizes an embedded terminator so the wrapper cannot be escaped", () => {
+      const out = formatForTerminalPaste(`before${BRACKETED_PASTE_END}${ETX}after`, wrapped);
+
+      expect(out.split(BRACKETED_PASTE_END).length - 1).toBe(1);
+      expect(out.endsWith(BRACKETED_PASTE_END)).toBe(true);
+      const body = out.slice(BRACKETED_PASTE_START.length, -BRACKETED_PASTE_END.length);
+      expect(body).not.toContain(ESC);
+      expect(body).not.toContain(ETX);
+      expect(body).toContain("before");
+      expect(body).toContain("after");
+    });
   });
 });

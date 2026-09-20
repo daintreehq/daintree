@@ -2,6 +2,7 @@
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
+import { BRACKETED_PASTE_END, BRACKETED_PASTE_START } from "@shared/utils/terminalInputProtocol";
 
 const { useWorktreeStoreOptionalMock, managed, writeMock, notifyUserInputMock } = vi.hoisted(
   () => ({
@@ -101,5 +102,46 @@ describe("send to agent, target without bracketed paste", () => {
     sendFromSourceToTarget("one\r\ntwo\rthree\nfour");
 
     expect(writeMock).toHaveBeenCalledWith("b", "one\rtwo\rthree\rfour");
+  });
+});
+
+describe("send to agent, wrapped and unreadable targets", () => {
+  beforeEach(() => {
+    useWorktreeStoreOptionalMock.mockImplementation(
+      (_selector: unknown, fallback: unknown) => fallback
+    );
+    writeMock.mockReset();
+    notifyUserInputMock.mockReset();
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  });
+
+  afterEach(() => {
+    cleanup();
+    usePaletteStore.setState({ activePaletteId: null });
+    usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  });
+
+  it("leaves line endings alone inside the wrapper, where they are data", () => {
+    managed.value = { terminal: { modes: { bracketedPasteMode: true } } };
+    sendFromSourceToTarget("one\r\ntwo\rthree");
+
+    expect(writeMock).toHaveBeenCalledWith(
+      "b",
+      `${BRACKETED_PASTE_START}one\r\ntwo\rthree${BRACKETED_PASTE_END}`
+    );
+    expect(notifyUserInputMock).toHaveBeenCalledWith("b");
+  });
+
+  it("wraps without notifying when the target has no managed instance", () => {
+    // No instance means no mode to read and nothing to notify. Both halves of
+    // that branch have to survive the formatter being shared with the others.
+    managed.value = undefined;
+    sendFromSourceToTarget("ls\x1b[201~\x03");
+
+    expect(writeMock).toHaveBeenCalledWith(
+      "b",
+      `${BRACKETED_PASTE_START}ls␛[201~␃${BRACKETED_PASTE_END}`
+    );
+    expect(notifyUserInputMock).not.toHaveBeenCalled();
   });
 });

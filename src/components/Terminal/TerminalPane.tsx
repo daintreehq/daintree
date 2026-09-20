@@ -85,10 +85,7 @@ import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import { openSendToAgentPaletteWithText } from "@/hooks/useSendToAgentPalette";
-import {
-  formatWithBracketedPaste,
-  neutralizeControlCharacters,
-} from "@shared/utils/terminalInputProtocol";
+import { formatForTerminalPaste } from "@shared/utils/terminalInputProtocol";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 import type { HybridInputBarHandle } from "./HybridInputBar";
 const LazyHybridInputBar = lazy(() =>
@@ -1203,19 +1200,15 @@ function TerminalPaneComponent({
     if (!text) return;
 
     const managed = terminalInstanceService.get(helpTid);
-    if (managed && !managed.terminal.modes.bracketedPasteMode) {
-      // Buffer text is whatever the agent printed, escape sequences included,
-      // so it can't reach the parser as it stands. Unwrapped, `\r` submits:
-      // every line ending is folded to `\n` first, neutralised, and only then
-      // turned back into the `\r` we mean — the same order as
-      // `primarySelection.ts`, and for the same reason.
-      terminalClient.write(
-        helpTid,
-        neutralizeControlCharacters(text.replace(/\r\n|\r/g, "\n")).replace(/\n/g, "\r")
-      );
-    } else {
-      terminalClient.write(helpTid, formatWithBracketedPaste(text));
-    }
+    // Buffer text is whatever the agent printed, escape sequences included, so
+    // it can't reach the parser as it stands. No managed instance means no mode
+    // to read, and wrapped is the safe reading of text we cannot ask about.
+    terminalClient.write(
+      helpTid,
+      formatForTerminalPaste(text, {
+        bracketedPasteMode: managed ? managed.terminal.modes.bracketedPasteMode : true,
+      })
+    );
     terminalInstanceService.notifyUserInput(helpTid);
     const help = useHelpPanelStore.getState();
     help.setOpen(true);

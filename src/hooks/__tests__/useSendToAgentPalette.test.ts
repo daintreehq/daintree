@@ -30,9 +30,6 @@ vi.mock("@/services/TerminalInstanceService", () => ({
 }));
 
 vi.mock("@/clients", () => ({ terminalClient: { write: vi.fn() } }));
-vi.mock("@shared/utils/terminalInputProtocol", () => ({
-  formatWithBracketedPaste: (t: string) => t,
-}));
 vi.mock("@shared/config/panelKindRegistry", () => ({ panelKindHasPty: () => true }));
 vi.mock("@/utils/terminalChrome", () => ({ deriveTerminalChrome: () => ({ label: "" }) }));
 vi.mock("./useSearchablePalette", () => ({ useSearchablePalette: () => ({}) }));
