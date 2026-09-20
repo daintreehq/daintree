@@ -105,6 +105,19 @@ describe("installLinuxPrimarySelectionListeners", () => {
       expect(notifyUserInput).toHaveBeenCalledWith("term-1");
     });
 
+    it("wraps on the terminal's mode, not on how the text looks", async () => {
+      // Short and single-line, so nothing about the text itself argues for a
+      // wrapper. Gating the branch on the text — `shouldUseBracketedPaste` and
+      // friends — instead of on the mode would leave this one unwrapped.
+      bracketedPasteMode = true;
+      readSelection.mockResolvedValueOnce({ text: "pasted" });
+      hostElement.dispatchEvent(new MouseEvent("auxclick", { button: 1, bubbles: true }));
+      await flush();
+      const ESC = String.fromCharCode(0x1b);
+      expect(writeToPty).toHaveBeenCalledWith("term-1", `${ESC}[200~pasted${ESC}[201~`);
+      expect(writeToPty).toHaveBeenCalledTimes(1);
+    });
+
     it("wraps the payload with bracketed-paste markers when the mode is active", async () => {
       // Exact bytes rather than a pair of substring checks: delimiters
       // concatenated by hand around text that was never sanitised would satisfy

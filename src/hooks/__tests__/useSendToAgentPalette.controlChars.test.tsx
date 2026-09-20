@@ -124,6 +124,9 @@ describe("send to agent, wrapped and unreadable targets", () => {
     );
     writeMock.mockReset();
     notifyUserInputMock.mockReset();
+    // Each test below supplies its own map; emptying it here keeps a reordered
+    // or filtered run from reading the previous describe's fixture.
+    instances.byId = {};
     usePanelStore.setState({ panelsById: {}, panelIds: [] });
   });
 
