@@ -58,6 +58,19 @@ export function redactUrl(raw: string): string {
   return `${url.toString()}?${keys.map((key) => `${encodeURIComponent(key)}=`).join("&")}`;
 }
 
+/**
+ * A label is a tag, an id and class tokens, none of which can hold a line
+ * break — so one that arrives with a break was not built from the element, and
+ * the rest of it is not a second line of anything. Collapsed rather than
+ * rejected: the label is how the user recognises what they clicked, and it is
+ * the host that decides it is one line, not whatever is running in the page.
+ * Only the breaks go: a no-break space is legal inside an id, and turning it
+ * into a space would name an element that isn't there.
+ */
+function singleLine(label: string): string {
+  return label.replace(/[\n\r\f\u0085\u2028\u2029]+/gu, " ").trim();
+}
+
 interface NodeContext {
   workspace: Workspace;
   model: SourceModel;
@@ -100,7 +113,7 @@ async function resolveNode(
     runtimeOccurrenceId: observation.runtimeOccurrenceId,
     invocation,
     ancestry,
-    label: observation.label,
+    label: singleLine(observation.label),
     bounds: observation.bounds,
   };
   const inspectOnly = (): NodeOutcome => ({

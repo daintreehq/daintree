@@ -147,6 +147,13 @@ export const GuestNodeObservationSchema = z
       })
       .strict()
       .optional(),
+    /**
+     * What the page calls the node. Bounded, never shaped: a grammar here
+     * would only reject labels built from ids and classes that are legal in
+     * HTML. It is the page's text, so every surface that shows or forwards it
+     * treats it as data — the host collapses it to one line, and a prompt
+     * quotes it.
+     */
     label: z.string().max(200),
     bounds: z.array(RectSchema).max(32),
     /** True when the node sits inside `{@html}`, canvas, or a shadow root. */

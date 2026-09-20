@@ -156,7 +156,7 @@ export const SelectedNodeSchema = z
     /** Full chain, innermost first, generated frames included but flagged. */
     ancestry: z.array(AncestryEntrySchema),
     mapping: MappingConfidenceSchema,
-    /** Human label for the breadcrumb, e.g. `button "Start Pro"`. */
+    /** The page's own label for the breadcrumb, collapsed to one line, e.g. `button "Start Pro"`. */
     label: z.string(),
     bounds: z.array(RectSchema),
   })
@@ -186,8 +186,18 @@ export const SiteSelectionSchema = z
      * selection from an older epoch is stale by definition and never re-targeted.
      */
     documentEpoch: z.number().int().nonnegative(),
+    /**
+     * What the page said it was serving, carried back unverified — the route
+     * the project model matched is on {@link PagePlace}, and that is the one
+     * to trust.
+     */
     routeId: z.string().nullable(),
-    /** Already redacted of query values before it reaches any model or log. */
+    /**
+     * Redacted before it reaches any model or log: query values, userinfo and
+     * the fragment are gone, and anything unparseable or off `http(s)` is the
+     * placeholder instead of a slice of itself. Still the page's to influence
+     * — it can push any path it likes — so treat it as an observation.
+     */
     displayedUrl: z.string(),
     viewport: ViewportSchema,
     nodes: z.array(SelectedNodeSchema),
