@@ -228,6 +228,18 @@ describe("formatForTerminalPaste", () => {
       expect(body).toBe("one\r\ntwo\rthree\nfour");
     });
 
+    it("neutralizes every embedded terminator, not just the first", () => {
+      // A sanitiser that replaced one occurrence would leave the second free to
+      // close the paste early and hand the remainder over as typed input.
+      const out = formatForTerminalPaste(
+        `before${BRACKETED_PASTE_END}${ETX}mid${BRACKETED_PASTE_END}after`,
+        wrapped
+      );
+
+      expect(out.split(BRACKETED_PASTE_END).length - 1).toBe(1);
+      expect(out).toBe(`${BRACKETED_PASTE_START}before␛[201~␃mid␛[201~after${BRACKETED_PASTE_END}`);
+    });
+
     it("neutralizes an embedded terminator so the wrapper cannot be escaped", () => {
       const out = formatForTerminalPaste(`before${BRACKETED_PASTE_END}${ETX}after`, wrapped);
 
