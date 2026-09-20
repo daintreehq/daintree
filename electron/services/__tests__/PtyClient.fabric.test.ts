@@ -971,6 +971,56 @@ describe("PtyClient fabric", () => {
     });
   });
 
+  describe("fallback-eligible projects (#12557)", () => {
+    it("replays the set to a shard that booted after it was published", () => {
+      // A shard forked later would otherwise suppress the IPC fallback for
+      // every project whose only remaining consumer holds no port — the
+      // starvation, reintroduced for as long as the shard stays unaware.
+      const client = createFabricClient();
+      client.setFallbackEligibleProjects(["project-a"]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toEqual([
+        { type: "set-fallback-eligible-projects", projectIds: ["project-a"] },
+      ]);
+      client.dispose();
+    });
+
+    it("does not replay an empty set to a fresh shard", () => {
+      // Nothing is eligible, and a shard boots with an empty set already.
+      const client = createFabricClient();
+      client.setFallbackEligibleProjects([]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toHaveLength(0);
+      client.dispose();
+    });
+
+    it("replays the LATEST set, not every update", () => {
+      const client = createFabricClient();
+      client.setFallbackEligibleProjects(["project-a"]);
+      client.setFallbackEligibleProjects(["project-b"]);
+      client.spawn("t1", { cwd: "/a", cols: 80, rows: 24, projectId: "project-a" });
+      const shardA = projectShard("project-a");
+      shardA.child.postMessage.mockClear();
+
+      shardA.child.emit("message", { type: "ready" });
+
+      expect(messagesOfType(shardA.child, "set-fallback-eligible-projects")).toEqual([
+        { type: "set-fallback-eligible-projects", projectIds: ["project-b"] },
+      ]);
+      client.dispose();
+    });
+  });
+
   describe("fan-out control messages", () => {
     it("sends pause-all/resume-all and trim-state to every shard", () => {
       const client = createFabricClient();
@@ -983,11 +1033,18 @@ describe("PtyClient fabric", () => {
 
       client.pauseAll();
       client.resumeAll();
+      client.setFallbackEligibleProjects(["project-a"]);
       void client.trimState(1000, "idle-only").catch(() => {});
 
       for (const child of [defaultShard().child, shardA.child]) {
         expect(messagesOfType(child, "pause-all")).toHaveLength(1);
         expect(messagesOfType(child, "resume-all")).toHaveLength(1);
+        // A project's terminals can live on any shard, so a shard that does not
+        // host the port-less view's project must still learn the set — else it
+        // suppresses the fallback for a terminal it does own (#12557).
+        expect(messagesOfType(child, "set-fallback-eligible-projects")).toEqual([
+          { type: "set-fallback-eligible-projects", projectIds: ["project-a"] },
+        ]);
         const trims = messagesOfType(child, "trim-state");
         expect(trims).toHaveLength(1);
         expect(trims[0]).toEqual({

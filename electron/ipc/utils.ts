@@ -416,9 +416,12 @@ export function broadcastToProjectRenderers(
  * lands in the same xterm twice (terminalClient.onData subscribes to both the
  * port and the IPC path).
  *
- * `exclude` is ignored on the unscoped fallback path: that branch only runs
- * when no project views are registered at all, in which case there is no
- * per-view port routing to double-deliver against.
+ * Exclusions apply to the unscoped fallback path too. That branch also runs
+ * for a terminal whose project Main can no longer name — `getTerminalProjectId`
+ * starts returning null the moment `PtyClient.kill()` drops the spawn record,
+ * while chunks the host already emitted are still arriving — and a port holder
+ * that just read the chunk off its port must not receive it again merely
+ * because the routing hint went missing.
  */
 export function broadcastToProjectRenderersExcept(
   projectId: string | null,
@@ -429,6 +432,17 @@ export function broadcastToProjectRenderersExcept(
   if (projectId !== null && hasRegisteredProjectViews()) {
     for (const wc of getWebContentsForProject(projectId)) {
       if (exclude?.has(wc.id)) continue;
+      try {
+        wc.send(channel, ...args);
+      } catch {
+        // Silently ignore send failures during window initialization/disposal.
+      }
+    }
+    return;
+  }
+  if (exclude && exclude.size > 0) {
+    for (const wc of getAllAppWebContents()) {
+      if (exclude.has(wc.id) || wc.isDestroyed()) continue;
       try {
         wc.send(channel, ...args);
       } catch {

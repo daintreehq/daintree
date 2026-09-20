@@ -9,31 +9,12 @@
 
 import { BrowserWindow, MessageChannelMain } from "electron";
 import { randomBytes } from "crypto";
+import {
+  clearPortHolderWebContents,
+  registerPortHolderWebContents,
+} from "./webContentsRegistry.js";
 import type { WindowContext } from "./WindowRegistry.js";
 import type { PtyClient } from "../services/PtyClient.js";
-
-// windowId → the WebContents currently holding that window's renderer-side PTY
-// port. Because the pty-host keeps one connection per window, this is exactly
-// the view its `portDeliveredWindowIds` refers to — so when the host reports a
-// window as already fed on its port, Main drops this WebContents from the IPC
-// fan-out and every other view of the project (cached duplicates included)
-// still receives the chunk (#12557).
-//
-// Entries are only ever replaced, never cleared on teardown: a stale id names a
-// destroyed or re-registered WebContents that no project fan-out will return
-// anyway, and clearing on close would need a teardown hook this module has no
-// other reason to own.
-const windowPortHolders = new Map<number, number>();
-
-/** WebContents id currently holding `windowId`'s PTY MessagePort, if any. */
-export function getPortHolderWebContentsId(windowId: number): number | undefined {
-  return windowPortHolders.get(windowId);
-}
-
-/** Test seam — the map is module state shared by every window. */
-export function __resetPortHoldersForTests(): void {
-  windowPortHolders.clear();
-}
 
 /**
  * Create a MessagePort pair and send it to a specific WebContents.
@@ -74,10 +55,13 @@ export function distributePortsToView(
   ctx.services.activeRendererPort = port1;
   ctx.services.activePtyHostPort = port2;
 
-  // Recorded before delivery, alongside the host-side connect: the host starts
-  // routing to this pair immediately, so a failed postMessage below must not
-  // leave Main believing the previous view still owns the window's port.
-  windowPortHolders.set(ctx.windowId, targetWc.id);
+  // Cleared before the host-side connect, restored only once the renderer end
+  // is confirmed delivered below (#12557). Between those two points this
+  // window has no confirmed port holder, which is exactly right: the outgoing
+  // view may still be draining the old pair, the incoming one has nothing yet,
+  // and both must stay eligible for the project-scoped IPC fallback rather
+  // than be excluded from it on the strength of a port neither holds.
+  clearPortHolderWebContents(ctx.windowId);
 
   if (ptyClient) {
     ptyClient.connectMessagePort(ctx.windowId, port2);
@@ -87,6 +71,9 @@ export function distributePortsToView(
     try {
       targetWc.postMessage("terminal-port-token", { token: handshakeToken });
       targetWc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+      // Confirmed: this view owns the window's port, so Main may exclude it
+      // from an IPC fallback the host says its port already carried.
+      registerPortHolderWebContents(ctx.windowId, targetWc.id);
     } catch (error) {
       // A reloading frame can be disposed while its WebContents still reports
       // alive, so postMessage throws despite the isDestroyed() checks. Keep

@@ -64,11 +64,11 @@ export interface HostContext {
   terminalWorkerConnections: Map<number, Map<string, TerminalWorkerConnection>>;
   windowProjectMap: Map<number, string | null>;
   /**
-   * Projects that currently have a cached (deactivated) view somewhere, pushed
-   * by Main (#12557). Orthogonal to `windowProjectMap`, which only tracks the
-   * one project each window is actively showing.
+   * Projects with a view that holds no MessagePort, pushed by Main (#12557).
+   * Orthogonal to `windowProjectMap`, which only tracks the one project each
+   * window is actively showing.
    */
-  cachedViewProjects: Set<string>;
+  fallbackEligibleProjects: Set<string>;
   /**
    * Per-window UI-focused terminal id, pushed from the renderer's
    * `focusedId` (terminalFocusSlice). Read by each window's PortQueueManager

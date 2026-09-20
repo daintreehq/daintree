@@ -1267,7 +1267,10 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-2" });
     // Main's view registry — not the host — is what knows window 2 kept a
     // cached copy of project-1; `windowProjectMap` only holds active projects.
-    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: ["project-1"] });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
     await flushMicrotasks();
 
     const batcher = hostState.batchers[0];
@@ -1301,7 +1304,10 @@ describe("pty-host adversarial", () => {
     const portA = createRendererPort();
     parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
-    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: ["project-9"] });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-9"],
+    });
     await flushMicrotasks();
 
     hostState.batchers[0].write.mockReturnValue(true);
@@ -1323,14 +1329,25 @@ describe("pty-host adversarial", () => {
     const portA = createRendererPort();
     parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [portA] });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
-    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: ["project-1"] });
-    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: [] });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
     await flushMicrotasks();
-
     hostState.batchers[0].write.mockReturnValue(true);
     parentPort.postMessage.mockClear();
 
-    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    // Prove the first message took effect, or "suppressed after clearing"
+    // would also pass an implementation that ignored both messages.
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "before\r\n");
+    await flushMicrotasks();
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+
+    parentPort.emit("message", { type: "set-fallback-eligible-projects", projectIds: [] });
+    await flushMicrotasks();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "after\r\n");
     await flushMicrotasks();
 
     expect(dataPayloads(parentPort)).toHaveLength(0);
@@ -1350,7 +1367,10 @@ describe("pty-host adversarial", () => {
     parentPort.emit("message", { data: { type: "connect-port", windowId: 2 }, ports: [portB] });
     parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
     parentPort.emit("message", { type: "set-active-project", windowId: 2, projectId: "project-1" });
-    parentPort.emit("message", { type: "set-cached-view-projects", projectIds: ["project-1"] });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
     await flushMicrotasks();
 
     // Window 1's batcher accepts, window 2's rejects.
@@ -1374,6 +1394,204 @@ describe("pty-host adversarial", () => {
     expect(dataPayloads(parentPort)).toEqual([
       expect.objectContaining({ type: "data", id: "t1", portDeliveredWindowIds: [1] }),
     ]);
+  });
+
+  it("SUPPLEMENTARY_FALLBACK_NEVER_APPLIES_BACKPRESSURE (#12557)", async () => {
+    // The IPC ledger is drained by whoever receives the IPC copy. Here that is
+    // only the port-less duplicate, which may be a frozen renderer that never
+    // acks. Letting that reach applyBackpressure would pause the PTY and stall
+    // the healthy primary window on a background view's progress.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.applyBackpressure.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+    expect(ipcQueue.applyBackpressure).not.toHaveBeenCalled();
+  });
+
+  it("PRIMARY_FALLBACK_STILL_APPLIES_BACKPRESSURE (#12557)", async () => {
+    // The guard above must be scoped to the supplementary case: when the IPC
+    // copy is the ONLY delivery, its ledger is the real flow control again.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-2" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    // Project-filtered away from the only window, so nothing takes it on a port.
+    const ipcQueue = hostState.ipcQueueManagers[0];
+    ipcQueue.applyBackpressure.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(ipcQueue.applyBackpressure).toHaveBeenCalled();
+  });
+
+  it("SUPPLEMENTARY_FALLBACK_AT_CAPACITY_KEEPS_THE_TERMINAL_LIVE (#12557)", async () => {
+    // Dropping the duplicate's copy must not paint a data-loss marker (the
+    // pulse is project-scoped and would land on the pane that DID receive the
+    // bytes) and must not take the early return that skips semantic analysis.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    hostState.ipcQueueManagers[0].isAtCapacity.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    const pulses = parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown) =>
+          typeof m === "object" && m !== null && (m as { status?: string }).status === "data-loss"
+      );
+    expect(pulses).toHaveLength(0);
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+    // No `data` went out, so Main-side monitors still need their mirror copy —
+    // the pre-fix behaviour for a port-delivered chunk.
+    expect(dataPayloads(parentPort, "data-mirror")).toHaveLength(1);
+  });
+
+  it("CACHED_DUPLICATE_FALLBACK_REPLACES_THE_MIRROR_COPY (#12557)", async () => {
+    // Exactly one Main-readable copy: UrlDetector reads `data` as well, so a
+    // mirror alongside a successful fallback would double-feed it.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(dataPayloads(parentPort)).toHaveLength(1);
+    expect(dataPayloads(parentPort, "data-mirror")).toHaveLength(0);
+  });
+
+  it("ELIGIBLE_SET_DOES_NOT_FORCE_A_FALLBACK_FOR_A_PROJECTLESS_TERMINAL (#12557)", async () => {
+    // A terminal with no project can never be the one a port-less view of some
+    // OTHER project is missing, so a non-empty eligible set must not reopen the
+    // fallback for it. The window deliberately claims no project, so the
+    // terminal is a genuine port target and its acceptance is what would have
+    // to be overridden.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1")); // undefined projectId
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(hostState.batchers[0].write).toHaveBeenCalled();
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+  });
+
+  it("PROJECTLESS_TERMINAL_FALLBACK_CARRIES_NO_ROUTING_HINT (#12557)", async () => {
+    // Filtered away from every window that claims a project, so nothing takes
+    // it on a port and the fallback is its only path — exactly as before the
+    // fix, and with no delivered-window list for Main to act on.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1")); // undefined projectId
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.batchers[0].write.mockReturnValue(true);
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    const payloads = dataPayloads(parentPort);
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0].portDeliveredWindowIds).toBeUndefined();
+  });
+
+  it("SUSPENDED_TERMINAL_STAYS_SILENT_WITH_AN_ELIGIBLE_PROJECT (#12557)", async () => {
+    // Backpressure suspension outranks the fallback: no port write, no data,
+    // no mirror.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    const port = createRendererPort();
+    parentPort.emit("message", { data: { type: "connect-port", windowId: 1 }, ports: [port] });
+    parentPort.emit("message", { type: "set-active-project", windowId: 1, projectId: "project-1" });
+    parentPort.emit("message", { type: "set-ipc-data-mirror", id: "t1", enabled: true });
+    parentPort.emit("message", {
+      type: "set-fallback-eligible-projects",
+      projectIds: ["project-1"],
+    });
+    await flushMicrotasks();
+
+    hostState.backpressureManagers[0].setSuspended("t1");
+    hostState.batchers[0].write.mockClear();
+    parentPort.postMessage.mockClear();
+
+    (hostState.currentPtyManager as MiniEmitter).emit("data", "t1", "step\r\n");
+    await flushMicrotasks();
+
+    expect(hostState.batchers[0].write).not.toHaveBeenCalled();
+    expect(dataPayloads(parentPort)).toHaveLength(0);
+    expect(dataPayloads(parentPort, "data-mirror")).toHaveLength(0);
   });
 
   it("TIER_CHANGED_BROADCAST_RESPECTS_PROJECT_FILTER", async () => {

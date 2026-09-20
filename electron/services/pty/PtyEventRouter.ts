@@ -150,12 +150,15 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     }
 
     case "data":
-      // The delivered-window list only exists when the host kept the fallback
-      // open for a cached duplicate (#12557); emitting it as a trailing
-      // `undefined` otherwise would change the arity every listener sees on
-      // the ordinary path for no gain.
-      if (event.portDeliveredWindowIds !== undefined) {
-        emitter.emit("data", event.id, event.data, event.portDeliveredWindowIds);
+      // The routing hints only exist when the host kept the fallback open for
+      // a port-less view, or is recovering one window's failed port flush
+      // (#12557); emitting them as trailing `undefined`s otherwise would
+      // change the arity every listener sees on the ordinary path for no gain.
+      if (event.portDeliveredWindowIds !== undefined || event.portRecoveryWindowId !== undefined) {
+        emitter.emit("data", event.id, event.data, {
+          portDeliveredWindowIds: event.portDeliveredWindowIds,
+          portRecoveryWindowId: event.portRecoveryWindowId,
+        });
       } else {
         emitter.emit("data", event.id, event.data);
       }

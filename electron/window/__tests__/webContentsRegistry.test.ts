@@ -368,76 +368,129 @@ describe("webContentsRegistry", () => {
     expect(isCachedViewWebContents(wc.id)).toBe(false);
   });
 
-  describe("cached-view project set (#12557)", () => {
-    it("reports the projects whose views are cached, not every registered project", async () => {
-      const { getCachedViewProjectIds, registerProjectView, registerCachedViewWebContents } =
+  describe("fallback-eligible project set (#12557)", () => {
+    it("reports projects whose views hold no port, and drops one once it does", async () => {
+      const { getFallbackEligibleProjectIds, registerProjectView, registerPortHolderWebContents } =
         await loadRegistry();
-      const active = createWebContents(201);
+      const holder = createWebContents(201);
       const cached = createWebContents(202);
 
-      registerProjectView("project-a", active as unknown as WebContents);
+      registerProjectView("project-a", holder as unknown as WebContents);
       registerProjectView("project-b", cached as unknown as WebContents);
-      registerCachedViewWebContents(cached as unknown as WebContents);
+      expect(getFallbackEligibleProjectIds().sort()).toEqual(["project-a", "project-b"]);
 
-      expect(getCachedViewProjectIds()).toEqual(["project-b"]);
+      // Window 1's active view takes the port; project-a now has a transport
+      // and no longer needs the fallback held open for it.
+      registerPortHolderWebContents(1, holder.id);
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-b"]);
     });
 
-    it("collapses two windows' cached views of the same project to one entry", async () => {
-      const { getCachedViewProjectIds, registerProjectView, registerCachedViewWebContents } =
+    it("keeps a project eligible while a second view of it holds no port", async () => {
+      // Window 1 shows A, window 2 has A cached. A must stay eligible.
+      const { getFallbackEligibleProjectIds, registerProjectView, registerPortHolderWebContents } =
         await loadRegistry();
-      const first = createWebContents(211);
-      const second = createWebContents(212);
+      const active = createWebContents(211);
+      const duplicate = createWebContents(212);
+      registerProjectView("project-a", active as unknown as WebContents);
+      registerProjectView("project-a", duplicate as unknown as WebContents);
 
-      for (const wc of [first, second]) {
-        registerProjectView("project-a", wc as unknown as WebContents);
-        registerCachedViewWebContents(wc as unknown as WebContents);
-      }
+      registerPortHolderWebContents(1, active.id);
 
-      expect(getCachedViewProjectIds()).toEqual(["project-a"]);
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-a"]);
+    });
+
+    it("re-opens eligibility the moment a holder gives up its port", async () => {
+      // The reactivation gap: a view stops being cached before its replacement
+      // port exists. Eligibility keyed on "holds no port" covers that interval;
+      // keying it on "is cached" would starve the view for the paint gate.
+      const {
+        getFallbackEligibleProjectIds,
+        registerProjectView,
+        registerPortHolderWebContents,
+        clearPortHolderWebContents,
+      } = await loadRegistry();
+      const wc = createWebContents(221);
+      registerProjectView("project-a", wc as unknown as WebContents);
+      registerPortHolderWebContents(1, wc.id);
+      expect(getFallbackEligibleProjectIds()).toEqual([]);
+
+      clearPortHolderWebContents(1);
+
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-a"]);
+    });
+
+    it("moves eligibility with the port on a project switch", async () => {
+      const { getFallbackEligibleProjectIds, registerProjectView, registerPortHolderWebContents } =
+        await loadRegistry();
+      const viewA = createWebContents(231);
+      const viewB = createWebContents(232);
+      registerProjectView("project-a", viewA as unknown as WebContents);
+      registerProjectView("project-b", viewB as unknown as WebContents);
+      registerPortHolderWebContents(1, viewA.id);
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-b"]);
+
+      // Same window, port handed to B's view: A becomes the port-less duplicate.
+      registerPortHolderWebContents(1, viewB.id);
+
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-a"]);
     });
 
     it("publishes the current set on subscribe, then only on real changes", async () => {
       const {
-        setCachedViewProjectsListener,
+        setFallbackEligibleProjectsListener,
         registerProjectView,
-        registerCachedViewWebContents,
-        unregisterCachedViewWebContents,
+        registerPortHolderWebContents,
       } = await loadRegistry();
-      const wc = createWebContents(221);
+      const wc = createWebContents(241);
       registerProjectView("project-a", wc as unknown as WebContents);
 
       const listener = vi.fn();
-      setCachedViewProjectsListener(listener);
-      expect(listener.mock.calls).toEqual([[[]]]);
-
-      registerCachedViewWebContents(wc as unknown as WebContents);
-      expect(listener.mock.calls).toEqual([[[]], [["project-a"]]]);
-
-      // Re-caching an already-cached view changes nothing — the host must not
-      // be re-told on every switch.
-      registerCachedViewWebContents(wc as unknown as WebContents);
-      expect(listener).toHaveBeenCalledTimes(2);
-
-      unregisterCachedViewWebContents(wc.id);
-      expect(listener.mock.calls).toEqual([[[]], [["project-a"]], [[]]]);
-    });
-
-    it("drops a project when its cached view is destroyed", async () => {
-      // Without this the host keeps the IPC fallback open for a project with no
-      // cached consumer left, paying a second main-process hop per chunk.
-      const { setCachedViewProjectsListener, registerProjectView, registerCachedViewWebContents } =
-        await loadRegistry();
-      const wc = createWebContents(231);
-      registerProjectView("project-a", wc as unknown as WebContents);
-      registerCachedViewWebContents(wc as unknown as WebContents);
-
-      const listener = vi.fn();
-      setCachedViewProjectsListener(listener);
+      setFallbackEligibleProjectsListener(listener);
       expect(listener.mock.calls).toEqual([[["project-a"]]]);
 
-      wc.emitDestroyed();
+      registerPortHolderWebContents(1, wc.id);
+      expect(listener.mock.calls).toEqual([[["project-a"]], [[]]]);
+
+      // Re-recording the same holder changes nothing — the host must not be
+      // re-told on every re-broker.
+      registerPortHolderWebContents(1, wc.id);
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it("drops a project when its port-less view is destroyed", async () => {
+      // Otherwise the host keeps the fallback open for a project with no
+      // port-less consumer left, paying a second main-process hop per chunk.
+      const {
+        setFallbackEligibleProjectsListener,
+        registerProjectView,
+        registerPortHolderWebContents,
+      } = await loadRegistry();
+      const holder = createWebContents(251);
+      const duplicate = createWebContents(252);
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerProjectView("project-a", duplicate as unknown as WebContents);
+      registerPortHolderWebContents(1, holder.id);
+
+      const listener = vi.fn();
+      setFallbackEligibleProjectsListener(listener);
+      expect(listener.mock.calls).toEqual([[["project-a"]]]);
+
+      duplicate.emitDestroyed();
 
       expect(listener.mock.calls).toEqual([[["project-a"]], [[]]]);
+    });
+
+    it("forgets a destroyed holder so its window stops excluding it", async () => {
+      const { getPortHolderWebContentsId, registerProjectView, registerPortHolderWebContents } =
+        await loadRegistry();
+      const holder = createWebContents(261);
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerPortHolderWebContents(4, holder.id);
+      expect(getPortHolderWebContentsId(4)).toBe(holder.id);
+
+      holder.emitDestroyed();
+
+      expect(getPortHolderWebContentsId(4)).toBeUndefined();
     });
   });
 

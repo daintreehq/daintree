@@ -294,13 +294,13 @@ export type PtyHostRequest =
       projectPath?: string;
     }
   | { type: "set-focused-terminal"; windowId: number; id: string | null }
-  // Projects that currently have a CACHED project view somewhere (#12557). A
-  // cached view has no MessagePort of its own — its window's single connection
-  // belongs to whichever view is active — so the IPC fallback is the only path
-  // that can still reach it. The host cannot infer this: `windowProjectMap`
-  // holds one active project per window and says nothing about what that window
-  // keeps cached. Main owns the answer and pushes it on every cache/reactivate.
-  | { type: "set-cached-view-projects"; projectIds: string[] }
+  // Projects with at least one view that holds no MessagePort (#12557) — a
+  // cached duplicate, or one mid-transport-handoff. A window's single
+  // connection belongs to whichever view is active, so the IPC fallback is the
+  // only path that can reach the others. The host cannot infer this:
+  // `windowProjectMap` holds one active project per window and says nothing
+  // about the views behind it. Main owns the answer and pushes it on change.
+  | { type: "set-fallback-eligible-projects"; projectIds: string[] }
   | { type: "disconnect-port"; windowId: number }
   | { type: "kill-by-project"; projectId: string; requestId: string }
   | { type: "get-project-stats"; projectId: string; requestId: string }
@@ -575,7 +575,18 @@ export type PtyHostEvent =
   // WebContents from the fan-out so the view that read the chunk off its port
   // never parses it a second time. Absent/empty = nobody got it on a port, i.e.
   // the original unrestricted project-scoped fallback.
-  | { type: "data"; id: string; data: string; portDeliveredWindowIds?: number[] }
+  // `portRecoveryWindowId` inverts the routing: this chunk was already
+  // delivered everywhere EXCEPT this window, whose port threw mid-flush, so
+  // Main sends it to that window's port holder alone. A plain re-broadcast
+  // would re-deliver to every sibling that took it on its own port and to
+  // every port-less view the supplementary fallback already fed.
+  | {
+      type: "data";
+      id: string;
+      data: string;
+      portDeliveredWindowIds?: number[];
+      portRecoveryWindowId?: number;
+    }
   // Main-process-only copy of a chunk the renderer already received on its
   // visual path (MessagePort) or that the background gate suppressed. Consumed
   // by Main-side monitors (DevPreviewSessionService/UrlDetector) and NEVER

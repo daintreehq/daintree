@@ -410,8 +410,8 @@ export class PtyClient extends EventEmitter {
   // so a restarted host would otherwise boot on balanced governor thresholds and
   // the ProcessTreeCache constructor default until the next profile change.
   private lastResourceProfile: ResourceProfile | null = null;
-  /** Last cached-view project set pushed to the shards (#12557); replayed on shard boot. */
-  private cachedViewProjects: string[] = [];
+  /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
+  private fallbackEligibleProjects: string[] = [];
   private lastProcessTreePollIntervalMs: number | null = null;
 
   /**
@@ -1128,10 +1128,13 @@ export class PtyClient extends EventEmitter {
     }
 
     // A shard that booted without this set would suppress the IPC fallback for
-    // every project whose only remaining consumer is a cached view — the #12557
+    // every project whose only remaining consumer holds no port — the #12557
     // starvation, reintroduced for exactly as long as the shard stays unaware.
-    if (this.cachedViewProjects.length > 0) {
-      shard.send({ type: "set-cached-view-projects", projectIds: this.cachedViewProjects });
+    if (this.fallbackEligibleProjects.length > 0) {
+      shard.send({
+        type: "set-fallback-eligible-projects",
+        projectIds: this.fallbackEligibleProjects,
+      });
     }
   }
 
@@ -1948,21 +1951,25 @@ export class PtyClient extends EventEmitter {
   }
 
   /**
-   * Tell every shard which projects currently have a cached (deactivated) view
-   * (#12557). A cached view has no MessagePort — its window's single connection
-   * follows whichever view is active — so the project-scoped IPC fallback is
-   * its only transport, and the host suppresses that fallback the moment any
-   * window's batcher accepts the chunk. Only Main can see cached views, so it
-   * pushes the set here on every cache/reactivate/teardown.
+   * Tell every shard which projects currently have a view holding no
+   * MessagePort (#12557) — a cached duplicate, or one mid-transport-handoff. A
+   * window's single connection follows whichever view is active, so the
+   * project-scoped IPC fallback is the only transport those views have, and the
+   * host suppresses that fallback the moment any window's batcher accepts the
+   * chunk. Only Main can see which views hold a port, so it pushes the set here
+   * whenever that changes.
    *
    * Sent to every shard, not the owning one: a project's terminals can be
    * spread across shards, and a shard holding one of them must not suppress the
-   * fallback because it happens not to host the cached view's active project.
+   * fallback because it happens not to host that view's active project.
    */
-  setCachedViewProjects(projectIds: string[]): void {
-    this.cachedViewProjects = [...projectIds];
+  setFallbackEligibleProjects(projectIds: string[]): void {
+    this.fallbackEligibleProjects = [...projectIds];
     for (const shard of this.shards.values()) {
-      shard.send({ type: "set-cached-view-projects", projectIds: this.cachedViewProjects });
+      shard.send({
+        type: "set-fallback-eligible-projects",
+        projectIds: this.fallbackEligibleProjects,
+      });
     }
   }
 

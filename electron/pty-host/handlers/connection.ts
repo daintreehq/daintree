@@ -19,7 +19,7 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     rendererConnections,
     terminalWorkerConnections,
     windowProjectMap,
-    cachedViewProjects,
+    fallbackEligibleProjects,
     windowFocusedTerminalMap,
     disconnectWindow,
     disconnectTerminalWorkerPort,
@@ -86,7 +86,16 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           );
           for (const batch of failedBatches) {
             if (batch.bytes <= 0) continue;
-            sendEvent({ type: "data", id: batch.id, data: batchDataToString(batch.data) });
+            // Addressed to this window only (#12557). Everyone else already
+            // has these bytes: sibling windows took them on their own ports,
+            // and port-less views took them from the supplementary IPC
+            // fallback that this window's acceptance kept open.
+            sendEvent({
+              type: "data",
+              id: batch.id,
+              data: batchDataToString(batch.data),
+              portRecoveryWindowId: windowId,
+            });
           }
           disconnectWindow(windowId, "postMessage-error");
         },
@@ -246,7 +255,14 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
           );
           for (const batch of failedBatches) {
             if (batch.bytes <= 0) continue;
-            sendEvent({ type: "data", id: batch.id, data: batchDataToString(batch.data) });
+            // Same single-recipient recovery as the window port above: the
+            // engaged worker belongs to this window's port-holding view.
+            sendEvent({
+              type: "data",
+              id: batch.id,
+              data: batchDataToString(batch.data),
+              portRecoveryWindowId: windowId,
+            });
           }
           disconnectTerminalWorkerPort(windowId, terminalId, "postMessage-error");
         },
@@ -310,19 +326,26 @@ export function createConnectionHandlers(ctx: HostContext): HandlerMap {
     },
 
     // Authoritative replace, never a merge: Main recomputes the whole set from
-    // its view registry on every cache/reactivate/teardown, so a stale entry
-    // here would keep the IPC fallback open for a project that no longer has a
-    // cached consumer — a permanent double-path for that project's output.
-    "set-cached-view-projects": (msg) => {
+    // its view registry whenever a view or a port holder changes, so a stale
+    // entry here would keep the IPC fallback open for a project whose every
+    // view now holds a port — a permanent double-path for its output.
+    "set-fallback-eligible-projects": (msg) => {
       const projectIds: unknown = msg.projectIds;
-      if (!Array.isArray(projectIds)) {
-        console.warn("[PtyHost] set-cached-view-projects missing projectIds, ignoring");
+      // Validated in full BEFORE the set is touched. Clearing first and
+      // filtering as we go would let a malformed payload erase the current
+      // protection and reopen the starvation — the one direction this message
+      // must never fail in. An empty array is legitimate and still clears.
+      if (
+        !Array.isArray(projectIds) ||
+        projectIds.some((projectId) => typeof projectId !== "string" || !projectId)
+      ) {
+        console.warn(
+          "[PtyHost] set-fallback-eligible-projects payload is not a list of project ids, ignoring"
+        );
         return;
       }
-      cachedViewProjects.clear();
-      for (const projectId of projectIds) {
-        if (typeof projectId === "string" && projectId) cachedViewProjects.add(projectId);
-      }
+      fallbackEligibleProjects.clear();
+      for (const projectId of projectIds as string[]) fallbackEligibleProjects.add(projectId);
     },
 
     "disconnect-port": (msg) => {

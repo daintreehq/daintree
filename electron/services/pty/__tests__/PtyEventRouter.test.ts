@@ -172,7 +172,23 @@ describe("routeHostEvent", () => {
 
     routeHostEvent({ type: "data", id: "t1", data: "x", portDeliveredWindowIds: [3] }, deps);
 
-    expect(dataListener).toHaveBeenCalledWith("t1", "x", [3]);
+    expect(dataListener).toHaveBeenCalledWith("t1", "x", {
+      portDeliveredWindowIds: [3],
+      portRecoveryWindowId: undefined,
+    });
+  });
+
+  it("forwards a port-flush recovery window on a data event (#12557)", () => {
+    const { deps, emitter } = makeDeps();
+    const dataListener = vi.fn();
+    emitter.on("data", dataListener);
+
+    routeHostEvent({ type: "data", id: "t1", data: "x", portRecoveryWindowId: 2 }, deps);
+
+    expect(dataListener).toHaveBeenCalledWith("t1", "x", {
+      portDeliveredWindowIds: undefined,
+      portRecoveryWindowId: 2,
+    });
   });
 
   it("emits submit-status as a single typed payload, not an error string", () => {
