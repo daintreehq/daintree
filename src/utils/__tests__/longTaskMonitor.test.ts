@@ -355,11 +355,15 @@ describe("startLongTaskMonitor", () => {
 
     expect(logWarn).not.toHaveBeenCalled();
     expect(mockMarkRendererPerformance).toHaveBeenCalledTimes(1);
-    const meta = mockMarkRendererPerformance.mock.calls[0]![1];
-    expect(meta).toMatchObject({ durationMs: 75, blockingDurationMs: 25, scriptCount: 1 });
-    const topScripts = (meta as { topScripts: Array<Record<string, unknown>> }).topScripts;
-    expect(topScripts).toHaveLength(1);
-    expect(topScripts[0]).toMatchObject({ sourceFunctionName: "belowGate", durationMs: 40 });
+    expect(mockMarkRendererPerformance).toHaveBeenCalledWith(
+      "renderer_long_animation_frame",
+      expect.objectContaining({
+        durationMs: 75,
+        blockingDurationMs: 25,
+        scriptCount: 1,
+        topScripts: [expect.objectContaining({ sourceFunctionName: "belowGate", durationMs: 40 })],
+      })
+    );
   });
 
   it("warns once for a mixed batch delivered in one callback and captures every entry", () => {
@@ -374,9 +378,11 @@ describe("startLongTaskMonitor", () => {
       expect.objectContaining({ durationMs: 100 })
     );
     expect(mockMarkRendererPerformance).toHaveBeenCalledTimes(3);
-    expect(
-      mockMarkRendererPerformance.mock.calls.map((c) => (c[1] as { durationMs: number }).durationMs)
-    ).toEqual([75, 100, 150]);
+    expect(mockMarkRendererPerformance.mock.calls.map((call) => call[1])).toEqual([
+      expect.objectContaining({ durationMs: 75 }),
+      expect.objectContaining({ durationMs: 100 }),
+      expect.objectContaining({ durationMs: 150 }),
+    ]);
   });
 
   it("does not call markRendererPerformance when capture is disabled", () => {
