@@ -2096,14 +2096,15 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
     return render(paneForRefresh());
   }
 
-  function refreshIcon(container: HTMLElement): SVGSVGElement {
+  // SpinningIcon rotates an HTML wrapper around the svg, not the svg itself.
+  function refreshSpinner(container: HTMLElement): HTMLElement {
     const button = Array.from(container.querySelectorAll("button")).find(
       (b) => b.getAttribute("aria-label") === "Refresh"
     );
     if (!button) throw new Error("Refresh button not rendered");
-    const svg = button.querySelector("svg");
-    if (!svg) throw new Error("Refresh icon not rendered");
-    return svg;
+    const spinner = button.querySelector("svg")?.parentElement;
+    if (!spinner) throw new Error("Refresh icon not rendered");
+    return spinner;
   }
 
   it("spins while a source refresh is in flight, then finishes the rotation once it settles", async () => {
@@ -2113,7 +2114,7 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
 
     // Initial load settles with no refresh in progress — the icon is still.
     await waitFor(() =>
-      expect(refreshIcon(container).classList.contains("animate-spin")).toBe(false)
+      expect(refreshSpinner(container).classList.contains("animate-spin")).toBe(false)
     );
 
     // The refresh read is held open so the operation is observably "running".
@@ -2124,20 +2125,20 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
         .find((b) => b.getAttribute("aria-label") === "Refresh")
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(true);
+    expect(refreshSpinner(container).classList.contains("animate-spin")).toBe(true);
 
     // The read settles: the spin request is released, but the class must remain
     // until the rotation boundary rather than snapping back mid-turn.
     await act(async () => {
       pending.resolve({ content: "v2" });
     });
-    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(true);
+    expect(refreshSpinner(container).classList.contains("animate-spin")).toBe(true);
 
     // The rotation completes → the icon stops at 0°.
     act(() => {
-      refreshIcon(container).dispatchEvent(new Event("animationiteration", { bubbles: true }));
+      refreshSpinner(container).dispatchEvent(new Event("animationiteration", { bubbles: true }));
     });
-    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(false);
+    expect(refreshSpinner(container).classList.contains("animate-spin")).toBe(false);
   });
 
   it("does not strand the spin when a diff refresh is abandoned before it resolves (#11323)", async () => {
@@ -2167,7 +2168,7 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
         .find((b) => b.getAttribute("aria-label") === "Refresh")
         ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
-    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(true);
+    expect(refreshSpinner(container).classList.contains("animate-spin")).toBe(true);
 
     // Abandon the diff by switching to Source before it ever resolves. The old
     // `diffContent !== undefined` predicate would wait forever; the spin must
@@ -2183,9 +2184,9 @@ describe("FilePane toolbar refresh spin (#11323)", () => {
     await act(async () => {});
 
     act(() => {
-      refreshIcon(container).dispatchEvent(new Event("animationiteration", { bubbles: true }));
+      refreshSpinner(container).dispatchEvent(new Event("animationiteration", { bubbles: true }));
     });
-    expect(refreshIcon(container).classList.contains("animate-spin")).toBe(false);
+    expect(refreshSpinner(container).classList.contains("animate-spin")).toBe(false);
   });
 });
 

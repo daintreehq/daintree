@@ -1805,10 +1805,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 <Tooltip autoDismiss={false}>
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs">
-                      <RefreshCw
-                        className="w-3 h-3 animate-spin motion-reduce:animate-none"
-                        aria-hidden="true"
-                      />
+                      <span className="inline-flex shrink-0 animate-spin motion-reduce:animate-none">
+                        <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                      </span>
                       <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
                     </span>
                   </TooltipTrigger>
@@ -1818,10 +1817,9 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 </Tooltip>
               ) : (
                 <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-text-secondary text-xs">
-                  <RefreshCw
-                    className="w-3 h-3 animate-spin motion-reduce:animate-none"
-                    aria-hidden="true"
-                  />
+                  <span className="inline-flex shrink-0 animate-spin motion-reduce:animate-none">
+                    <RefreshCw className="w-3 h-3" aria-hidden="true" />
+                  </span>
                   <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
                 </span>
               )}

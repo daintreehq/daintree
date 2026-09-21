@@ -83,7 +83,9 @@ export function DevServerIndicator({ session }: DevServerIndicatorProps) {
             aria-label={label}
             className="inline-flex items-center text-text-muted shrink-0"
           >
-            <Loader2 className="w-3 h-3 shrink-0 animate-spin" aria-hidden="true" />
+            <span className="inline-flex shrink-0 animate-spin">
+              <Loader2 className="w-3 h-3" aria-hidden="true" />
+            </span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="top">{label}</TooltipContent>

@@ -140,6 +140,12 @@ export const UI_STILL_WORKING_MS = 5000;
  *  mechanism constant coupled to a third-party default. */
 export const UI_SPIN_CYCLE_MS = 1_000;
 
+/** One full visible/hidden cycle of the composer's cursor blink. CodeMirror's
+ *  own `cursorBlinkRate` default, kept so the timer-driven blink (#12584) reads
+ *  exactly like the CSS animation it replaced. A mechanism constant, not a
+ *  design-motion token. */
+export const COMPOSER_CURSOR_BLINK_MS = 1_200;
+
 /** Feedback-hint window for direct user actions (e.g. `Button`'s `loading`
  *  state). Distinct in role from the skeleton/Doherty gates: those *delay*
  *  showing a placeholder to avoid flicker on background work, whereas a

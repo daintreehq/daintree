@@ -18,11 +18,24 @@ interface SpinnerProps {
   className?: string;
 }
 
+/**
+ * The rotation runs on an HTML wrapper, not the `<svg>`: Chromium cannot run a
+ * transform animation on the compositor when its target is an svg, so it
+ * re-runs style on the main thread every frame for as long as the spinner is
+ * visible (#12584). Size, placement and colour classes land on the wrapper,
+ * which is block-level like the svg it replaces; the glyph fills it.
+ */
 export function Spinner({ size = "md", className }: SpinnerProps) {
   return (
-    <Loader2
-      className={cn("animate-spin motion-reduce:animate-none", SIZE_CLASSES[size], className)}
+    <span
+      className={cn(
+        "flex shrink-0 items-center justify-center animate-spin motion-reduce:animate-none",
+        SIZE_CLASSES[size],
+        className
+      )}
       aria-hidden="true"
-    />
+    >
+      <Loader2 className="size-full" />
+    </span>
   );
 }

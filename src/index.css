@@ -2192,10 +2192,13 @@ label:focus-within .brand-mark,
   }
 }
 
+/* Bounded: a running animation keeps the renderer, GPU process and compositor
+ * presenting at display rate, and a forge error can persist for hours (#12584).
+ * Two and a half breaths draw the eye, then the bar rests on the 50% keyframe's
+ * full opacity, which is also its static state, so the end does not snap. */
 .forge-status-error {
   background: var(--color-status-error);
-  animation: forge-status-error-pulse 2s ease-in-out infinite;
-  will-change: opacity;
+  animation: forge-status-error-pulse 2s ease-in-out 2.5;
 }
 
 /* Respect user's motion preferences */
