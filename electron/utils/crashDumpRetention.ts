@@ -6,9 +6,10 @@ import path from "node:path";
  *
  * Daintree starts `crashReporter` with `uploadToServer: false`, so no upload
  * thread ever moves reports out of `pending/`. Crashpad's own database prune
- * (128 MiB / 365 days) only runs on the handler's periodic-task thread, first
- * ten minutes after launch and then daily, which is too loose and too late to
- * bound a desktop install. This module applies a tighter budget itself.
+ * (128 MiB / 365 days upstream) only runs on the handler's periodic-task
+ * thread, first ten minutes after launch and then daily, which is too loose
+ * and too late to bound a desktop install. This module applies a tighter
+ * budget itself.
  *
  * Only file metadata is ever read — dump contents can hold process memory and
  * are never opened, hashed, or uploaded.
@@ -75,19 +76,22 @@ interface DumpEntry {
 
 // CrashRecoveryService classifies the previous session by looking for dumps
 // newer than its start. Pruning before that inspection could erase the only
-// evidence of a native crash, so callers must wait for this flag.
-let recoveryInspectionComplete = false;
+// evidence of a native crash, so callers wait until this holds the running
+// session's start — which the prune also needs to keep this session's
+// evidence for the next launch.
+let inspectedSessionStartMs: number | null = null;
 
-export function markCrashRecoveryInspectionComplete(): void {
-  recoveryInspectionComplete = true;
+export function markCrashRecoveryInspectionComplete(sessionStartMs: number): void {
+  inspectedSessionStartMs = sessionStartMs;
 }
 
-export function isCrashRecoveryInspectionComplete(): boolean {
-  return recoveryInspectionComplete;
+/** The running session's start once recovery inspection is done, else null. */
+export function getInspectedSessionStartMs(): number | null {
+  return inspectedSessionStartMs;
 }
 
 export function _resetCrashRecoveryInspectionForTests(): void {
-  recoveryInspectionComplete = false;
+  inspectedSessionStartMs = null;
 }
 
 function errorCode(err: unknown): string {
@@ -104,14 +108,16 @@ function sidecarPath(dumpPath: string, ext: string): string {
   return dumpPath.slice(0, -DUMP_EXT.length) + ext;
 }
 
-// Crashpad's POSIX database holds `<uuid>.lock` while a report is being read,
-// written, or moved. Anything other than a definite ENOENT counts as locked.
-async function isLocked(dumpPath: string): Promise<boolean> {
+// Linux Crashpad holds `<uuid>.lock` while a report is being read, written,
+// or moved. Anything other than a definite ENOENT counts as locked.
+async function isLocked(dumpPath: string, failures: Record<string, number>): Promise<boolean> {
   try {
     await fsp.lstat(sidecarPath(dumpPath, LOCK_EXT));
     return true;
   } catch (err) {
-    return errorCode(err) !== "ENOENT";
+    if (errorCode(err) === "ENOENT") return false;
+    recordFailure(failures, "lock-stat", err);
+    return true;
   }
 }
 
@@ -143,18 +149,24 @@ function sumBytes(dumps: DumpEntry[]): number {
 }
 
 /**
- * Applies `policy` to the Crashpad database at `dumpsDir`. The newest dump is
- * always kept unless it has aged out, so a crash earlier in the running
- * session still classifies the next launch as `native-crash`. Beyond that,
- * dumps are kept newest-first while they fit the count and byte budget; every
- * older dump, and anything past `maxAgeMs`, is deleted. Recent and locked
- * dumps are never deleted but still consume budget.
+ * Applies `policy` to the Crashpad database at `dumpsDir`. Recent and locked
+ * dumps are never deleted and claim budget first. The newest dump is exempt
+ * from the count and byte budget and, when it was written during the session
+ * that started at `sessionStartMs`, from `maxAgeMs` too — so the next launch
+ * can still classify that session as a native crash. Every other dump is kept
+ * newest-first while it fits the budget; the rest, and anything past
+ * `maxAgeMs`, is deleted.
  *
  * Never throws — every filesystem failure is counted in `failures`.
  */
 export async function pruneCrashDumps(
   dumpsDir: string,
-  options: { policy?: CrashDumpRetentionPolicy; nowMs?: number; platform?: NodeJS.Platform } = {}
+  options: {
+    policy?: CrashDumpRetentionPolicy;
+    nowMs?: number;
+    platform?: NodeJS.Platform;
+    sessionStartMs?: number;
+  } = {}
 ): Promise<CrashDumpRetentionResult> {
   const policy = options.policy ?? NATIVE_CRASH_DUMP_RETENTION;
   const nowMs = options.nowMs ?? Date.now();
@@ -189,26 +201,38 @@ export async function pruneCrashDumps(
   // Newest first; the path tiebreak keeps equal-mtime ordering deterministic.
   dumps.sort((a, b) => b.mtimeMs - a.mtimeMs || a.path.localeCompare(b.path));
 
-  const toDelete: DumpEntry[] = [];
+  // Protected dumps stay whatever the budget says, so they claim it before any
+  // optional dump does. Otherwise an older locked dump found after the budget
+  // was spent would push the total over it.
+  const isProtected: boolean[] = [];
   let keptCount = 0;
   let keptBytes = 0;
-  let budgetExhausted = false;
-  for (const [index, dump] of dumps.entries()) {
-    const ageMs = nowMs - dump.mtimeMs;
-    // A negative age (clock skew, future mtime) lands here too.
-    if (ageMs < policy.activeWriteGraceMs || (await isLocked(dump.path))) {
+  for (const dump of dumps) {
+    // A negative age (clock skew, future mtime) counts as recent.
+    const isRecent = nowMs - dump.mtimeMs < policy.activeWriteGraceMs;
+    const dumpProtected = isRecent || (await isLocked(dump.path, failures));
+    isProtected.push(dumpProtected);
+    if (dumpProtected) {
       result.protectedCount++;
       keptCount++;
       keptBytes += dump.size;
-      continue;
     }
-    if (ageMs > policy.maxAgeMs) {
+  }
+
+  const toDelete: DumpEntry[] = [];
+  let budgetExhausted = false;
+  for (const [index, dump] of dumps.entries()) {
+    if (isProtected[index]) continue;
+    const isNewest = index === 0;
+    const isSessionEvidence =
+      isNewest && options.sessionStartMs !== undefined && dump.mtimeMs >= options.sessionStartMs;
+    if (nowMs - dump.mtimeMs > policy.maxAgeMs && !isSessionEvidence) {
       toDelete.push(dump);
       continue;
     }
     const fitsBudget =
       !budgetExhausted && keptCount < policy.maxCount && keptBytes + dump.size <= policy.maxBytes;
-    if (index === 0 || fitsBudget) {
+    if (isNewest || fitsBudget) {
       keptCount++;
       keptBytes += dump.size;
     } else {
@@ -221,7 +245,7 @@ export async function pruneCrashDumps(
 
   for (const dump of toDelete) {
     // Crashpad may have picked the report up since the scan.
-    if (await isLocked(dump.path)) {
+    if (await isLocked(dump.path, failures)) {
       result.protectedCount++;
       continue;
     }

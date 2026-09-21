@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   _resetCrashRecoveryInspectionForTests,
-  isCrashRecoveryInspectionComplete,
+  getInspectedSessionStartMs,
   markCrashRecoveryInspectionComplete,
   pruneCrashDumps,
   type CrashDumpRetentionPolicy,
@@ -44,13 +44,27 @@ describe("pruneCrashDumps", () => {
   }
 
   function prune(
-    overrides: { policy?: CrashDumpRetentionPolicy; platform?: NodeJS.Platform } = {}
+    overrides: {
+      policy?: CrashDumpRetentionPolicy;
+      platform?: NodeJS.Platform;
+      sessionStartMs?: number;
+    } = {}
   ) {
     return pruneCrashDumps(dumpsDir, {
       policy: overrides.policy ?? POLICY,
       nowMs: NOW,
       platform: overrides.platform ?? "darwin",
+      sessionStartMs: overrides.sessionStartMs,
     });
+  }
+
+  function spyOnLockStat(lockPath: string, onCall: (call: number) => void): void {
+    const realLstat = fsp.lstat.bind(fsp);
+    let calls = 0;
+    vi.spyOn(fsp, "lstat").mockImplementation((async (target: fs.PathLike) => {
+      if (target === lockPath) onCall(++calls);
+      return realLstat(target);
+    }) as typeof fsp.lstat);
   }
 
   beforeEach(() => {
@@ -215,6 +229,65 @@ describe("pruneCrashDumps", () => {
     expect(result).toMatchObject({ protectedCount: 3, deletedCount: 1 });
   });
 
+  it("reserves count budget for an older locked dump before keeping newer ones", async () => {
+    writeFile("pending/h1.dmp", 1 * HOUR);
+    writeFile("pending/h2.dmp", 2 * HOUR);
+    writeFile("pending/h3.dmp", 3 * HOUR);
+    writeFile("pending/h4.dmp", 4 * HOUR);
+    writeFile("pending/h4.lock", 4 * HOUR, 0);
+
+    const result = await prune();
+
+    expect(exists("pending/h1.dmp")).toBe(true);
+    expect(exists("pending/h2.dmp")).toBe(true);
+    expect(exists("pending/h3.dmp")).toBe(false);
+    expect(exists("pending/h4.dmp")).toBe(true);
+    expect(result).toMatchObject({ protectedCount: 1, deletedCount: 1 });
+  });
+
+  it("reserves byte budget for locked dumps and gives no second newest-dump exemption", async () => {
+    const policy = { ...POLICY, maxCount: 10 };
+    // Newest dump is locked, so the next one down is not "the newest".
+    writeFile("pending/h1.dmp", 1 * HOUR, 700);
+    writeFile("pending/h1.lock", 1 * HOUR, 0);
+    writeFile("pending/h2.dmp", 2 * HOUR, 200);
+    writeFile("pending/h3.dmp", 3 * HOUR, 250);
+    writeFile("pending/h3.lock", 3 * HOUR, 0);
+    // Would fit on its own, but sits behind a dump that missed the budget.
+    writeFile("pending/h4.dmp", 4 * HOUR, 10);
+
+    const result = await prune({ policy });
+
+    expect(exists("pending/h1.dmp")).toBe(true);
+    expect(exists("pending/h2.dmp")).toBe(false);
+    expect(exists("pending/h3.dmp")).toBe(true);
+    expect(exists("pending/h4.dmp")).toBe(false);
+    expect(result).toMatchObject({ protectedCount: 2, deletedCount: 2, deletedBytes: 210 });
+  });
+
+  it("keeps the running session's newest dump past the maximum age", async () => {
+    const sessionStartMs = NOW - 40 * DAY;
+    writeFile("pending/this-session.dmp", 35 * DAY);
+    writeFile("pending/this-session-older.dmp", 36 * DAY);
+    writeFile("pending/before-session.dmp", 45 * DAY);
+
+    const result = await prune({ sessionStartMs });
+
+    expect(exists("pending/this-session.dmp")).toBe(true);
+    expect(exists("pending/this-session-older.dmp")).toBe(false);
+    expect(exists("pending/before-session.dmp")).toBe(false);
+    expect(result.deletedCount).toBe(2);
+  });
+
+  it("ages out a newest dump written before the running session started", async () => {
+    writeFile("pending/before-session.dmp", 35 * DAY);
+
+    const result = await prune({ sessionStartMs: NOW - 1 * DAY });
+
+    expect(exists("pending/before-session.dmp")).toBe(false);
+    expect(result.deletedCount).toBe(1);
+  });
+
   it("removes a Linux .meta sidecar with its dump and preserves unrelated Crashpad files", async () => {
     writeFile("pending/old.dmp", 40 * DAY);
     writeFile("pending/old.meta", 40 * DAY);
@@ -297,18 +370,11 @@ describe("pruneCrashDumps", () => {
   it("skips a dump whose lock appears between the scan and the deletion", async () => {
     writeFile("pending/old.dmp", 40 * DAY);
     const lockPath = path.join(dumpsDir, "pending", "old.lock");
-    const realLstat = fsp.lstat.bind(fsp);
-    let lockChecks = 0;
-    vi.spyOn(fsp, "lstat").mockImplementation((async (target: fs.PathLike) => {
-      if (target === lockPath && ++lockChecks === 1) {
-        try {
-          return await realLstat(target);
-        } finally {
-          fs.writeFileSync(lockPath, "");
-        }
-      }
-      return realLstat(target);
-    }) as typeof fsp.lstat);
+    spyOnLockStat(lockPath, (call) => {
+      // The scan-time check has already missed; the lock lands before the
+      // deletion-time recheck.
+      if (call === 2) fs.writeFileSync(lockPath, "");
+    });
 
     const result = await prune();
 
@@ -316,37 +382,103 @@ describe("pruneCrashDumps", () => {
     expect(result).toMatchObject({ deletedCount: 0, protectedCount: 1 });
   });
 
-  it("records an unreadable directory without aborting the rest of the sweep", async () => {
-    writeFile("pending/a.dmp", 2 * DAY);
-    writeFile("completed/old.dmp", 40 * DAY);
-    const pendingDir = path.join(dumpsDir, "pending");
-    const realOpendir = fsp.opendir.bind(fsp);
-    vi.spyOn(fsp, "opendir").mockImplementation(async (dir, opts) => {
-      if (dir === pendingDir) throw errnoError("EACCES");
-      return realOpendir(dir, opts);
+  it.each([
+    ["the scan", 1],
+    ["the deletion recheck", 2],
+  ])("treats an unreadable lock at %s as locked and records it", async (_label, failingCall) => {
+    writeFile("pending/old.dmp", 40 * DAY);
+    writeFile("pending/old.meta", 40 * DAY);
+    writeFile("pending/other.dmp", 41 * DAY);
+    spyOnLockStat(path.join(dumpsDir, "pending", "old.lock"), (call) => {
+      if (call === failingCall) throw errnoError("EACCES");
     });
 
     const result = await prune();
 
-    expect(result.failures).toEqual({ "scan:EACCES": 1 });
-    expect(exists("pending/a.dmp")).toBe(true);
-    expect(exists("completed/old.dmp")).toBe(false);
+    expect(exists("pending/old.dmp")).toBe(true);
+    expect(exists("pending/old.meta")).toBe(true);
+    expect(exists("pending/other.dmp")).toBe(false);
+    expect(result).toMatchObject({
+      protectedCount: 1,
+      deletedCount: 1,
+      failures: { "lock-stat:EACCES": 1 },
+    });
   });
 
-  it("inventories Windows reports/ without deleting anything", async () => {
+  it("records a dump stat failure, skips a dump that vanished mid-scan, and carries on", async () => {
+    const unreadable = writeFile("pending/unreadable.dmp", 40 * DAY);
+    const vanished = writeFile("pending/vanished.dmp", 40 * DAY);
+    writeFile("pending/old.dmp", 40 * DAY);
+    const realLstat = fsp.lstat.bind(fsp);
+    vi.spyOn(fsp, "lstat").mockImplementation((async (target: fs.PathLike) => {
+      if (target === unreadable) throw errnoError("EACCES");
+      if (target === vanished) throw errnoError("ENOENT");
+      return realLstat(target);
+    }) as typeof fsp.lstat);
+
+    const result = await prune();
+
+    expect(exists("pending/unreadable.dmp")).toBe(true);
+    expect(exists("pending/vanished.dmp")).toBe(true);
+    expect(exists("pending/old.dmp")).toBe(false);
+    expect(result).toMatchObject({ count: 1, failures: { "stat:EACCES": 1 } });
+  });
+
+  it.each(["new", "pending"])(
+    "records an unreadable %s/ without aborting the rest of the sweep",
+    async (subdir) => {
+      writeFile("new/writing.dmp", 1 * MINUTE);
+      writeFile("pending/a.dmp", 2 * DAY);
+      writeFile("completed/old.dmp", 40 * DAY);
+      const unreadableDir = path.join(dumpsDir, subdir);
+      const realOpendir = fsp.opendir.bind(fsp);
+      vi.spyOn(fsp, "opendir").mockImplementation(async (dir, opts) => {
+        if (dir === unreadableDir) throw errnoError("EACCES");
+        return realOpendir(dir, opts);
+      });
+
+      const result = await prune();
+
+      expect(result.failures).toEqual({ "scan:EACCES": 1 });
+      expect(exists("new/writing.dmp")).toBe(true);
+      expect(exists("pending/a.dmp")).toBe(true);
+      expect(exists("completed/old.dmp")).toBe(false);
+    }
+  );
+
+  it("inventories only Windows reports/ and deletes nothing there", async () => {
     writeFile("reports/old.dmp", 90 * DAY, 300);
     writeFile("reports/recent.dmp", 1 * HOUR, 200);
-    writeFile("metadata", 90 * DAY);
+    writeFile("new/posix.dmp", 90 * DAY, 1_000);
+    writeFile("pending/posix.dmp", 90 * DAY, 1_000);
+    writeFile("completed/posix.dmp", 90 * DAY, 1_000);
+    const metadata = writeFile("metadata", 90 * DAY);
+    fs.writeFileSync(metadata, "crashpad-index");
+    const metadataBefore = fs.statSync(metadata);
 
     const result = await prune({ platform: "win32" });
 
-    expect(exists("reports/old.dmp")).toBe(true);
-    expect(exists("reports/recent.dmp")).toBe(true);
-    expect(result).toMatchObject({
+    for (const file of [
+      "reports/old.dmp",
+      "reports/recent.dmp",
+      "new/posix.dmp",
+      "pending/posix.dmp",
+      "completed/posix.dmp",
+    ]) {
+      expect(exists(file), file).toBe(true);
+    }
+    expect(fs.readFileSync(metadata, "utf8")).toBe("crashpad-index");
+    expect(fs.statSync(metadata).mtimeMs).toBe(metadataBefore.mtimeMs);
+    expect(result).toEqual({
       count: 2,
       bytes: 500,
       oldestAgeMs: 90 * DAY,
+      inProgressCount: 0,
+      inProgressBytes: 0,
       deletedCount: 0,
+      deletedBytes: 0,
+      protectedCount: 0,
+      failures: {},
       deletionSupported: false,
     });
   });
@@ -370,12 +502,12 @@ describe("crash recovery inspection gate", () => {
     _resetCrashRecoveryInspectionForTests();
   });
 
-  it("is closed until crash recovery marks its inspection complete", () => {
+  it("holds no session start until crash recovery marks its inspection complete", () => {
     _resetCrashRecoveryInspectionForTests();
-    expect(isCrashRecoveryInspectionComplete()).toBe(false);
+    expect(getInspectedSessionStartMs()).toBeNull();
 
-    markCrashRecoveryInspectionComplete();
+    markCrashRecoveryInspectionComplete(NOW);
 
-    expect(isCrashRecoveryInspectionComplete()).toBe(true);
+    expect(getInspectedSessionStartMs()).toBe(NOW);
   });
 });

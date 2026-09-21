@@ -16,6 +16,17 @@ const loggerMock = vi.hoisted(() => ({
 vi.mock("electron", () => ({ app: appMock }));
 vi.mock("../../utils/logger.js", () => loggerMock);
 
+// The fixtures use the macOS/Linux layout; pin it so the suite behaves the
+// same on a Windows host, where the real prune only inventories reports/.
+vi.mock("../../utils/crashDumpRetention.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../utils/crashDumpRetention.js")>();
+  return {
+    ...actual,
+    pruneCrashDumps: (dir: string, options: Parameters<typeof actual.pruneCrashDumps>[1]) =>
+      actual.pruneCrashDumps(dir, { ...options, platform: "linux" }),
+  };
+});
+
 import {
   _resetCrashDumpRetentionForTests,
   requestNativeCrashDumpPrune,
@@ -26,6 +37,7 @@ import {
 } from "../../utils/crashDumpRetention.js";
 
 const DAY = 24 * 60 * 60 * 1000;
+const SENTINEL = "SENTINEL-4f2a";
 
 describe("requestNativeCrashDumpPrune", () => {
   let dumpsDir: string;
@@ -39,11 +51,21 @@ describe("requestNativeCrashDumpPrune", () => {
     return filePath;
   }
 
+  function expectNoPathsLogged(): void {
+    const logged = JSON.stringify([
+      loggerMock.logDebug.mock.calls,
+      loggerMock.logInfo.mock.calls,
+      loggerMock.logWarn.mock.calls,
+    ]);
+    expect(logged).not.toContain(dumpsDir);
+    expect(logged).not.toContain(SENTINEL);
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     _resetCrashDumpRetentionForTests();
     _resetCrashRecoveryInspectionForTests();
-    dumpsDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-dump-service-"));
+    dumpsDir = fs.mkdtempSync(path.join(os.tmpdir(), `crash-dump-service-${SENTINEL}-`));
     appMock.getPath.mockImplementation((name) => {
       if (name === "crashDumps") return dumpsDir;
       throw new Error(`unexpected path ${name}`);
@@ -65,9 +87,9 @@ describe("requestNativeCrashDumpPrune", () => {
   });
 
   it("prunes once inspection is complete and logs aggregates without paths", async () => {
-    markCrashRecoveryInspectionComplete();
-    const old = writeDump("pending/old.dmp", 90 * DAY);
-    const recent = writeDump("pending/recent.dmp", 2 * DAY);
+    markCrashRecoveryInspectionComplete(Date.now());
+    const old = writeDump(`pending/${SENTINEL}-old.dmp`, 90 * DAY);
+    const recent = writeDump(`pending/${SENTINEL}-recent.dmp`, 2 * DAY);
 
     const result = await requestNativeCrashDumpPrune();
 
@@ -77,11 +99,23 @@ describe("requestNativeCrashDumpPrune", () => {
     expect(loggerMock.logInfo).toHaveBeenCalledTimes(1);
     const [, context] = loggerMock.logInfo.mock.calls[0];
     expect(context).toMatchObject({ count: 2, deletedCount: 1, oldestAgeHours: 90 * 24 });
-    expect(JSON.stringify(loggerMock.logInfo.mock.calls)).not.toContain(dumpsDir);
+    expectNoPathsLogged();
+  });
+
+  it("keeps the running session's evidence dump past the maximum age", async () => {
+    // A session open for 40 days, with native crashes 35 and 36 days ago.
+    markCrashRecoveryInspectionComplete(Date.now() - 40 * DAY);
+    const evidence = writeDump("pending/this-session.dmp", 35 * DAY);
+    const older = writeDump("pending/this-session-older.dmp", 36 * DAY);
+
+    await requestNativeCrashDumpPrune();
+
+    expect(fs.existsSync(evidence)).toBe(true);
+    expect(fs.existsSync(older)).toBe(false);
   });
 
   it("shares one in-flight pass between concurrent callers", async () => {
-    markCrashRecoveryInspectionComplete();
+    markCrashRecoveryInspectionComplete(Date.now());
     writeDump("pending/old.dmp", 90 * DAY);
 
     const first = requestNativeCrashDumpPrune();
@@ -96,9 +130,9 @@ describe("requestNativeCrashDumpPrune", () => {
   });
 
   it("resolves null instead of rejecting when the dumps path cannot be resolved", async () => {
-    markCrashRecoveryInspectionComplete();
+    markCrashRecoveryInspectionComplete(Date.now());
     appMock.getPath.mockImplementation(() => {
-      throw Object.assign(new Error("no path"), { code: "ENOTSUP" });
+      throw Object.assign(new Error(`cannot resolve ${dumpsDir}`), { code: "ENOTSUP" });
     });
 
     await expect(requestNativeCrashDumpPrune()).resolves.toBeNull();
@@ -106,11 +140,13 @@ describe("requestNativeCrashDumpPrune", () => {
     expect(loggerMock.logWarn).toHaveBeenCalledWith(expect.stringContaining("failed"), {
       code: "ENOTSUP",
     });
+    expectNoPathsLogged();
   });
 
-  it("logs cleanup failures as a warning", async () => {
-    markCrashRecoveryInspectionComplete();
-    writeDump("pending/old.dmp", 90 * DAY);
+  it("logs cleanup failures as a warning without paths", async () => {
+    markCrashRecoveryInspectionComplete(Date.now());
+    writeDump(`pending/${SENTINEL}.dmp`, 90 * DAY);
+    // opendir on a regular file fails with ENOTDIR, whose message names the path.
     fs.writeFileSync(path.join(dumpsDir, "completed"), "not a directory");
 
     await requestNativeCrashDumpPrune();
@@ -120,10 +156,11 @@ describe("requestNativeCrashDumpPrune", () => {
       expect.objectContaining({ failures: { "scan:ENOTDIR": 1 }, deletedCount: 1 })
     );
     expect(loggerMock.logInfo).not.toHaveBeenCalled();
+    expectNoPathsLogged();
   });
 
   it("logs at debug level when there are no dumps on disk", async () => {
-    markCrashRecoveryInspectionComplete();
+    markCrashRecoveryInspectionComplete(Date.now());
 
     await requestNativeCrashDumpPrune();
 

@@ -1,7 +1,7 @@
 import { app } from "electron";
 import { logDebug, logInfo, logWarn } from "../utils/logger.js";
 import {
-  isCrashRecoveryInspectionComplete,
+  getInspectedSessionStartMs,
   pruneCrashDumps,
   type CrashDumpRetentionResult,
 } from "../utils/crashDumpRetention.js";
@@ -24,12 +24,13 @@ export function requestNativeCrashDumpPrune(): Promise<CrashDumpRetentionResult 
 }
 
 async function runPrune(): Promise<CrashDumpRetentionResult | null> {
-  if (!isCrashRecoveryInspectionComplete()) {
+  const sessionStartMs = getInspectedSessionStartMs();
+  if (sessionStartMs === null) {
     logWarn("[CrashDumpRetention] Skipped: crash recovery has not inspected native dumps yet");
     return null;
   }
   try {
-    const result = await pruneCrashDumps(app.getPath("crashDumps"));
+    const result = await pruneCrashDumps(app.getPath("crashDumps"), { sessionStartMs });
     logResult(result);
     return result;
   } catch (err) {

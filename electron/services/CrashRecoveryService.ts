@@ -110,7 +110,7 @@ export class CrashRecoveryService {
     this.pendingCrash = this.consumeMarker();
     // The previous session is now classified against the on-disk Crashpad
     // dumps, so native-dump retention may start deleting them.
-    markCrashRecoveryInspectionComplete();
+    markCrashRecoveryInspectionComplete(this.sessionStartMs);
     this.writeMarker();
     console.log("[CrashRecovery] Initialized, pending crash:", this.pendingCrash !== null);
   }

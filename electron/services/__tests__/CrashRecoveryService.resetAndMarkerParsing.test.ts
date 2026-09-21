@@ -77,7 +77,7 @@ vi.mock("../SystemSleepService.js", () => ({
 import { CrashRecoveryService } from "../CrashRecoveryService.js";
 import {
   _resetCrashRecoveryInspectionForTests,
-  isCrashRecoveryInspectionComplete,
+  getInspectedSessionStartMs,
   pruneCrashDumps,
 } from "../../utils/crashDumpRetention.js";
 
@@ -91,6 +91,7 @@ describe("CrashRecoveryService", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    _resetCrashRecoveryInspectionForTests();
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "crash-recovery-test-"));
     userData = tmpDir;
     appMock.getPath.mockReturnValue(userData);
@@ -496,7 +497,6 @@ describe("CrashRecoveryService", () => {
     });
 
     it("keeps 'native-crash' after retention deletes the dump it was classified from", async () => {
-      _resetCrashRecoveryInspectionForTests();
       const dumpsDir = path.join(userData, "crashpad-dumps");
       const pendingDir = path.join(dumpsDir, "pending");
       fs.mkdirSync(pendingDir, { recursive: true });
@@ -523,10 +523,13 @@ describe("CrashRecoveryService", () => {
           })
         );
 
+        const constructedAfterMs = Date.now();
         const svc = makeService();
-        expect(isCrashRecoveryInspectionComplete()).toBe(false);
+        expect(getInspectedSessionStartMs()).toBeNull();
         svc.initialize();
-        expect(isCrashRecoveryInspectionComplete()).toBe(true);
+        // The gate opens with the running session's start, not the one just
+        // classified.
+        expect(getInspectedSessionStartMs()).toBeGreaterThanOrEqual(constructedAfterMs);
 
         // A zero budget with no grace window deletes even the fresh dump.
         const result = await pruneCrashDumps(dumpsDir, {
