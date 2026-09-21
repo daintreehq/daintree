@@ -13,6 +13,7 @@ import type { ForgeProviderMatcher } from "../../../shared/utils/forgeHostnames.
 import { projectStore } from "../ProjectStore.js";
 import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 import type { HostLoadKind } from "../ProjectSwitchStatusTiming.js";
+import type { WorkspacePollingPolicy } from "../../../shared/types/powerPolicy.js";
 
 const CLEANUP_GRACE_MS = 180_000;
 
@@ -123,6 +124,13 @@ export class WorkspaceHostPool {
    * a non-balanced profile is active doesn't run the in-host defaults. */
   private monitorConfigCache:
     import("../../../shared/types/workspace-host.js").MonitorConfig | null = null;
+
+  /** App-wide workspace power policy — seeded into hosts created after the
+   * last push. Without it a new or prewarmed host boots fully permissioned
+   * while the attenuated cadence from `monitorConfigCache` reaches it, so it
+   * would watch, fetch and poll behind a locked screen until the next policy
+   * change happened to fire. `null` until the first push. */
+  private workspacePolicyCache: WorkspacePollingPolicy | null = null;
 
   private emit: EmitFn;
   private onProjectSwitch?: (windowId: number) => void;
@@ -282,6 +290,10 @@ export class WorkspaceHostPool {
         // without each having to remember to foreground first. `resume()` is
         // idempotent, so this is harmless when the host was never paused.
         existingEntry.host.send({ type: "foreground" });
+        // A withdrawal reaches every host; the matching grant reaches only the
+        // attached ones, so a host that was dormant across both re-attaches
+        // holding the withdrawal and would reconcile status work off for good.
+        existingEntry.host.flushWorkspacePowerPolicy();
         this.windowToProject.set(windowId, normalizedPath);
 
         if (isSwitching) {
@@ -300,6 +312,9 @@ export class WorkspaceHostPool {
     }
     if (this.monitorConfigCache !== null) {
       host.updateMonitorConfig(this.monitorConfigCache);
+    }
+    if (this.workspacePolicyCache !== null) {
+      host.setWorkspacePowerPolicy(this.workspacePolicyCache, true);
     }
 
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
@@ -374,6 +389,9 @@ export class WorkspaceHostPool {
     }
     if (this.monitorConfigCache !== null) {
       host.updateMonitorConfig(this.monitorConfigCache);
+    }
+    if (this.workspacePolicyCache !== null) {
+      host.setWorkspacePowerPolicy(this.workspacePolicyCache, true);
     }
 
     const projectId = projectStore.resolveProjectIdForPath(normalizedPath);
@@ -801,6 +819,24 @@ export class WorkspaceHostPool {
     this.monitorConfigCache = { ...this.monitorConfigCache, ...config };
     for (const entry of this.entries.values()) {
       entry.host.updateMonitorConfig(config);
+    }
+  }
+
+  // ── Workspace power policy ──
+
+  /**
+   * Push the app-wide workspace power policy and cache it for hosts created
+   * later. A policy that withdraws a permission reaches every host; one that
+   * grants reaches only the attached ones — a dormant host retained behind a
+   * cached view must not be woken by a focus return. Every host caches it
+   * regardless, so a restart replays the policy in force.
+   */
+  setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
+    this.workspacePolicyCache = { ...policy };
+    const grantsOnly = policy.statusAllowed && policy.backgroundWorkAllowed;
+    const deliverTo = new Set(grantsOnly ? this.attachedEntries() : [...this.entries.values()]);
+    for (const entry of this.entries.values()) {
+      entry.host.setWorkspacePowerPolicy(policy, deliverTo.has(entry));
     }
   }
 

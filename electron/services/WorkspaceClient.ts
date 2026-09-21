@@ -374,15 +374,7 @@ export class WorkspaceClient extends EventEmitter {
    * window re-attaches and foregrounds it.
    */
   setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
-    const grantsOnly = policy.statusAllowed && policy.backgroundWorkAllowed;
-    const deliverTo = new Set(
-      grantsOnly ? this.pool.attachedEntries() : [...this.pool.entries.values()]
-    );
-    // Every host caches the policy so a restart replays the one in force; only
-    // the chosen ones are woken with it now.
-    for (const entry of this.pool.entries.values()) {
-      entry.host.setWorkspacePowerPolicy(policy, deliverTo.has(entry));
-    }
+    this.pool.setWorkspacePowerPolicy(policy);
   }
 
   /**

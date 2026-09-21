@@ -1,5 +1,5 @@
-// Leaf module: no runtime imports, safe to import from any process-global
-// service. Shared between powerMonitor's power-policy polling throttle (the
+// Near-leaf module: imports only the import-free powerPolicy leaf, so it stays
+// safe to import from any process-global service. Shared between powerMonitor's power-policy polling throttle (the
 // only writer) and ResourceProfileService (a concurrent writer of the same
 // polling knobs) so a profile transition landing mid-throttle keeps the
 // multiplier applied instead of silently un-throttling the pollers

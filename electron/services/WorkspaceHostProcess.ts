@@ -411,6 +411,19 @@ export class WorkspaceHostProcess extends EventEmitter {
   }
 
   /**
+   * Deliver the cached policy now. For a host that was skipped for a grant
+   * while it sat dormant: it re-attaches holding a withdrawn policy it would
+   * otherwise keep reconciling against until an unrelated policy change fired.
+   * No-op before the first push — nothing has ever narrowed the default.
+   */
+  flushWorkspacePowerPolicy(): void {
+    if (this.workspacePolicyCache === null) return;
+    if (this.isInitialized && this.child) {
+      this.send({ type: "set-workspace-power-policy", policy: this.workspacePolicyCache });
+    }
+  }
+
+  /**
    * Update the cached forge provider-matcher table and push immediately if
    * initialized. On restart, `ready` replays the cached table automatically.
    */

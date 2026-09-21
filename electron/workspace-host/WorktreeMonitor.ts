@@ -1172,9 +1172,9 @@ export class WorktreeMonitor {
 
   /**
    * Status work (watcher-driven refreshes and the timed poll) runs while this
-   * worktree's project is in the foreground of a window someone could look at,
-   * and where neither holds only where an agent is working — that worktree's
-   * freshness is the product's core loop.
+   * worktree's project is in the foreground of a window someone could look at.
+   * When that does not hold it continues only for a worktree an agent is
+   * working in — that worktree's freshness is the product's core loop.
    */
   private get statusWorkAllowed(): boolean {
     return this.statusPollingEnabled || this._agentActive;

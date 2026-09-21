@@ -41,8 +41,15 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
 
     // Mirrors the real host: the policy is cached for replay on every host and
     // only delivered to the ones the client chose.
+    cachedWorkspacePolicy: unknown = null;
     setWorkspacePowerPolicy = vi.fn((policy: unknown, deliver: boolean) => {
+      this.cachedWorkspacePolicy = policy;
       if (deliver) this.send({ type: "set-workspace-power-policy", policy });
+    });
+
+    flushWorkspacePowerPolicy = vi.fn(() => {
+      if (this.cachedWorkspacePolicy === null) return;
+      this.send({ type: "set-workspace-power-policy", policy: this.cachedWorkspacePolicy });
     });
 
     // `timeoutMs` mirrors the real WorkspaceHostProcess signature so callers
@@ -367,6 +374,64 @@ describe("WorkspaceClient multi-process manager", () => {
       const load3 = client.loadProject("/project-a", 1);
       await load3;
       expect(h(0).send).toHaveBeenCalledWith({ type: "foreground" });
+    });
+
+    it("seeds a newly created host with the workspace power policy in force", async () => {
+      const withdrawn = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
+      client.setWorkspacePowerPolicy(withdrawn);
+
+      const load = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load;
+
+      // Without this the host boots fully permissioned while the attenuated
+      // monitor config reaches it — watching and fetching behind a lock screen.
+      expect(h(0).setWorkspacePowerPolicy).toHaveBeenCalledWith(withdrawn, true);
+    });
+
+    it("seeds a prewarmed host with the workspace power policy in force", async () => {
+      const withdrawn = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
+      client.setWorkspacePowerPolicy(withdrawn);
+
+      client.prewarmProject("/project-a");
+
+      expect(h(0).setWorkspacePowerPolicy).toHaveBeenCalledWith(withdrawn, true);
+    });
+
+    it("re-delivers the cached policy when a dormant host is re-attached", async () => {
+      const load1 = client.loadProject("/project-a", 1);
+      await readyAndResolveLoad(0);
+      await load1;
+
+      const load2 = client.loadProject("/project-b", 1);
+      await readyAndResolveLoad(1);
+      await load2;
+
+      // Withdrawal reaches every host, including the now-dormant project-a.
+      const withdrawn = { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true };
+      client.setWorkspacePowerPolicy(withdrawn);
+      expect(h(0).send).toHaveBeenCalledWith({
+        type: "set-workspace-power-policy",
+        policy: withdrawn,
+      });
+
+      // The matching grant reaches only the attached host — project-a keeps
+      // caching the withdrawal without being woken.
+      const granted = { statusAllowed: true, backgroundWorkAllowed: true, attenuated: false };
+      client.setWorkspacePowerPolicy(granted);
+      expect(h(0).send).not.toHaveBeenCalledWith({
+        type: "set-workspace-power-policy",
+        policy: granted,
+      });
+
+      // Re-attaching foregrounds it, and the host reconciles against the
+      // policy it holds — so the grant has to land with the foreground.
+      const load3 = client.loadProject("/project-a", 1);
+      await load3;
+      expect(h(0).send).toHaveBeenCalledWith({
+        type: "set-workspace-power-policy",
+        policy: granted,
+      });
     });
   });
 
