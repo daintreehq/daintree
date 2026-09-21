@@ -159,6 +159,23 @@ function editorOwnsDomFocus(view: EditorView): boolean {
   return view.contentDOM.contains(document.activeElement);
 }
 
+/**
+ * Drag feedback for both editor hosts — the compact bar and the Expanded
+ * Editor. Shared so the two drop targets cannot drift apart again (#12570).
+ */
+function FileDropOverlay({ className }: { className?: string }) {
+  return (
+    <div
+      className={cn(
+        "absolute inset-0 z-10 flex items-center justify-center bg-surface-canvas/80 pointer-events-none",
+        className
+      )}
+    >
+      <span className="text-xs font-medium text-accent-primary">Drop to attach</span>
+    </div>
+  );
+}
+
 const hybridInputE2EControllers = new Map<string, HybridInputE2EController>();
 
 function installHybridInputE2EBridge(): void {
@@ -296,8 +313,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // bar would (#11809). Called with no argument, which is what keeps the
     // shift/cmd fleet gestures a click carries out of a drop. Absent for the
     // Assistant, whose input bar owns no selectable pane.
-    const { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles } =
-      useDragDrop(editorViewRef, cwd, onActivate);
+    const {
+      handleDragEnter,
+      handleDragOver,
+      handleDragLeave,
+      handleDrop,
+      resetDragState,
+      isDragOverFiles,
+    } = useDragDrop(editorViewRef, cwd, onActivate);
+
+    // The dialog unmounts its body once its exit animation ends, and can close
+    // under a hovering file — a slow submission collapses it mid-drag. Chromium
+    // then fires the pending dragleave at the detached node, which React never
+    // sees, so the depth the body accumulated would pin the overlay on the
+    // compact bar. Stable identity, or every re-render would detach and reset.
+    const releaseModalDropTarget = useCallback(
+      (node: HTMLDivElement | null) => {
+        if (!node) resetDragState();
+      },
+      [resetDragState]
+    );
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(cwd);
 
@@ -875,7 +910,13 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-accent": inputBarColors.accent,
     } as React.CSSProperties;
 
-    const isSpecialState = isVoiceActiveForPanel || isDragOverFiles || isFleetPrimary;
+    // One hook instance serves both hosts, so its hover state says a drag is
+    // over the editor, not which host. The compact bar stays visible through
+    // the dialog's scrim and must not light up for a drag over the modal.
+    const isDragOverCompact = isDragOverFiles && !isExpanded;
+    const isDragOverModal = isDragOverFiles && isExpanded;
+
+    const isSpecialState = isVoiceActiveForPanel || isDragOverCompact || isFleetPrimary;
 
     // Fleet-primary uses the same amber family as FleetDraftingPill so the
     // shell itself says "Enter broadcasts" at the point of typing.
@@ -885,7 +926,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           backgroundColor: `color-mix(in oklab, ${inputBarColors.accent} 12%, ${inputBarColors.background})`,
           boxShadow: `0 0 0 1px color-mix(in oklab, ${inputBarColors.accent} 35%, transparent), 0 0 16px color-mix(in oklab, ${inputBarColors.accent} 15%, transparent)`,
         }
-      : isDragOverFiles
+      : isDragOverCompact
         ? {
             borderColor: `color-mix(in oklab, ${inputBarColors.accent} 60%, transparent)`,
             backgroundColor: inputBarColors.shellBg,
@@ -982,11 +1023,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       : "No matches"
               }
             />
-            {isDragOverFiles && (
-              <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-daintree-bg/80 pointer-events-none">
-                <span className="text-xs font-medium text-accent-primary">Drop to attach</span>
-              </div>
-            )}
+            {isDragOverCompact && <FileDropOverlay className="rounded-md" />}
             {isVoiceSubmitting && (
               <div
                 role="status"
@@ -1108,7 +1145,18 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             <AppDialog.Title>Expanded Editor</AppDialog.Title>
             <AppDialog.CloseButton />
           </AppDialog.Header>
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {/* CodeMirror claims file drops to suppress its own text insertion
+              (#11710), so a drop only lands through these handlers (#12570).
+              Outside the scrolling host, so the overlay covers the visible
+              editor instead of scrolling away with a long draft. */}
+          <div
+            ref={releaseModalDropTarget}
+            className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
+            onDragEnter={handleDragEnter}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          >
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 <div
@@ -1133,6 +1181,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
               </ContextMenuContent>
             </ContextMenu>
+            {isDragOverModal && <FileDropOverlay />}
           </div>
         </AppDialog>
         {isFocusedTerminal && (

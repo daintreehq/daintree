@@ -55,6 +55,11 @@ export function useDragDrop(
     e.dataTransfer.dropEffect = "copy";
   }, []);
 
+  const resetDragState = useCallback(() => {
+    dragDepthRef.current = 0;
+    setIsDragOverFiles(false);
+  }, []);
+
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.stopPropagation();
     dragDepthRef.current--;
@@ -68,8 +73,7 @@ export function useDragDrop(
     async (e: React.DragEvent) => {
       e.preventDefault();
       e.stopPropagation();
-      dragDepthRef.current = 0;
-      setIsDragOverFiles(false);
+      resetDragState();
 
       const view = editorViewRef.current;
       if (!view) return;
@@ -222,8 +226,15 @@ export function useDragDrop(
         // Editor may have been destroyed
       }
     },
-    [editorViewRef, cwd, onDropSelect]
+    [editorViewRef, cwd, onDropSelect, resetDragState]
   );
 
-  return { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles };
+  return {
+    handleDragEnter,
+    handleDragOver,
+    handleDragLeave,
+    handleDrop,
+    resetDragState,
+    isDragOverFiles,
+  };
 }

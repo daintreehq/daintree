@@ -610,6 +610,33 @@ describe("useDragDrop", () => {
       expect(result.current.isDragOverFiles).toBe(false);
     });
 
+    // A drop target unmounted mid-drag never gets its leaves (#12570). The
+    // release has to drop the depth it stranded as well as the overlay, or the
+    // next drag's single leave would leave the overlay stuck on.
+    it("releases a stranded drag so the next drag clears on its own leave", () => {
+      const { ref } = fakeView();
+      const { result } = renderHook(() => useDragDrop(ref, CWD));
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+      });
+      act(() => {
+        result.current.resetDragState();
+      });
+      expect(result.current.isDragOverFiles).toBe(false);
+
+      act(() => {
+        result.current.handleDragEnter(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(true);
+
+      act(() => {
+        result.current.handleDragLeave(dragEvent([FILE_DRAG_MIME]));
+      });
+      expect(result.current.isDragOverFiles).toBe(false);
+    });
+
     // Ranges are accumulated against the emitted spelling, and images emit a
     // bare absolute path while files emit a shortened token. Interleaving them
     // on this provenance is where an accumulator could drift independently of
