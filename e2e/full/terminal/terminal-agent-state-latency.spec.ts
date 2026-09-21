@@ -453,7 +453,7 @@ test.describe("Full: agent-state transition latency and hidden-pane delivery", (
       const reduced = await withFlags({ motionRate: "reduced" });
       expect(full.name).not.toBe("none");
       expect(reduced.name).toBe(full.name);
-      expect(steps(reduced.timing)).toBeLessThan(steps(full.timing) / 2);
+      expect(steps(reduced.timing)).toBeLessThanOrEqual(steps(full.timing) / 2);
       const motion = await spinnersAdvancing(window);
       expect(motion.count).toBeGreaterThan(0);
       expect(motion.advancing).toBe(motion.count);

@@ -72,6 +72,7 @@ const config: KnipConfig = {
     "src/components/Layout/__preview__/sidebarFooter.tsx",
     "src/components/Plugin/__preview__/preview.tsx",
     "src/components/Terminal/__preview__/preview.tsx",
+    "src/components/Terminal/__preview__/hybridInput.tsx",
     "src/components/Worktree/__preview__/preview.tsx",
     "src/components/Panel/__preview__/preview.tsx",
     "src/components/DragDrop/__preview__/preview.tsx",
