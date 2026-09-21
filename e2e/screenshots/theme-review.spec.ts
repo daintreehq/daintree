@@ -461,13 +461,14 @@ test("theme review — chrome, overlays, states", async () => {
 
     // 6. Action palette.
     await step("action-palette", async () => {
-      await page.keyboard.press("Shift");
-      await page.keyboard.press("Shift");
+      // Open it by action, not by the double-Shift accelerator with a Cmd+K
+      // fallback. Under load the accelerator's palette took longer than the
+      // 2.5s guard to paint, so the fallback fired too — and Cmd+K is a chord
+      // prefix, which raised the command HUD on top of the palette that was
+      // already opening. The capture came out with two overlapping palettes.
+      await dispatchAction(page, "action.palette.open");
       const dialog = page.locator(SEL.actionPalette.dialog);
-      if (!(await dialog.isVisible({ timeout: 2500 }).catch(() => false))) {
-        await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K");
-      }
-      await dialog.waitFor({ state: "visible", timeout: 5000 });
+      await dialog.waitFor({ state: "visible", timeout: T_REQUIRED });
       await page.locator(SEL.actionPalette.searchInput).fill("theme");
       await settle(page, 600);
       await snap(page, "17-action-palette");
