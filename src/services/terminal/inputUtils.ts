@@ -14,6 +14,19 @@ const SS3_NAV_RE = /^\x1bO[ABCDHFPQRS]$/;
 // eslint-disable-next-line no-control-regex
 const TILDE_NAV_RE = /^\x1b\[(2|3|5|6|15|17|18|19|20|21|23|24)(;\d+)?~$/;
 
+// xterm answers application queries through the same onData event as typing.
+// CPR/DSR/DA/window-report/DECRPM finals; `1;2R` doubles as Shift+F3, which
+// CSI_NAV_RE already keeps out of prompt composition.
+// eslint-disable-next-line no-control-regex
+const CSI_REPORT_RE = /^\x1b\[[>?]?[\d;]*(?:[Rnct]|\$y)$/;
+
+// String replies: OSC (colours, image-addon cell size), DCS (DECRQSS,
+// XTVERSION), APC (Kitty graphics). The terminator is required so bare Alt+],
+// Alt+Shift+P and Alt+_ stay typing, and the payload excludes control bytes so
+// a multi-line raw paste that happens to be framed like one is not swallowed.
+// eslint-disable-next-line no-control-regex
+const STRING_REPLY_RE = /^\x1b(?:\]\d+;|P|_G)[^\x00-\x1f\x7f]*(?:\x07|\x1b\\)$/;
+
 export function isNonKeyboardInput(data: string): boolean {
   // Mouse sequences
   if (data.startsWith("\x1b[M")) return true;
@@ -32,6 +45,12 @@ export function isNonKeyboardInput(data: string): boolean {
   // misclassified as a keystroke and flipped a `waiting` agent to `directing`
   // on a plain click.
   if (data.startsWith("\x1b[?")) return true;
+
+  // An agent TUI re-queries the terminal on focus-in and on resize, so without
+  // this selecting a pane or switching back to its worktree read as typing —
+  // and most replies are long enough to pick the 10s directing debounce.
+  if (CSI_REPORT_RE.test(data)) return true;
+  if (STRING_REPLY_RE.test(data)) return true;
 
   // Lone Escape
   if (data === "\x1b") return true;
