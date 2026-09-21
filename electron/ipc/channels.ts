@@ -597,6 +597,7 @@ export const CHANNELS = {
   CLIPBOARD_WRITE_TEXT: "clipboard:write-text",
   CLIPBOARD_WRITE_SELECTION: "clipboard:write-selection",
   CLIPBOARD_READ_SELECTION: "clipboard:read-selection",
+  CLIPBOARD_PICK_ATTACHMENTS: "clipboard:pick-attachments",
 
   APP_THEME_GET: "app-theme:get",
   APP_THEME_SET_COLOR_SCHEME: "app-theme:set-color-scheme",

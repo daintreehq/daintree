@@ -55,6 +55,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["cli:install"]["result"]>;
   };
   clipboard: {
+    pickAttachments(
+      ...args: IpcInvokeMap["clipboard:pick-attachments"]["args"]
+    ): Promise<IpcInvokeMap["clipboard:pick-attachments"]["result"]>;
     readSelection(
       ...args: IpcInvokeMap["clipboard:read-selection"]["args"]
     ): Promise<IpcInvokeMap["clipboard:read-selection"]["result"]>;

@@ -7,6 +7,7 @@ export const CLIPBOARD_METHOD_CHANNELS = {
   writeText: "clipboard:write-text",
   writeSelection: "clipboard:write-selection",
   readSelection: "clipboard:read-selection",
+  pickAttachments: "clipboard:pick-attachments",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof CLIPBOARD_METHOD_CHANNELS;

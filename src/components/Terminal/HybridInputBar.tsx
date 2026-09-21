@@ -37,6 +37,7 @@ import { tryFleetBroadcastFromEditor } from "@/components/Fleet/fleetEnterBroadc
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { VoiceInputButton } from "./VoiceInputButton";
 import { Archive, Loader2 } from "lucide-react";
+import { Paperclip } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { createTooltipContent } from "@/lib/tooltipShortcut";
@@ -53,6 +54,7 @@ import { resolveInputBarColors } from "@/utils/terminalTheme";
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
 import { useDragDrop } from "./hooks/useDragDrop";
+import { useAttachFiles } from "./hooks/useAttachFiles";
 import { useVoiceDecorations } from "./hooks/useVoiceDecorations";
 import { useContextDetection } from "./hooks/useContextDetection";
 import { useTokenResolution } from "./hooks/useTokenResolution";
@@ -333,6 +335,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       },
       [resetDragState]
     );
+    const handleAttachFiles = useAttachFiles(editorViewRef, cwd);
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(cwd);
 
@@ -1072,6 +1075,25 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               </ContextMenuContent>
             </ContextMenu>
             <div className="flex items-center pr-1.5">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => void handleAttachFiles()}
+                    disabled={disabled}
+                    className={cn(
+                      "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                      "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
+                      "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
+                      "disabled:pointer-events-none disabled:opacity-40"
+                    )}
+                    aria-label="Attach files"
+                  >
+                    <Paperclip className="h-3.5 w-3.5" />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">Attach files</TooltipContent>
+              </Tooltip>
               {hasStash && (
                 <Tooltip>
                   <TooltipTrigger asChild>

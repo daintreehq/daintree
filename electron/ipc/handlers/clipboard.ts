@@ -1,10 +1,11 @@
-import { clipboard, nativeImage } from "electron";
+import { BrowserWindow, clipboard, dialog, nativeImage } from "electron";
 import * as path from "node:path";
 import type { Dirent } from "node:fs";
 import * as fs from "node:fs/promises";
 import * as crypto from "node:crypto";
 import * as os from "node:os";
 import { defineIpcNamespace, op } from "../define.js";
+import type { IpcContext } from "../types.js";
 import { CLIPBOARD_METHOD_CHANNELS } from "./clipboard.preload.js";
 import { AppError } from "../../utils/errorTypes.js";
 import { projectStore } from "../../services/ProjectStore.js";
@@ -277,6 +278,24 @@ async function handleReadSelection(): Promise<{ text: string }> {
   return { text };
 }
 
+// The composer's attach button. Returns only what the user picked in a native
+// dialog — the renderer passes nothing in, so this can't be steered into
+// reading or listing an arbitrary path. Nothing is read or copied here either:
+// the composer inserts references, exactly as it does for a dropped file.
+async function handlePickAttachments(ctx: IpcContext): Promise<string[]> {
+  const win = ctx.senderWindow ?? BrowserWindow.getFocusedWindow();
+  const dialogOptions = {
+    title: "Attach files",
+    buttonLabel: "Attach",
+    properties: ["openFile" as const, "multiSelections" as const],
+  };
+  const result = win
+    ? await dialog.showOpenDialog(win, dialogOptions)
+    : await dialog.showOpenDialog(dialogOptions);
+  if (result.canceled) return [];
+  return result.filePaths;
+}
+
 export const clipboardNamespace = defineIpcNamespace({
   name: "clipboard",
   ops: {
@@ -286,6 +305,9 @@ export const clipboardNamespace = defineIpcNamespace({
     writeText: op(CLIPBOARD_METHOD_CHANNELS.writeText, handleWriteText),
     writeSelection: op(CLIPBOARD_METHOD_CHANNELS.writeSelection, handleWriteSelection),
     readSelection: op(CLIPBOARD_METHOD_CHANNELS.readSelection, handleReadSelection),
+    pickAttachments: op(CLIPBOARD_METHOD_CHANNELS.pickAttachments, handlePickAttachments, {
+      withContext: true,
+    }),
   },
 });
 
