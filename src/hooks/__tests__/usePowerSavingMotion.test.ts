@@ -26,8 +26,8 @@ vi.mock("@/lib/viewCacheState", () => ({
 
 import { StrictMode } from "react";
 import {
+  loopingMotionMode,
   resetPowerSavingMotionForTests,
-  shouldSuspendDecorativeMotion,
   usePowerSavingMotion,
 } from "../usePowerSavingMotion";
 import { useResourceProfileStore } from "@/store/resourceProfileStore";
@@ -52,8 +52,9 @@ function setVisibility(state: DocumentVisibilityState): void {
 }
 
 const powerSaving = () => document.body.dataset.powerSaving;
+const motionRate = () => document.body.dataset.motionRate;
 
-describe("shouldSuspendDecorativeMotion", () => {
+describe("loopingMotionMode", () => {
   const base = {
     powerLevel: "active",
     profile: "balanced",
@@ -61,18 +62,24 @@ describe("shouldSuspendDecorativeMotion", () => {
     documentHidden: false,
   } as const;
 
-  it("keeps looping motion in the foreground on AC", () => {
-    expect(shouldSuspendDecorativeMotion(base)).toBe(false);
+  it("runs at full rate in the foreground on AC", () => {
+    expect(loopingMotionMode(base)).toBe("full");
   });
 
   it.each([
-    ["battery or blur (saving)", { powerLevel: "saving" }],
-    ["locked or hidden (deep)", { powerLevel: "deep" }],
+    ["battery or a blurred window (saving)", { powerLevel: "saving" }],
     ["the efficiency profile", { profile: "efficiency" }],
+  ] as const)("slows but never stops a window that can still be seen: %s", (_label, overrides) => {
+    expect(loopingMotionMode({ ...base, ...overrides })).toBe("reduced");
+  });
+
+  it.each([
+    ["locked or hidden (deep)", { powerLevel: "deep" }],
     ["a cached view", { viewCached: true }],
     ["a hidden document", { documentHidden: true }],
-  ] as const)("stops it for %s", (_label, overrides) => {
-    expect(shouldSuspendDecorativeMotion({ ...base, ...overrides })).toBe(true);
+  ] as const)("stops only where nothing can be seen: %s", (_label, overrides) => {
+    expect(loopingMotionMode({ ...base, ...overrides })).toBe("stopped");
+    expect(loopingMotionMode({ ...base, powerLevel: "saving", ...overrides })).toBe("stopped");
   });
 });
 
@@ -98,6 +105,7 @@ describe("usePowerSavingMotion", () => {
   afterEach(() => {
     Reflect.deleteProperty(window, "electron");
     delete document.body.dataset.powerSaving;
+    delete document.body.dataset.motionRate;
     resetPowerSavingMotionForTests();
   });
 
@@ -115,7 +123,7 @@ describe("usePowerSavingMotion", () => {
 
     renderHook(() => usePowerSavingMotion(), { wrapper: StrictMode });
 
-    expect(powerSaving()).toBe("true");
+    expect(motionRate()).toBe("reduced");
   });
 
   it("follows main's power policy, including the way back", () => {
@@ -123,9 +131,15 @@ describe("usePowerSavingMotion", () => {
     expect(powerSaving()).toBeUndefined();
 
     act(() => pushPolicy!(snapshot("saving")));
+    expect(motionRate()).toBe("reduced");
+    expect(powerSaving()).toBeUndefined();
+
+    act(() => pushPolicy!(snapshot("deep")));
+    expect(motionRate()).toBeUndefined();
     expect(powerSaving()).toBe("true");
 
     act(() => pushPolicy!(snapshot("active")));
+    expect(motionRate()).toBeUndefined();
     expect(powerSaving()).toBeUndefined();
   });
 
@@ -139,15 +153,34 @@ describe("usePowerSavingMotion", () => {
     lifecycle.cached = false;
     act(() => lifecycle.listeners.forEach((listener) => listener("revealed")));
     expect(powerSaving()).toBeUndefined();
+
+    // Cached outranks slowed, and reveal hands the slowed state back intact.
+    act(() => pushPolicy!(snapshot("saving")));
+    lifecycle.cached = true;
+    act(() => lifecycle.listeners.forEach((listener) => listener("cached")));
+    expect([powerSaving(), motionRate()]).toEqual(["true", undefined]);
+    lifecycle.cached = false;
+    act(() => lifecycle.listeners.forEach((listener) => listener("revealed")));
+    expect([powerSaving(), motionRate()]).toEqual([undefined, "reduced"]);
   });
 
   it("tracks the efficiency profile and page visibility", () => {
     renderHook(() => usePowerSavingMotion());
 
     act(() => useResourceProfileStore.getState().setProfile("efficiency"));
-    expect(powerSaving()).toBe("true");
-    act(() => useResourceProfileStore.getState().setProfile("balanced"));
+    expect(motionRate()).toBe("reduced");
     expect(powerSaving()).toBeUndefined();
+
+    // Hidden outranks slowed: nothing to see, so nothing runs.
+    act(() => setVisibility("hidden"));
+    expect(motionRate()).toBeUndefined();
+    expect(powerSaving()).toBe("true");
+    act(() => setVisibility("visible"));
+    expect(motionRate()).toBe("reduced");
+    expect(powerSaving()).toBeUndefined();
+
+    act(() => useResourceProfileStore.getState().setProfile("balanced"));
+    expect(motionRate()).toBeUndefined();
 
     act(() => setVisibility("hidden"));
     expect(powerSaving()).toBe("true");
@@ -155,14 +188,18 @@ describe("usePowerSavingMotion", () => {
     expect(powerSaving()).toBeUndefined();
   });
 
-  it("clears the attribute and its subscriptions on unmount", () => {
+  it("clears both attributes and its subscriptions on unmount", () => {
     const { unmount } = renderHook(() => usePowerSavingMotion());
     act(() => pushPolicy!(snapshot("deep")));
     expect(powerSaving()).toBe("true");
-
     unmount();
-
     expect(powerSaving()).toBeUndefined();
+
+    const second = renderHook(() => usePowerSavingMotion());
+    act(() => pushPolicy!(snapshot("saving")));
+    expect(motionRate()).toBe("reduced");
+    second.unmount();
+    expect(motionRate()).toBeUndefined();
     expect(lifecycle.listeners.size).toBe(0);
   });
 

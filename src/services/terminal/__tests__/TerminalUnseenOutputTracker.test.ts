@@ -39,6 +39,63 @@ describe("TerminalUnseenOutputTracker", () => {
       expect(listener).toHaveBeenCalledTimes(2);
     });
 
+    it("shows the pill for a burst a hidden pane merged into fewer writes", () => {
+      const listener = vi.fn();
+      tracker.subscribe(terminalId, listener);
+
+      // A burst one write over the threshold, landing as a plain write plus one merged batch.
+      tracker.incrementUnseen(terminalId, true);
+      tracker.incrementUnseen(terminalId, true, UNSEEN_THRESHOLD);
+
+      expect(tracker.getSnapshot(terminalId).unseen).toBeGreaterThan(UNSEEN_THRESHOLD);
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it("publishes the crossing when one merged batch jumps straight over the threshold", () => {
+      const listener = vi.fn();
+      tracker.subscribe(terminalId, listener);
+
+      tracker.incrementUnseen(terminalId, true, UNSEEN_THRESHOLD + 5);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(UNSEEN_THRESHOLD + 5);
+      expect(listener).toHaveBeenCalledTimes(1);
+
+      tracker.incrementUnseen(terminalId, true, 4);
+      expect(listener).toHaveBeenCalledTimes(1);
+    });
+
+    it("holds weighted increments unpublished and releases back to the held count", () => {
+      const listener = vi.fn();
+      tracker.subscribe(terminalId, listener);
+      tracker.incrementUnseen(terminalId, true);
+      listener.mockClear();
+
+      const held = tracker.holdUnseen(terminalId);
+      tracker.incrementUnseen(terminalId, true, 40);
+      expect(listener).not.toHaveBeenCalled();
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(1);
+      // Counted while held, not discarded: the raw count a second hold reads.
+      expect(tracker.holdUnseen(terminalId)).toBe(held + 40);
+
+      tracker.releaseUnseen(terminalId, held);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(1);
+
+      // Counting resumes from the released value, weights included.
+      tracker.incrementUnseen(terminalId, true, 2);
+      expect(tracker.getSnapshot(terminalId).unseen).toBe(3);
+    });
+
+    it.each([0, -3, Number.NaN, Number.POSITIVE_INFINITY])(
+      "counts a malformed batch size (%s) as one write and keeps counting",
+      (bad) => {
+        tracker.incrementUnseen(terminalId, true, bad);
+        tracker.incrementUnseen(terminalId, true, UNSEEN_THRESHOLD);
+        expect(tracker.getSnapshot(terminalId).unseen).toBe(1 + UNSEEN_THRESHOLD);
+
+        tracker.clearUnseen(terminalId, true);
+        expect(tracker.getSnapshot(terminalId).unseen).toBe(0);
+      }
+    );
+
     it("does not wake subscribers for further increments above the threshold", () => {
       const listener = vi.fn();
       tracker.subscribe(terminalId, listener);

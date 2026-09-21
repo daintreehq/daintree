@@ -163,7 +163,7 @@ describe("TerminalWriteController.write", () => {
     controller.write("t1", "hello");
 
     expect(vi.mocked(managed.terminal.write)).toHaveBeenCalledWith("hello", expect.any(Function));
-    expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false);
+    expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false, 1);
     expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
@@ -608,6 +608,13 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
     vi.stubGlobal("electron", undefined);
   });
 
+  it("counts a coalesced batch as the writes it merged, not as one", () => {
+    managed.isUserScrolledBack = true;
+    controller.write("t1", "abc", 3);
+
+    expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", true, 3);
+  });
+
   it("keeps the byte stream and every ledger live while cached", () => {
     // The hard constraint from #10811/#4853: demoting a hidden view must never
     // hold bytes. Ingest stays live, so no backlog exists to detonate on reveal.
@@ -618,7 +625,7 @@ describe("TerminalWriteController — cached project view (#11212)", () => {
     expect(deps.acknowledgePortData).toHaveBeenCalledWith("t1", 5, 1);
     expect(deps.acknowledgeData).toHaveBeenCalledWith("t1", 5);
     expect(deps.notifyWriteComplete).toHaveBeenCalledWith("t1", 5);
-    expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false);
+    expect(deps.incrementUnseen).toHaveBeenCalledWith("t1", false, 1);
   });
 
   it("schedules no frame and allocates no marker for writes while cached", () => {

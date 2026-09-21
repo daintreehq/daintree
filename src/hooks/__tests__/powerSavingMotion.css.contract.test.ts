@@ -59,12 +59,24 @@ function topLevelRules(source: string): TopLevelRule[] {
 }
 
 const PREFIX = 'body[data-power-saving="true"] ';
-const powerSavingRules = topLevelRules(css).filter((rule) =>
-  rule.selectors.some((selector) => selector.includes("data-power-saving"))
+const REDUCED_PREFIX = 'body[data-motion-rate="reduced"] ';
+const gateRules = topLevelRules(css).filter((rule) =>
+  rule.selectors.some(
+    (selector) => selector.includes("data-power-saving") || selector.includes("data-motion-rate")
+  )
 );
+const LOOPS = [
+  ".animate-spin-slow",
+  ".animate-activity-pulse",
+  ".animate-breathe",
+  ".animate-pulse",
+  ".motion-safe\\:animate-pulse",
+  ".status-working",
+  ".forge-status-error",
+];
 
 function ruleFor(target: string): TopLevelRule | undefined {
-  return powerSavingRules.find((rule) => rule.selectors.includes(PREFIX + target));
+  return gateRules.find((rule) => rule.selectors.includes(PREFIX + target));
 }
 
 describe("power-saving motion CSS", () => {
@@ -88,16 +100,17 @@ describe("power-saving motion CSS", () => {
   );
 
   it("targets named classes only — never a wildcard", () => {
-    const selectors = powerSavingRules.flatMap((rule) => rule.selectors);
+    const selectors = gateRules.flatMap((rule) => rule.selectors);
     expect(selectors.length).toBeGreaterThan(0);
     for (const selector of selectors) {
-      expect(selector.startsWith(PREFIX)).toBe(true);
-      expect(selector.slice(PREFIX.length)).toMatch(/^\.[\w\\:-]+(::after)?$/);
+      const prefix = [PREFIX, REDUCED_PREFIX].find((candidate) => selector.startsWith(candidate));
+      expect(prefix).toBeDefined();
+      expect(selector.slice(prefix!.length)).toMatch(/^\.[\w\\:-]+(::after)?$/);
     }
   });
 
   it("never overrides transitions", () => {
-    for (const rule of powerSavingRules) {
+    for (const rule of gateRules) {
       for (const property of rule.declarations.keys()) {
         expect(property.startsWith("transition")).toBe(false);
       }
@@ -105,8 +118,52 @@ describe("power-saving motion CSS", () => {
   });
 
   it("leaves the gated loading pulses alone so skeletons never vanish", () => {
-    const selectors = powerSavingRules.flatMap((rule) => rule.selectors);
+    const selectors = gateRules.flatMap((rule) => rule.selectors);
     expect(selectors.some((s) => s.includes("animate-pulse-delayed"))).toBe(false);
     expect(selectors.some((s) => s.includes("animate-pulse-immediate"))).toBe(false);
+  });
+
+  describe("reduced rate", () => {
+    const reducedRule = (target: string) =>
+      gateRules.find((rule) => rule.selectors.includes(REDUCED_PREFIX + target));
+    const stepsOf = (value: string | undefined) =>
+      Number(/^steps\((\d+), end\)$/.exec(value ?? "")?.[1] ?? Number.NaN);
+
+    it.each(LOOPS)("keeps the %s loop running, in discrete steps", (target) => {
+      const declarations = reducedRule(target)?.declarations;
+      expect(stepsOf(declarations?.get("animation-timing-function"))).toBeGreaterThan(0);
+      // Touching `animation` or its name would restart a loop reduced motion stopped.
+      expect([...declarations!.keys()]).toEqual(["animation-timing-function"]);
+    });
+
+    it("slows everything the stop list stops, so nothing visible is left still", () => {
+      const targets = (prefix: string) =>
+        gateRules
+          .flatMap((rule) => rule.selectors)
+          .filter((selector) => selector.startsWith(prefix))
+          .map((selector) => selector.slice(prefix.length))
+          .sort();
+      expect(targets(REDUCED_PREFIX)).toEqual(targets(PREFIX));
+    });
+
+    it("never hides or removes an animation at the reduced rate", () => {
+      for (const rule of gateRules) {
+        if (!rule.selectors.some((selector) => selector.startsWith(REDUCED_PREFIX))) continue;
+        expect([...rule.declarations.keys()]).toEqual(["animation-timing-function"]);
+      }
+    });
+
+    it("turns the spinner at under half its foreground frame rate", () => {
+      const foreground = topLevelRules(css).find((rule) =>
+        rule.selectors.includes(".animate-spin-slow")
+      );
+      const foregroundSteps = Number(
+        /steps\((\d+)/.exec(foreground?.declarations.get("animation") ?? "")?.[1]
+      );
+      const reducedSteps = stepsOf(
+        reducedRule(".animate-spin-slow")?.declarations.get("animation-timing-function")
+      );
+      expect(reducedSteps).toBeLessThan(foregroundSteps / 2);
+    });
   });
 });
