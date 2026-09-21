@@ -1,5 +1,12 @@
 import type { ComponentType, SVGProps } from "react";
-import { GitHubIcon, GitPullRequest, LayoutPanelTop, Plug, SvelteIcon } from "@/components/icons";
+import {
+  GitHubIcon,
+  GitPullRequest,
+  LayoutPanelTop,
+  MarkdownIcon,
+  Plug,
+  SvelteIcon,
+} from "@/components/icons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
 import { isPluginCategoryId, resolvePluginCategory } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId, PluginManifest } from "@shared/types/plugin";
@@ -16,6 +23,7 @@ type IconComponent = ComponentType<SVGProps<SVGSVGElement>>;
  */
 const BRAND_PLUGIN_ICONS: Record<string, IconComponent> = {
   "daintree.github": GitHubIcon,
+  "daintree.markdown-editor": MarkdownIcon,
   "daintree.sveltekit-builder": SvelteIcon,
 };
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { categoryIconFor, pluginIconForIdentity } from "../pluginIcons";
 import { DEFAULT_PLUGIN_ICON } from "@/components/icons/pluginIconRegistry";
-import { GitHubIcon, SvelteIcon } from "@/components/icons";
+import { GitHubIcon, MarkdownIcon, SvelteIcon } from "@/components/icons";
 import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { PluginCategoryId } from "@shared/types/plugin";
 
@@ -27,6 +27,10 @@ describe("pluginIconForIdentity", () => {
     expect(pluginIconForIdentity("daintree.sveltekit-builder", "workspace")).not.toBe(
       categoryIconFor("workspace")
     );
+  });
+
+  it("identifies the Markdown editor by the Markdown mark", () => {
+    expect(pluginIconForIdentity("daintree.markdown-editor", "workspace")).toBe(MarkdownIcon);
   });
 
   it("keeps the brand mark regardless of the resolved category", () => {
