@@ -3,11 +3,11 @@
 // that way after any height change, and on stream finish if a resize landed
 // mid-stream (#12398).
 //
-// xterm's ED3 handler trims every scrollback line and zeroes ybase/ydisp but
-// leaves BufferService.isUserScrolling set, so as the transcript is
-// re-inserted a bottom-following buffer follows it down while a scrolled-back
-// one stays parked on line 0 — the startup banner. The internal scroll event
-// ED3 fires never reaches the public `onScroll`, so nothing app-side notices.
+// xterm's ED3 handler trims every scrollback line and zeroes ybase/ydisp, so
+// the reader's position is gone by the time the transcript is re-inserted.
+// Upstream's #6081 also clears isUserScrolling there, which means the redraw
+// now carries the viewport along at the bottom — better than beta.300's park
+// on line 0 (the startup banner), but still not where the reader was.
 //
 // This observes the erase on the parser (our handler runs before xterm's, so
 // the buffer is still intact), remembers where the reader was, and scrolls
@@ -15,10 +15,11 @@
 // and the browser viewport has re-synced to the rebuilt buffer. Agent-agnostic:
 // only the byte sequence and the buffer position decide anything.
 //
-// Pinned to @xterm 6.1.0-beta.300 behaviour: CSI handlers run newest-first and
-// `false` falls through to xterm's own; ED3 fires no public onScroll and keeps
-// isUserScrolling; a DECSTBM region with a top margin of 0 still scrolls lines
-// into scrollback; public onRender precedes the Viewport's deferred sync.
+// Pinned to @xterm 6.1.0-beta.304 behaviour: CSI handlers run newest-first and
+// `false` falls through to xterm's own; ED3 fires no public onScroll and drops
+// isUserScrolling (#6081), so the replay's own scrolls report the bottom; a
+// DECSTBM region with a top margin of 0 still scrolls lines into scrollback;
+// public onRender precedes the Viewport's deferred sync.
 
 type CsiParams = (number | number[])[];
 
@@ -212,8 +213,8 @@ export function installViewportAnchorController(
       unseenHeld: true,
       phase: "armed",
       restoreCancelled: false,
-      // ED3 leaves ydisp at 0 and buffer-driven scrolling keeps it there while
-      // the reader is scrolled back; a different value means the reader moved.
+      // ED3 leaves ydisp at 0, and until the first line lands that is also the
+      // bottom; from there the redraw carries it down (see onScroll).
       expectedViewportY: 0,
       attempts: 0,
       deadlineTimer,
@@ -373,11 +374,18 @@ export function installViewportAnchorController(
       return false;
     }),
     terminal.onWriteParsed(restartQuietTimer),
-    // Buffer-driven scrolls during the redraw report the parked ydisp; a
-    // scrollbar drag, scroll key, or scroll-to-bottom reports a new one.
+    // Since #6081 the erase drops isUserScrolling, so the re-inserted lines
+    // drag the viewport along at the bottom: a report from there is the redraw
+    // moving it, not the reader. Off the bottom — and off where we parked it —
+    // is a scrollbar drag or scroll key. A reader who deliberately scrolls to
+    // the bottom mid-redraw is indistinguishable from the redraw itself and
+    // gets restored anyway; one gesture during a few frames, against losing
+    // the restore entirely, is the better side to err on.
     terminal.onScroll(() => {
       if (!pending || selfScrolling) return;
-      const viewportY = terminal.buffer.active.viewportY;
+      const buffer = terminal.buffer.active;
+      const viewportY = buffer.viewportY;
+      if (viewportY === buffer.baseY) return;
       if (viewportY !== pending.expectedViewportY && viewportY !== pending.target) {
         cancelRestore();
       }

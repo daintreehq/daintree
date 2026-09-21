@@ -128,19 +128,21 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     });
   };
 
-  it("control: without the controller the replay parks a scrolled-back reader on line 0", async () => {
-    const { terminal } = await scrolledBackTerminal();
+  it("control: without the controller the replay drags a scrolled-back reader to the bottom", async () => {
+    const { terminal, anchorLine } = await scrolledBackTerminal();
     track(terminal);
 
     await writeAndFlush(terminal, codexReplayBurst(transcript()));
 
+    // Upstream #6081 moved the damage: no longer parked on the startup banner,
+    // but still not the content the reader was on.
     const buffer = terminal.buffer.active;
     expect(buffer.baseY).toBeGreaterThan(0);
-    expect(buffer.viewportY).toBe(0);
-    expect(topLine(terminal)).toBe(transcriptLine(1));
+    expect(buffer.viewportY).toBe(buffer.baseY);
+    expect(topLine(terminal)).not.toBe(anchorLine);
   });
 
-  it("pins the beta.300 premise: ESC[3J reaches no public onScroll and keeps the reader scrolled back", async () => {
+  it("pins the beta.304 premise: ESC[3J reaches no public onScroll and drops isUserScrolling", async () => {
     const { terminal } = await scrolledBackTerminal();
     track(terminal);
     const onScroll = vi.fn();
@@ -151,10 +153,11 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     expect(terminal.buffer.active.baseY).toBe(0);
     expect(terminal.buffer.active.viewportY).toBe(0);
 
-    // The re-inserted lines do reach it — with the parked ydisp, not the bottom.
+    // The re-inserted lines do reach it — riding the bottom, because the erase
+    // cleared isUserScrolling. That is the report the cancel path must ignore.
     await writeAndFlush(terminal, codexReplay(transcript()));
     expect(onScroll).toHaveBeenCalled();
-    expect(terminal.buffer.active.viewportY).toBe(0);
+    expect(terminal.buffer.active.viewportY).toBe(terminal.buffer.active.baseY);
   });
 
   it("restores a scrolled-back reader to the same content after the replay", async () => {
@@ -166,7 +169,7 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     // The parser saw ESC[3J then the closing ESU; the scroll waits for a render.
     expect(harness.controller.phase).toBe("restoring");
     const buffer = terminal.buffer.active;
-    expect(buffer.viewportY).toBe(0);
+    expect(buffer.viewportY).toBe(buffer.baseY);
     // The replay's DECSTBM layout shifts the transcript, so the distance guess
     // alone would land on different content — the text anchor is load-bearing.
     expect(lineAt(terminal, buffer.baseY - SCROLL_BACK_BY)).not.toBe(anchorLine);
@@ -261,13 +264,16 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     await writeAndFlush(terminal, codexReplayBurst(transcript()));
     expect(harness.controller.phase).toBe("restoring");
 
-    // A scrollbar drag or PageDown: the buffer moves off the parked position.
-    terminal.scrollLines(5);
+    // A scrollbar drag or PageUp: the buffer moves off the bottom the redraw
+    // left it on, which is the one report that is unambiguously the reader.
+    const buffer = terminal.buffer.active;
+    const grabbed = buffer.baseY - 5;
+    terminal.scrollLines(-5);
     expect(harness.controller.phase).toBe("idle");
     expect(harness.pendingRenders()).toBe(0);
 
     harness.flushRender();
-    expect(terminal.buffer.active.viewportY).toBe(5);
+    expect(buffer.viewportY).toBe(grabbed);
   });
 
   it("a wheel gesture cancels before the replay ends; the count stays held until it lands", async () => {
@@ -289,7 +295,8 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     expect(harness.deps.releaseUnseen).toHaveBeenCalledWith(2);
     expect(harness.deps.releaseUnseen).toHaveBeenCalledTimes(1);
     expect(harness.pendingRenders()).toBe(0);
-    expect(terminal.buffer.active.viewportY).toBe(0);
+    // Never scrolled by us: wherever the redraw left it, which is the bottom.
+    expect(terminal.buffer.active.viewportY).toBe(terminal.buffer.active.baseY);
   });
 
   it("a plain clear with no sync block settles at line 0 without scrolling", async () => {
@@ -330,7 +337,7 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
     await writeAndFlush(terminal, codexReplayBurst(transcript()));
 
     expect(harness.controller.phase).toBe("idle");
-    expect(terminal.buffer.active.viewportY).toBe(0);
+    expect(terminal.buffer.active.viewportY).toBe(terminal.buffer.active.baseY);
     expect(harness.deps.holdUnseen).not.toHaveBeenCalled();
   });
 

@@ -38,7 +38,7 @@ interface BufferLineLike {
   _data: Uint32Array;
   _combined: SparseMap;
   _extendedAttrs: SparseMap;
-  _invalidateStringCache(): void;
+  _cacheValid: boolean;
   _copySparseMapsFrom(src: BufferLineLike): void;
   setCell(index: number, cell: unknown): void;
   setCellFromCodepoint(index: number, codePoint: number, width: number, attrs: unknown): void;
@@ -63,7 +63,7 @@ interface FillCellLike {
   bg: number;
 }
 
-// Mirrors of const-enum values inlined into the pinned 6.1.0-beta.288
+// Mirrors of const-enum values inlined into the pinned 6.1.0-beta.304
 // bundles (src/common/buffer/{BufferLine,Constants}.ts upstream). The
 // equivalence suite catches drift on version bumps.
 const CELL_SIZE = 3;
@@ -83,7 +83,6 @@ const REQUIRED_METHODS = [
   "setCell",
   "setCellFromCodepoint",
   "getWidth",
-  "_invalidateStringCache",
   "_copySparseMapsFrom",
 ] as const;
 
@@ -135,7 +134,7 @@ function makeCopyCellsFrom(original: BufferLineLike["copyCellsFrom"]) {
       original.call(this, src, srcCol, destCol, length, applyInReverse);
       return;
     }
-    this._invalidateStringCache();
+    this._cacheValid = false;
     const span = srcEnd - srcStart;
     if (srcData === destData) {
       destData.copyWithin(destCol * CELL_SIZE, srcStart, srcEnd);
@@ -181,7 +180,7 @@ function makeResize(original: BufferLineLike["resize"]) {
     ) {
       return original.call(this, cols, fillCellData);
     }
-    this._invalidateStringCache();
+    this._cacheValid = false;
     const uint32Cells = cols * CELL_SIZE;
     if (cols > this.length) {
       let data = this._data;
@@ -237,7 +236,7 @@ function makeCopyFrom(original: BufferLineLike["copyFrom"]) {
       original.call(this, line);
       return;
     }
-    this._invalidateStringCache();
+    this._cacheValid = false;
     const needed = line.length * CELL_SIZE;
     if (this._data.length === src.length) {
       this._data.set(src);
@@ -283,7 +282,7 @@ function makeReplaceCells(original: BufferLineLike["replaceCells"]) {
       original.call(this, start, end, fillCellData, respectProtect);
       return;
     }
-    this._invalidateStringCache();
+    this._cacheValid = false;
     if (start && this.getWidth(start - 1) === 2) {
       this.setCellFromCodepoint(start - 1, 0, 1, fillCellData);
     }
@@ -344,7 +343,6 @@ interface BufferLike {
   scrollBottom: number;
   _cols: number;
   _rows: number;
-  _stringCache: { clear(): void };
   _optionsService: {
     rawOptions: {
       windowsPty?: { backend?: unknown; buildNumber?: unknown };
@@ -366,7 +364,6 @@ interface BufferLike {
 }
 
 type BufferLineCtor = new (
-  stringCache: unknown,
   cols: number,
   fillCellData: unknown,
   isWrapped: boolean
@@ -522,7 +519,6 @@ function makeBufferResize(original: BufferLike["resize"]) {
       return;
     }
 
-    this._stringCache.clear();
     let dirtyMemoryLines = 0;
 
     const newMaxLength = this._getCorrectBufferLength(newRows);
@@ -550,7 +546,7 @@ function makeBufferResize(original: BufferLike["resize"]) {
           ) {
             // Capacity-stable grow (see makeResize): reuse the existing view
             // when it already spans the new width, fill only the new cells.
-            line._invalidateStringCache();
+            line._cacheValid = false;
             let data = line._data;
             if (data.length < newCells) {
               const capacityCells = Math.floor(data.buffer.byteLength / 4);
@@ -582,7 +578,7 @@ function makeBufferResize(original: BufferLike["resize"]) {
           if (this.lines.length < newRows + this.ybase) {
             const windowsPty = this._optionsService.rawOptions.windowsPty;
             if (windowsPty?.backend !== undefined || windowsPty?.buildNumber !== undefined) {
-              this.lines.push(new lineCtor(this._stringCache, newCols, nullCell, false));
+              this.lines.push(new lineCtor(newCols, nullCell, false));
             } else {
               if (this.ybase > 0 && this.lines.length <= this.ybase + this.y + addToY + 1) {
                 this.ybase -= 1;
@@ -591,7 +587,7 @@ function makeBufferResize(original: BufferLike["resize"]) {
                   this.ydisp -= 1;
                 }
               } else {
-                this.lines.push(new lineCtor(this._stringCache, newCols, nullCell, false));
+                this.lines.push(new lineCtor(newCols, nullCell, false));
               }
             }
           }
@@ -650,7 +646,7 @@ function makeBufferResize(original: BufferLike["resize"]) {
           ) {
             // Capacity-stable shrink (see makeResize): the logical width
             // drops, the view keeps its slack for the next grow.
-            line._invalidateStringCache();
+            line._cacheValid = false;
             line.length = newCols;
             dirtyMemoryLines += +(newCells * 4 * CLEANUP_THRESHOLD < line._data.buffer.byteLength);
           } else {
@@ -1080,6 +1076,10 @@ function patchLinePrototype(line: BufferLineLike): boolean {
   }
   if (typeof line._combined !== "object" || line._combined === null) return false;
   if (typeof line._extendedAttrs !== "object" || line._extendedAttrs === null) return false;
+  // Upstream #6114 replaced `_invalidateStringCache()` with this flag; the
+  // fast paths write it directly, so its absence is shape drift like any
+  // missing method.
+  if (typeof line._cacheValid !== "boolean") return false;
   for (const method of REQUIRED_METHODS) {
     if (typeof proto[method] !== "function") return false;
   }
@@ -1107,7 +1107,6 @@ function patchBufferPrototype(buffer: BufferLike, line: BufferLineLike): boolean
   if (typeof isReflowEnabled?.get !== "function") return false;
   if (!Array.isArray(buffer.lines?._array)) return false;
   if (typeof buffer.lines._startIndex !== "number") return false;
-  if (typeof buffer._stringCache?.clear !== "function") return false;
   if (typeof buffer._optionsService?.rawOptions !== "object") return false;
   if (typeof buffer._memoryCleanupQueue?.clear !== "function") return false;
   if (typeof buffer._memoryCleanupQueue?.enqueue !== "function") return false;

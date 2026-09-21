@@ -113,11 +113,14 @@ function makeFakeTerminal(): FakeTerminal {
   return fake;
 }
 
-/** The program re-inserts its transcript: scrollback grows while the reader stays parked at 0. */
+/**
+ * The program re-inserts its transcript: scrollback grows and the viewport
+ * rides the bottom with it, since the erase cleared isUserScrolling (#6081).
+ */
 function replay(terminal: FakeTerminal, lines: string[]): void {
   terminal.lines = lines;
   terminal.baseY = Math.max(0, lines.length - terminal.rows);
-  terminal.viewportY = 0;
+  terminal.viewportY = terminal.baseY;
   terminal.writeParsed();
   terminal.fireScroll();
 }
@@ -341,11 +344,26 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     terminal.esu();
     expect(controller.phase).toBe("restoring");
 
-    // scrollToBottom from the pill / scrollToLastActivity / a scrollbar drag.
-    terminal.viewportY = terminal.baseY;
+    // A scrollbar drag or scroll key, landing off the bottom.
+    terminal.viewportY = terminal.baseY - 12;
     terminal.fireScroll();
     expect(controller.phase).toBe("idle");
     expect(renders).toHaveLength(0);
+  });
+
+  it("the redraw riding the bottom is not the reader and does not cancel", () => {
+    install();
+    terminal.ed3();
+    replay(terminal, originalLines());
+    terminal.esu();
+    expect(controller.phase).toBe("restoring");
+
+    // More of the transcript lands: since #6081 each batch drags the viewport
+    // down with the bottom, which must not read as a gesture.
+    terminal.baseY += 5;
+    terminal.viewportY = terminal.baseY;
+    terminal.fireScroll();
+    expect(controller.phase).toBe("restoring");
   });
 
   it("cancel before the replay ends keeps the count held until the redraw has landed, and never scrolls", () => {
