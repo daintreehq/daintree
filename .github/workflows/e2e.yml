@@ -96,6 +96,10 @@ on:
         description: "Enable Playwright blob reporter so downstream jobs can merge reports across shards/OSes (stabilize sweep / release)."
         type: boolean
         default: false
+      prebuilt_artifact:
+        description: "Artifact-name prefix of a build:e2e bundle the caller already produced in this run (stabilize.yml's e2e-build job). The OS name is appended, e.g. `e2e-build` resolves to `e2e-build-Windows`. When set, shards download it instead of each rebuilding the app. Empty = build inline."
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -152,57 +156,30 @@ jobs:
           esac
 
           # Only the full-* buckets and the `full` meta-suite fan out. N=4 is
-          # the tuned starting point from #8053 (39min → ~10min on Windows).
-          # Windows full-platform contains restart/persistence-heavy tests that
-          # still form >45m shards at smaller splits, so use 16 slices there.
-          # Windows full-terminal has one very large serial terminal-panels file;
-          # 32 slices keeps that file isolated from terminal-link tests.
-          # full-worktree has restart-heavy cross-project and deletion-cleanup
-          # specs that can still exceed the 45m reusable workflow timeout at
-          # 8 slices, so match full-platform's 16-slice Windows split. full-presets
-          # has context-menu/custom-preset shards that also exceed the release
-          # window at 8 slices, so it uses the same 16-slice Windows split.
-          # full-panels has cold-launch-heavy settings/github/review files that
-          # can pack into one long shard; 32 slices separates the forge/github
-          # group from the specialized-palette group.
-          # full-resilience's crash/error-recovery specs need the same Windows
-          # split as other restart-heavy buckets; shard 2/8 can exceed the
-          # 45-minute e2e job timeout when its crash-recovery files pack together.
+          # the tuned starting point from #8053 (39min -> ~10min on Windows).
+          #
+          # Windows gets more slices because its restart/persistence-heavy files
+          # run several times slower, but every shard pays a fixed setup cost
+          # (~3min of npm ci, plus ~3.5min of build when the caller supplies no
+          # prebuilt bundle) and the runner pool caps concurrency, so slices
+          # past the point where setup dominates make the whole run SLOWER.
+          # Measured on a green Windows stabilize run (2026-09-21): at 32/16
+          # slices the busiest shard spent 283s in Playwright and the median
+          # under 60s, against ~360s of setup, 132 jobs queueing for ~17
+          # runners. 12/8 keeps the busiest projected shard near 10min, far
+          # inside the 90min Windows window, with well under half the jobs.
+          # full-terminal and full-panels keep the larger count: each has one
+          # big serial file that should not share a shard with much else.
+          WINDOWS_RUN=false
+          if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
+            WINDOWS_RUN=true
+          fi
           case "$SUITE" in
-            full-terminal)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
-                SHARD_TOTAL=32
-              else
-                SHARD_TOTAL=4
-              fi
+            full-terminal|full-panels)
+              if [ "$WINDOWS_RUN" = "true" ]; then SHARD_TOTAL=12; else SHARD_TOTAL=4; fi
               ;;
-            full-platform)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
-                SHARD_TOTAL=16
-              else
-                SHARD_TOTAL=4
-              fi
-              ;;
-            full-worktree|full-presets)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
-                SHARD_TOTAL=16
-              else
-                SHARD_TOTAL=4
-              fi
-              ;;
-            full-resilience)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
-                SHARD_TOTAL=16
-              else
-                SHARD_TOTAL=4
-              fi
-              ;;
-            full-panels)
-              if [ "$PLATFORM" = "windows" ] || [ "$PLATFORM" = "all" ] || [ "$PLATFORM" = "linux-windows" ]; then
-                SHARD_TOTAL=32
-              else
-                SHARD_TOTAL=4
-              fi
+            full-platform|full-worktree|full-presets|full-resilience)
+              if [ "$WINDOWS_RUN" = "true" ]; then SHARD_TOTAL=8; else SHARD_TOTAL=4; fi
               ;;
             full|full-*) SHARD_TOTAL=4 ;;
             *)           SHARD_TOTAL=1 ;;
@@ -420,7 +397,28 @@ jobs:
       - name: Verify Electron install
         run: node scripts/ci/verify-electron-install.mjs
 
+      # A caller that fans this workflow out many times (stabilize.yml) builds
+      # once per OS and hands the bundle over, so ~3.5min of identical
+      # tsc + vite + esbuild work is not repeated on every shard.
+      - name: Download prebuilt app
+        if: inputs.prebuilt_artifact != ''
+        uses: actions/download-artifact@v7
+        with:
+          name: ${{ inputs.prebuilt_artifact }}-${{ matrix.name }}
+          path: .
+
+      - name: Unpack prebuilt app
+        if: inputs.prebuilt_artifact != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          tar -xzf e2e-build.tgz
+          rm e2e-build.tgz
+          test -f dist/index.html
+          test -f dist-electron/electron/bootstrap.js
+
       - name: Build app
+        if: inputs.prebuilt_artifact == ''
         run: npm run build:e2e
         env:
           NODE_OPTIONS: --max-old-space-size=4096
