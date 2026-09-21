@@ -114,12 +114,12 @@ async function clearPartitionDirs(
   }
 
   for (const entry of entries) {
-    // A symlinked partition dir is followed, as Chromium does; only its cache
-    // dirs are touched, and fs.rm never follows links beneath them.
-    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+    const isSymlink = entry.isSymbolicLink();
+    if (!entry.isDirectory() && !isSymlink) continue;
     if (classifyPartition(`persist:${entry.name}`) === "unknown") continue;
 
-    const outcome = await clearPartitionDir(path.join(partitionsRoot, entry.name), handled);
+    const partitionDir = path.join(partitionsRoot, entry.name);
+    const outcome = await clearPartitionDir(partitionDir, handled, isSymlink);
     if (outcome === "cleared") result.cleared++;
     else if (outcome === "failed") result.failed++;
   }
@@ -127,7 +127,8 @@ async function clearPartitionDirs(
 
 async function clearPartitionDir(
   partitionDir: string,
-  handled: Set<Electron.Session>
+  handled: Set<Electron.Session>,
+  isSymlink: boolean
 ): Promise<"cleared" | "failed" | "already-counted"> {
   let ok = true;
   let alreadyCounted = false;
@@ -144,6 +145,12 @@ async function clearPartitionDir(
     // Opened after the API pass took its snapshot.
     handled.add(live);
     ok = await clearLiveSession(live);
+  } else if (isSymlink) {
+    // Never traverse an unopened symlinked partition: a recognized name doesn't
+    // make the target Daintree's (it could be $HOME, or alias a live partition
+    // whose backend is open). Report it rather than claim it was cleared.
+    console.warn(`[SessionCacheCleaner] Skipped symlinked partition ${partitionDir}`);
+    return "failed";
   } else {
     const nonce = randomBytes(6).toString("hex");
     for (const name of CACHE_DIR_NAMES) {
@@ -162,7 +169,8 @@ async function clearPartitionDir(
 
   // Retry dirs a previous clear detached but could not remove.
   try {
-    for (const name of await fs.promises.readdir(partitionDir)) {
+    const names = isSymlink ? [] : await fs.promises.readdir(partitionDir);
+    for (const name of names) {
       const candidate = path.join(partitionDir, name);
       if (DETACHED_DIR_PATTERN.test(name) && !doomed.includes(candidate)) {
         doomed.push(candidate);

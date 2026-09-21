@@ -336,17 +336,32 @@ describe("clearAllSessionCaches — unopened partitions on disk", () => {
     expectPreserved(dir);
   });
 
-  it("follows a symlinked partition dir and clears only its caches", async () => {
+  it("never traverses an unopened symlinked partition and reports it", async () => {
+    const liveDir = seedPartition("daintree");
+    trackSession(asSession(fakeSession(liveDir)));
+    fs.symlinkSync(liveDir, partitionDir("browser-alias"), "dir");
+    const renameSpy = vi.spyOn(fs, "renameSync");
+
+    const result = await clearAllSessionCaches();
+
+    expect(renameSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(liveDir, "Cache", "Cache_Data", "index"))).toBe(true);
+    expect(fs.existsSync(path.join(liveDir, "Code Cache", "js", "index"))).toBe(true);
+    expect(result).toEqual({ cleared: 2, failed: 1 });
+  });
+
+  it("clears a symlinked partition opened by name through the API only", async () => {
     const relocated = path.join(sessionData, "relocated-browser");
     fs.mkdirSync(partitionsRoot, { recursive: true });
     fs.renameSync(seedPartition("browser-moved"), relocated);
     fs.symlinkSync(relocated, partitionDir("browser-moved"), "dir");
+    const moved = fakeSession(partitionDir("browser-moved"));
+    trackSession(asSession(moved));
 
     const result = await clearAllSessionCaches();
 
-    expectCachesRemoved(relocated);
-    expectPreserved(relocated);
-    expect(fs.lstatSync(partitionDir("browser-moved")).isSymbolicLink()).toBe(true);
+    expect(moved.clearCache).toHaveBeenCalledTimes(1);
+    expect(fs.existsSync(path.join(relocated, "Cache", "Cache_Data", "index"))).toBe(true);
     expect(result).toEqual({ cleared: 2, failed: 0 });
   });
 
