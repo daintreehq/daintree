@@ -15,18 +15,18 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `agent.focusNextAgent` | Focus Next Agent | safe | — |
-| `agent.focusNextWaiting` | Focus Next Waiting Agent | safe | — |
-| `agent.focusNextWorking` | Focus Next Working Agent | safe | — |
-| `agent.focusPreviousAgent` | Focus Previous Agent | safe | — |
-| `agent.getState` | Get Agent State | safe | `agentId` |
-| `agent.launch` | Launch Agent | safe | `agentId`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `presetId?`, `prompt?`, `removeOnExit?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `worktreeId?` |
-| `agent.listAvailable` | List Available Agents | safe | — |
-| `agent.listPresets` | List Agent Presets | safe | `agentId`, `projectId?` |
-| `agent.listToolbar` | List Toolbar Agents | safe | — |
-| `agent.terminal` | Launch Terminal | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
-| `agentSessionHistory.list` | List Resumable Sessions | safe | `limit?`, `offset?`, `projectId?`, `worktreeId?` |
-| `agentSessionHistory.resume` | Resume Agent Session | safe | `sessionId`, `worktreeId?`, `worktreePath?` |
+| `agent.focusNextAgent` | Focus next agent | safe | — |
+| `agent.focusNextWaiting` | Focus next waiting agent | safe | — |
+| `agent.focusNextWorking` | Focus next working agent | safe | — |
+| `agent.focusPreviousAgent` | Focus previous agent | safe | — |
+| `agent.getState` | Get agent state | safe | `agentId` |
+| `agent.launch` | Launch agent | safe | `agentId`, `activateDockOnCreate?`, `agentLaunchFlags?`, `cwd?`, `env?`, `excludeFromPersistence?`, `focusPolicy?`, `force?`, `handback?`, `interactive?`, `location?`, `model?`, `name?`, `presetId?`, `prompt?`, `removeOnExit?`, `requestedId?`, `spawnedBy?`, `systemPrompt?`, `worktreeId?` |
+| `agent.listAvailable` | List available agents | safe | — |
+| `agent.listPresets` | List agent presets | safe | `agentId`, `projectId?` |
+| `agent.listToolbar` | List toolbar agents | safe | — |
+| `agent.terminal` | Launch terminal | safe | `focusPolicy?`, `location?`, `spawnedBy?` |
+| `agentSessionHistory.list` | List resumable sessions | safe | `limit?`, `offset?`, `projectId?`, `worktreeId?` |
+| `agentSessionHistory.resume` | Resume agent session | safe | `sessionId`, `worktreeId?`, `worktreePath?` |
 | `session.bookmark.delete` | Delete bookmark | confirm | `sessionId` |
 | `session.bookmark.promote` | Add bookmark to session | safe | `label`, `sessionId` |
 | `session.bookmark.rename` | Rename bookmark | safe | `label`, `sessionId` |
@@ -34,72 +34,72 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `session.bookmarks.list` | List bookmarks | safe | `limit?`, `offset?`, `projectId?` |
 | `skills.load` | Load skill | safe | `id` |
 | `skills.search` | Search skills | safe | `limit?`, `query?` |
-| `slashCommands.list` | List Slash Commands | safe | `agentId?`, `projectId?`, `projectPath?` |
+| `slashCommands.list` | List slash commands | safe | `agentId?`, `projectId?`, `projectPath?` |
 
 ## app
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `action.repeatLast` | Repeat Last Action | safe | — |
-| `app.developerMode.set` | Set Developer Mode | safe | `enabled`, `autoOpenDiagnostics?`, `focusEventsTab?` |
-| `app.exportConfig` | Export Configuration… | safe | — |
-| `app.importConfig` | Import Configuration… | confirm | — |
-| `app.pluginManager` | Open Plugin Manager | safe | — |
-| `app.reloadConfig` | Reload Configuration | safe | — |
-| `app.settings.openTab` | Open Settings Tab | safe | `tab`, `sectionId?`, `subtab?` |
-| `app.theme.browser.open` | Browse Themes… | safe | — |
-| `app.theme.pick` | Pick Theme… | safe | — |
-| `app.theme.toggle` | Toggle Dark/Light Theme | safe | — |
+| `action.repeatLast` | Repeat last action | safe | — |
+| `app.developerMode.set` | Set developer mode | safe | `enabled`, `autoOpenDiagnostics?`, `focusEventsTab?` |
+| `app.exportConfig` | Export configuration… | safe | — |
+| `app.importConfig` | Import configuration… | confirm | — |
+| `app.pluginManager` | Open plugin manager | safe | — |
+| `app.reloadConfig` | Reload configuration | safe | — |
+| `app.settings.openTab` | Open settings tab | safe | `tab`, `sectionId?`, `subtab?` |
+| `app.theme.browser.open` | Browse themes… | safe | — |
+| `app.theme.pick` | Pick theme… | safe | — |
+| `app.theme.toggle` | Toggle dark/light theme | safe | — |
 
 ## artifacts
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `artifact.applyPatch` | Apply Patch | confirm | `patchContent`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `artifact.saveToFile` | Save Artifact To File | safe | `content`, `cwd?`, `suggestedFilename?` |
+| `artifact.applyPatch` | Apply patch | confirm | `patchContent`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `artifact.saveToFile` | Save artifact to file | safe | `content`, `cwd?`, `suggestedFilename?` |
 
 ## browser
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `browser.back` | Browser Back | safe | `terminalId?` |
-| `browser.captureScreenshot` | Capture Browser Screenshot | safe | `terminalId?` |
-| `browser.clearConsole` | Clear Browser Console | safe | `terminalId?` |
+| `browser.back` | Browser back | safe | `terminalId?` |
+| `browser.captureScreenshot` | Capture browser screenshot | safe | `terminalId?` |
+| `browser.clearConsole` | Clear browser console | safe | `terminalId?` |
 | `browser.copyUrl` | Copy URL | safe | `terminalId?`, `url?` |
-| `browser.forward` | Browser Forward | safe | `terminalId?` |
-| `browser.getConsoleMessages` | Get Browser Console Messages | safe | `level?`, `limit?`, `terminalId?` |
-| `browser.hardReload` | Hard Reload Browser | safe | `terminalId?` |
-| `browser.navigate` | Navigate Browser | safe | `url`, `terminalId?` |
-| `browser.openExternal` | Open in External Browser | safe | `terminalId?`, `url?` |
-| `browser.openUrl` | Open URL in Browser | safe | `url` |
-| `browser.reload` | Reload Browser | safe | `terminalId?` |
-| `browser.setZoomLevel` | Set Browser Zoom Level | safe | `zoomFactor`, `terminalId?` |
-| `browser.toggleConsole` | Toggle Browser Console | safe | `terminalId?` |
-| `browser.toggleDevTools` | Toggle Browser DevTools | safe | `terminalId?` |
+| `browser.forward` | Browser forward | safe | `terminalId?` |
+| `browser.getConsoleMessages` | Get browser console messages | safe | `level?`, `limit?`, `terminalId?` |
+| `browser.hardReload` | Hard reload browser | safe | `terminalId?` |
+| `browser.navigate` | Navigate browser | safe | `url`, `terminalId?` |
+| `browser.openExternal` | Open in external browser | safe | `terminalId?`, `url?` |
+| `browser.openUrl` | Open URL in browser | safe | `url` |
+| `browser.reload` | Reload browser | safe | `terminalId?` |
+| `browser.setZoomLevel` | Set browser zoom level | safe | `zoomFactor`, `terminalId?` |
+| `browser.toggleConsole` | Toggle browser console | safe | `terminalId?` |
+| `browser.toggleDevTools` | Toggle browser DevTools | safe | `terminalId?` |
 
 ## copyTree
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `copyTree.cancel` | Cancel CopyTree | safe | — |
-| `copyTree.generate` | Generate CopyTree Context | safe | `includeContent?`, `name?`, `options?`, `worktreeId?`, `worktreePath?` |
-| `copyTree.generateAndCopyFile` | Generate And Copy Context | safe | `name?`, `options?`, `worktreeId?`, `worktreePath?` |
-| `copyTree.getFileTree` | Get File Tree | safe | `worktreeId`, `dirPath?`, `includeExcluded?` |
-| `copyTree.injectToTerminal` | Inject Context To Terminal | safe | `terminalId`, `name?`, `options?`, `worktreeId?` |
-| `copyTree.isAvailable` | CopyTree Availability | safe | — |
+| `copyTree.generate` | Generate CopyTree context | safe | `includeContent?`, `name?`, `options?`, `worktreeId?`, `worktreePath?` |
+| `copyTree.generateAndCopyFile` | Generate and copy context | safe | `name?`, `options?`, `worktreeId?`, `worktreePath?` |
+| `copyTree.getFileTree` | Get file tree | safe | `worktreeId`, `dirPath?`, `includeExcluded?` |
+| `copyTree.injectToTerminal` | Inject context to terminal | safe | `terminalId`, `name?`, `options?`, `worktreeId?` |
+| `copyTree.isAvailable` | CopyTree availability | safe | — |
 
 ## devServer
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `devPreview.promoteToPortal` | Open in Portal | safe | `panelId?`, `projectId?` |
+| `devPreview.promoteToPortal` | Open in portal | safe | `panelId?`, `projectId?` |
 | `devPreview.reinstallAndRestart` | Reinstall and restart | confirm | `panelId?`, `projectId?` |
 | `devPreview.reloadPreview` | Reload preview | safe | `panelId?`, `projectId?` |
 | `devPreview.restart` | Restart dev server | safe | `panelId?`, `projectId?` |
 | `devPreview.restartAndClearCache` | Restart and clear cache | confirm | `panelId?`, `projectId?` |
-| `devPreview.stop` | Stop Dev Server | safe | — |
-| `devPreview.toggleTool` | Toggle Dev Preview Tool | safe | `toolId`, `panelId?` |
-| `devServer.start` | Open Dev Preview | safe | `activateDockOnCreate?`, `location?` |
+| `devPreview.stop` | Stop dev server | safe | — |
+| `devPreview.toggleTool` | Toggle dev preview tool | safe | `toolId`, `panelId?` |
+| `devServer.start` | Open dev preview | safe | `activateDockOnCreate?`, `location?` |
 
 ## diagnostics
 
@@ -107,156 +107,156 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | --- | --- | --- | --- |
 | `diagnostics.openReview` | Send diagnostics | safe | `scope?` |
 | `diagnostics.openWhySlow` | Why am I slow? | safe | — |
-| `eventInspector.clear` | Clear Event Inspector | safe | — |
-| `eventInspector.getEvents` | Get Events | safe | `cursor?`, `limit?`, `offset?`, `skip?` |
-| `eventInspector.getFiltered` | Get Filtered Events | safe | `after?`, `before?`, `categories?`, `category?`, `limit?`, `offset?`, `search?`, `terminalId?`, `types?`, `worktreeId?` |
-| `eventInspector.subscribe` | Subscribe to Events | safe | — |
-| `eventInspector.unsubscribe` | Unsubscribe from Events | safe | — |
-| `notifications.recent` | Recent Notifications | safe | `limit?`, `type?`, `unreadOnly?` |
-| `telemetry.clearPreview` | Clear Telemetry Preview | safe | — |
-| `telemetry.togglePreview` | Preview Outbound Telemetry | safe | `active?` |
+| `eventInspector.clear` | Clear event inspector | safe | — |
+| `eventInspector.getEvents` | Get events | safe | `cursor?`, `limit?`, `offset?`, `skip?` |
+| `eventInspector.getFiltered` | Get filtered events | safe | `after?`, `before?`, `categories?`, `category?`, `limit?`, `offset?`, `search?`, `terminalId?`, `types?`, `worktreeId?` |
+| `eventInspector.subscribe` | Subscribe to events | safe | — |
+| `eventInspector.unsubscribe` | Unsubscribe from events | safe | — |
+| `notifications.recent` | Recent notifications | safe | `limit?`, `type?`, `unreadOnly?` |
+| `telemetry.clearPreview` | Clear telemetry preview | safe | — |
+| `telemetry.togglePreview` | Preview outbound telemetry | safe | `active?` |
 
 ## errors
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `errors.clearAll` | Clear All Errors | safe | — |
-| `errors.openLogs` | Open Error Logs | safe | — |
-| `errors.recent` | Recent Errors | safe | `includesDismissed?`, `limit?` |
+| `errors.clearAll` | Clear all errors | safe | — |
+| `errors.openLogs` | Open error logs | safe | — |
+| `errors.recent` | Recent errors | safe | `includesDismissed?`, `limit?` |
 
 ## files
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `file.openDiff` | Open Diff | safe | `path`, `status?`, `worktreePath?` |
-| `file.openImageViewer` | Open in Image Viewer | safe | `path` |
-| `file.openInBrowser` | Open in Browser | safe | `path` |
-| `file.openInEditor` | Open in Editor | safe | `path`, `col?`, `line?` |
-| `file.openPanel` | Open File Panel | safe | `path`, `rootPath?`, `viewMode?` |
-| `file.read` | Read File | safe | `path`, `rootPath?` |
-| `file.showItemInFolder` | Reveal in File Manager | safe | `path`, `allowOutsideRoots?` |
-| `file.view` | View File | safe | `path`, `col?`, `line?`, `rootPath?`, `viewMode?`, `worktreeId?` |
-| `files.search` | Search Files | safe | `query`, `cwd?`, `limit?` |
+| `file.openDiff` | Open diff | safe | `path`, `status?`, `worktreePath?` |
+| `file.openImageViewer` | Open in image viewer | safe | `path` |
+| `file.openInBrowser` | Open in browser | safe | `path` |
+| `file.openInEditor` | Open in editor | safe | `path`, `col?`, `line?` |
+| `file.openPanel` | Open file panel | safe | `path`, `rootPath?`, `viewMode?` |
+| `file.read` | Read file | safe | `path`, `rootPath?` |
+| `file.showItemInFolder` | Reveal in file manager | safe | `path`, `allowOutsideRoots?` |
+| `file.view` | View file | safe | `path`, `col?`, `line?`, `rootPath?`, `viewMode?`, `worktreeId?` |
+| `files.search` | Search files | safe | `query`, `cwd?`, `limit?` |
 
 ## forge
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `forge.addIssueComment` | Add Issue Comment | confirm | `body`, `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.addIssueLabel` | Add Issue Label | safe | `issueNumber`, `label`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.approvePR` | Approve Pull Request | confirm | `prNumber`, `body?`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.assignIssue` | Assign Issue | safe | `issueNumber`, `username`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.closeIssue` | Close Issue | confirm | `issueNumber`, `cwd?`, `stateReason?`, `worktreeId?`, `worktreePath?` |
+| `forge.addIssueComment` | Add issue comment | confirm | `body`, `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.addIssueLabel` | Add issue label | safe | `issueNumber`, `label`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.approvePR` | Approve pull request | confirm | `prNumber`, `body?`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.assignIssue` | Assign issue | safe | `issueNumber`, `username`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.closeIssue` | Close issue | confirm | `issueNumber`, `cwd?`, `stateReason?`, `worktreeId?`, `worktreePath?` |
 | `forge.closePR` | Close pull request | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.commentOnPR` | Comment on pull request | confirm | `body`, `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.convertPRToDraft` | Convert pull request to draft | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.createIssue` | Create Issue | confirm | `title`, `body?`, `cwd?`, `labels?`, `worktreeId?`, `worktreePath?` |
+| `forge.createIssue` | Create issue | confirm | `title`, `body?`, `cwd?`, `labels?`, `worktreeId?`, `worktreePath?` |
 | `forge.createPR` | Create pull request | confirm | `base`, `head`, `title`, `body?`, `cwd?`, `draft?`, `worktreeId?`, `worktreePath?` |
-| `forge.dismissReview` | Dismiss Pull Request Review | confirm | `message`, `prNumber`, `reviewId`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.editIssue` | Edit Issue | confirm | `issueNumber`, `body?`, `cwd?`, `title?`, `worktreeId?`, `worktreePath?` |
+| `forge.dismissReview` | Dismiss pull request review | confirm | `message`, `prNumber`, `reviewId`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.editIssue` | Edit issue | confirm | `issueNumber`, `body?`, `cwd?`, `title?`, `worktreeId?`, `worktreePath?` |
 | `forge.editPR` | Edit pull request | confirm | `prNumber`, `body?`, `cwd?`, `title?`, `worktreeId?`, `worktreePath?` |
-| `forge.getChecks` | Get CI Checks | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.getCIStatus` | Get CI Status | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.getIssue` | Get Issue | safe | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.getPR` | Get Pull Request | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.getPRs` | Get Pull Requests | safe | `prNumbers`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.getRepoStats` | Get Repo Stats | safe | `bypassCache?`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.listIssueComments` | List Issue Comments | safe | `issueNumber`, `cursor?`, `cwd?`, `perPage?`, `worktreeId?`, `worktreePath?` |
-| `forge.listIssues` | List Issues | safe | `bypassCache?`, `cursor?`, `cwd?`, `direction?`, `perPage?`, `search?`, `sort?`, `state?`, `view?`, `worktreeId?`, `worktreePath?` |
-| `forge.listPRs` | List Pull Requests | safe | `bypassCache?`, `cursor?`, `cwd?`, `direction?`, `perPage?`, `search?`, `sort?`, `state?`, `view?`, `worktreeId?`, `worktreePath?` |
+| `forge.getChecks` | Get CI checks | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.getCIStatus` | Get CI status | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.getIssue` | Get issue | safe | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.getPR` | Get pull request | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.getPRs` | Get pull requests | safe | `prNumbers`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.getRepoStats` | Get repo stats | safe | `bypassCache?`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.listIssueComments` | List issue comments | safe | `issueNumber`, `cursor?`, `cwd?`, `perPage?`, `worktreeId?`, `worktreePath?` |
+| `forge.listIssues` | List issues | safe | `bypassCache?`, `cursor?`, `cwd?`, `direction?`, `perPage?`, `search?`, `sort?`, `state?`, `view?`, `worktreeId?`, `worktreePath?` |
+| `forge.listPRs` | List pull requests | safe | `bypassCache?`, `cursor?`, `cwd?`, `direction?`, `perPage?`, `search?`, `sort?`, `state?`, `view?`, `worktreeId?`, `worktreePath?` |
 | `forge.markPRReadyForReview` | Mark pull request ready for review | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.mergePR` | Merge pull request | confirm | `prNumber`, `commitMessage?`, `commitTitle?`, `cwd?`, `mergeMethod?`, `worktreeId?`, `worktreePath?` |
-| `forge.openCommits` | Open Commits | safe | `branch?`, `projectId?`, `projectPath?` |
-| `forge.openIssue` | Open Issue | safe | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.openIssues` | Open Issues | safe | `projectId?`, `projectPath?`, `query?`, `state?` |
+| `forge.openCommits` | Open commits | safe | `branch?`, `projectId?`, `projectPath?` |
+| `forge.openIssue` | Open issue | safe | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.openIssues` | Open issues | safe | `projectId?`, `projectPath?`, `query?`, `state?` |
 | `forge.openPR` | Open pull request | safe | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.openPRs` | Open Pull Requests | safe | `projectId?`, `projectPath?`, `query?`, `state?` |
+| `forge.openPRs` | Open pull requests | safe | `projectId?`, `projectPath?`, `query?`, `state?` |
 | `forge.openRepo` | Open repository | safe | `projectId?`, `projectPath?` |
-| `forge.removeIssueLabel` | Remove Issue Label | safe | `issueNumber`, `label`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.reopenIssue` | Reopen Issue | confirm | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.removeIssueLabel` | Remove issue label | safe | `issueNumber`, `label`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.reopenIssue` | Reopen issue | confirm | `issueNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
 | `forge.reopenPR` | Reopen pull request | confirm | `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.requestChanges` | Request Changes on Pull Request | confirm | `body`, `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.requestReviewers` | Request Pull Request Reviewers | confirm | `prNumber`, `cwd?`, `teams?`, `users?`, `worktreeId?`, `worktreePath?` |
-| `forge.unassignIssue` | Unassign Issue | safe | `issueNumber`, `username`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `forge.validateToken` | Validate Forge Token | safe | `providerId`, `token` |
+| `forge.requestChanges` | Request changes on pull request | confirm | `body`, `prNumber`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.requestReviewers` | Request pull request reviewers | confirm | `prNumber`, `cwd?`, `teams?`, `users?`, `worktreeId?`, `worktreePath?` |
+| `forge.unassignIssue` | Unassign issue | safe | `issueNumber`, `username`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `forge.validateToken` | Validate forge token | safe | `providerId`, `token` |
 
 ## git
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `git.abortRepositoryOperation` | Abort Git Operation | confirm | `cwd?`, `operation?`, `worktreeId?`, `worktreePath?` |
+| `git.abortRepositoryOperation` | Abort Git operation | confirm | `cwd?`, `operation?`, `worktreeId?`, `worktreePath?` |
 | `git.commit` | Commit | safe | `message`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.continueRepositoryOperation` | Continue Git Operation | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.continueRepositoryOperation` | Continue Git operation | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.fetch` | Fetch | safe | `cwd?`, `prune?`, `worktreeId?`, `worktreePath?` |
-| `git.forcePushWithLease` | Force Push with Lease | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.getFileDiff` | Get File Diff | safe | `filePath`, `status`, `cwd?`, `ignoreWhitespace?`, `maxBytes?`, `offset?`, `worktreeId?`, `worktreePath?` |
-| `git.getProjectPulse` | Get Project Pulse | safe | `forceRefresh?`, `includeDelta?`, `includeRecentCommits?`, `rangeDays?`, `worktreeId?`, `worktreePath?` |
-| `git.getStagingStatus` | Get Staging Status | safe | `cwd?`, `limit?`, `offset?`, `worktreeId?`, `worktreePath?` |
-| `git.listCommits` | List Commits | safe | `branch?`, `cursor?`, `cwd?`, `limit?`, `offset?`, `search?`, `skip?`, `worktreeId?`, `worktreePath?` |
-| `git.markSafeDirectory` | Trust Repository | safe | `cwd?`, `path?`, `worktreeId?`, `worktreePath?` |
-| `git.mergeBaseIntoBranch` | Merge Base Branch In | confirm | `baseBranch`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.pullRebase` | Pull and Rebase | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.forcePushWithLease` | Force push with lease | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.getFileDiff` | Get file diff | safe | `filePath`, `status`, `cwd?`, `ignoreWhitespace?`, `maxBytes?`, `offset?`, `worktreeId?`, `worktreePath?` |
+| `git.getProjectPulse` | Get project pulse | safe | `forceRefresh?`, `includeDelta?`, `includeRecentCommits?`, `rangeDays?`, `worktreeId?`, `worktreePath?` |
+| `git.getStagingStatus` | Get staging status | safe | `cwd?`, `limit?`, `offset?`, `worktreeId?`, `worktreePath?` |
+| `git.listCommits` | List commits | safe | `branch?`, `cursor?`, `cwd?`, `limit?`, `offset?`, `search?`, `skip?`, `worktreeId?`, `worktreePath?` |
+| `git.markSafeDirectory` | Trust repository | safe | `cwd?`, `path?`, `worktreeId?`, `worktreePath?` |
+| `git.mergeBaseIntoBranch` | Merge base branch in | confirm | `baseBranch`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.pullRebase` | Pull and rebase | confirm | `cwd?`, `worktreeId?`, `worktreePath?` |
 | `git.push` | Push | confirm | `cwd?`, `setUpstream?`, `worktreeId?`, `worktreePath?` |
-| `git.rebaseOntoBase` | Rebase onto Base Branch | confirm | `baseBranch`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.stageAll` | Stage All Files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.stageFile` | Stage File | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.unstageAll` | Unstage All Files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
-| `git.unstageFile` | Unstage File | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.rebaseOntoBase` | Rebase onto base branch | confirm | `baseBranch`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.stageAll` | Stage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.stageFile` | Stage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.unstageAll` | Unstage all files | safe | `cwd?`, `worktreeId?`, `worktreePath?` |
+| `git.unstageFile` | Unstage file | safe | `filePath`, `cwd?`, `worktreeId?`, `worktreePath?` |
 
 ## help
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
 | `help.displayImage` | Display documentation image | safe | `url`, `altText?`, `caption?` |
-| `help.gettingStarted.show` | Getting Started | safe | — |
-| `help.openCommandsFolder` | Open Assistant Commands Folder | safe | — |
+| `help.gettingStarted.show` | Getting started | safe | — |
+| `help.openCommandsFolder` | Open assistant commands folder | safe | — |
 
 ## introspection
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `actions.getContext` | Get Action Context | safe | — |
-| `actions.getSchema` | Get Action Schema | safe | `actionId` |
-| `actions.list` | List Actions | safe | `category?`, `enabledOnly?`, `limit?`, `offset?`, `search?` |
-| `actions.persistedStores` | List Persisted Stores | safe | — |
-| `actions.search` | Search Actions | safe | `query`, `limit?` |
-| `mcp.surface` | Get MCP Surface | safe | — |
+| `actions.getContext` | Get action context | safe | — |
+| `actions.getSchema` | Get action schema | safe | `actionId` |
+| `actions.list` | List actions | safe | `category?`, `enabledOnly?`, `limit?`, `offset?`, `search?` |
+| `actions.persistedStores` | List persisted stores | safe | — |
+| `actions.search` | Search actions | safe | `query`, `limit?` |
+| `mcp.surface` | Get MCP surface | safe | — |
 
 ## logs
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `logs.clear` | Clear Logs | confirm | — |
-| `logs.clearLevelOverrides` | Clear Log Level Overrides | safe | — |
-| `logs.getAll` | Get Logs | safe | `filters?` |
-| `logs.getLevelOverrides` | Get Log Level Overrides | safe | — |
-| `logs.getRegistry` | Get Logger Registry | safe | — |
-| `logs.getSources` | Get Log Sources | safe | — |
-| `logs.getVerbose` | Get Verbose Logging | safe | — |
-| `logs.openFile` | Open Logs File | safe | — |
-| `logs.setLevelOverrides` | Set Log Level Overrides | safe | `overrides` |
-| `logs.setLogLevel` | Set Log Level… | safe | — |
-| `logs.setVerbose` | Set Verbose Logging | safe | `enabled` |
+| `logs.clear` | Clear logs | confirm | — |
+| `logs.clearLevelOverrides` | Clear log level overrides | safe | — |
+| `logs.getAll` | Get logs | safe | `filters?` |
+| `logs.getLevelOverrides` | Get log level overrides | safe | — |
+| `logs.getRegistry` | Get logger registry | safe | — |
+| `logs.getSources` | Get log sources | safe | — |
+| `logs.getVerbose` | Get verbose logging | safe | — |
+| `logs.openFile` | Open logs file | safe | — |
+| `logs.setLevelOverrides` | Set log level overrides | safe | `overrides` |
+| `logs.setLogLevel` | Set log level… | safe | — |
+| `logs.setVerbose` | Set verbose logging | safe | `enabled` |
 
 ## navigation
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `action.palette.open` | Open Command Palette | safe | — |
-| `find.inFocusedPanel` | Find in Focused Panel | safe | — |
-| `nav.quickSwitcher` | Quick Switcher | safe | — |
-| `nav.toggleFocusMode` | Toggle Focus Mode | safe | — |
+| `action.palette.open` | Open command palette | safe | — |
+| `find.inFocusedPanel` | Find in focused panel | safe | — |
+| `nav.quickSwitcher` | Quick switcher | safe | — |
+| `nav.toggleFocusMode` | Toggle focus mode | safe | — |
 
 ## panel
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `notifications.toggle` | Toggle Notification Inbox | safe | — |
-| `panel.focus` | Focus Panel | safe | `panelId` |
-| `panel.focusIndex` | Focus Panel by Index | safe | `index` |
-| `panel.list` | List Panels | safe | `location?`, `worktreeId?` |
-| `panel.openPluginPanel` | Open Plugin Panel | safe | `kind`, `initialArgs?`, `reuseExisting?`, `worktreeId?` |
-| `panel.palette` | Panel Palette | safe | — |
+| `notifications.toggle` | Toggle notification inbox | safe | — |
+| `panel.focus` | Focus panel | safe | `panelId` |
+| `panel.focusIndex` | Focus panel by index | safe | `index` |
+| `panel.list` | List panels | safe | `location?`, `worktreeId?` |
+| `panel.openPluginPanel` | Open plugin panel | safe | `kind`, `initialArgs?`, `reuseExisting?`, `worktreeId?` |
+| `panel.palette` | Panel palette | safe | — |
 
 ## plugins
 
@@ -269,48 +269,48 @@ An argument shown as `name?` is optional. Argument names come from each action's
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `portal.activateTab` | Activate Portal Tab | safe | `tabId` |
-| `portal.closeAllTabs` | Close All Portal Tabs | safe | `confirmed?` |
-| `portal.closeOthers` | Close Other Portal Tabs | safe | `confirmed?`, `tabId?` |
-| `portal.closeTab` | Close Portal Tab | safe | `tabId?` |
-| `portal.closeToRight` | Close Tabs to the Right | safe | `confirmed?`, `tabId?` |
-| `portal.copyTabUrl` | Copy Portal Tab URL | safe | `tabId?` |
-| `portal.copyUrl` | Copy Portal URL | safe | `tabId?` |
-| `portal.duplicateTab` | Duplicate Portal Tab | safe | `tabId?` |
-| `portal.goBack` | Portal Back | safe | `tabId?` |
-| `portal.goForward` | Portal Forward | safe | `tabId?` |
-| `portal.links.add` | Add Portal Link | safe | `title`, `url`, `alwaysEnabled?`, `icon?` |
-| `portal.links.remove` | Remove Portal Link | confirm | `id` |
-| `portal.links.reorder` | Reorder Portal Links | safe | `fromIndex`, `toIndex` |
-| `portal.links.toggle` | Toggle Portal Link | safe | `id` |
-| `portal.links.update` | Update Portal Link | safe | `id`, `updates` |
-| `portal.listTabs` | List Portal Tabs | safe | — |
-| `portal.newTab` | New Portal Tab | safe | — |
-| `portal.nextTab` | Next Portal Tab | safe | — |
-| `portal.openExternal` | Open Portal URL Externally | safe | `tabId?` |
-| `portal.openLaunchpad` | Open Portal Launchpad | safe | — |
-| `portal.openTabExternal` | Open Portal Tab Externally | safe | `tabId?` |
-| `portal.openUrl` | Open URL in Portal | safe | `url`, `background?`, `title?` |
-| `portal.prevTab` | Previous Portal Tab | safe | — |
-| `portal.reload` | Reload Portal | safe | `tabId?` |
-| `portal.reloadTab` | Reload Portal Tab | safe | `tabId?` |
-| `portal.resetWidth` | Reset Portal Width | safe | — |
-| `portal.setDefaultNewTab` | Set Default New Tab | safe | `url` |
-| `portal.tabs.reorder` | Reorder Portal Tabs | safe | `fromIndex`, `toIndex` |
-| `portal.toggle` | Toggle Portal | safe | — |
-| `portal.toggleDevDashboard` | Toggle Dev Server Dashboard | safe | — |
-| `portal.width.set` | Set Portal Width | safe | `width` |
+| `portal.activateTab` | Activate portal tab | safe | `tabId` |
+| `portal.closeAllTabs` | Close all portal tabs | safe | `confirmed?` |
+| `portal.closeOthers` | Close other portal tabs | safe | `confirmed?`, `tabId?` |
+| `portal.closeTab` | Close portal tab | safe | `tabId?` |
+| `portal.closeToRight` | Close tabs to the right | safe | `confirmed?`, `tabId?` |
+| `portal.copyTabUrl` | Copy portal tab URL | safe | `tabId?` |
+| `portal.copyUrl` | Copy portal URL | safe | `tabId?` |
+| `portal.duplicateTab` | Duplicate portal tab | safe | `tabId?` |
+| `portal.goBack` | Portal back | safe | `tabId?` |
+| `portal.goForward` | Portal forward | safe | `tabId?` |
+| `portal.links.add` | Add portal link | safe | `title`, `url`, `alwaysEnabled?`, `icon?` |
+| `portal.links.remove` | Remove portal link | confirm | `id` |
+| `portal.links.reorder` | Reorder portal links | safe | `fromIndex`, `toIndex` |
+| `portal.links.toggle` | Toggle portal link | safe | `id` |
+| `portal.links.update` | Update portal link | safe | `id`, `updates` |
+| `portal.listTabs` | List portal tabs | safe | — |
+| `portal.newTab` | New portal tab | safe | — |
+| `portal.nextTab` | Next portal tab | safe | — |
+| `portal.openExternal` | Open portal URL externally | safe | `tabId?` |
+| `portal.openLaunchpad` | Open portal launchpad | safe | — |
+| `portal.openTabExternal` | Open portal tab externally | safe | `tabId?` |
+| `portal.openUrl` | Open URL in portal | safe | `url`, `background?`, `title?` |
+| `portal.prevTab` | Previous portal tab | safe | — |
+| `portal.reload` | Reload portal | safe | `tabId?` |
+| `portal.reloadTab` | Reload portal tab | safe | `tabId?` |
+| `portal.resetWidth` | Reset portal width | safe | — |
+| `portal.setDefaultNewTab` | Set default new tab | safe | `url` |
+| `portal.tabs.reorder` | Reorder portal tabs | safe | `fromIndex`, `toIndex` |
+| `portal.toggle` | Toggle portal | safe | — |
+| `portal.toggleDevDashboard` | Toggle dev server dashboard | safe | — |
+| `portal.width.set` | Set portal width | safe | `width` |
 
 ## preferences
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `preferences.reduceAnimations.set` | Set Reduce UI Animations | safe | `value` |
-| `preferences.showAgentTaskTitles.set` | Set Agent Task Titles Visibility | safe | `show` |
-| `preferences.showDeveloperTools.set` | Set Developer Tools Visibility | safe | `show` |
-| `preferences.showDockAgentHighlights.set` | Set Dock Agent Highlights Visibility | safe | `show` |
-| `preferences.showGridAgentHighlights.set` | Set Grid Agent Highlights Visibility | safe | `show` |
-| `preferences.showProjectPulse.set` | Set Project Pulse Visibility | safe | `show` |
+| `preferences.reduceAnimations.set` | Set reduce UI animations | safe | `value` |
+| `preferences.showAgentTaskTitles.set` | Set agent task titles visibility | safe | `show` |
+| `preferences.showDeveloperTools.set` | Set developer tools visibility | safe | `show` |
+| `preferences.showDockAgentHighlights.set` | Set dock agent highlights visibility | safe | `show` |
+| `preferences.showGridAgentHighlights.set` | Set grid agent highlights visibility | safe | `show` |
+| `preferences.showProjectPulse.set` | Set project pulse visibility | safe | `show` |
 
 ## project
 
@@ -319,239 +319,239 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `pilot.openProject` | View this project's agents | safe | — |
 | `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
-| `project.add` | Add Project | safe | `path?` |
-| `project.cloneRepo` | Clone Repository | safe | — |
-| `project.close` | Close Project | safe | `projectId` |
-| `project.closeActive` | Close Project | safe | — |
-| `project.detectRunners` | Detect Runners | safe | `projectId?` |
-| `project.getAll` | List Projects | safe | — |
-| `project.getCurrent` | Get Current Project | safe | — |
-| `project.getSettings` | Get Project Settings | safe | `projectId?` |
-| `project.getStats` | Get Project Stats | safe | `projectId?` |
-| `project.muteNotifications` | Mute Project Notifications | safe | `projectId` |
-| `project.openDialog` | Pick Directory | safe | — |
-| `project.remove` | Remove Project | confirm | `projectId` |
-| `project.saveSettings` | Save Project Settings | safe | `projectId`, `settings` |
-| `project.settings.open` | Open Project Settings | safe | — |
-| `project.silenceNotificationKind` | Silence Notification Kind | safe | `kind`, `projectId?` |
-| `project.switch` | Switch Project | safe | `projectId` |
-| `project.update` | Update Project | safe | `projectId`, `updates` |
+| `project.add` | Add project | safe | `path?` |
+| `project.cloneRepo` | Clone repository | safe | — |
+| `project.close` | Close project | safe | `projectId` |
+| `project.closeActive` | Close project | safe | — |
+| `project.detectRunners` | Detect runners | safe | `projectId?` |
+| `project.getAll` | List projects | safe | — |
+| `project.getCurrent` | Get current project | safe | — |
+| `project.getSettings` | Get project settings | safe | `projectId?` |
+| `project.getStats` | Get project stats | safe | `projectId?` |
+| `project.muteNotifications` | Mute project notifications | safe | `projectId` |
+| `project.openDialog` | Pick directory | safe | — |
+| `project.remove` | Remove project | confirm | `projectId` |
+| `project.saveSettings` | Save project settings | safe | `projectId`, `settings` |
+| `project.settings.open` | Open project settings | safe | — |
+| `project.silenceNotificationKind` | Silence notification kind | safe | `kind`, `projectId?` |
+| `project.switch` | Switch project | safe | `projectId` |
+| `project.update` | Update project | safe | `projectId`, `updates` |
 
 ## recipes
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `recipe.delete` | Delete Recipe | confirm | `recipeId` |
-| `recipe.editor.open` | Open Recipe Editor | safe | `initialTerminals?`, `recipeId?`, `worktreeId?` |
-| `recipe.editor.openFromLayout` | Open Recipe Editor From Layout | safe | `worktreeId` |
-| `recipe.list` | List Recipes | safe | `worktreeId?` |
-| `recipe.manager.open` | Manage Recipes | safe | — |
-| `recipe.run` | Run Recipe | confirm | `recipeId`, `focusPolicy?`, `spawnedBy?`, `worktreeId?` |
-| `recipe.saveToRepo` | Save Recipe to Repository | safe | `recipeId`, `deleteOriginal?` |
+| `recipe.delete` | Delete recipe | confirm | `recipeId` |
+| `recipe.editor.open` | Open recipe editor | safe | `initialTerminals?`, `recipeId?`, `worktreeId?` |
+| `recipe.editor.openFromLayout` | Open recipe editor from layout | safe | `worktreeId` |
+| `recipe.list` | List recipes | safe | `worktreeId?` |
+| `recipe.manager.open` | Manage recipes | safe | — |
+| `recipe.run` | Run recipe | confirm | `recipeId`, `focusPolicy?`, `spawnedBy?`, `worktreeId?` |
+| `recipe.saveToRepo` | Save recipe to repository | safe | `recipeId`, `deleteOriginal?` |
 
 ## settings
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `agentSettings.get` | Get Agent Settings | safe | — |
-| `agentSettings.reset` | Reset Agent Settings | confirm | `agentId?` |
-| `agentSettings.set` | Update Agent Settings | safe | `agentId`, `settings` |
-| `env.global.get` | Get Global Environment Variables | safe | — |
-| `env.global.set` | Set Global Environment Variables | safe | `variables` |
-| `env.project.get` | Get Project Environment Variables | safe | `projectId` |
-| `env.project.set` | Set Project Environment Variables | safe | `projectId`, `variables` |
-| `hibernation.getConfig` | Get Hibernation Config | safe | — |
-| `hibernation.updateConfig` | Update Hibernation Config | safe | `enabled?`, `inactiveThresholdHours?` |
-| `idleBackgroundAutoClose.getConfig` | Get Idle Background Auto-Close Config | safe | — |
-| `idleBackgroundAutoClose.updateConfig` | Update Idle Background Auto-Close Config | safe | `enabled?`, `thresholdMinutes?` |
-| `idleTerminalNotify.getConfig` | Get Idle Terminal Notification Config | safe | — |
-| `idleTerminalNotify.updateConfig` | Update Idle Terminal Notification Config | safe | `enabled?`, `thresholdMinutes?` |
-| `keybinding.getOverrides` | Get Keybinding Overrides | safe | — |
-| `keybinding.removeOverride` | Remove Keybinding Override | safe | `actionId` |
-| `keybinding.resetAll` | Reset All Keybinding Overrides | confirm | — |
-| `keybinding.setOverride` | Set Keybinding Override | safe | `actionId`, `combo` |
-| `sessionRestore.getConfig` | Get Session Restore Config | safe | — |
-| `sessionRestore.updateConfig` | Update Session Restore Config | safe | `enabled?` |
-| `terminalConfig.get` | Get Terminal Config | safe | — |
-| `terminalConfig.setCachedProjectViews` | Set Cached Project Views | safe | `cachedProjectViews` |
-| `terminalConfig.setFontFamily` | Set Terminal Font Family | safe | `fontFamily` |
-| `terminalConfig.setFontSize` | Set Terminal Font Size | safe | `fontSize` |
-| `terminalConfig.setHybridInputAutoFocus` | Set Default Focus Target | safe | `enabled` |
-| `terminalConfig.setHybridInputEnabled` | Set Hybrid Input Enabled | safe | `enabled` |
-| `terminalConfig.setPerformanceMode` | Set Performance Mode | safe | `performanceMode` |
-| `terminalConfig.setScreenReaderMode` | Set Screen Reader Mode | safe | `mode` |
-| `terminalConfig.setScrollback` | Set Scrollback | safe | `scrollbackLines` |
-| `worktreeConfig.get` | Get Worktree Config | safe | — |
-| `worktreeConfig.setPattern` | Set Worktree Path Pattern | safe | `pattern` |
+| `agentSettings.get` | Get agent settings | safe | — |
+| `agentSettings.reset` | Reset agent settings | confirm | `agentId?` |
+| `agentSettings.set` | Update agent settings | safe | `agentId`, `settings` |
+| `env.global.get` | Get global environment variables | safe | — |
+| `env.global.set` | Set global environment variables | safe | `variables` |
+| `env.project.get` | Get project environment variables | safe | `projectId` |
+| `env.project.set` | Set project environment variables | safe | `projectId`, `variables` |
+| `hibernation.getConfig` | Get hibernation config | safe | — |
+| `hibernation.updateConfig` | Update hibernation config | safe | `enabled?`, `inactiveThresholdHours?` |
+| `idleBackgroundAutoClose.getConfig` | Get idle background auto-close config | safe | — |
+| `idleBackgroundAutoClose.updateConfig` | Update idle background auto-close config | safe | `enabled?`, `thresholdMinutes?` |
+| `idleTerminalNotify.getConfig` | Get idle terminal notification config | safe | — |
+| `idleTerminalNotify.updateConfig` | Update idle terminal notification config | safe | `enabled?`, `thresholdMinutes?` |
+| `keybinding.getOverrides` | Get keybinding overrides | safe | — |
+| `keybinding.removeOverride` | Remove keybinding override | safe | `actionId` |
+| `keybinding.resetAll` | Reset all keybinding overrides | confirm | — |
+| `keybinding.setOverride` | Set keybinding override | safe | `actionId`, `combo` |
+| `sessionRestore.getConfig` | Get session restore config | safe | — |
+| `sessionRestore.updateConfig` | Update session restore config | safe | `enabled?` |
+| `terminalConfig.get` | Get terminal config | safe | — |
+| `terminalConfig.setCachedProjectViews` | Set cached project views | safe | `cachedProjectViews` |
+| `terminalConfig.setFontFamily` | Set terminal font family | safe | `fontFamily` |
+| `terminalConfig.setFontSize` | Set terminal font size | safe | `fontSize` |
+| `terminalConfig.setHybridInputAutoFocus` | Set default focus target | safe | `enabled` |
+| `terminalConfig.setHybridInputEnabled` | Set hybrid input enabled | safe | `enabled` |
+| `terminalConfig.setPerformanceMode` | Set performance mode | safe | `performanceMode` |
+| `terminalConfig.setScreenReaderMode` | Set screen reader mode | safe | `mode` |
+| `terminalConfig.setScrollback` | Set scrollback | safe | `scrollbackLines` |
+| `worktreeConfig.get` | Get worktree config | safe | — |
+| `worktreeConfig.setPattern` | Set worktree path pattern | safe | `pattern` |
 
 ## system
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `cliAvailability.get` | Get CLI Availability | safe | — |
-| `cliAvailability.refresh` | Refresh CLI Availability | safe | — |
-| `system.checkCommand` | Check Command Availability | safe | `command` |
-| `system.checkDirectory` | Check Directory | safe | `path` |
-| `system.getHomeDir` | Get Home Directory | safe | — |
-| `system.getResourceProfileSnapshot` | Get Resource Profile Snapshot | safe | — |
-| `system.openExternal` | Open External URL | safe | `url` |
-| `system.openPath` | Open Path | safe | `path` |
+| `cliAvailability.get` | Get CLI availability | safe | — |
+| `cliAvailability.refresh` | Refresh CLI availability | safe | — |
+| `system.checkCommand` | Check command availability | safe | `command` |
+| `system.checkDirectory` | Check directory | safe | `path` |
+| `system.getHomeDir` | Get home directory | safe | — |
+| `system.getResourceProfileSnapshot` | Get resource profile snapshot | safe | — |
+| `system.openExternal` | Open external URL | safe | `url` |
+| `system.openPath` | Open path | safe | `path` |
 | `watchdog.restart` | Restart crash watchdog | safe | — |
 
 ## terminal
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `fleet.armAll` | Fleet: Arm All Eligible | safe | `scope?` |
-| `fleet.armFocused` | Fleet: Toggle Arm Focused Pane | safe | — |
-| `fleet.armMatchingFilter` | Fleet: Arm Agents Matching Filter | safe | `worktreeIds` |
-| `fleet.deleteNamedFleet` | Fleet: Delete named fleet | confirm | `id` |
-| `fleet.getRunStatus` | Fleet: Get run status | safe | — |
-| `fleet.kill` | Fleet: Kill | confirm | `confirmed?` |
-| `fleet.recallNamedFleet` | Fleet: Recall named fleet | safe | `id` |
-| `fleet.restart` | Fleet: Restart | confirm | `confirmed?` |
-| `fleet.saveNamedFleet` | Fleet: Save named fleet | safe | — |
-| `fleet.scope.enter` | Fleet: Enter Scope Mode | safe | — |
-| `fleet.scope.exit` | Fleet: Exit Scope Mode | safe | — |
-| `fleet.trash` | Fleet: Trash | confirm | `confirmed?` |
-| `idleTerminalNotify.closeProject` | Close Idle Terminals | safe | `projectId` |
-| `idleTerminalNotify.muteProject` | Mute Idle Terminal Notifications | safe | `projectId` |
-| `panel.gridLayout.setStrategy` | Set Grid Layout Strategy | safe | `strategy` |
-| `panel.gridLayout.setValue` | Set Grid Layout Value | safe | `value` |
-| `terminal.arm` | Arm Terminal | confirm | `terminalId` |
-| `terminal.armAll` | Arm All Eligible | safe | `scope?` |
-| `terminal.armByState` | Arm by State | safe | `state`, `extend?`, `scope?` |
-| `terminal.armDefault` | Arm Current Worktree | safe | — |
-| `terminal.bulkCommand` | Fleet: Broadcast | safe | — |
-| `terminal.close` | Close Terminal | safe | `terminalId?` |
-| `terminal.closeAll` | Close All Terminals | safe | — |
-| `terminal.closeOwned` | Close Owned Terminal | safe | `terminalId` |
-| `terminal.contextMenu` | Open Context Menu | safe | `terminalId?` |
-| `terminal.copy` | Copy Selection | safe | `terminalId?` |
-| `terminal.copyLink` | Copy Link Address | safe | `url` |
-| `terminal.disarm` | Disarm Terminal | safe | `terminalId` |
-| `terminal.disarmAll` | Disarm All | safe | — |
-| `terminal.duplicate` | Duplicate Panel | safe | `focusPolicy?`, `spawnedBy?`, `terminalId?` |
-| `terminal.forceResume` | Force Resume | safe | `terminalId?` |
-| `terminal.getOutput` | Get Terminal Output | safe | `terminalId`, `maxLines?`, `stripAnsi?` |
-| `terminal.getStatus` | Get Terminal Status | safe | `includeOutput?`, `location?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
-| `terminal.gridLayout.setStrategy` | Set Grid Layout Strategy | safe | `strategy` |
-| `terminal.gridLayout.setValue` | Set Grid Layout Value | safe | `value` |
-| `terminal.info.get` | Get Terminal Info | safe | `terminalId?` |
-| `terminal.info.open` | Open Terminal Info | safe | `terminalId?` |
-| `terminal.inject` | Inject Context | safe | `terminalId?` |
-| `terminal.kill` | Kill Terminal | confirm | `confirmed?`, `terminalId?` |
-| `terminal.killAll` | Kill All Terminals | confirm | `confirmed?` |
+| `fleet.armAll` | Fleet: arm all eligible | safe | `scope?` |
+| `fleet.armFocused` | Fleet: toggle arm focused pane | safe | — |
+| `fleet.armMatchingFilter` | Fleet: arm agents matching filter | safe | `worktreeIds` |
+| `fleet.deleteNamedFleet` | Fleet: delete named fleet | confirm | `id` |
+| `fleet.getRunStatus` | Fleet: get run status | safe | — |
+| `fleet.kill` | Fleet: kill | confirm | `confirmed?` |
+| `fleet.recallNamedFleet` | Fleet: recall named fleet | safe | `id` |
+| `fleet.restart` | Fleet: restart | confirm | `confirmed?` |
+| `fleet.saveNamedFleet` | Fleet: save named fleet | safe | — |
+| `fleet.scope.enter` | Fleet: enter scope mode | safe | — |
+| `fleet.scope.exit` | Fleet: exit scope mode | safe | — |
+| `fleet.trash` | Fleet: trash | confirm | `confirmed?` |
+| `idleTerminalNotify.closeProject` | Close idle terminals | safe | `projectId` |
+| `idleTerminalNotify.muteProject` | Mute idle terminal notifications | safe | `projectId` |
+| `panel.gridLayout.setStrategy` | Set grid layout strategy | safe | `strategy` |
+| `panel.gridLayout.setValue` | Set grid layout value | safe | `value` |
+| `terminal.arm` | Arm terminal | confirm | `terminalId` |
+| `terminal.armAll` | Arm all eligible | safe | `scope?` |
+| `terminal.armByState` | Arm by state | safe | `state`, `extend?`, `scope?` |
+| `terminal.armDefault` | Arm current worktree | safe | — |
+| `terminal.bulkCommand` | Fleet: broadcast | safe | — |
+| `terminal.close` | Close terminal | safe | `terminalId?` |
+| `terminal.closeAll` | Close all terminals | safe | — |
+| `terminal.closeOwned` | Close owned terminal | safe | `terminalId` |
+| `terminal.contextMenu` | Open context menu | safe | `terminalId?` |
+| `terminal.copy` | Copy selection | safe | `terminalId?` |
+| `terminal.copyLink` | Copy link address | safe | `url` |
+| `terminal.disarm` | Disarm terminal | safe | `terminalId` |
+| `terminal.disarmAll` | Disarm all | safe | — |
+| `terminal.duplicate` | Duplicate panel | safe | `focusPolicy?`, `spawnedBy?`, `terminalId?` |
+| `terminal.forceResume` | Force resume | safe | `terminalId?` |
+| `terminal.getOutput` | Get terminal output | safe | `terminalId`, `maxLines?`, `stripAnsi?` |
+| `terminal.getStatus` | Get terminal status | safe | `includeOutput?`, `location?`, `submissionToken?`, `terminalIds?`, `worktreeId?` |
+| `terminal.gridLayout.setStrategy` | Set grid layout strategy | safe | `strategy` |
+| `terminal.gridLayout.setValue` | Set grid layout value | safe | `value` |
+| `terminal.info.get` | Get terminal info | safe | `terminalId?` |
+| `terminal.info.open` | Open terminal info | safe | `terminalId?` |
+| `terminal.inject` | Inject context | safe | `terminalId?` |
+| `terminal.kill` | Kill terminal | confirm | `confirmed?`, `terminalId?` |
+| `terminal.killAll` | Kill all terminals | confirm | `confirmed?` |
 | `terminal.killBatch` | Kill terminals | confirm | `terminalIds` |
-| `terminal.list` | List Terminals | safe | `includeClientMetadata?`, `location?`, `owned?`, `terminalId?`, `worktreeId?` |
-| `terminal.moveToDock` | Move to Dock | safe | `terminalId?` |
-| `terminal.moveToGrid` | Move to Grid | safe | `terminalId?` |
-| `terminal.moveToNewWorktree` | Move to New Worktree… | safe | `terminalId?` |
-| `terminal.moveToWorktree` | Move to Worktree | safe | `worktreeId`, `terminalId?` |
-| `terminal.new` | New Terminal | safe | `command?`, `cwd?`, `focusPolicy?`, `spawnedBy?` |
-| `terminal.openWorktreeEditor` | Open Focused Terminal's Worktree Folder | safe | — |
-| `terminal.openWorktreeIssue` | Open Focused Terminal's Worktree Issue | safe | — |
-| `terminal.openWorktreePR` | Open Focused Terminal's Worktree Pull Request | safe | — |
-| `terminal.popStash` | Restore Stashed Input | safe | — |
-| `terminal.redraw` | Redraw Terminal | safe | `terminalId?` |
-| `terminal.rename` | Rename Terminal | safe | `name?`, `terminalId?` |
-| `terminal.restart` | Restart Terminal | confirm | `confirmed?`, `terminalId?` |
-| `terminal.restartService` | Restart Terminal Service | safe | — |
-| `terminal.resumeSessions` | Resume Session… | safe | — |
-| `terminal.revealOwned` | Reveal Owned Terminal | safe | `terminalId` |
-| `terminal.sendToAgent` | Send to Agent | safe | `terminalId?` |
-| `terminal.stashInput` | Stash Input | safe | — |
-| `terminal.toggleDock` | Toggle Dock | safe | `terminalId?` |
-| `terminal.toggleDockAll` | Toggle All Dock | safe | — |
-| `terminal.toggleInputLock` | Toggle Input Lock | safe | `terminalId?` |
-| `terminal.toggleMaximize` | Toggle Maximize | safe | `terminalId?` |
-| `terminal.trash` | Trash Terminal | safe | `terminalId?` |
-| `terminal.viewInfo` | View Terminal Info | safe | `terminalId?` |
+| `terminal.list` | List terminals | safe | `includeClientMetadata?`, `location?`, `owned?`, `terminalId?`, `worktreeId?` |
+| `terminal.moveToDock` | Move to dock | safe | `terminalId?` |
+| `terminal.moveToGrid` | Move to grid | safe | `terminalId?` |
+| `terminal.moveToNewWorktree` | Move to new worktree… | safe | `terminalId?` |
+| `terminal.moveToWorktree` | Move to worktree | safe | `worktreeId`, `terminalId?` |
+| `terminal.new` | New terminal | safe | `command?`, `cwd?`, `focusPolicy?`, `spawnedBy?` |
+| `terminal.openWorktreeEditor` | Open focused terminal's worktree folder | safe | — |
+| `terminal.openWorktreeIssue` | Open focused terminal's worktree issue | safe | — |
+| `terminal.openWorktreePR` | Open focused terminal's worktree pull request | safe | — |
+| `terminal.popStash` | Restore stashed input | safe | — |
+| `terminal.redraw` | Redraw terminal | safe | `terminalId?` |
+| `terminal.rename` | Rename terminal | safe | `name?`, `terminalId?` |
+| `terminal.restart` | Restart terminal | confirm | `confirmed?`, `terminalId?` |
+| `terminal.restartService` | Restart terminal service | safe | — |
+| `terminal.resumeSessions` | Resume session… | safe | — |
+| `terminal.revealOwned` | Reveal owned terminal | safe | `terminalId` |
+| `terminal.sendToAgent` | Send to agent | safe | `terminalId?` |
+| `terminal.stashInput` | Stash input | safe | — |
+| `terminal.toggleDock` | Toggle dock | safe | `terminalId?` |
+| `terminal.toggleDockAll` | Toggle all dock | safe | — |
+| `terminal.toggleInputLock` | Toggle input lock | safe | `terminalId?` |
+| `terminal.toggleMaximize` | Toggle maximize | safe | `terminalId?` |
+| `terminal.trash` | Trash terminal | safe | `terminalId?` |
+| `terminal.viewInfo` | View terminal info | safe | `terminalId?` |
 | `terminal.waitUntilIdle` | Wait until terminal idle | safe | `terminalId`, `timeoutMs?` |
 | `terminal.waitUntilIdleBatch` | Wait until terminals idle (batch) | safe | `terminalIds`, `mode?`, `timeoutMs?` |
-| `terminal.watch` | Watch This Terminal | safe | `terminalId?` |
+| `terminal.watch` | Watch this terminal | safe | `terminalId?` |
 
 ## ui
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `ui.sidebar.resetWidth` | Reset Sidebar Width | safe | — |
-| `window.close` | Close Window | safe | — |
-| `window.forceReload` | Force Reload Window | safe | — |
-| `window.reload` | Reload Window | safe | — |
+| `ui.sidebar.resetWidth` | Reset sidebar width | safe | — |
+| `window.close` | Close window | safe | — |
+| `window.forceReload` | Force reload window | safe | — |
+| `window.reload` | Reload window | safe | — |
 | `window.toggleDevTools` | Toggle DevTools | safe | — |
-| `window.toggleFullscreen` | Toggle Fullscreen | safe | — |
-| `window.zoomIn` | Zoom In | safe | — |
-| `window.zoomOut` | Zoom Out | safe | — |
-| `window.zoomReset` | Reset Zoom | safe | — |
+| `window.toggleFullscreen` | Toggle fullscreen | safe | — |
+| `window.zoomIn` | Zoom in | safe | — |
+| `window.zoomOut` | Zoom out | safe | — |
+| `window.zoomReset` | Reset zoom | safe | — |
 
 ## workspace
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `workspace.list` | List Workspaces | safe | — |
+| `workspace.list` | List workspaces | safe | — |
 
 ## worktree
 
 | Action | Title | Danger | Arguments |
 | --- | --- | --- | --- |
-| `workflow.focusNextAttention` | Focus Next Attention | safe | — |
-| `workflow.prepBranchForReview` | Inspect Branch for Review | safe | `cwd?`, `projectId?`, `worktreeId?`, `worktreePath?` |
-| `workflow.startWorkOnIssue` | Start Work on Issue | safe | `agentId`, `issueNumber`, `assignToSelf?`, `baseBranch?`, `branchName?`, `focusPolicy?`, `injectContext?`, `recipeId?`, `spawnedBy?` |
-| `worktree.bulk.closeSessions` | Close Sessions for Selected Worktrees | confirm | — |
-| `worktree.bulk.remove` | Remove Selected Worktrees | confirm | — |
-| `worktree.compareDiff` | Compare Worktree Diff | safe | `compareToWorktreeId`, `ignoreWhitespace?`, `limit?`, `offset?`, `useMergeBase?`, `worktreeId?` |
-| `worktree.copyContext` | Copy Worktree Context (Alias) | safe | `format?`, `modified?`, `worktreeId?` |
-| `worktree.copyTree` | Copy Worktree Context | safe | `format?`, `includePaths?`, `modified?`, `scopeIgnoresIgnoreFiles?`, `scopePaths?`, `worktreeId?` |
-| `worktree.create` | Create Worktree | safe | `options`, `rootPath?`, `worktreeId?`, `worktreePath?` |
-| `worktree.createDialog.open` | New Worktree | safe | — |
-| `worktree.createWithRecipe` | Create Managed Worktree | safe | `source`, `focusPolicy?`, `recipeId?`, `spawnedBy?` |
-| `worktree.delete` | Delete Worktree | confirm | `worktreeId`, `closeTerminals?`, `deleteBranch?`, `force?` |
-| `worktree.deleteOwned` | Delete Owned Worktree | confirm | `worktreeId` |
-| `worktree.getAvailableBranch` | Get Available Branch Name | safe | `branchName`, `rootPath?`, `worktreeId?`, `worktreePath?` |
-| `worktree.getCurrent` | Get Current Worktree | safe | — |
-| `worktree.getDefaultPath` | Get Default Worktree Path | safe | `branchName`, `rootPath?`, `worktreeId?`, `worktreePath?` |
-| `worktree.inject` | Inject Worktree Context into Focused Terminal | safe | `worktreeId?` |
+| `workflow.focusNextAttention` | Focus next attention | safe | — |
+| `workflow.prepBranchForReview` | Inspect branch for review | safe | `cwd?`, `projectId?`, `worktreeId?`, `worktreePath?` |
+| `workflow.startWorkOnIssue` | Start work on issue | safe | `agentId`, `issueNumber`, `assignToSelf?`, `baseBranch?`, `branchName?`, `focusPolicy?`, `injectContext?`, `recipeId?`, `spawnedBy?` |
+| `worktree.bulk.closeSessions` | Close sessions for selected worktrees | confirm | — |
+| `worktree.bulk.remove` | Remove selected worktrees | confirm | — |
+| `worktree.compareDiff` | Compare worktree diff | safe | `compareToWorktreeId`, `ignoreWhitespace?`, `limit?`, `offset?`, `useMergeBase?`, `worktreeId?` |
+| `worktree.copyContext` | Copy worktree context (alias) | safe | `format?`, `modified?`, `worktreeId?` |
+| `worktree.copyTree` | Copy worktree context | safe | `format?`, `includePaths?`, `modified?`, `scopeIgnoresIgnoreFiles?`, `scopePaths?`, `worktreeId?` |
+| `worktree.create` | Create worktree | safe | `options`, `rootPath?`, `worktreeId?`, `worktreePath?` |
+| `worktree.createDialog.open` | New worktree | safe | — |
+| `worktree.createWithRecipe` | Create managed worktree | safe | `source`, `focusPolicy?`, `recipeId?`, `spawnedBy?` |
+| `worktree.delete` | Delete worktree | confirm | `worktreeId`, `closeTerminals?`, `deleteBranch?`, `force?` |
+| `worktree.deleteOwned` | Delete owned worktree | confirm | `worktreeId` |
+| `worktree.getAvailableBranch` | Get available branch name | safe | `branchName`, `rootPath?`, `worktreeId?`, `worktreePath?` |
+| `worktree.getCurrent` | Get current worktree | safe | — |
+| `worktree.getDefaultPath` | Get default worktree path | safe | `branchName`, `rootPath?`, `worktreeId?`, `worktreePath?` |
+| `worktree.inject` | Inject worktree context into focused terminal | safe | `worktreeId?` |
 | `worktree.lifecycle.retrySetup` | Retry setup | safe | `worktreeId?` |
-| `worktree.list` | List Worktrees | safe | — |
-| `worktree.listBranches` | List Branches | safe | `limit?`, `offset?`, `rootPath?`, `worktreeId?`, `worktreePath?` |
+| `worktree.list` | List worktrees | safe | — |
+| `worktree.listBranches` | List branches | safe | `limit?`, `offset?`, `rootPath?`, `worktreeId?`, `worktreePath?` |
 | `worktree.openChanges` | Open changes | safe | `worktreeId?` |
-| `worktree.openEditor` | Open in Editor | safe | `worktreeId?` |
+| `worktree.openEditor` | Open in editor | safe | `worktreeId?` |
 | `worktree.openFileBrowser` | Browse files | safe | `revealKind?`, `revealPath?`, `worktreeId?` |
 | `worktree.openFileBrowserPanel` | Browse files | safe | `activateDockOnCreate?`, `location?`, `revealKind?`, `revealPath?`, `worktreeId?` |
-| `worktree.openIssue` | Open Worktree Issue | safe | `worktreeId?` |
-| `worktree.openPR` | Open Worktree Pull Request | safe | `worktreeId?` |
-| `worktree.openReviewHub` | Open Review Hub | safe | `worktreeId?` |
-| `worktree.overview.close` | Close Worktree Overview | safe | — |
-| `worktree.overview.open` | Open Worktree Overview | safe | — |
-| `worktree.quickCreate` | Quick Create Worktree | safe | — |
+| `worktree.openIssue` | Open worktree issue | safe | `worktreeId?` |
+| `worktree.openPR` | Open worktree pull request | safe | `worktreeId?` |
+| `worktree.openReviewHub` | Open review hub | safe | `worktreeId?` |
+| `worktree.overview.close` | Close worktree overview | safe | — |
+| `worktree.overview.open` | Open worktree overview | safe | — |
+| `worktree.quickCreate` | Quick create worktree | safe | — |
 | `worktree.reconcileTopology` | Reconcile worktree list | safe | — |
-| `worktree.refresh` | Refresh Sidebar | safe | — |
-| `worktree.refreshPullRequests` | Refresh Pull Requests | safe | — |
-| `worktree.resource.config.get` | Get Resource Environments Config | safe | `projectId` |
-| `worktree.resource.config.set` | Set Resource Environments Config | safe | `projectId`, `resourceEnvironments` |
-| `worktree.resource.connect` | Connect to Resource | safe | `focusPolicy?`, `spawnedBy?`, `worktreeId?` |
-| `worktree.resource.pause` | Pause Resource | safe | `worktreeId?` |
-| `worktree.resource.provision` | Provision Resource | safe | `worktreeId?` |
-| `worktree.resource.resume` | Resume Resource | safe | `worktreeId?` |
-| `worktree.resource.status` | Check Resource Status | safe | `worktreeId?` |
-| `worktree.resource.teardown` | Teardown Resource | confirm | `worktreeId?` |
-| `worktree.restartService` | Restart Workspace Service | confirm | — |
+| `worktree.refresh` | Refresh sidebar | safe | — |
+| `worktree.refreshPullRequests` | Refresh pull requests | safe | — |
+| `worktree.resource.config.get` | Get resource environments config | safe | `projectId` |
+| `worktree.resource.config.set` | Set resource environments config | safe | `projectId`, `resourceEnvironments` |
+| `worktree.resource.connect` | Connect to resource | safe | `focusPolicy?`, `spawnedBy?`, `worktreeId?` |
+| `worktree.resource.pause` | Pause resource | safe | `worktreeId?` |
+| `worktree.resource.provision` | Provision resource | safe | `worktreeId?` |
+| `worktree.resource.resume` | Resume resource | safe | `worktreeId?` |
+| `worktree.resource.status` | Check resource status | safe | `worktreeId?` |
+| `worktree.resource.teardown` | Teardown resource | confirm | `worktreeId?` |
+| `worktree.restartService` | Restart workspace service | confirm | — |
 | `worktree.retryProjectLoad` | Retry loading worktrees | safe | — |
-| `worktree.reveal` | Reveal Worktree | safe | `worktreeId?` |
-| `worktree.reviewReadiness` | Review Readiness | safe | `worktreeId?` |
-| `worktree.select` | Select Worktree | safe | `worktreeId?` |
-| `worktree.sessions.clearHistory` | Clear Session History | confirm | `confirmed?`, `worktreeId?` |
-| `worktree.sessions.closeCompleted` | Close Completed Sessions | safe | `worktreeId?` |
-| `worktree.sessions.endAll` | End All Sessions | confirm | `confirmed?`, `worktreeId?` |
-| `worktree.sessions.maximizeAll` | Move All Sessions To Grid | safe | `worktreeId?` |
-| `worktree.sessions.minimizeAll` | Dock All Sessions | safe | `worktreeId?` |
-| `worktree.sessions.resetRenderers` | Reset Session Renderers | safe | `worktreeId?` |
-| `worktree.sessions.restartAll` | Restart All Sessions | confirm | `confirmed?`, `worktreeId?` |
-| `worktree.sessions.trashAll` | Trash All Sessions | confirm | `confirmed?`, `worktreeId?` |
-| `worktree.setActive` | Set Active Worktree | safe | `worktreeId` |
-| `worktree.switchIndex` | Switch to Worktree by Index | safe | `index` |
-| `worktree.waitUntilReady` | Wait Until Worktree Ready | safe | `timeoutMs?`, `worktreeId?`, `worktreePath?` |
+| `worktree.reveal` | Reveal worktree | safe | `worktreeId?` |
+| `worktree.reviewReadiness` | Review readiness | safe | `worktreeId?` |
+| `worktree.select` | Select worktree | safe | `worktreeId?` |
+| `worktree.sessions.clearHistory` | Clear session history | confirm | `confirmed?`, `worktreeId?` |
+| `worktree.sessions.closeCompleted` | Close completed sessions | safe | `worktreeId?` |
+| `worktree.sessions.endAll` | End all sessions | confirm | `confirmed?`, `worktreeId?` |
+| `worktree.sessions.maximizeAll` | Move all sessions to grid | safe | `worktreeId?` |
+| `worktree.sessions.minimizeAll` | Dock all sessions | safe | `worktreeId?` |
+| `worktree.sessions.resetRenderers` | Reset session renderers | safe | `worktreeId?` |
+| `worktree.sessions.restartAll` | Restart all sessions | confirm | `confirmed?`, `worktreeId?` |
+| `worktree.sessions.trashAll` | Trash all sessions | confirm | `confirmed?`, `worktreeId?` |
+| `worktree.setActive` | Set active worktree | safe | `worktreeId` |
+| `worktree.switchIndex` | Switch to worktree by index | safe | `index` |
+| `worktree.waitUntilReady` | Wait until worktree ready | safe | `timeoutMs?`, `worktreeId?`, `worktreePath?` |
 
 ## See also
 

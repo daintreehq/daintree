@@ -13,7 +13,7 @@ export function registerWorktreeServiceActions(
 ): void {
   actions.set("worktree.refresh", () => ({
     id: "worktree.refresh",
-    title: "Refresh Sidebar",
+    title: "Refresh sidebar",
     description:
       "Re-read worktree state, pull requests and forge statistics from disk and the provider, discarding what is cached. Use this after changes made outside the app leave stale data on screen. It costs provider round trips against your rate limit, so prefer it over routine polling rather than as a habit.",
     category: "worktree",
@@ -71,7 +71,7 @@ export function registerWorktreeServiceActions(
 
   actions.set("worktree.refreshPullRequests", () => ({
     id: "worktree.refreshPullRequests",
-    title: "Refresh Pull Requests",
+    title: "Refresh pull requests",
     description: "Refresh PR information for all worktrees",
     category: "worktree",
     kind: "command",
@@ -85,7 +85,7 @@ export function registerWorktreeServiceActions(
 
   actions.set("worktree.restartService", () => ({
     id: "worktree.restartService",
-    title: "Restart Workspace Service",
+    title: "Restart workspace service",
     description:
       "Restart the workspace host. Available after the service has crashed and could not recover automatically.",
     category: "worktree",
@@ -141,7 +141,7 @@ export function registerWorktreeServiceActions(
   actions.set("worktree.setActive", () =>
     defineAction({
       id: "worktree.setActive",
-      title: "Set Active Worktree",
+      title: "Set active worktree",
       description:
         "Switch which worktree is the active one, changing the default target for everything scoped to 'the current worktree' and moving what the user sees. Call this deliberately — subsequent actions that omit a worktree will follow it, so switching mid-task can silently retarget later work.",
       category: "worktree",

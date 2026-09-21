@@ -31,7 +31,7 @@ export function registerIntrospectionActions(
 ): void {
   actions.set("actions.list", () => ({
     id: "actions.list",
-    title: "List Actions",
+    title: "List actions",
     description:
       "Enumerate the available actions as lightweight entries, filtered by domain or substring and returned a page at a time. Use ranked search instead when looking for a capability by intent; use this when walking a domain systematically. Entries omit argument and result schemas to stay small, so fetch one action's schema before dispatching. Ordering is stable, so paging cannot skip or repeat entries.",
     category: "introspection",
@@ -139,7 +139,7 @@ export function registerIntrospectionActions(
   // `skills.search`. `run()` throws if the renderer ever invokes it directly.
   actions.set("mcp.surface", () => ({
     id: "mcp.surface",
-    title: "Get MCP Surface",
+    title: "Get MCP surface",
     description:
       "Report this session's tool surface as data: its authorization tier, a stable hash, and per-tool tier, kind, read-only and idempotency hints, and deprecation. Call it once at startup to check the surface matches what this client was built against, then re-read the hash to detect drift without diffing everything. It describes exactly what tools/list returns for this session.",
     category: "introspection",
@@ -158,7 +158,7 @@ export function registerIntrospectionActions(
 
   actions.set("actions.getContext", () => ({
     id: "actions.getContext",
-    title: "Get Action Context",
+    title: "Get action context",
     description:
       "Snapshot what the user currently has open — active project, worktree, focused terminal, and panel state. Call this first to resolve an implicit 'current' target before an action that needs an explicit id. Anything not focused or active is simply absent, so treat a missing field as nothing being selected. It can fail early in a session, before the worktree view store has initialised.",
     category: "introspection",
@@ -226,7 +226,7 @@ export function registerIntrospectionActions(
 
   actions.set("actions.persistedStores", () => ({
     id: "actions.persistedStores",
-    title: "List Persisted Stores",
+    title: "List persisted stores",
     description:
       "List persisted renderer stores with storage key, version, migration flags, size, and parse status.",
     category: "introspection",
@@ -287,7 +287,7 @@ export function registerIntrospectionActions(
 
   actions.set("actions.search", () => ({
     id: "actions.search",
-    title: "Search Actions",
+    title: "Search actions",
     description:
       "Find actions by describing what you want to do, ranked by how well each matches. This is the discovery path: start here, then fetch the chosen action's schema before dispatching it. Use the plain listing when walking a domain systematically rather than searching by intent. Results omit argument and result schemas to stay small, and matching nothing returns an empty list rather than failing.",
     category: "introspection",
@@ -401,7 +401,7 @@ export function registerIntrospectionActions(
 
   actions.set("actions.getSchema", () => ({
     id: "actions.getSchema",
-    title: "Get Action Schema",
+    title: "Get action schema",
     description:
       "Fetch one action's full manifest entry — the exact arguments it accepts, the shape it returns, and a policy record saying whether this session can call it, at which tier, and whether confirmation applies. Use it after finding a candidate by search or listing, before dispatching. An unknown, hidden or restricted id comes back as a structured failure rather than a thrown error.",
     category: "introspection",

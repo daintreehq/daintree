@@ -1828,7 +1828,7 @@ export function ReviewHubContent({
                 id="review-hub-title"
                 className="text-text-primary font-semibold text-sm tracking-wide shrink-0"
               >
-                Review & Commit
+                Review & commit
               </h2>
             )}
             {status?.currentBranch && (

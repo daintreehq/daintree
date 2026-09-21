@@ -12,7 +12,7 @@ import { useTelemetryPreviewStore } from "@/store/telemetryPreviewStore";
 export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("logs.openFile", () => ({
     id: "logs.openFile",
-    title: "Open Logs File",
+    title: "Open logs file",
     description: "Open the logs file in the system file manager",
     category: "logs",
     kind: "command",
@@ -25,7 +25,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.getAll", () => ({
     id: "logs.getAll",
-    title: "Get Logs",
+    title: "Get logs",
     description: "Get buffered application logs",
     category: "logs",
     kind: "query",
@@ -42,7 +42,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.getSources", () => ({
     id: "logs.getSources",
-    title: "Get Log Sources",
+    title: "Get log sources",
     description: "Get distinct log sources",
     category: "logs",
     kind: "query",
@@ -57,7 +57,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.clear", () => ({
     id: "logs.clear",
-    title: "Clear Logs",
+    title: "Clear logs",
     description: "Clear application logs",
     category: "logs",
     kind: "command",
@@ -81,7 +81,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.setVerbose", () => ({
     id: "logs.setVerbose",
-    title: "Set Verbose Logging",
+    title: "Set verbose logging",
     description: "Enable or disable verbose logging",
     category: "logs",
     kind: "command",
@@ -101,7 +101,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.getVerbose", () => ({
     id: "logs.getVerbose",
-    title: "Get Verbose Logging",
+    title: "Get verbose logging",
     description: "Get whether verbose logging is enabled",
     category: "logs",
     kind: "query",
@@ -116,7 +116,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.setLogLevel", () => ({
     id: "logs.setLogLevel",
-    title: "Set Log Level…",
+    title: "Set log level…",
     description: "Open the log level picker to adjust verbosity for a specific module",
     category: "logs",
     kind: "command",
@@ -129,7 +129,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.getLevelOverrides", () => ({
     id: "logs.getLevelOverrides",
-    title: "Get Log Level Overrides",
+    title: "Get log level overrides",
     description: "Return the current map of per-module log level overrides",
     category: "logs",
     kind: "query",
@@ -143,7 +143,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.setLevelOverrides", () => ({
     id: "logs.setLevelOverrides",
-    title: "Set Log Level Overrides",
+    title: "Set log level overrides",
     description: "Replace the full map of per-module log level overrides",
     category: "logs",
     kind: "command",
@@ -159,7 +159,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.clearLevelOverrides", () => ({
     id: "logs.clearLevelOverrides",
-    title: "Clear Log Level Overrides",
+    title: "Clear log level overrides",
     description: "Remove all per-module log level overrides",
     category: "logs",
     kind: "command",
@@ -173,7 +173,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("logs.getRegistry", () => ({
     id: "logs.getRegistry",
-    title: "Get Logger Registry",
+    title: "Get logger registry",
     description: "Return the list of loggers registered in the main process",
     category: "logs",
     kind: "query",
@@ -188,7 +188,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("errors.openLogs", () => ({
     id: "errors.openLogs",
-    title: "Open Error Logs",
+    title: "Open error logs",
     description: "Open the error log file",
     category: "errors",
     kind: "command",
@@ -201,7 +201,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("errors.clearAll", () => ({
     id: "errors.clearAll",
-    title: "Clear All Errors",
+    title: "Clear all errors",
     description: "Clear all error banners and problem entries",
     category: "errors",
     kind: "command",
@@ -214,7 +214,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("errors.recent", () => ({
     id: "errors.recent",
-    title: "Recent Errors",
+    title: "Recent errors",
     description:
       "List recent entries from the diagnostics error log, covering runtime and inter-process failures, newest first. This is a separate store from the user's notification inbox, so a full picture usually means reading both. Dismissed entries are left out by default, so an empty list means nothing was recorded or everything recorded has been dismissed.",
     category: "errors",
@@ -269,7 +269,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("notifications.recent", () => ({
     id: "notifications.recent",
-    title: "Recent Notifications",
+    title: "Recent notifications",
     description:
       "List recent entries from the notification inbox — the completion, waiting and informational messages raised for the user, including quiet ones that never surfaced as a toast — newest first. This is a separate store from the diagnostics error log, so a full picture of what went wrong usually means reading both. It never fails; an empty list means nothing was notified.",
     category: "diagnostics",
@@ -331,7 +331,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("eventInspector.getEvents", () => ({
     id: "eventInspector.getEvents",
-    title: "Get Events",
+    title: "Get events",
     description:
       "Get captured events from the event inspector. Args (all optional): `limit` (default 50, max 500); `offset` (default 0, `skip` is accepted as a legacy alias); `cursor` — pass the previous response's `nextCursor`. Returns { items, hasMore, nextCursor, total }.",
     category: "diagnostics",
@@ -360,7 +360,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("eventInspector.getFiltered", () => ({
     id: "eventInspector.getFiltered",
-    title: "Get Filtered Events",
+    title: "Get filtered events",
     description:
       "Get filtered events from the event inspector. Events must be subscribed to first via eventInspector_subscribe.",
     category: "diagnostics",
@@ -421,7 +421,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
     // Diagnostics/MCP plumbing: starts event capture with no visible effect.
     // Driven by the event-inspector UI and MCP, not a user palette command.
     palette: { mode: "hidden" },
-    title: "Subscribe to Events",
+    title: "Subscribe to events",
     description:
       "Start capturing events into the event inspector. Must be called before getEvents or getFiltered will return results.",
     category: "diagnostics",
@@ -435,7 +435,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("eventInspector.unsubscribe", () => ({
     id: "eventInspector.unsubscribe",
-    title: "Unsubscribe from Events",
+    title: "Unsubscribe from events",
     description: "Stop streaming events into the event inspector",
     category: "diagnostics",
     kind: "command",
@@ -448,7 +448,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("eventInspector.clear", () => ({
     id: "eventInspector.clear",
-    title: "Clear Event Inspector",
+    title: "Clear event inspector",
     description: "Clear captured events in the event inspector",
     category: "diagnostics",
     kind: "command",
@@ -463,7 +463,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
   actions.set("telemetry.togglePreview", () => ({
     id: "telemetry.togglePreview",
     palette: { mode: "hidden" },
-    title: "Preview Outbound Telemetry",
+    title: "Preview outbound telemetry",
     description:
       "Toggle a session-only preview that mirrors every sanitised telemetry payload before it is sent.",
     category: "diagnostics",
@@ -486,7 +486,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("telemetry.clearPreview", () => ({
     id: "telemetry.clearPreview",
-    title: "Clear Telemetry Preview",
+    title: "Clear telemetry preview",
     description: "Clear captured telemetry preview events from the diagnostics dock.",
     category: "diagnostics",
     kind: "command",
@@ -499,7 +499,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("ui.refresh", () => ({
     id: "ui.refresh",
-    title: "Reload Application",
+    title: "Reload application",
     description: "Reload the renderer (useful for recovery)",
     category: "ui",
     kind: "command",
@@ -512,7 +512,7 @@ export function registerLogActions(actions: ActionRegistry, _callbacks: ActionCa
 
   actions.set("ui.sidebar.resetWidth", () => ({
     id: "ui.sidebar.resetWidth",
-    title: "Reset Sidebar Width",
+    title: "Reset sidebar width",
     description: "Reset the sidebar width to default",
     category: "ui",
     kind: "command",

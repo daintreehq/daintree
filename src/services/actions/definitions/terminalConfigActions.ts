@@ -14,7 +14,7 @@ export function registerTerminalConfigActions(
 ): void {
   actions.set("terminalConfig.get", () => ({
     id: "terminalConfig.get",
-    title: "Get Terminal Config",
+    title: "Get terminal config",
     description: "Get persisted terminal configuration",
     category: "settings",
     kind: "query",
@@ -60,7 +60,7 @@ export function registerTerminalConfigActions(
 
   actions.set("terminalConfig.setScrollback", () => ({
     id: "terminalConfig.setScrollback",
-    title: "Set Scrollback",
+    title: "Set scrollback",
     description: "Set terminal scrollback lines",
     category: "settings",
     kind: "command",
@@ -84,7 +84,7 @@ export function registerTerminalConfigActions(
 
   actions.set("terminalConfig.setPerformanceMode", () => ({
     id: "terminalConfig.setPerformanceMode",
-    title: "Set Performance Mode",
+    title: "Set performance mode",
     description: "Enable or disable performance mode",
     category: "settings",
     kind: "command",
@@ -108,7 +108,7 @@ export function registerTerminalConfigActions(
 
   actions.set("terminalConfig.setFontSize", () => ({
     id: "terminalConfig.setFontSize",
-    title: "Set Terminal Font Size",
+    title: "Set terminal font size",
     description: "Set terminal font size",
     category: "settings",
     kind: "command",
@@ -132,7 +132,7 @@ export function registerTerminalConfigActions(
 
   actions.set("terminalConfig.setFontFamily", () => ({
     id: "terminalConfig.setFontFamily",
-    title: "Set Terminal Font Family",
+    title: "Set terminal font family",
     description: "Set terminal font family",
     category: "settings",
     kind: "command",
@@ -156,7 +156,7 @@ export function registerTerminalConfigActions(
 
   actions.set("terminalConfig.setHybridInputEnabled", () => ({
     id: "terminalConfig.setHybridInputEnabled",
-    title: "Set Hybrid Input Enabled",
+    title: "Set hybrid input enabled",
     description: "Enable or disable the hybrid input bar",
     category: "settings",
     kind: "command",
@@ -180,7 +180,7 @@ export function registerTerminalConfigActions(
 
   actions.set("terminalConfig.setHybridInputAutoFocus", () => ({
     id: "terminalConfig.setHybridInputAutoFocus",
-    title: "Set Default Focus Target",
+    title: "Set default focus target",
     description:
       "Choose whether agent panes start with the hybrid input or the terminal focused — runtime clicks still win",
     category: "settings",
@@ -205,7 +205,7 @@ export function registerTerminalConfigActions(
 
   actions.set("terminalConfig.setScreenReaderMode", () => ({
     id: "terminalConfig.setScreenReaderMode",
-    title: "Set Screen Reader Mode",
+    title: "Set screen reader mode",
     description: "Set screen reader mode for terminals (auto, on, or off)",
     category: "settings",
     kind: "command",
@@ -229,7 +229,7 @@ export function registerTerminalConfigActions(
 
   actions.set("terminalConfig.setCachedProjectViews", () => ({
     id: "terminalConfig.setCachedProjectViews",
-    title: "Set Cached Project Views",
+    title: "Set cached project views",
     description: "Set the number of project views to keep cached in memory (1–5)",
     category: "settings",
     kind: "command",

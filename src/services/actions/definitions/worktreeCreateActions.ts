@@ -31,7 +31,7 @@ export function registerWorktreeCreateActions(
 ): void {
   actions.set("worktree.quickCreate", () => ({
     id: "worktree.quickCreate",
-    title: "Quick Create Worktree",
+    title: "Quick create worktree",
     description: "Open recipe picker for quick worktree creation",
     category: "worktree",
     kind: "command",
@@ -45,7 +45,7 @@ export function registerWorktreeCreateActions(
 
   actions.set("worktree.createDialog.open", () => ({
     id: "worktree.createDialog.open",
-    title: "New Worktree",
+    title: "New worktree",
     description: "Open dialog to create a new worktree",
     category: "worktree",
     kind: "command",
@@ -60,7 +60,7 @@ export function registerWorktreeCreateActions(
   actions.set("worktree.create", () =>
     defineAction({
       id: "worktree.create",
-      title: "Create Worktree",
+      title: "Create worktree",
       description:
         "Low-level worktree creator, taking an explicit repository root and filesystem path. Reach for the managed creator instead for ordinary creation in the active project — it resolves the path and branch collisions itself. Use this one only when the root, the path, an environment mode or resource provisioning must be stated explicitly. Setup can still fail after the worktree exists.",
       category: "worktree",
@@ -117,7 +117,7 @@ export function registerWorktreeCreateActions(
   actions.set("worktree.delete", () =>
     defineAction({
       id: "worktree.delete",
-      title: "Delete Worktree",
+      title: "Delete worktree",
       description:
         "Delete a linked worktree and remove its directory from disk. By default it refuses when the worktree has uncommitted or untracked changes; forcing it past that destroys them irreversibly. The main worktree cannot be deleted. Confirm the target and make sure anything worth keeping is committed or pushed first.",
       category: "worktree",
@@ -210,7 +210,7 @@ export function registerWorktreeCreateActions(
   actions.set("worktree.deleteOwned", () =>
     defineAction({
       id: "worktree.deleteOwned",
-      title: "Delete Owned Worktree",
+      title: "Delete owned worktree",
       description:
         "Delete a worktree this session itself created, removing its directory from disk after the user confirms. Only worktrees created by this connection can be deleted; anything else is refused. It will not force past uncommitted or untracked changes, delete the branch, or close terminals it does not own — commit or close those first.",
       category: "worktree",

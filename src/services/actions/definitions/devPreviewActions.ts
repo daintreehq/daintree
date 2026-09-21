@@ -145,7 +145,7 @@ export function registerDevPreviewActions(
 
   actions.set("devPreview.promoteToPortal", () => ({
     id: "devPreview.promoteToPortal",
-    title: "Open in Portal",
+    title: "Open in portal",
     description:
       "Open the current dev preview URL in a Portal tab, sharing the same session (cookies, localStorage, IndexedDB). The dev preview stays open; sessionStorage does not carry over.",
     category: "devServer",

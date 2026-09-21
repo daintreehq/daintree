@@ -10,7 +10,7 @@ import { useUIStore } from "@/store/uiStore";
 export function registerNotificationsActions(actions: ActionRegistry): void {
   actions.set("notifications.toggle", () => ({
     id: "notifications.toggle",
-    title: "Toggle Notification Inbox",
+    title: "Toggle notification inbox",
     description: "Open or close the notification inbox dropdown anchored to the toolbar bell.",
     category: "panel",
     kind: "command",

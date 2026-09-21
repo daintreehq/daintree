@@ -69,7 +69,7 @@ export function registerWorktreeQueryActions(
 ): void {
   actions.set("worktree.list", () => ({
     id: "worktree.list",
-    title: "List Worktrees",
+    title: "List worktrees",
     description:
       "List every worktree in the active project with its branch, status and any linked issue or pull request. Use this to discover worktree ids; ask for the current worktree instead when all you need is the one in use. It never fails — an empty list means the project has no worktrees.",
     category: "worktree",
@@ -105,7 +105,7 @@ export function registerWorktreeQueryActions(
 
   actions.set("worktree.getCurrent", () => ({
     id: "worktree.getCurrent",
-    title: "Get Current Worktree",
+    title: "Get current worktree",
     description:
       "Get the worktree currently in use, which is what most work should be scoped to. Use the full worktree listing only when you genuinely need the others. An empty result means no worktree is active, or the active one can no longer be found — either way, handle it before acting.",
     category: "worktree",
@@ -152,7 +152,7 @@ export function registerWorktreeQueryActions(
   actions.set("worktree.listBranches", () =>
     defineAction({
       id: "worktree.listBranches",
-      title: "List Branches",
+      title: "List branches",
       description:
         "List a repository's git branches a page at a time, flagging which one is checked out. Use this to discover branch names before creating a worktree or opening a pull request. Long branch lists are paged, so continue from the offset it hands back while more remain. A target that is not a git repository fails rather than returning nothing.",
       category: "worktree",
@@ -234,7 +234,7 @@ export function registerWorktreeQueryActions(
   actions.set("worktree.getDefaultPath", () =>
     defineAction({
       id: "worktree.getDefaultPath",
-      title: "Get Default Worktree Path",
+      title: "Get default worktree path",
       description:
         "Work out where a worktree for a given branch would live under the project's configured path pattern. A planning helper and an input to the low-level creator: the managed creator resolves its own path, so calling this first is redundant, and it reserves nothing either way. Name the repository explicitly — there is no active-worktree fallback, which would nest the path inside a linked worktree.",
       category: "worktree",
@@ -265,7 +265,7 @@ export function registerWorktreeQueryActions(
   actions.set("worktree.getAvailableBranch", () =>
     defineAction({
       id: "worktree.getAvailableBranch",
-      title: "Get Available Branch Name",
+      title: "Get available branch name",
       description:
         "Turn a desired branch name into one that is currently free, appending a numeric suffix when the name is taken. Planning and display only: it reserves nothing, so the name can be claimed between this call and the one that uses it. Do not call it before the managed worktree creator, which resolves collisions atomically under its own `collisionPolicy` and reports the branch it actually used.",
       category: "worktree",
@@ -296,7 +296,7 @@ export function registerWorktreeQueryActions(
   actions.set("worktree.waitUntilReady", () =>
     defineAction({
       id: "worktree.waitUntilReady",
-      title: "Wait Until Worktree Ready",
+      title: "Wait until worktree ready",
       description:
         "Wait for a worktree's post-create setup — config copy, submodules, then the setup script and any resource provisioning — to finish, and report where it got to. Setup can outlive the call that created the worktree, so work started before it completes may run against an unpopulated tree. Pass a zero timeout to read the state without blocking. Running out of time is not a failure: call again.",
       category: "worktree",

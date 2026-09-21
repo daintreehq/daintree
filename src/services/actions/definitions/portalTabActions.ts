@@ -17,7 +17,7 @@ export function registerPortalTabActions(
     // global palette commands. (Portal-level commands like portal.toggle /
     // portal.newTab / portal.openLaunchpad stay visible.)
     palette: { mode: "hidden" },
-    title: "Close Portal Tab",
+    title: "Close portal tab",
     description: "Close the active portal tab",
     category: "portal",
     kind: "command",
@@ -37,7 +37,7 @@ export function registerPortalTabActions(
   actions.set("portal.nextTab", () => ({
     id: "portal.nextTab",
     palette: { mode: "hidden" },
-    title: "Next Portal Tab",
+    title: "Next portal tab",
     description: "Switch to next portal tab",
     category: "portal",
     kind: "command",
@@ -58,7 +58,7 @@ export function registerPortalTabActions(
   actions.set("portal.prevTab", () => ({
     id: "portal.prevTab",
     palette: { mode: "hidden" },
-    title: "Previous Portal Tab",
+    title: "Previous portal tab",
     description: "Switch to previous portal tab",
     category: "portal",
     kind: "command",
@@ -78,7 +78,7 @@ export function registerPortalTabActions(
 
   actions.set("portal.activateTab", () => ({
     id: "portal.activateTab",
-    title: "Activate Portal Tab",
+    title: "Activate portal tab",
     description: "Switch to a specific portal tab",
     category: "portal",
     kind: "command",
@@ -94,7 +94,7 @@ export function registerPortalTabActions(
   actions.set("portal.goBack", () => ({
     id: "portal.goBack",
     palette: { mode: "hidden" },
-    title: "Portal Back",
+    title: "Portal back",
     description: "Navigate back in the active portal tab",
     category: "portal",
     kind: "command",
@@ -114,7 +114,7 @@ export function registerPortalTabActions(
   actions.set("portal.goForward", () => ({
     id: "portal.goForward",
     palette: { mode: "hidden" },
-    title: "Portal Forward",
+    title: "Portal forward",
     description: "Navigate forward in the active portal tab",
     category: "portal",
     kind: "command",
@@ -134,7 +134,7 @@ export function registerPortalTabActions(
   actions.set("portal.reload", () => ({
     id: "portal.reload",
     palette: { mode: "hidden" },
-    title: "Reload Portal",
+    title: "Reload portal",
     description: "Reload the active portal tab",
     category: "portal",
     kind: "command",
@@ -154,7 +154,7 @@ export function registerPortalTabActions(
   actions.set("portal.copyUrl", () => ({
     id: "portal.copyUrl",
     palette: { mode: "hidden" },
-    title: "Copy Portal URL",
+    title: "Copy portal URL",
     description: "Copy the active portal tab URL to clipboard",
     category: "portal",
     kind: "command",
@@ -175,7 +175,7 @@ export function registerPortalTabActions(
   actions.set("portal.openExternal", () => ({
     id: "portal.openExternal",
     palette: { mode: "hidden" },
-    title: "Open Portal URL Externally",
+    title: "Open portal URL externally",
     description: "Open the active portal tab URL in the system browser",
     category: "portal",
     kind: "command",
@@ -196,7 +196,7 @@ export function registerPortalTabActions(
   actions.set("portal.reloadTab", () => ({
     id: "portal.reloadTab",
     palette: { mode: "hidden" },
-    title: "Reload Portal Tab",
+    title: "Reload portal tab",
     description: "Reload a portal tab",
     category: "portal",
     kind: "command",
@@ -216,7 +216,7 @@ export function registerPortalTabActions(
   actions.set("portal.copyTabUrl", () => ({
     id: "portal.copyTabUrl",
     palette: { mode: "hidden" },
-    title: "Copy Portal Tab URL",
+    title: "Copy portal tab URL",
     description: "Copy a portal tab URL to clipboard",
     category: "portal",
     kind: "command",
@@ -238,7 +238,7 @@ export function registerPortalTabActions(
   actions.set("portal.openTabExternal", () => ({
     id: "portal.openTabExternal",
     palette: { mode: "hidden" },
-    title: "Open Portal Tab Externally",
+    title: "Open portal tab externally",
     description: "Open a portal tab URL in the system browser",
     category: "portal",
     kind: "command",
@@ -260,7 +260,7 @@ export function registerPortalTabActions(
   actions.set("portal.closeOthers", () => ({
     id: "portal.closeOthers",
     palette: { mode: "hidden" },
-    title: "Close Other Portal Tabs",
+    title: "Close other portal tabs",
     description: "Close all portal tabs except one",
     category: "portal",
     kind: "command",
@@ -304,7 +304,7 @@ export function registerPortalTabActions(
   actions.set("portal.closeToRight", () => ({
     id: "portal.closeToRight",
     palette: { mode: "hidden" },
-    title: "Close Tabs to the Right",
+    title: "Close tabs to the right",
     description: "Close all portal tabs to the right of a tab",
     category: "portal",
     kind: "command",

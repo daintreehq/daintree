@@ -76,7 +76,7 @@ export function registerTerminalQueryActions(
 ): void {
   actions.set("terminal.list", () => ({
     id: "terminal.list",
-    title: "List Terminals",
+    title: "List terminals",
     description:
       "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means nothing matched, not a failure.",
     category: "terminal",
@@ -205,7 +205,7 @@ export function registerTerminalQueryActions(
 
   actions.set("terminal.getOutput", () => ({
     id: "terminal.getOutput",
-    title: "Get Terminal Output",
+    title: "Get terminal output",
     description:
       "Read the trailing scrollback of one terminal, to inspect what an agent or command printed. Use the status snapshot when watching several terminals: it fetches tails for a whole fleet in one call, and reading one at a time is the common mistake. ANSI codes are stripped by default; output may be truncated to the requested tail, and a missing terminal returns an error field, not a failed call.",
     category: "terminal",
@@ -302,7 +302,7 @@ export function registerTerminalQueryActions(
 
   actions.set("terminal.getStatus", () => ({
     id: "terminal.getStatus",
-    title: "Get Terminal Status",
+    title: "Get terminal status",
     description:
       "Snapshot agent and process state across many terminals, with optional output tails, and confirm a submission landed. The batched polling path: prefer it over listing terminals for agent state, or reading each one's output. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the fetch failed. Use the blocking wait to catch an agent finishing.",
     category: "terminal",
@@ -741,7 +741,7 @@ export function registerTerminalQueryActions(
   // `run()` throws if the renderer ever invokes it directly.
   actions.set("terminal.readLastMessageOwned", () => ({
     id: "terminal.readLastMessageOwned",
-    title: "Read Owned Agent's Last Message",
+    title: "Read owned agent's last message",
     description:
       "Read what the agent in a panel this connection created or was handed last wrote to its own transcript: that reply's text, plus any tool calls left unanswered since, such as a question and its options. Claude Code only for now. This reports what the file holds, not whether the agent is waiting; a permission prompt never appears there, so read the terminal for the live screen.",
     category: "terminal",
@@ -927,7 +927,7 @@ export function registerTerminalQueryActions(
   // submission path and its receipt are the ones already shipped (#12407).
   actions.set("terminal.sendCommandOwned", () => ({
     id: "terminal.sendCommandOwned",
-    title: "Submit Text to Owned Terminal",
+    title: "Submit text to owned terminal",
     description:
       "Queue text as one submission to a terminal this connection created or was handed: a shell runs it as a command, an agent pane takes it as the next prompt. Any other panel is refused. Returns once queued, not delivered or run: pass the returned `submissionToken` to the status capability to find out.",
     category: "terminal",

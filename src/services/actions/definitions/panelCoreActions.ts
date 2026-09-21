@@ -21,7 +21,7 @@ export function registerPanelCoreActions(
 ): void {
   actions.set("panel.list", () => ({
     id: "panel.list",
-    title: "List Panels",
+    title: "List panels",
     description: "Get list of all panels with layout information",
     category: "panel",
     kind: "query",
@@ -108,7 +108,7 @@ export function registerPanelCoreActions(
 
   actions.set("panel.focus", () => ({
     id: "panel.focus",
-    title: "Focus Panel",
+    title: "Focus panel",
     description:
       "Move keyboard focus to a specific panel, changing what the user is looking at and where their typing goes. Use it to surface a panel the user should attend to. It reports nothing about the panel — list terminals or panels to inspect state.",
     category: "panel",
@@ -143,7 +143,7 @@ export function registerPanelCoreActions(
 
   actions.set("panel.openPluginPanel", () => ({
     id: "panel.openPluginPanel",
-    title: "Open Plugin Panel",
+    title: "Open plugin panel",
     description:
       "Spawn (or focus an existing) plugin-contributed panel kind, handing it an initial argument. Args: `kind` (required) — the plugin panel kind id from `contributes.panels`; `initialArgs` (optional) — an opaque bag delivered to the view as `PanelViewProps.initialArgs` (e.g. `{ path }` to open a file); `worktreeId` (optional) — target worktree, which must belong to the current project; `reuseExisting` (optional, default true) — focus an existing panel of this kind in the worktree instead of spawning a second one. Returns `{ panelId }`. Errors when `kind` is not a registered plugin panel kind, when `worktreeId` belongs to another project, or — transiently, retry — when the project's worktrees haven't loaded yet.",
     category: "panel",
@@ -229,7 +229,7 @@ export function registerPanelCoreActions(
 
   actions.set("panel.palette", () => ({
     id: "panel.palette",
-    title: "Panel Palette",
+    title: "Panel palette",
     description: "Open panel palette to create non-PTY panels",
     category: "panel",
     kind: "command",
@@ -250,7 +250,7 @@ export function registerPanelCoreActions(
 
   actions.set("panel.toggleDiagnostics", () => ({
     id: "panel.toggleDiagnostics",
-    title: "Toggle Diagnostics",
+    title: "Toggle diagnostics",
     description: "Toggle the diagnostics panel",
     category: "panel",
     kind: "command",
@@ -264,7 +264,7 @@ export function registerPanelCoreActions(
 
   actions.set("panel.diagnosticsLogs", () => ({
     id: "panel.diagnosticsLogs",
-    title: "Show Logs",
+    title: "Show logs",
     description: "Open diagnostics panel with logs tab",
     category: "panel",
     kind: "command",
@@ -278,7 +278,7 @@ export function registerPanelCoreActions(
 
   actions.set("panel.diagnosticsEvents", () => ({
     id: "panel.diagnosticsEvents",
-    title: "Show Events",
+    title: "Show events",
     description: "Open diagnostics panel with events tab",
     category: "panel",
     kind: "command",
@@ -292,7 +292,7 @@ export function registerPanelCoreActions(
 
   actions.set("panel.diagnosticsMessages", () => ({
     id: "panel.diagnosticsMessages",
-    title: "Show Problems",
+    title: "Show problems",
     description: "Open diagnostics panel with problems tab",
     category: "panel",
     kind: "command",
@@ -307,7 +307,7 @@ export function registerPanelCoreActions(
 
   actions.set("panel.togglePortal", () => ({
     id: "panel.togglePortal",
-    title: "Toggle Portal",
+    title: "Toggle portal",
     description: "Toggle the portal panel",
     category: "panel",
     kind: "command",

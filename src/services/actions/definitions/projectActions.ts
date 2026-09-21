@@ -155,7 +155,7 @@ type PilotChordTarget =
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("project.switcherPalette", () => ({
     id: "project.switcherPalette",
-    title: "Open Project Switcher",
+    title: "Open project switcher",
     description: "Open the quick project switcher palette",
     category: "project",
     kind: "command",
@@ -436,7 +436,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   // orphan any binding a user has already customised.
   actions.set("project.mruCycleOlder", () => ({
     id: "project.mruCycleOlder",
-    title: "Switch to Last Workspace",
+    title: "Switch to last workspace",
     description:
       "Switch to the workspace this window was in before the current one — a project or a scratch. Running it again returns to where you started.",
     category: "project",
@@ -451,7 +451,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.add", () => ({
     id: "project.add",
-    title: "Add Project",
+    title: "Add project",
     description: "Add a project (optionally by path)",
     category: "project",
     kind: "command",
@@ -475,7 +475,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.openDialog", () => ({
     id: "project.openDialog",
-    title: "Pick Directory",
+    title: "Pick directory",
     description: "Open a directory picker dialog",
     category: "project",
     kind: "command",
@@ -489,7 +489,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.switch", () => ({
     id: "project.switch",
-    title: "Switch Project",
+    title: "Switch project",
     description: "Switch to another project",
     category: "project",
     kind: "command",
@@ -504,7 +504,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.update", () => ({
     id: "project.update",
-    title: "Update Project",
+    title: "Update project",
     description:
       "Change a project's stored metadata, such as its display name. This persists immediately and has no undo here, so read the project's current record first rather than overwriting fields blindly.",
     category: "project",
@@ -531,7 +531,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.remove", () => ({
     id: "project.remove",
-    title: "Remove Project",
+    title: "Remove project",
     description: "Remove a project from the list",
     category: "project",
     kind: "command",
@@ -548,7 +548,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.close", () => ({
     id: "project.close",
-    title: "Close Project",
+    title: "Close project",
     description: "Close a project and kill its processes",
     category: "project",
     kind: "command",
@@ -568,7 +568,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.closeActive", () => ({
     id: "project.closeActive",
-    title: "Close Project",
+    title: "Close project",
     description: "Close the currently active project and return to the welcome screen",
     category: "project",
     kind: "command",
@@ -583,7 +583,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.getAll", () => ({
     id: "project.getAll",
-    title: "List Projects",
+    title: "List projects",
     description:
       "List every project registered in the app, whether or not it is currently open. Use this to discover project ids; ask for the current project instead when all you need is the one the user is working in. It never fails — an empty list means no projects are registered rather than an error.",
     category: "project",
@@ -599,7 +599,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.getCurrent", () => ({
     id: "project.getCurrent",
-    title: "Get Current Project",
+    title: "Get current project",
     description:
       "Get the project currently open in the active window, which is what most work should be scoped to. Use the full project listing only when you genuinely need projects the user is not in. It never fails: an empty result means no project is open.",
     category: "project",
@@ -615,7 +615,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.getSettings", () => ({
     id: "project.getSettings",
-    title: "Get Project Settings",
+    title: "Get project settings",
     description:
       "Read a project's operational settings — run commands, dev server command, worktree naming, forge remote and notification overrides. Dedicated environment-variable, secret and access-control fields are withheld. The command strings themselves come back verbatim though, so treat them as potentially sensitive: a project may have inlined a credential in one.",
     category: "project",
@@ -643,7 +643,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.saveSettings", () => ({
     id: "project.saveSettings",
-    title: "Save Project Settings",
+    title: "Save project settings",
     description:
       "Persist a project's settings, merging the supplied fields over the stored ones so anything omitted is kept. This writes immediately and has no undo, and settings drive real behaviour such as run commands and worktree naming. The MCP tier and agent-exposure keys are stripped from every write, so setting those reports success and changes nothing.",
     category: "project",
@@ -678,7 +678,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.muteNotifications", () => ({
     id: "project.muteNotifications",
-    title: "Mute Project Notifications",
+    title: "Mute project notifications",
     description:
       "Stop a project from raising notifications when its agents finish or need attention. The user will no longer be prompted for work that is waiting, so anything blocked on them may sit unnoticed. This persists until it is turned back on.",
     category: "project",
@@ -752,7 +752,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.silenceNotificationKind", () => ({
     id: "project.silenceNotificationKind",
-    title: "Silence Notification Kind",
+    title: "Silence notification kind",
     description: "Suppress a specific category of notifications",
     category: "project",
     kind: "command",
@@ -859,7 +859,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.detectRunners", () => ({
     id: "project.detectRunners",
-    title: "Detect Runners",
+    title: "Detect runners",
     description:
       "Detect the runnable commands a project defines, by inspecting its manifest files. Use this to discover the right command to run rather than guessing one. It returns every script it finds, publish and deploy included, and for some frameworks synthesizes conventional commands that are declared nowhere — check what a command actually does before running it.",
     category: "project",
@@ -879,7 +879,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.getStats", () => ({
     id: "project.getStats",
-    title: "Get Project Stats",
+    title: "Get project stats",
     description:
       "Get aggregate resource usage for a project — how many processes and terminals it is running and roughly how much memory they consume. Use this to judge whether there is headroom before launching more work. Host process ids are deliberately withheld, so this cannot be used to target individual processes.",
     category: "project",
@@ -907,7 +907,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.cloneRepo", () => ({
     id: "project.cloneRepo",
-    title: "Clone Repository",
+    title: "Clone repository",
     description: "Clone a Git repository from a URL",
     category: "project",
     kind: "command",
@@ -920,7 +920,7 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.settings.open", () => ({
     id: "project.settings.open",
-    title: "Open Project Settings",
+    title: "Open project settings",
     description: "Open the project settings dialog",
     category: "project",
     kind: "command",

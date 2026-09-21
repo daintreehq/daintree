@@ -129,7 +129,7 @@ export function registerDevServerActions(
 ): void {
   actions.set("devServer.start", () => ({
     id: "devServer.start",
-    title: "Open Dev Preview",
+    title: "Open dev preview",
     description: "Open a dev preview panel and start the dev server when configured",
     category: "devServer",
     kind: "command",
@@ -180,7 +180,7 @@ export function registerDevServerActions(
 
   actions.set("devPreview.toggleTool", () => ({
     id: "devPreview.toggleTool",
-    title: "Toggle Dev Preview Tool",
+    title: "Toggle dev preview tool",
     description:
       "Switch a plugin-contributed dev preview tool on or off in a dev preview of the active worktree — the focused one, else the first open one — opening a dev preview when the worktree has none. Returns the panel it acted on.",
     category: "devServer",
@@ -273,7 +273,7 @@ export function registerDevServerActions(
 
   actions.set("devPreview.stop", () => ({
     id: "devPreview.stop",
-    title: "Stop Dev Server",
+    title: "Stop dev server",
     description: "Stop the currently focused dev preview server",
     category: "devServer",
     kind: "command",

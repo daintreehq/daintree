@@ -1191,7 +1191,7 @@ export function Toolbar({
             <TooltipContent side="bottom">
               {hasWorkspace
                 ? createTooltipContent(
-                    isFocusMode ? "Show Sidebar" : "Hide Sidebar",
+                    isFocusMode ? "Show sidebar" : "Hide sidebar",
                     sidebarShortcut
                   )
                 : "Open a project or scratch to use the sidebar"}

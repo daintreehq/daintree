@@ -25,7 +25,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     mcpVisibility: "core",
     name: "actions.getContext",
     requiresArgs: false,
-    title: "Get Action Context",
+    title: "Get action context",
   },
   {
     band: "reversible",
@@ -61,7 +61,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     mcpVisibility: "core",
     name: "actions.getSchema",
     requiresArgs: true,
-    title: "Get Action Schema",
+    title: "Get action schema",
   },
   {
     band: "reversible",
@@ -107,7 +107,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     mcpVisibility: "core",
     name: "actions.list",
     requiresArgs: false,
-    title: "List Actions",
+    title: "List actions",
   },
   {
     band: "reversible",
@@ -155,7 +155,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     mcpVisibility: "core",
     name: "actions.search",
     requiresArgs: true,
-    title: "Search Actions",
+    title: "Search actions",
   },
   {
     band: "reversible",
@@ -420,7 +420,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Launch Agent",
+    title: "Launch agent",
   },
   {
     band: "reversible",
@@ -484,7 +484,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "List Available Agents",
+    title: "List available agents",
   },
   {
     band: "reversible",
@@ -588,7 +588,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "List Agent Presets",
+    title: "List agent presets",
   },
   {
     band: "destructive-local",
@@ -803,7 +803,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Generate And Copy Context",
+    title: "Generate and copy context",
   },
   {
     band: "reversible",
@@ -1044,7 +1044,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Fleet: Get run status",
+    title: "Fleet: get run status",
   },
   {
     band: "reversible",
@@ -1132,7 +1132,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Get MCP Surface",
+    title: "Get MCP surface",
   },
   {
     band: "reversible",
@@ -1156,7 +1156,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "query",
     name: "recipe.list",
     requiresArgs: false,
-    title: "List Recipes",
+    title: "List recipes",
   },
   {
     band: "destructive-local",
@@ -1244,7 +1244,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Run Recipe",
+    title: "Run recipe",
   },
   {
     band: "reversible",
@@ -1353,7 +1353,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Close Owned Terminal",
+    title: "Close owned terminal",
   },
   {
     band: "reversible",
@@ -1439,7 +1439,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Get Terminal Output",
+    title: "Get terminal output",
   },
   {
     band: "reversible",
@@ -1723,7 +1723,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "Get Terminal Status",
+    title: "Get terminal status",
   },
   {
     band: "reversible",
@@ -1750,7 +1750,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "terminal.injectOwned",
     requiresArgs: true,
-    title: "Inject Context to Owned Terminal",
+    title: "Inject context to owned terminal",
   },
   {
     band: "reversible",
@@ -1805,7 +1805,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Interrupt Owned Agent",
+    title: "Interrupt owned agent",
   },
   {
     band: "reversible",
@@ -1957,7 +1957,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "List Terminals",
+    title: "List terminals",
   },
   {
     band: "reversible",
@@ -2000,7 +2000,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "terminal.new",
     requiresArgs: false,
-    title: "New Terminal",
+    title: "New terminal",
   },
   {
     band: "reversible",
@@ -2217,7 +2217,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       type: "object",
     },
     requiresArgs: true,
-    title: "Read Owned Agent's Last Message",
+    title: "Read owned agent's last message",
   },
   {
     band: "reversible",
@@ -2244,7 +2244,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "terminal.revealOwned",
     requiresArgs: true,
-    title: "Reveal Owned Terminal",
+    title: "Reveal owned terminal",
   },
   {
     band: "reversible",
@@ -2312,7 +2312,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Submit Text to Owned Terminal",
+    title: "Submit text to owned terminal",
   },
   {
     band: "reversible",
@@ -2394,7 +2394,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: true,
-    title: "Set Terminal Client Metadata",
+    title: "Set terminal client metadata",
   },
   {
     band: "reversible",
@@ -2704,7 +2704,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
       additionalProperties: false,
     },
     requiresArgs: false,
-    title: "List Workspaces",
+    title: "List workspaces",
   },
   {
     band: "reversible",
@@ -2843,7 +2843,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "worktree.createWithRecipe",
     requiresArgs: true,
-    title: "Create Managed Worktree",
+    title: "Create managed worktree",
   },
   {
     band: "destructive-local",
@@ -2871,7 +2871,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "worktree.deleteOwned",
     requiresArgs: true,
-    title: "Delete Owned Worktree",
+    title: "Delete owned worktree",
   },
   {
     band: "reversible",
@@ -2884,7 +2884,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "query",
     name: "worktree.getCurrent",
     requiresArgs: false,
-    title: "Get Current Worktree",
+    title: "Get current worktree",
   },
   {
     band: "reversible",
@@ -2897,7 +2897,7 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "query",
     name: "worktree.list",
     requiresArgs: false,
-    title: "List Worktrees",
+    title: "List worktrees",
   },
   {
     band: "reversible",
@@ -2922,6 +2922,6 @@ export const MCP_EXTERNAL_BASE_MANIFEST: readonly ActionManifestEntry[] = [
     kind: "command",
     name: "worktree.setActive",
     requiresArgs: true,
-    title: "Set Active Worktree",
+    title: "Set active worktree",
   },
 ];
