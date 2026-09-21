@@ -97,7 +97,7 @@ export class Director {
       win.center();
     });
     await mockOpenDialog(ctx.app, firstProject.repo.dir);
-    await ctx.window.getByRole("button", { name: "Open folder" }).click();
+    await ctx.window.getByRole("button", { name: "Open project", exact: true }).click();
     this.page = ctx.window;
     await this.settle();
     this.projects.set(firstProject.repo.slug, firstProject);

@@ -100,7 +100,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
       {
         id: "open-folder",
         icon: FolderOpen,
-        title: "Open folder",
+        title: "Open project",
         description: "Open an existing project on your machine",
         onClick: () => void addProject(),
         primary: true,

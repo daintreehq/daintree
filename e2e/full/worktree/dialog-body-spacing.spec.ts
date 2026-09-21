@@ -44,7 +44,7 @@ test.describe.serial("AppDialog body spacing", () => {
 
     ctx = await launchApp();
     await mockOpenDialog(ctx.app, plainDir);
-    await ctx.window.getByRole("button", { name: "Open folder" }).click();
+    await ctx.window.getByRole("button", { name: "Open project", exact: true }).click();
   });
 
   test.afterAll(async () => {

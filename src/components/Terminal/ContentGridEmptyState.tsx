@@ -422,7 +422,7 @@ export function ContentGridEmptyState({
                       void actionService.dispatch("project.add", undefined, { source: "user" });
                     }}
                   >
-                    Open folder…
+                    Open project…
                   </Button>
                 }
               />

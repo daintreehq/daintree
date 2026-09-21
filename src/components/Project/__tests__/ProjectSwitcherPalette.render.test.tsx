@@ -1028,21 +1028,21 @@ describe("ProjectSwitcherPalette modal mode", () => {
 
   it("names an action the surface it is rendered in can actually perform", () => {
     // The modal mounts without the add/clone callbacks, so an empty state that
-    // pointed at "Add project…" would name a button that isn't there.
+    // pointed at "Open project…" would name a button that isn't there.
     const { unmount } = render(<ProjectSwitcherPalette {...modalProps} results={[]} />);
     const modalCopy = screen.getByTestId("project-empty-state").textContent;
-    expect(screen.queryByText("Add project…")).toBeNull();
+    expect(screen.queryByText("Open project…")).toBeNull();
     unmount();
 
     render(<ProjectSwitcherPalette {...dropdownProps} results={[]} />);
-    expect(screen.getByText("Add project…")).toBeTruthy();
+    expect(screen.getByText("Open project…")).toBeTruthy();
     expect(screen.getByTestId("project-empty-state").textContent).not.toBe(modalCopy);
   });
 
   it("does not show management action buttons in modal mode", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
     expect(screen.queryByText("Project settings…")).toBeNull();
-    expect(screen.queryByText("Add project…")).toBeNull();
+    expect(screen.queryByText("Open project…")).toBeNull();
     expect(screen.queryByText("Clone repository…")).toBeNull();
     expect(screen.queryByText("Create new folder…")).toBeNull();
   });
@@ -2243,7 +2243,7 @@ describe("ProjectSwitcherPalette band collapse", () => {
       />
     );
 
-    // "Add a project to get started" here would be a lie the user cannot argue
+    // "Open a project to get started" here would be a lie the user cannot argue
     // with — and it would take away the headers that are the only way back.
     expect(screen.queryByTestId("project-empty-state")).toBeNull();
     expect(screen.getByRole("group", { name: "Running" })).toBeTruthy();

@@ -203,7 +203,7 @@ export function ProjectSwitcher() {
   );
 
   // Deleting the last scratch clears `currentScratch`, so a zero-project user
-  // would drop straight to the bare "Open Project…" branch below — unmounting the
+  // would drop straight to the bare "Open project…" branch below — unmounting the
   // palette, and with it the confirm dialog still spinning on the delete. Hold the
   // palette open until the run resolves. Covers the single-scratch delete too:
   // deleting the one remaining scratch takes the same branch.
@@ -274,7 +274,7 @@ export function ProjectSwitcher() {
               disabled={showLoadingSpinner}
               onClick={() => projectSwitcher.open("dropdown")}
             >
-              <span>Select Project...</span>
+              <span>Select project</span>
               {showLoadingSpinner ? (
                 <Spinner size="md" className="shrink-0" />
               ) : (
@@ -296,7 +296,7 @@ export function ProjectSwitcher() {
           disabled={isLoading}
         >
           <Plus />
-          Open Project...
+          Open project…
         </Button>
       </>
     );

@@ -226,7 +226,7 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     });
 
     // The active scratch persists in main but doesn't ride the hydrate payload,
-    // so without this the toolbar and sidebar show "Open project" after a relaunch
+    // so without this the toolbar and sidebar show "Select project" after a relaunch
     // into a scratch. Fire-and-forget: nothing on the boot path blocks on it.
     void useScratchStore
       .getState()

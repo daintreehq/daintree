@@ -129,7 +129,7 @@ async function bootDemoProject(repo: DemoRepo): Promise<{
   });
 
   await mockOpenDialog(ctx.app, repo.dir);
-  await ctx.window.getByRole("button", { name: "Open folder" }).click();
+  await ctx.window.getByRole("button", { name: "Open project", exact: true }).click();
 
   let page = await refreshActiveWindow(ctx.app, ctx.window);
   await dismissTelemetryConsent(page);

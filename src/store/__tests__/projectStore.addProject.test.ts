@@ -344,7 +344,7 @@ describe("projectStore addProject", () => {
       await useProjectStore.getState().addProjectByPath("relative/path");
 
       expect(notifyMock).toHaveBeenCalledWith(
-        expect.objectContaining({ title: "Couldn't add project" })
+        expect.objectContaining({ title: "Couldn't open project" })
       );
     });
 
@@ -395,7 +395,7 @@ describe("projectStore addProject", () => {
       );
       expect(ownershipToasts).toHaveLength(0);
       const genericToasts = notifyMock.mock.calls.filter(
-        (call) => (call[0] as { title?: string }).title === "Couldn't add project"
+        (call) => (call[0] as { title?: string }).title === "Couldn't open project"
       );
       expect(genericToasts.length).toBeGreaterThan(0);
     });

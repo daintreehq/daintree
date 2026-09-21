@@ -58,7 +58,7 @@ async function ensureProjectOpen(): Promise<void> {
     }
     if (
       await ctx.window
-        .getByRole("button", { name: "Open folder" })
+        .getByRole("button", { name: "Open project", exact: true })
         .isVisible({ timeout: 500 })
         .catch(() => false)
     ) {

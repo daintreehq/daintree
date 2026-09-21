@@ -651,7 +651,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
         component: "projectStore",
         details: { path: resolvedPath || path },
       });
-      const errorMessage = formatErrorMessage(error, "Couldn't add project");
+      const errorMessage = formatErrorMessage(error, "Couldn't open project");
 
       // Absolute-path check: POSIX (/...), Windows drive letter (C:\... / C:/...),
       // and Windows UNC (\\server\share...) are all "absolute" here.
@@ -744,7 +744,7 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
       const pickAnother = classified?.recovery === "choose-folder";
       notify({
         type: "error",
-        title: "Couldn't add project",
+        title: "Couldn't open project",
         message,
         actions: [
           {

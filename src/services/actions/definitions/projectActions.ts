@@ -451,8 +451,8 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
 
   actions.set("project.add", () => ({
     id: "project.add",
-    title: "Add project",
-    description: "Add a project (optionally by path)",
+    title: "Open project",
+    description: "Open a project (optionally by path)",
     category: "project",
     kind: "command",
     danger: "safe",

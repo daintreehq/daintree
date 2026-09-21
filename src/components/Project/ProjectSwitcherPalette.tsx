@@ -1157,7 +1157,7 @@ interface ProjectListContentProps {
   query: string;
   onSelect: (row: ProjectSwitcherRow, source?: ProjectSwitchSelectSource) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
-  /** Whether this surface offers "Add project…" — decides what the empty state can name. */
+  /** Whether this surface offers "Open project…" — decides what the empty state can name. */
   canAddProject: boolean;
   /**
    * Whether the Scratch band below this list offers a create row. It decides
@@ -1426,7 +1426,7 @@ function ProjectListContent({
                   <div>{`No workspaces match "${query}"`}</div>
                 ) : canAddProject ? (
                   // Names the button sitting directly below this list.
-                  "Add a project to get started"
+                  "Open a project to get started"
                 ) : canCreateScratch ? (
                   // No project commands on this surface, but Scratch is still
                   // here — so the nearest action is the create row, not a menu.
@@ -1997,7 +1997,7 @@ function ProjectSwitcherFooter({
 }
 
 /**
- * The plain commands under the divider — Project Settings, Add Project, Clone,
+ * The plain commands under the divider — Project Settings, Open Project, Clone,
  * Create Folder. Full-bleed on purpose: they never take the roving cursor, so
  * they must not wear the ranked rows' card shape, which is what marks the
  * arrow-key domain (`PALETTE_ROW_CLASS`). Losing the inset means `px-3` is now
@@ -2396,7 +2396,7 @@ function ProjectPaletteInner({
               <ProjectCommandRow
                 icon={Plus}
                 tone="create"
-                label="Add project…"
+                label="Open project…"
                 onClick={onAddProject}
                 testId="project-add-button"
               />
@@ -2925,7 +2925,7 @@ export function ProjectSwitcherPalette({
             <div className="text-xs text-text-secondary">
               {removeConfirmProject.isActive
                 ? "The project will remain in your list and can be reopened at any time."
-                : "This project will be removed from your list. You can add it back later, but any running terminals or processes will need to be restarted."}
+                : "This project will be removed from your list. You can open it again later, but any running terminals or processes will need to be restarted."}
             </div>
           </div>
         </ConfirmDialog>
