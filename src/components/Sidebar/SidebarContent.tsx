@@ -154,6 +154,9 @@ const SIDEBAR_VIRTUOSO_OVERSCAN_PX = 600;
 // ~14s workspace-host restart budget so it fires before `setFatalError`.
 const RECONNECT_ESCALATE_MS = 10_000;
 
+const WORKTREE_DISCONNECTED_MESSAGE =
+  "The workspace service isn't connected, so worktrees can't load.";
+
 // Fixed-count shimmer card placeholders for the worktree sidebar loading state.
 // Follows the same 3-bone structure as the `.skel-card` design in the
 // index.html startup ghost — title / subtitle / detail at 13px / 11px / 32px,
@@ -486,7 +489,8 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       }, 50);
     },
   });
-  const { worktrees, isLoading, isReconnecting, reconnectingAt, error, refresh } = useWorktrees();
+  const { worktrees, isLoading, isInitialized, isReconnecting, reconnectingAt, error, refresh } =
+    useWorktrees();
   const [bannerDismissed, setBannerDismissed] = useState(false);
   useEffect(() => {
     setBannerDismissed(false);
@@ -1558,6 +1562,12 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     <WorktreeLoadErrorBanner error={worktreeLoadError} />
   ) : null;
 
+  // An open project whose worktree store never received a snapshot has no port
+  // to the workspace service. That is a connection failure, not an empty
+  // repository, so it must never fall through to the "Open a Git repository"
+  // nudge — the state Retry used to leave behind (#12576).
+  const isProjectDisconnected = currentProject !== null && !isInitialized;
+
   // Workspace-service error banner overlays cached data so the user can keep
   // working through transient poll failures. Hoisted before the early returns
   // so a `setFatalError` that fires before the first snapshot is still
@@ -1662,7 +1672,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <>
         <div className="flex flex-col h-full">
-          {worktreeLoadErrorBanner}
+          {worktreeLoadErrorBanner ??
+            (isProjectDisconnected && error === null ? (
+              <WorktreeLoadErrorBanner error={WORKTREE_DISCONNECTED_MESSAGE} />
+            ) : null)}
           <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
             <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
               Worktrees
@@ -1670,10 +1683,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           </div>
           {errorBanner}
 
-          {/* A failed load already has an open project — the "Open a Git
-              repository" nudge would contradict the banner, so the banner
-              stands alone as the actionable state. */}
-          {!worktreeLoadError && (
+          {/* A failed load or a missing connection already has an open
+              project — the "Open a Git repository" nudge would contradict the
+              banner, so the banner stands alone as the actionable state. */}
+          {!worktreeLoadError && !isProjectDisconnected && (
             <EmptyState
               variant="zero-data"
               scale="sidebar"

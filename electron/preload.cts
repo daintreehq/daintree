@@ -677,9 +677,16 @@ class WorktreePortClient {
 
 const worktreePortClient = new WorktreePortClient();
 
-ipcRenderer.on("worktree-port", (event: Electron.IpcRendererEvent) => {
+ipcRenderer.on("worktree-port", (event: Electron.IpcRendererEvent, payload: unknown) => {
   if (!event.ports || event.ports.length === 0) return;
   worktreePortClient.attach(event.ports[0]);
+  // Main can't observe delivery — a port posted before this listener existed
+  // is dropped silently — so it only reuses a channel this receipt confirms
+  // (#12576). Sent after attach so the ready callbacks have already run.
+  const token = (payload as { token?: unknown } | null | undefined)?.token;
+  if (typeof token === "number") {
+    ipcRenderer.send(CHANNELS.WORKTREE_PORT_ACK, { token });
+  }
 });
 
 // Main broadcasts this on every host exit.  Only the fatal payload is acted

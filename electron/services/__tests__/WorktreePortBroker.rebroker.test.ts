@@ -10,7 +10,7 @@
 
 import { EventEmitter } from "events";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebContents } from "electron";
+import { ipcMain, type WebContents } from "electron";
 import type { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
 
 type MockPort = EventEmitter & { close: ReturnType<typeof vi.fn> };
@@ -38,8 +38,19 @@ vi.mock("electron", async () => {
 
   return {
     MessageChannelMain: MockMessageChannelMain,
+    ipcMain: new EE(),
   };
 });
+
+vi.mock("../../utils/logger.js", () => ({
+  createLogger: () => ({
+    name: "test",
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+  }),
+}));
 
 import { WorktreePortBroker } from "../WorktreePortBroker.js";
 
@@ -104,6 +115,29 @@ describe("WorktreePortBroker re-broker", () => {
   beforeEach(() => {
     createdChannels.length = 0;
     nextWebContentsId = 1;
+    ipcMain.removeAllListeners();
+  });
+
+  it("posts a fresh port after a host restart even when the host object survives", () => {
+    // A restart can respawn the child behind the same WorkspaceHostProcess, so
+    // host identity alone can't justify reuse — the restart path's
+    // closePortsForHost is what forces the re-post.
+    const broker = new WorktreePortBroker();
+    const host = createHost("/tmp/project-a");
+    const view = createWebContents();
+
+    expect(broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(view))).toBe(true);
+    expect(broker.confirmPort(view.id, 1)).toBe(true);
+
+    const closedIds = broker.closePortsForHost("/tmp/project-a");
+    expect(
+      broker.reBrokerForHost(asWorkspaceHostProcess(host), lookupFrom([view]), closedIds)
+    ).toBe(1);
+
+    expect(createdChannels).toHaveLength(2);
+    expect(view.postMessage).toHaveBeenLastCalledWith("worktree-port", { token: 2 }, [
+      createdChannels[1].port2,
+    ]);
   });
 
   it("re-brokers every live view against the fresh host after a restart", () => {
@@ -139,7 +173,7 @@ describe("WorktreePortBroker re-broker", () => {
     expect(freshHost.attachWorktreePort).toHaveBeenCalledTimes(2);
     expect(oldHost.attachWorktreePort).toHaveBeenCalledTimes(2);
     expect(viewA.postMessage).toHaveBeenCalledTimes(2);
-    expect(viewA.postMessage).toHaveBeenLastCalledWith("worktree-port", null, [
+    expect(viewA.postMessage).toHaveBeenLastCalledWith("worktree-port", { token: 3 }, [
       createdChannels[2].port2,
     ]);
   });

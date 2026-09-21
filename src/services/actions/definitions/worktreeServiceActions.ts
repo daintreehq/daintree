@@ -7,6 +7,20 @@ import { worktreeClient } from "@/clients";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
+/**
+ * A load failure worth retrying: one main or the port watchdog reported, or an
+ * open project whose worktree store settled without ever receiving a snapshot.
+ * The second has no error of its own to show, which is why it used to read as
+ * an empty repository instead of a connection failure (#12576).
+ */
+function hasRetryableWorktreeLoadFailure(): boolean {
+  const { worktreeLoadError, currentProject } = useProjectStore.getState();
+  if (worktreeLoadError !== null) return true;
+  if (!currentProject) return false;
+  const viewState = getCurrentViewStoreOrNull()?.getState();
+  return viewState !== undefined && !viewState.isInitialized && !viewState.isLoading;
+}
+
 export function registerWorktreeServiceActions(
   actions: ActionRegistry,
   _callbacks: ActionCallbacks
@@ -120,11 +134,9 @@ export function registerWorktreeServiceActions(
     scope: "renderer",
     nonRepeatable: true,
     keywords: ["reload", "recover", "switch", "worktree"],
-    isEnabled: () => useProjectStore.getState().worktreeLoadError !== null,
+    isEnabled: () => hasRetryableWorktreeLoadFailure(),
     disabledReason: () =>
-      useProjectStore.getState().worktreeLoadError === null
-        ? "No worktree load failure to retry"
-        : undefined,
+      hasRetryableWorktreeLoadFailure() ? undefined : "No worktree load failure to retry",
     run: async () => {
       const retriedError = useProjectStore.getState().worktreeLoadError;
       await worktreeClient.retryProjectLoad();
