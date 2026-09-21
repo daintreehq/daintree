@@ -2203,6 +2203,50 @@ describe("builder lifetime while switched on", () => {
     await waitFor(() => expect(screen.queryByText("Waiting for the page to load")).toBeNull());
   });
 
+  it("connects promptly once the page is up, however long it waited for the server", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // The bind that answers the page coming up loses a race with the page
+      // registering itself; the one after it succeeds.
+      let failuresLeft = Infinity;
+      host.sitePreview.bind.mockImplementation(async (request) => {
+        if (failuresLeft > 0) {
+          failuresLeft--;
+          throw new Error("No dev preview is available on that panel");
+        }
+        return {
+          sessionId: "session-1",
+          panelId: request.panelId,
+          projectId: "p1",
+          documentEpoch: 0,
+          mode: request.mode ?? "select",
+          guestReady: false,
+          droppedMessages: 0,
+          suspended: false,
+        };
+      });
+      startDevPreviewToolSessions();
+      publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
+      useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
+      render(<Builder />);
+      await screen.findByText("Waiting for the page to load");
+      // A cold dev server: long enough for the backoff to reach its long steps.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(40_000);
+      });
+
+      failuresLeft = 1;
+      await act(async () => {
+        publishDevPreviewToolContext(hostContext());
+        await vi.advanceTimersByTimeAsync(3_000);
+      });
+      expect(screen.queryByText("Waiting for the page to load")).toBeNull();
+      expect(session().getSnapshot().binding.status).toBe("bound");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says it couldn't connect, and why, once it has stopped trying", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
