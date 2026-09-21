@@ -143,9 +143,6 @@ const DURABLE_ALLOWLIST = new Set([
   // Current rebase step indicator in the conflict UI (single primary anchor per active focus region)
   "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
 
-  // Find bar match-case toggle active state (single primary anchor per active focus region)
-  "src/components/Browser/FindBar.tsx",
-
   // File-browser tree-column resize handle: focus ring + grip accent mark the
   // one keyboard-focusable separator (single focus anchor per active focus
   // region), mirroring the PortalDock/Sidebar resize-handle convention (#11331)
