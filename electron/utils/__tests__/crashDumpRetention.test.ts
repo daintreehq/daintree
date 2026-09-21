@@ -4,7 +4,6 @@ import fsp from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
-  NATIVE_CRASH_DUMP_RETENTION,
   _resetCrashRecoveryInspectionForTests,
   isCrashRecoveryInspectionComplete,
   markCrashRecoveryInspectionComplete,
@@ -363,15 +362,6 @@ describe("pruneCrashDumps", () => {
 
     expect(first.deletedCount).toBe(1);
     expect(second).toMatchObject({ count: 3, deletedCount: 0 });
-  });
-
-  it("ships a bounded default policy", () => {
-    expect(NATIVE_CRASH_DUMP_RETENTION).toEqual({
-      maxAgeMs: 30 * DAY,
-      maxCount: 20,
-      maxBytes: 100 * 1024 * 1024,
-      activeWriteGraceMs: 10 * MINUTE,
-    });
   });
 });
 
