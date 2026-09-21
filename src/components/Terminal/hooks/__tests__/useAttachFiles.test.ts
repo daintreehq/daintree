@@ -17,11 +17,15 @@ const { getAllAtFileTokens } = await import("../../hybridInputParsing");
 
 const CWD = "/Users/greg/Projects/daintree";
 
-function fakeView(head = 0) {
+/** `before` is the document text ahead of the caret; whitespace unless a test says otherwise. */
+function fakeView(head = 0, before = " ".repeat(head)) {
   const dispatch = vi.fn();
   const focus = vi.fn();
   const view = {
-    state: { selection: { main: { head } } },
+    state: {
+      selection: { main: { head } },
+      doc: { sliceString: (from: number, to: number) => before.slice(from, to) },
+    },
     dispatch,
     focus,
   } as unknown as EditorView;
@@ -164,6 +168,42 @@ describe("useAttachFiles", () => {
     expect(getAllAtFileTokens(spans[0]!).map((t) => t.path)).toEqual(["a.ts"]);
     expect(getAllAtFileTokens(spans[2]!).map((t) => t.path)).toEqual(["c d.md"]);
     expect(dispatch.mock.calls[0]![0].selection).toEqual({ anchor: head + insert.length });
+  });
+
+  // Type a sentence, then reach for the button: the caret sits right after the
+  // last word, where neither an `@file` token nor a bare path would parse.
+  it("separates what it inserts from the word the caret sits right after", async () => {
+    const before = "compare this";
+    pickAttachments.mockResolvedValue([`${CWD}/a.ts`, "/tmp/b.png"]);
+    const { dispatch, ref } = fakeView(before.length, before);
+    const { result } = renderHook(() => useAttachFiles(ref, CWD));
+
+    await act(async () => {
+      await result.current();
+    });
+
+    const doc = before + insertedText(dispatch);
+    expect(getAllAtFileTokens(doc).map((t) => t.path)).toEqual(["a.ts"]);
+    expect(doc.split(/\s+/)).toContain("/tmp/b.png");
+    const spans = effectValues(dispatch).map((chip) =>
+      doc.slice(chip.from as number, chip.to as number)
+    );
+    expect(spans.sort()).toEqual(["/tmp/b.png", "@a.ts"].sort());
+  });
+
+  it("adds no separator after an opening bracket, where a token already parses", async () => {
+    const before = "see (";
+    pickAttachments.mockResolvedValue([`${CWD}/a.ts`]);
+    const { dispatch, ref } = fakeView(before.length, before);
+    const { result } = renderHook(() => useAttachFiles(ref, CWD));
+
+    await act(async () => {
+      await result.current();
+    });
+
+    const doc = before + insertedText(dispatch);
+    expect(doc.startsWith("see (@")).toBe(true);
+    expect(getAllAtFileTokens(doc).map((t) => t.path)).toEqual(["a.ts"]);
   });
 
   it("does nothing when the picker is cancelled", async () => {

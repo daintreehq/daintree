@@ -80,7 +80,12 @@ export async function insertFileAttachments(
     const cursor = view.state.selection.main.head;
     const imageEffects: ReturnType<typeof addImageChip.of>[] = [];
     const fileEffects: ReturnType<typeof addFileDropChip.of>[] = [];
-    let insertText = "";
+    // A reference only parses at a boundary: `look at this@a.ts` carries no
+    // `@file` token, and an absolute path glued to a word is no path at all.
+    // The button makes that the common case — the caret sits right after
+    // whatever was typed before reaching for it.
+    let insertText =
+      cursor > 0 && !/[\s([{]/.test(view.state.doc.sliceString(cursor - 1, cursor)) ? " " : "";
 
     for (const entry of resolved) {
       const from = cursor + insertText.length;
