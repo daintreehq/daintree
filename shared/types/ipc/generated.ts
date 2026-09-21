@@ -130,6 +130,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./system.js").CliInstallStatus;
   };
+  "clipboard:pick-attachments": {
+    args: [];
+    result: string[];
+  };
   "clipboard:read-selection": {
     args: [];
     result: { text: string };

@@ -743,6 +743,7 @@ export default tseslint.config(
   {
     files: [
       "src/components/Terminal/HybridInputBar.tsx",
+      "src/components/Terminal/fileAttachments.ts",
       "src/components/Terminal/hooks/**/*.{ts,tsx}",
       "src/components/Terminal/inputEditorExtensions/**/*.{ts,tsx}",
       "src/store/terminalInputStore.ts",
