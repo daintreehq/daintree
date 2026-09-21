@@ -131,6 +131,8 @@ export function BrowserToolbar({
   const [isEditing, setIsEditing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const copiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectOnFocusTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [screenshotCopied, setScreenshotCopied] = useState(false);
   const screenshotCopiedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState(-1);
@@ -190,11 +192,15 @@ export function BrowserToolbar({
     return () => document.removeEventListener("mousedown", handleClick, true);
   }, [longPressDir]);
 
-  // Cleanup long-press timer on unmount
+  // Every timer this component schedules has to die with it: a feedback reset
+  // that outlives the mount sets state on a gone tree, and under vitest it can
+  // fire after the jsdom environment is torn down ("window is not defined").
   useEffect(() => {
     return () => {
       if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
       if (screenshotCopiedTimerRef.current) clearTimeout(screenshotCopiedTimerRef.current);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
     };
   }, []);
 
@@ -383,7 +389,8 @@ export function BrowserToolbar({
   const handleFocus = useCallback(() => {
     setIsEditing(true);
     setInputValue(url);
-    setTimeout(() => inputRef.current?.select(), 0);
+    if (selectOnFocusTimerRef.current) clearTimeout(selectOnFocusTimerRef.current);
+    selectOnFocusTimerRef.current = setTimeout(() => inputRef.current?.select(), 0);
   }, [url]);
 
   const handleBlur = useCallback(
@@ -463,7 +470,8 @@ export function BrowserToolbar({
         throw new Error(result.error.message);
       }
       setCopied(true);
-      setTimeout(() => setCopied(false), COPIED_FEEDBACK_RESET_MS);
+      if (copiedTimerRef.current) clearTimeout(copiedTimerRef.current);
+      copiedTimerRef.current = setTimeout(() => setCopied(false), COPIED_FEEDBACK_RESET_MS);
     } catch (err) {
       logError("Failed to copy URL", err);
     }
