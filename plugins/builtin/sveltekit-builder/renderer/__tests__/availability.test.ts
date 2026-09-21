@@ -43,11 +43,19 @@ describe("the builder's availability answer", () => {
     expect(invoke).toHaveBeenCalledTimes(2);
   });
 
-  it("stays available when the walk stopped early, so the surfaces can say why", async () => {
-    // Withholding the tool here would hide the notice explaining that the
-    // search was cut short, and make commands refuse with a claim about the
-    // worktree that the truncated walk never established.
+  it("is unavailable when the walk stopped early without finding an app", async () => {
+    // Almost every real repository stops the walk at its depth budget, so a
+    // stopped walk says nothing about Svelte: treating it as "may apply" put
+    // the tool in the toolbar of projects that have never used it.
     const invoke = vi.fn().mockResolvedValue({ appCount: 0, complete: false });
+    stubInvoke(invoke);
+
+    const applies = await loadApplies();
+    expect(await applies(nextContext() as never)).toBe(false);
+  });
+
+  it("is available when a walk that stopped early had already found an app", async () => {
+    const invoke = vi.fn().mockResolvedValue({ appCount: 1, complete: false });
     stubInvoke(invoke);
 
     const applies = await loadApplies();

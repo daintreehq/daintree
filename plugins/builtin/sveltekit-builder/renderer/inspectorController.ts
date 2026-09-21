@@ -367,6 +367,7 @@ const REATTACH_REASONS: ReadonlySet<SitePreviewDetachReason> = new Set([
 const REATTACH_DELAY_MS = 300;
 /** About two minutes in all: long enough for a cold dev server to serve its first page. */
 const CONNECT_RETRY_DELAYS_MS = [500, 1000, 2000, 4000, 8000, 15000, 30000, 60000];
+const CONNECT_RETRY_PAGE_READY_MAX_MS = 2000;
 
 const RUNTIME_ISSUE_COPY: Record<string, string> = {
   "no-svelte-meta":
@@ -476,6 +477,8 @@ export class InspectorController implements DevPreviewToolSession {
   private workspaceKey: string | null = null;
   private workspaceRequest = 0;
   private bindRequest = 0;
+  /** The host's last word on whether the preview is showing a page. */
+  private pageReady = false;
   private reattachTimer: ReturnType<typeof setTimeout> | null = null;
   private connectRetryTimer: ReturnType<typeof setTimeout> | null = null;
   private connectAttempts = 0;
@@ -538,8 +541,18 @@ export class InspectorController implements DevPreviewToolSession {
       worktreeId: context.worktreeId,
       worktreePath: context.worktreePath,
     });
-    if (context.isWebviewReady && context.url && this.state.binding.status === "failed") {
-      void this.connect();
+    const pageReady = context.isWebviewReady && context.url.length > 0;
+    // The page arriving is a new round whatever the binding is doing: a bind
+    // already in flight when it arrives would otherwise fail into a budget
+    // the wait for the server had spent, and stop trying beside a live page.
+    if (pageReady && !this.pageReady) this.connectAttempts = 0;
+    this.pageReady = pageReady;
+    if (pageReady && this.state.binding.status === "failed") {
+      // A fresh round, not the next step of the old one: the failures so far
+      // were a preview with no page, and a bind that now loses a race with the
+      // page registering itself would otherwise wait out a backoff grown for
+      // a cold dev server — up to a minute of "waiting" beside a loaded page.
+      void this.retryConnect();
     }
   }
 
@@ -826,7 +839,12 @@ export class InspectorController implements DevPreviewToolSession {
 
   private scheduleConnectRetry(previewPanelId: string, request: number): boolean {
     if (this.disposed || this.connectAttempts >= CONNECT_RETRY_DELAYS_MS.length) return false;
-    const delay = CONNECT_RETRY_DELAYS_MS[this.connectAttempts]!;
+    // The long steps wait for a dev server to serve its first page. Once the
+    // host says a page is showing there is nothing left to wait that long for.
+    const delay = Math.min(
+      CONNECT_RETRY_DELAYS_MS[this.connectAttempts]!,
+      this.pageReady ? CONNECT_RETRY_PAGE_READY_MAX_MS : Infinity
+    );
     this.connectAttempts++;
     this.clearConnectRetry();
     this.connectRetryTimer = setTimeout(() => {
@@ -858,6 +876,12 @@ export class InspectorController implements DevPreviewToolSession {
   async detach(): Promise<void> {
     const binding = this.state.binding;
     this.bindRequest++;
+    // Superseding the request silences any retry waiting on it, so the state
+    // must stop promising one.
+    this.clearConnectRetry();
+    if (binding.status === "failed" && binding.retrying) {
+      this.patchState({ binding: { ...binding, retrying: false } });
+    }
     if (binding.status !== "bound") return;
     this.patchState({
       binding: { status: "detached", panelId: binding.panelId, reason: "requested" },

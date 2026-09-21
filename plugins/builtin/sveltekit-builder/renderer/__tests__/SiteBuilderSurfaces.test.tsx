@@ -84,6 +84,19 @@ function Builder() {
   );
 }
 
+function boundState(request: { panelId: string; mode?: "browse" | "select" }) {
+  return {
+    sessionId: "session-1",
+    panelId: request.panelId,
+    projectId: "p1",
+    documentEpoch: 0,
+    mode: request.mode ?? ("select" as const),
+    guestReady: false,
+    droppedMessages: 0,
+    suspended: false,
+  };
+}
+
 function mount() {
   switchOn();
   return render(<Builder />);
@@ -2201,6 +2214,118 @@ describe("builder lifetime while switched on", () => {
     await screen.findByText("Waiting for the page to load");
     await waitFor(() => expect(attempts).toBe(3), { timeout: 3000 });
     await waitFor(() => expect(screen.queryByText("Waiting for the page to load")).toBeNull());
+  });
+
+  it("connects promptly once the page is up, however long it waited for the server", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // The bind that answers the page coming up loses a race with the page
+      // registering itself; the one after it succeeds.
+      let failuresLeft = Infinity;
+      host.sitePreview.bind.mockImplementation(async (request) => {
+        if (failuresLeft > 0) {
+          failuresLeft--;
+          throw new Error("No dev preview is available on that panel");
+        }
+        return {
+          sessionId: "session-1",
+          panelId: request.panelId,
+          projectId: "p1",
+          documentEpoch: 0,
+          mode: request.mode ?? "select",
+          guestReady: false,
+          droppedMessages: 0,
+          suspended: false,
+        };
+      });
+      startDevPreviewToolSessions();
+      publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
+      useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
+      render(<Builder />);
+      await screen.findByText("Waiting for the page to load");
+      // A cold dev server: long enough for the backoff to reach its long steps.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(40_000);
+      });
+
+      // Inside the first step of a fresh round, and well short of the step a
+      // capped delay alone would wait.
+      failuresLeft = 1;
+      await act(async () => {
+        publishDevPreviewToolContext(hostContext());
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(screen.queryByText("Waiting for the page to load")).toBeNull();
+      expect(session().getSnapshot().binding.status).toBe("bound");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never waits out a long backoff step beside a page that is showing", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // Six failures with the page up throughout: the uncapped schedule would
+      // still be half a minute from its next attempt.
+      let failuresLeft = 6;
+      host.sitePreview.bind.mockImplementation(async (request) => {
+        if (failuresLeft > 0) {
+          failuresLeft--;
+          throw new Error("No dev preview is available on that panel");
+        }
+        return boundState(request);
+      });
+      mount();
+      await screen.findByText("Waiting for the page to load");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12_000);
+      });
+      expect(session().getSnapshot().binding.status).toBe("bound");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps trying when the page arrives under the last attempt it had left", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      let pageUp = false;
+      let release: (() => void) | null = null;
+      host.sitePreview.bind.mockImplementation(async (request) => {
+        if (release === null && pageUp) {
+          // The attempt in flight as the page arrives.
+          await new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          throw new Error("No dev preview is available on that panel");
+        }
+        if (release === null) throw new Error("No dev preview is available on that panel");
+        return boundState(request);
+      });
+      startDevPreviewToolSessions();
+      publishDevPreviewToolContext({ ...hostContext(), isWebviewReady: false });
+      useDevPreviewToolStore.getState().setActive("preview-1", BUILDER_TOOL_ID);
+      render(<Builder />);
+      await screen.findByText("Waiting for the page to load");
+      // Through every step but the last, whose attempt is the one held open.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(61_000);
+      });
+      pageUp = true;
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      expect(release).not.toBeNull();
+
+      await act(async () => {
+        publishDevPreviewToolContext(hostContext());
+        release?.();
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      expect(session().getSnapshot().binding.status).toBe("bound");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("says it couldn't connect, and why, once it has stopped trying", async () => {
