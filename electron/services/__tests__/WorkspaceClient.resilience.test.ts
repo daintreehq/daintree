@@ -37,7 +37,13 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
       return `req-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     }
 
-    send = vi.fn(() => true);
+    send = vi.fn((_msg?: unknown) => true);
+
+    // Mirrors the real host: the policy is cached for replay on every host and
+    // only delivered to the ones the client chose.
+    setWorkspacePowerPolicy = vi.fn((policy: unknown, deliver: boolean) => {
+      if (deliver) this.send({ type: "set-workspace-power-policy", policy });
+    });
 
     // `timeoutMs` mirrors the real WorkspaceHostProcess signature so callers
     // that scope a request's budget can be asserted on.
@@ -2754,6 +2760,9 @@ describe("WorkspaceClient multi-process manager", () => {
             type: "set-workspace-power-policy",
             policy: active,
           });
+          // The dormant host is not woken, but it still records the policy so a
+          // restart comes back holding it rather than the permissive default.
+          expect(h(0).setWorkspacePowerPolicy).toHaveBeenCalledWith(active, false);
 
           // Attenuation is not a grant: a host that keeps watching still has to
           // hear that it may stop fetching, dormant or not.
