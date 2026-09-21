@@ -328,7 +328,13 @@ export function VoiceInputButton({
         className={cn(
           "relative flex items-center justify-center rounded-full transition duration-150",
           "h-6 w-6",
-          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
+          // The ring is inset because the wrapper above is `contain: strict`,
+          // which includes paint containment and clips descendants at its
+          // 24x24 box — and this button fills that box exactly, so an outward
+          // ring is painted straight into the clip. Insetting keeps the
+          // indicator visible without giving up the containment the orbit
+          // animation relies on.
+          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-accent-primary",
           showOrbit
             ? "bg-overlay-soft text-text-primary hover:bg-overlay-medium"
             : cn(
