@@ -124,6 +124,22 @@ export const theme: BuiltInThemeSource = {
     "search-selected-result-border": "rgba(54,206,148,0.30)",
     "search-selected-result-icon": "#36CE94",
     "surface-toolbar": "#151211",
+    // The resting edge of every text field. It is its own token, not the
+    // `border-strong` the inputs used to share with dividers and card edges: an
+    // input boundary is a UI component under WCAG 1.4.11 and owes 3:1 on its
+    // own, while the divider ladder is tuned for separation and reads as hard
+    // ruled lines anywhere near that weight.
+    //
+    // Solid rather than alpha: a white-alpha border composites to a different
+    // colour on every surface, so a value that clears the ratio inside a panel
+    // quietly fails on the elevated field fill. `border-strong`
+    // (white 14% → ~#484848 on the field) measured ~1.55:1, less than half.
+    //
+    // 3.11:1 on `surface-input` (#2b2b2a) and 3.61:1 on `surface-panel`
+    // (#201f1f) — the quietest rung that clears both with margin. Warm-neutral
+    // to stay on the ladder's hue family. `contrastRatio` from `shared/theme`
+    // reproduces both numbers.
+    "border-input": "#767674",
     // The engine derives this token as `text-primary` at 35% alpha, which
     // measured 2.7–2.8:1 on every daintree surface. That is below even this
     // repo's own placeholder floor — `MATRIX_CONTRAST_PAIRS` treats placeholder

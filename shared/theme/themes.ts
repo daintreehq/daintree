@@ -141,6 +141,8 @@ export function createDaintreeTokens(
 
   const prStateDefaults = dark ? PR_STATE_DARK_TOKENS : PR_STATE_LIGHT_TOKENS;
 
+  const borderStrong = tokens["border-strong"] ?? withAlpha(borderInk, dark ? 0.14 : 0.18);
+
   const searchHighlightBg =
     tokens["search-highlight-background"] ?? withAlpha(tokens["accent-primary"], dark ? 0.2 : 0.12);
   const searchHighlightText = tokens["search-highlight-text"] ?? tokens["status-success"];
@@ -194,9 +196,14 @@ export function createDaintreeTokens(
     // canvas, separation falls to borders — so the light ladder is roughly doubled and
     // driven from the cool near-black `borderInk`, which composites near-neutral.
     "border-subtle": tokens["border-subtle"] ?? withAlpha(borderInk, dark ? 0.08 : 0.09),
-    "border-strong": tokens["border-strong"] ?? withAlpha(borderInk, dark ? 0.14 : 0.18),
+    "border-strong": borderStrong,
     "border-divider": tokens["border-divider"] ?? withAlpha(borderInk, dark ? 0.05 : 0.085),
     "border-interactive": tokens["border-interactive"] ?? withAlpha(borderInk, dark ? 0.2 : 0.2),
+    // Defaults to whatever `border-strong` resolved to, deliberately: the token
+    // exists so a theme can raise the text-entry boundary to the 3:1 WCAG 1.4.11
+    // asks of it without dragging every decorative divider up with it. A theme
+    // that says nothing keeps the ladder value it had before the split.
+    "border-input": tokens["border-input"] ?? borderStrong,
     // Driven from `text-primary`, not `borderInk`: this is the one border that
     // must hit a fixed ratio, and `text-primary` is the only ink already floored
     // against every surface, so a fraction of it lands predictably in all 14
@@ -593,11 +600,31 @@ const INTERNAL_LIGHT_FALLBACK_SOURCE: BuiltInThemeSource = {
   },
 };
 
+/**
+ * `border-input` follows `border-strong` unless the theme names it — including
+ * when the theme retuned `border-strong` itself. The engine derivation runs
+ * before token overrides are merged, so without this the field edge of a theme
+ * that moved `border-strong` would fall back to the engine's ladder value
+ * instead of tracking the theme's, which is exactly the silent divergence the
+ * token split was supposed to avoid.
+ */
+function followBorderStrongForInput(
+  tokens: Record<string, unknown>,
+  overrides: Record<string, unknown> | undefined
+): void {
+  if (typeof overrides?.["border-input"] === "string") return;
+  if (typeof overrides?.["border-strong"] !== "string") return;
+  if (typeof tokens["border-strong"] === "string") {
+    tokens["border-input"] = tokens["border-strong"];
+  }
+}
+
 function createThemeFromSource(source: BuiltInThemeSource): AppColorScheme {
   const compiledTokens = compilePaletteToTokens(source.palette);
   const tokens = source.tokens
     ? normalizeAppThemeTokens(source.tokens, compiledTokens)
     : compiledTokens;
+  if (source.tokens) followBorderStrongForInput(tokens, source.tokens);
   const extensions = resolveStrategyExtensions(source.palette, source.extensions);
 
   return {
@@ -981,6 +1008,7 @@ export function normalizeAppColorScheme(
   const tokenOverrides = (maybeScheme.tokens as Record<string, unknown> | undefined) ?? {};
   const normalizedTokens = normalizeAppThemeTokens(rawTokens ?? {}, baseScheme.tokens);
   Object.assign(normalizedTokens, normalizeAppThemeTokens(tokenOverrides, normalizedTokens));
+  followBorderStrongForInput(normalizedTokens, tokenOverrides);
   if (
     typeof tokenOverrides["accent-foreground"] !== "string" &&
     typeof normalizedTokens["accent-primary"] === "string"

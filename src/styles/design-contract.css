@@ -71,6 +71,7 @@
   --color-border-strong: var(--theme-border-strong);
   --color-border-divider: var(--theme-border-divider);
   --color-border-interactive: var(--theme-border-interactive);
+  --color-border-input: var(--theme-border-input);
   --color-selection-outline: var(--theme-selection-outline);
   --color-accent-primary: var(--theme-accent-primary);
   --color-accent-hover: var(--theme-accent-hover);

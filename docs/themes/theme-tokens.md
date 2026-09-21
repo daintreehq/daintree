@@ -83,16 +83,19 @@ Dim or disabled icons must use a solid token (`text-text-muted` for disabled/nee
 
 ## Border Tokens
 
-| Token                | Purpose                               | Dark default | Light default |
-| -------------------- | ------------------------------------- | ------------ | ------------- |
-| `border-default`     | Card outlines, input borders          | Required     | Required      |
-| `border-subtle`      | Panel-internal dividers               | `white 8%`   | `black 5%`    |
-| `border-strong`      | Focused panel borders                 | `white 14%`  | `black 14%`   |
-| `border-divider`     | Structural separators                 | `white 5%`   | `black 4%`    |
-| `border-interactive` | Hovered/focused interactive borders   | `white 20%`  | `black 10%`   |
-| `selection-outline`  | Palette selected-row leading-rail ink | `text 42%`   | `text 53%`    |
+| Token                | Purpose                               | Dark default    | Light default   |
+| -------------------- | ------------------------------------- | --------------- | --------------- |
+| `border-default`     | Card outlines, input borders          | Required        | Required        |
+| `border-subtle`      | Panel-internal dividers               | `white 8%`      | `black 5%`      |
+| `border-strong`      | Focused panel borders                 | `white 14%`     | `black 14%`     |
+| `border-divider`     | Structural separators                 | `white 5%`      | `black 4%`      |
+| `border-interactive` | Hovered/focused interactive borders   | `white 20%`     | `black 10%`     |
+| `border-input`       | Resting `Input`/`Textarea` edge       | `border-strong` | `border-strong` |
+| `selection-outline`  | Palette selected-row leading-rail ink | `text 42%`      | `text 53%`      |
 
 **Polarity pattern:** Dark themes use white-alpha; light themes use black-alpha.
+
+**`border-input` is the ladder value until a theme raises it.** A text field's boundary is a user-interface component under WCAG 1.4.11 and owes 3:1 on its own, which `border-strong` — a separation value shared with dividers and card edges — is not tuned for: on `daintree` it composited to ~1.55:1 against the field fill. The token defaults to whatever `border-strong` resolved to, so a theme that says nothing renders exactly as before; a theme that needs the ratio sets it to a **solid** hex, because an alpha border composites differently on the field fill than on the panel behind it and a value that clears one can fail the other. `shared/theme/__tests__/borderInputContrast.test.ts` holds the opted-in theme to 3:1 on both surfaces and every other theme to its `border-strong`.
 
 **`selection-outline` is deliberately outside that ladder.** The name is historical — the token drew an outline around all four sides of the selected row before the geometry moved to a leading rail; the job did not change. It is derived from `text-primary` rather than the border ink, and sits 2-3x above `border-strong`, because it is the only selection mark in the app that must satisfy WCAG 1.4.11 on its own — the raised fill it marks clears barely 1.1-1.2:1 against the palette surface, so the rail is the whole non-text indicator. The rail sits on the row's boundary, touching the fill on one side and the surrounding palette surface on the other, and `getThemeContrastWarnings` gates it at 3:1 against both — so retuning `text-primary` or the fill trips the theme contract rather than silently weakening the indicator. See [interaction-state-recipes.md](./interaction-state-recipes.md#selected-state-list-item).
 
@@ -456,7 +459,7 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | --- | --- |
 | Surface | 11 |
 | Text | 6 |
-| Border | 6 (5 ladder + `selection-outline`) |
+| Border | 7 (5 ladder + `border-input` + `selection-outline`) |
 | Accent | 9 (6 primary + 3 secondary) |
 | Focus | 1 (`focus-ring`) |
 | Status | 8 (4 colors + 4 `*-surface` washes) |

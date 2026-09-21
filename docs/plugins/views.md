@@ -41,7 +41,7 @@ Prefer **container queries** (`@container`, `@sm:`, `@md:`) over viewport breakp
 
 **Borders** — `border-`, `divide-`, `ring-`
 
-`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive`
+`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive` `border-input`
 
 **Status** — `bg-`, `text-`, `border-`
 
