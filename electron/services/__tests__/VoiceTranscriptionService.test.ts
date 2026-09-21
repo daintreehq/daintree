@@ -105,19 +105,19 @@ vi.mock("ws", () => {
   return { default: ctor };
 });
 
-// ── Mock the VAD worker (`node:worker_threads`) ──────────────────────────────
+// ── Mock the VAD process (`electron` utilityProcess) ────────────────────────
 //
-// The OpenAI provider spawns a Silero VAD worker. Replace it with a stub so the
-// coordinator tests can drive speech-end events synchronously instead of
-// loading ONNX or spawning a real thread.
+// The OpenAI provider forks a Silero VAD utility process. Replace it with a
+// stub so the coordinator tests can drive speech-end events synchronously
+// instead of loading ONNX or spawning a real process.
 
 type VadListener = (...args: unknown[]) => void;
 
 class MockVadWorker {
-  terminateCalls = 0;
+  readonly pid = 41_000 + vadWorkers.length;
   private listeners: Map<string, Set<VadListener>> = new Map();
 
-  constructor(_path: string | URL) {
+  constructor(_modulePath: string) {
     vadWorkers.push(this);
   }
 
@@ -127,22 +127,7 @@ class MockVadWorker {
     return this;
   }
 
-  removeAllListeners(event?: string): this {
-    if (event) this.listeners.delete(event);
-    else this.listeners.clear();
-    return this;
-  }
-
   postMessage(): void {}
-
-  unref(): this {
-    return this;
-  }
-
-  terminate(): Promise<number> {
-    this.terminateCalls++;
-    return Promise.resolve(0);
-  }
 
   private fire(event: string, ...args: unknown[]): void {
     const set = this.listeners.get(event);
@@ -156,14 +141,17 @@ class MockVadWorker {
   emitSpeechEnd(): void {
     this.fire("message", { type: "speech-end" });
   }
+  emitExit(code: number): void {
+    this.fire("exit", code);
+  }
 }
 
 const vadWorkers: MockVadWorker[] = [];
 
-vi.mock("node:worker_threads", () => ({
-  Worker: function (this: unknown, scriptPath: string | URL) {
-    return new MockVadWorker(scriptPath);
-  } as unknown as new (scriptPath: string | URL) => MockVadWorker,
+vi.mock("electron", () => ({
+  utilityProcess: {
+    fork: (modulePath: string) => new MockVadWorker(modulePath),
+  },
 }));
 
 function latestVadWorker(): MockVadWorker {
@@ -238,10 +226,14 @@ describe("VoiceTranscriptionService (coordinator)", () => {
   beforeEach(() => {
     instances.length = 0;
     vadWorkers.length = 0;
+    // Retirement arms a real SIGKILL backstop; fake pids must never reach the OS.
+    vi.spyOn(process, "kill").mockImplementation(() => true);
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    // End every fake VAD process so none lingers in the module's retiring set.
+    for (const worker of vadWorkers) worker.emitExit(0);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });

@@ -151,6 +151,12 @@ const closeSharedDbMock = vi.hoisted(() => ({
 
 vi.mock("../../services/persistence/db.js", () => closeSharedDbMock);
 
+const vadDrainMock = vi.hoisted(() => ({
+  waitForRetiringVadProcesses: vi.fn((_budgetMs: number) => Promise.resolve(0)),
+}));
+
+vi.mock("../../services/voice/openaiVadProcess.js", () => vadDrainMock);
+
 const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../services/TelemetryService.js", () => ({
@@ -294,6 +300,7 @@ import {
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
+  VAD_DRAIN_BUDGET_MS,
 } from "../shutdownConfig.js";
 
 function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
@@ -649,6 +656,80 @@ describe("registerShutdownHandler", () => {
         expect.any(Error)
       );
       warnSpy.mockRestore();
+    });
+  });
+
+  describe("voice VAD drain at quit (#12577)", () => {
+    it("waits for the VAD process voice teardown retired before exiting", async () => {
+      const order: string[] = [];
+      let releaseDrain!: () => void;
+      const drained = new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      });
+      let markWaitStarted!: () => void;
+      const waitStarted = new Promise<void>((resolve) => {
+        markWaitStarted = resolve;
+      });
+      vadDrainMock.waitForRetiringVadProcesses.mockImplementationOnce(async (budgetMs) => {
+        order.push(`vad-wait:${budgetMs}`);
+        markWaitStarted();
+        await drained;
+        order.push("vad-drained");
+        return 0;
+      });
+      let markDbClosed!: () => void;
+      const dbClosed = new Promise<void>((resolve) => {
+        markDbClosed = resolve;
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementationOnce(() => {
+        order.push("closeSharedDb");
+        markDbClosed();
+      });
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => {
+          order.push("exit");
+          resolve();
+        });
+      });
+
+      const { beforeQuitCb } = await setup({
+        getCleanupIpcHandlers: vi.fn(() => () => {
+          order.push("cleanupIpc");
+        }),
+      });
+      await beforeQuitCb(makeEvent());
+
+      await Promise.all([waitStarted, dbClosed]);
+      // Give an unblocked chain every chance to run on to its telemetry flush.
+      for (let i = 0; i < 5; i++) await new Promise((resolve) => setImmediate(resolve));
+      expect(closeTelemetryMock).not.toHaveBeenCalled();
+      expect(order).not.toContain("exit");
+
+      releaseDrain();
+      await exited;
+      expect(order.indexOf("cleanupIpc")).toBeLessThan(
+        order.indexOf(`vad-wait:${VAD_DRAIN_BUDGET_MS}`)
+      );
+      expect(order.slice(-2)).toEqual(["vad-drained", "exit"]);
+    });
+
+    it("exits cleanly when a VAD process is still draining at the budget", async () => {
+      vadDrainMock.waitForRetiringVadProcesses.mockResolvedValueOnce(1);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const exited = new Promise<void>((resolve) => {
+        appMock.exit.mockImplementationOnce(() => resolve());
+      });
+
+      try {
+        const { beforeQuitCb } = await setup({});
+        await beforeQuitCb(makeEvent());
+        await exited;
+
+        expect(appMock.exit).toHaveBeenCalledWith(0);
+        expect(warnSpy).toHaveBeenCalledWith("[MAIN] 1 VAD process(es) still draining at quit");
+      } finally {
+        warnSpy.mockRestore();
+      }
     });
   });
 

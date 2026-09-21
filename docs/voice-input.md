@@ -73,7 +73,7 @@ interface TranscriptionProvider {
 
 | Provider | `hasServerVAD` | Endpoint | Audio on wire | Segmentation | Keep-alive |
 | --- | --- | --- | --- | --- | --- |
-| `OpenAITranscriptionProvider` | `false` | `wss://api.openai.com/v1/realtime?intent=transcription`, model `gpt-live-transcribe` | base64 JSON `input_audio_buffer.append` | client-side Silero VAD worker + 8s backstop | ping/pong heartbeat (20s) |
+| `OpenAITranscriptionProvider` | `false` | `wss://api.openai.com/v1/realtime?intent=transcription`, model `gpt-live-transcribe` | base64 JSON `input_audio_buffer.append` | client-side Silero VAD process + 8s backstop | ping/pong heartbeat (20s) |
 | `DeepgramTranscriptionProvider` | `true` | `wss://api.deepgram.com/v1/listen`, model `nova-3` | raw binary frames, `linear16` @ 24kHz | server-side `endpointing=300` | `KeepAlive` frame (5s) |
 
 Both buffer up to `PRE_CONNECT_BUFFER_MAX` (100) chunks / `150_000` bytes (~3s) while connecting or reconnecting, then flush on session-ready. WebSocket URLs accept env overrides (`DAINTREE_REALTIME_WS_URL`, `DAINTREE_DEEPGRAM_WS_URL`) for testing.
@@ -120,16 +120,18 @@ The types for `keywords` and `languages` are hand-written in the provider: the i
 
 The OpenAI provider sends `turn_detection: null` explicitly and segments itself. The explicit `null` matters: omitting the field makes the server apply a default VAD, after which it acks commits but emits no transcription. Every documented `gpt-live-transcribe` example still shows `null`, and whether the model would accept a server-VAD block is unverified — adopting one would be its own change, with the error response checked first.
 
-The old approach committed on a blind 2-second interval, which cut words mid-pause and added up to ~2s of end-of-speech latency. It's replaced by a Silero VAD v5 side-chain (`electron/services/voice/openaiVadWorker.ts`, via the `avr-vad` package) running on a **worker thread** so ONNX inference (~every 32ms) never jitters the Electron main loop. The same 24kHz mono PCM16 stream sent to OpenAI is also fed to the worker, which resamples to Silero's 16kHz internally.
+The old approach committed on a blind 2-second interval, which cut words mid-pause and added up to ~2s of end-of-speech latency. It's replaced by a Silero VAD v5 side-chain (`electron/services/voice/openaiVadWorker.ts`, via the `avr-vad` package) running in a dedicated `utilityProcess` child (`openaiVadProcess.ts`, one per voice session, `serviceName` `daintree-voice-vad`) so ONNX inference (~every 32ms) never jitters the Electron main loop — and, since ONNX Runtime can abort in native code (#12577), so an abort ends that child instead of main. The same 24kHz mono PCM16 stream sent to OpenAI is also fed to the child, which resamples to Silero's 16kHz internally.
+
+Retiring a VAD posts `destroy` and waits: the child drains its in-flight model load and inference, releases the ONNX session, reports `drained` and exits 0. A child still alive `VAD_RETIRE_KILL_MS` (3s) later gets a raw SIGKILL — `UtilityProcess.kill()` blocks main on macOS (#11069), and only that process dies either way. App quit gives outstanding drains `VAD_DRAIN_BUDGET_MS` (1s) inside the cleanup phase. Any exit the provider did not ask for, like a native abort, drops it into degraded mode: no speech events, commits on the `VAD_MAX_SEGMENT_MS` backstop alone, dictation keeps working.
 
 ### VAD worker protocol
 
 `electron/services/voice/openaiVadWorkerProtocol.ts`:
 
-- **Main → worker (`VadWorkerInbound`):** `audio` (PCM16 `ArrayBuffer`, transferred not copied) | `destroy`.
-- **Worker → main (`VadWorkerOutbound`):** `ready` | `speech-start` | `speech-end` | `error`.
+- **Main → VAD (`VadWorkerInbound`):** `audio` (PCM16 `ArrayBuffer`, structured-cloned across the process boundary) | `destroy`.
+- **VAD → main (`VadWorkerOutbound`):** `ready` | `speech-start` | `speech-end` | `drained` | `error`.
 
-A `VADMisfire` (sub-`minSpeechFrames` blip) is reported as `speech-end` so the provider always returns to not-speaking. Worker defaults: 512-sample frames, ~768ms redemption holdover, 0.5/0.35 positive/negative thresholds — tuned for dictation.
+A `VADMisfire` (sub-`minSpeechFrames` blip) is reported as `speech-end` so the provider always returns to not-speaking. VAD defaults: 512-sample frames, ~768ms redemption holdover, 0.5/0.35 positive/negative thresholds — tuned for dictation.
 
 ### Commit / barge-in gating (`OpenAITranscriptionProvider`)
 
@@ -205,7 +207,8 @@ When AI correction and `resolveFileLinks` are both on, every `complete` utteranc
 | Provider interface + neutral event union | `electron/services/voice/TranscriptionProvider.ts` |
 | OpenAI Realtime provider | `electron/services/voice/OpenAITranscriptionProvider.ts` |
 | Deepgram provider | `electron/services/voice/DeepgramTranscriptionProvider.ts` |
-| VAD worker (Silero v5) + protocol | `electron/services/voice/openaiVadWorker.ts`, `openaiVadWorkerProtocol.ts` |
+| VAD child lifecycle (fork, retire, SIGKILL backstop, quit drain) | `electron/services/voice/openaiVadProcess.ts` |
+| VAD entry (Silero v5) + protocol | `electron/services/voice/openaiVadWorker.ts`, `openaiVadWorkerProtocol.ts` |
 | AI correction service | `electron/services/VoiceCorrectionService.ts` |
 | Correction prompts/thresholds | `shared/config/voiceCorrection.ts` |
 | File-link resolution | `electron/services/VoiceFileLinkResolver.ts` |

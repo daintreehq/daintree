@@ -697,15 +697,15 @@ async function run() {
       // code in a utilityProcess.fork child and respawns on each Vite rebuild.
       "electron/plugin-dev-worker.ts",
       "electron/plugin-dev-worker-bootstrap.ts",
-      // VAD side-chain worker for OpenAI transcription (#9177). Loaded via
-      // `new Worker()` from OpenAITranscriptionProvider; needs its own entry so
-      // esbuild emits a standalone bundle at the resolved worker path.
+      // VAD side-chain for OpenAI transcription (#9177). Forked as a
+      // utilityProcess by openaiVadProcess (#12577); needs its own entry so
+      // esbuild emits a standalone bundle at the resolved path.
       "electron/services/voice/openaiVadWorker.ts",
       // Multi-threading workers: per-terminal analysis (headless xterm +
       // activity detection) inside pty-host, SQLite maintenance off the main
       // event loop, and copytree generation inside workspace-host. Each is
       // loaded via `new Worker()` and needs a standalone bundle at its
-      // resolved worker path (same pattern as openaiVadWorker).
+      // resolved worker path.
       "electron/pty-host/analysisWorker.ts",
       "electron/services/persistence/dbMaintenanceWorker.ts",
       "electron/workspace-host/copytreeWorker.ts",
