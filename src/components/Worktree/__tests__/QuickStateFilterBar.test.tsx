@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { QuickStateFilterBar } from "../QuickStateFilterBar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { glyphBox, GLYPH_SELECTOR } from "@/components/icons/__tests__/glyphBox";
 
 // Each segment is a Radix tooltip trigger, so the bar needs a TooltipProvider
 // ancestor — the real app supplies one at App.tsx.
@@ -155,10 +156,10 @@ describe("QuickStateFilterBar", () => {
     const working = screen.getByRole("button", { name: /Working/ });
     const waiting = screen.getByRole("button", { name: /Attention/ });
     const finished = screen.getByRole("button", { name: /Finished/ });
-    expect(all.querySelector("svg")).toBeNull();
-    expect(working.querySelector("svg")).not.toBeNull();
-    expect(waiting.querySelector("svg")).not.toBeNull();
-    expect(finished.querySelector("svg")).not.toBeNull();
+    expect(all.querySelector(GLYPH_SELECTOR)).toBeNull();
+    expect(working.querySelector(GLYPH_SELECTOR)).not.toBeNull();
+    expect(waiting.querySelector(GLYPH_SELECTOR)).not.toBeNull();
+    expect(finished.querySelector(GLYPH_SELECTOR)).not.toBeNull();
   });
 
   it("spins the working icon when counts.working > 0 even if Working is not the active filter", () => {
@@ -170,7 +171,7 @@ describe("QuickStateFilterBar", () => {
       />
     );
     const working = screen.getByRole("button", { name: /Working/ });
-    const svg = working.querySelector("svg");
+    const svg = glyphBox(working);
     expect(svg).not.toBeNull();
     const svgClass = svg?.getAttribute("class") ?? "";
     expect(svgClass).toContain("animate-spin-slow");
@@ -187,7 +188,7 @@ describe("QuickStateFilterBar", () => {
     );
     const working = screen.getByRole("button", { name: /Working/ });
     expect(working.getAttribute("aria-pressed")).toBe("true");
-    const svg = working.querySelector("svg");
+    const svg = glyphBox(working);
     expect(svg).not.toBeNull();
     expect(svg?.getAttribute("class") ?? "").toContain("animate-spin-slow");
   });
@@ -201,7 +202,7 @@ describe("QuickStateFilterBar", () => {
       />
     );
     const working = screen.getByRole("button", { name: /Working/ });
-    const svg = working.querySelector("svg");
+    const svg = glyphBox(working);
     expect(svg).not.toBeNull();
     expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
   });
@@ -209,7 +210,7 @@ describe("QuickStateFilterBar", () => {
   it("does not spin the working icon when counts prop is omitted", () => {
     renderBar(<QuickStateFilterBar value="all" onChange={() => {}} />);
     const working = screen.getByRole("button", { name: "Working" });
-    const svg = working.querySelector("svg");
+    const svg = glyphBox(working);
     expect(svg).not.toBeNull();
     expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
   });
@@ -225,7 +226,7 @@ describe("QuickStateFilterBar", () => {
       />
     );
     for (const name of [/Attention/, /Finished/]) {
-      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      const svg = glyphBox(screen.getByRole("button", { name }));
       expect(svg).not.toBeNull();
       expect(svg?.getAttribute("class") ?? "").not.toContain("animate-spin-slow");
     }
@@ -241,7 +242,7 @@ describe("QuickStateFilterBar", () => {
     );
     for (const name of [/Working/, /Attention/, /Finished/]) {
       const button = screen.getByRole("button", { name });
-      const svg = button.querySelector("svg");
+      const svg = glyphBox(button);
       expect(svg).not.toBeNull();
       expect(svg?.getAttribute("aria-hidden")).toBe("true");
     }
@@ -286,7 +287,7 @@ describe("QuickStateFilterBar", () => {
       [/Finished/, "text-category-blue/40"],
     ];
     for (const [name, fadedClass] of fadedBySegment) {
-      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      const svg = glyphBox(screen.getByRole("button", { name }));
       expect(svg).not.toBeNull();
       expect(svg?.getAttribute("class") ?? "").toContain(fadedClass);
     }
@@ -306,7 +307,7 @@ describe("QuickStateFilterBar", () => {
       [/Finished/, "text-category-blue"],
     ];
     for (const [name, colorClass] of colorBySegment) {
-      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      const svg = glyphBox(screen.getByRole("button", { name }));
       expect(svg).not.toBeNull();
       const svgClass = svg?.getAttribute("class") ?? "";
       expect(svgClass).toContain(colorClass);
@@ -325,17 +326,17 @@ describe("QuickStateFilterBar", () => {
     const workingClass =
       screen
         .getByRole("button", { name: /Working/ })
-        .querySelector("svg")
+        .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
     const waitingClass =
       screen
         .getByRole("button", { name: /Attention/ })
-        .querySelector("svg")
+        .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
     const finishedClass =
       screen
         .getByRole("button", { name: /Finished/ })
-        .querySelector("svg")
+        .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
     expect(workingClass).toContain("text-state-working/40");
     expect(finishedClass).toContain("text-category-blue/40");
@@ -346,7 +347,7 @@ describe("QuickStateFilterBar", () => {
   it("does not fade icons when the counts prop is omitted", () => {
     renderBar(<QuickStateFilterBar value="all" onChange={() => {}} />);
     for (const name of ["Working", "Attention", "Finished"]) {
-      const svg = screen.getByRole("button", { name }).querySelector("svg");
+      const svg = glyphBox(screen.getByRole("button", { name }));
       expect(svg).not.toBeNull();
       expect(svg?.getAttribute("class") ?? "").not.toContain("/40");
     }
@@ -364,13 +365,13 @@ describe("QuickStateFilterBar", () => {
     );
     const waiting = screen.getByRole("button", { name: /Attention/ });
     expect(waiting.getAttribute("aria-pressed")).toBe("true");
-    expect(waiting.querySelector("svg")?.getAttribute("class") ?? "").toContain(
+    expect(waiting.querySelector(GLYPH_SELECTOR)?.getAttribute("class") ?? "").toContain(
       "text-state-waiting/40"
     );
     const workingClass =
       screen
         .getByRole("button", { name: /Working/ })
-        .querySelector("svg")
+        .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
     expect(workingClass).toContain("animate-spin-slow");
     expect(workingClass).not.toContain("/40");
@@ -387,7 +388,7 @@ describe("QuickStateFilterBar", () => {
     const svgClass =
       screen
         .getByRole("button", { name: /Working/ })
-        .querySelector("svg")
+        .querySelector(GLYPH_SELECTOR)
         ?.getAttribute("class") ?? "";
     expect(svgClass).toContain("text-state-working/40");
     expect(svgClass).not.toContain("animate-spin-slow");

@@ -634,6 +634,31 @@ body,
   will-change: transform, opacity;
 }
 
+/* The working glyph: a 270deg arc with round caps, gap from 3:00 to 6:00.
+ * Proportions are SpinnerCircle's old 16-unit svg (r=6, stroke 1.333), in
+ * percentages so any square w-/h- size works. An HTML box so its spin composites.
+ * The shape is all mask and the colour is painted once: layered backgrounds
+ * would stack where the caps meet the arc and darken a translucent tone. */
+.spinner-circle {
+  /* What preflight gives the <svg> this replaced, so it lays out the same. */
+  display: block;
+  vertical-align: middle;
+  background: currentColor;
+  /* caps + (arc within ring): the caps already sit inside the ring's band. */
+  mask:
+    radial-gradient(ellipse 4.167% 4.167% at 50% 87.5%, #000 92%, transparent 100%),
+    radial-gradient(ellipse 4.167% 4.167% at 87.5% 50%, #000 92%, transparent 100%),
+    conic-gradient(from 180deg, #000 270deg, transparent 0),
+    radial-gradient(
+      closest-side,
+      transparent calc(66.67% - 0.25px),
+      #000 calc(66.67% + 0.25px),
+      #000 calc(83.33% - 0.25px),
+      transparent calc(83.33% + 0.25px)
+    );
+  mask-composite: add, add, intersect, add;
+}
+
 /* Slower spinner to reduce "chaos" in dense panel grids */
 @keyframes spin-slow {
   to {
@@ -643,7 +668,9 @@ body,
 
 .animate-spin-slow {
   /* Shared phase is set by usePowerSavingMotion, including newly mounted icons.
-   * Aligned steps let the compositor sleep between status updates. */
+   * Stepped so the glyph changes ten times a second, not at display rate. Apply
+   * it to HTML boxes only: Chromium keeps a transform animation whose target is
+   * an <svg> on the main thread (see SpinnerCircle). */
   animation: spin-slow 2.4s steps(24, end) infinite;
   transform-origin: center;
   will-change: transform;
@@ -2437,6 +2464,13 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     outline-offset: 2px !important;
   }
 
+  /* The working glyph is nothing but a masked background, which the forced
+     canvas colour would erase. */
+  .spinner-circle {
+    forced-color-adjust: none;
+    background: CanvasText;
+  }
+
   .xterm {
     forced-color-adjust: none;
   }
@@ -2852,6 +2886,14 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
   button .status-mark,
   [role="button"] .status-mark {
     background-color: ButtonText !important;
+  }
+
+  /* The working glyph is a masked background too, so it takes the same pair. */
+  button .spinner-circle,
+  [role="button"] .spinner-circle,
+  [role="tab"] .spinner-circle,
+  [role="radio"] .spinner-circle {
+    background: ButtonText;
   }
 
   /* The one mark whose emptiness IS the state.
