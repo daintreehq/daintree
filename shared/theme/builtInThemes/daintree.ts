@@ -134,17 +134,17 @@ export const theme: BuiltInThemeSource = {
     // Solid rather than alpha-derived: an alpha text colour bakes into
     // `color-mix()` and its contrast cannot be recovered downstream.
     //
-    // Landed at 4.8:1 on the worst surface (panel-elevated) up to 6.5:1 on the
-    // grid. That clears the house's 3:1 tier with room and also the AA text
-    // floor, which these strings arguably owe — "Commit message…" and "Search
-    // agents & panels…" are informational, not decorative. It still sits a step
-    // below `text-secondary` (5.5 / 7.5) and lands about at `text-muted`, so a
-    // placeholder reads quieter than the value that replaces it.
+    // Landed at 3.6:1 on the worst surface (panel-elevated) up to 4.9:1 on the
+    // grid — the house's 3:1 tier with room to spare, not the 4.5:1 body-text
+    // floor. Clearing AA was tried first and is wrong here: at that level the
+    // token stops receding from `text-muted`, which inverts the role ramp and
+    // fails the ordering assertion in `scripts/theme-text-contrast.test.ts`.
+    // A placeholder has to stay the quietest rung, so the tier wins.
     // `npm run theme:text-contrast -- --theme daintree` reproduces the numbers.
     //
     // Set here rather than on the shared derivation: that fallback feeds all
     // fifteen themes and this pass only measured daintree.
-    "text-placeholder": "#95959e",
+    "text-placeholder": "#808087",
     // ANSI 90 is the conventional dim slot for hints, timestamps and secondary
     // output — it is read as body text, so it owes AA. 4.55:1 on the terminal
     // background, and still 3.0x quieter than the foreground's 13.85:1, so it

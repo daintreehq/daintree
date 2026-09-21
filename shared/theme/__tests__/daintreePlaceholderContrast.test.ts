@@ -37,7 +37,7 @@ describe("daintree text-placeholder", () => {
     expect(parseRgba(raw as string)).toBeNull();
   });
 
-  it("keeps placeholder text legible on every display surface", () => {
+  it("clears the placeholder floor on every display surface", () => {
     const raw = daintree?.tokens["text-placeholder"] as string;
 
     const failures: string[] = [];
@@ -49,24 +49,28 @@ describe("daintree text-placeholder", () => {
       const fg = alpha ? blendOverBackground(alpha.hex, bg, alpha.opacity) : raw;
       const ratio = contrastRatio(fg, bg);
 
-      // 4.5:1, not the 3:1 graphical tier: daintree's placeholders carry real
-      // information ("Commit message…", "Search agents & panels…"), so they are
-      // read as text. Clearing the stricter bar is a deliberate commitment for
-      // this theme, not a claim about what every theme owes.
-      if (ratio < 4.5) failures.push(`${surface}: ${ratio.toFixed(2)}:1`);
+      // 3:1, matching `MATRIX_CONTRAST_PAIRS` — this repo treats placeholder as
+      // a graphical-tier de-emphasis, not 4.5:1 body text. That tier is the
+      // house position and it outranks the stricter external reading: a
+      // placeholder that clears AA stops receding from `text-muted`, which the
+      // role ramp in `scripts/theme-text-contrast.test.ts` requires it to do.
+      // The derivation this replaced sat at 2.7-2.8:1, under even this floor.
+      if (ratio < 3) failures.push(`${surface}: ${ratio.toFixed(2)}:1`);
     }
 
     expect(failures).toEqual([]);
   });
 
-  it("stays quieter than text-secondary, so a placeholder never reads as a value", () => {
+  it("recedes from text-muted, so the role ramp keeps its order", () => {
+    // The ramp is primary > secondary > muted > placeholder. A placeholder that
+    // outruns muted inverts it, and "nearest role" stops meaning anything.
     const placeholder = daintree?.tokens["text-placeholder"] as string;
-    const secondary = daintree?.tokens["text-secondary"] as string;
+    const muted = daintree?.tokens["text-muted"] as string;
 
     for (const surface of DISPLAY_SURFACES) {
       const bg = daintree?.tokens[surface];
       if (!bg) continue;
-      expect(contrastRatio(placeholder, bg)).toBeLessThan(contrastRatio(secondary, bg));
+      expect(contrastRatio(placeholder, bg)).toBeLessThan(contrastRatio(muted, bg));
     }
   });
 });
