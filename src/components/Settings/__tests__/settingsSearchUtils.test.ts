@@ -165,26 +165,43 @@ describe("countMatchesPerTab", () => {
   });
 });
 
+/**
+ * The class the match wrapper carries. Named once so these tests assert the
+ * BEHAVIOUR — matched runs are wrapped, unmatched ones are not, casing and full
+ * text survive — rather than pinning a colour decision that has already changed
+ * twice. Two properties are load-bearing and asserted separately below: the
+ * treatment must not be the accent token (accent is not for membership), and it
+ * must not change text metrics (the row must not reflow as the user types).
+ */
+const HIGHLIGHT_CLASS = "bg-overlay-medium";
+
 describe("HighlightText", () => {
+  it("does not spend the accent budget on matches", () => {
+    const html = renderToStaticMarkup(HighlightText({ text: "Font size", query: "font" }));
+    expect(html).not.toContain("text-search-highlight-text");
+    expect(html).not.toContain("accent");
+  });
+
   it("renders plain text when query is empty", () => {
     const html = renderToStaticMarkup(HighlightText({ text: "Hello World", query: "" }));
-    expect(html).not.toContain("text-search-highlight-text");
+    expect(html).not.toContain(HIGHLIGHT_CLASS);
     expect(html).toContain("Hello World");
   });
 
   it("wraps matching text in a highlight span", () => {
     const html = renderToStaticMarkup(HighlightText({ text: "Font size setting", query: "font" }));
-    expect(html).toContain("text-search-highlight-text");
-    // Bold weight removed — color alone differentiates the match, so width
-    // does not shift as the user types.
+    expect(html).toContain(HIGHLIGHT_CLASS);
+    // No weight change: bolding reflows the row as the user types. Whatever
+    // the highlight treatment becomes, it must not alter text metrics.
     expect(html).not.toContain("font-semibold");
+    expect(html).not.toContain("font-bold");
     // The matched portion should be inside the highlight span
     expect(html.toLowerCase()).toContain(">font<");
   });
 
   it("is case-insensitive in highlighting", () => {
     const html = renderToStaticMarkup(HighlightText({ text: "GitHub Token", query: "github" }));
-    expect(html).toContain("text-search-highlight-text");
+    expect(html).toContain(HIGHLIGHT_CLASS);
     // Original casing preserved
     expect(html).toContain("GitHub");
   });
@@ -193,7 +210,7 @@ describe("HighlightText", () => {
     const html = renderToStaticMarkup(
       HighlightText({ text: "font family font size", query: "font" })
     );
-    const highlightCount = (html.match(/text-search-highlight-text/g) ?? []).length;
+    const highlightCount = (html.match(new RegExp(HIGHLIGHT_CLASS, "g")) ?? []).length;
     expect(highlightCount).toBeGreaterThanOrEqual(2);
   });
 

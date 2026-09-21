@@ -219,7 +219,11 @@ export function HighlightText({ text, query }: HighlightTextProps) {
       <span>
         {parts.map((part, i) =>
           lowerTokens.some((t) => part.toLowerCase() === t) ? (
-            <span key={i} className="text-search-highlight-text">
+            // Neutral band, matching `HighlightedText` — a query matching four
+            // rows painted four accent runs across the results list. Not bold:
+            // weight was removed here deliberately so the row does not reflow
+            // as the user types.
+            <span key={i} className="bg-overlay-medium text-text-primary">
               {part}
             </span>
           ) : (
