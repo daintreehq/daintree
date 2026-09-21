@@ -70,6 +70,14 @@ describe("npm-ci-retry", () => {
       const stderr = "npm ERR! code EPEERINVALID\nnpm ERR! peer dependency mismatch\n";
       expect(classifyFailure(stderr)).toBe("deterministic");
     });
+
+    it("matches a failed node-pty binding.gyp patch, even beside a network blip", () => {
+      const stderr =
+        "npm error Postinstall failures (1):\n" +
+        "npm error   node-pty binding.gyp patch: expected one target_defaults block in node-pty's binding.gyp, found 0\n" +
+        "npm warn fetch failed, retrying ECONNRESET\n";
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
   });
 
   describe("TRANSIENT_PATTERNS", () => {
@@ -218,7 +226,7 @@ Postinstall failures (2):
     const allTransient = TRANSIENT_PATTERNS.map((p) => p.source);
 
     it("covers every deterministic pattern", () => {
-      expect(DETERMINISTIC_PATTERNS).toHaveLength(10);
+      expect(DETERMINISTIC_PATTERNS).toHaveLength(11);
     });
 
     it("covers every transient pattern", () => {

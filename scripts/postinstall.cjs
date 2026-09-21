@@ -1,14 +1,32 @@
+const fs = require("fs");
 const path = require("path");
 const { execSync } = require("child_process");
 const { rebuild } = require("@electron/rebuild");
 const { version: electronVersion } = require("electron/package.json");
+const { patchNodePtyBindingGyp } = require("./patchNodePtyBinding.cjs");
 
 const NATIVE_MODULES = ["node-pty", "win-job-object", "posix-pty-reaper"];
 
 const buildPath = path.resolve(__dirname, "..");
 
+function patchNodePtyBinding() {
+  const gypPath = path.join(buildPath, "node_modules", "node-pty", "binding.gyp");
+  const source = fs.readFileSync(gypPath, "utf8");
+  const patched = patchNodePtyBindingGyp(source);
+  if (patched !== source) fs.writeFileSync(gypPath, patched);
+}
+
 async function runPostinstall() {
   const failures = [];
+
+  // Must land before the node-pty rebuild below, which is what compiles it in.
+  // A failure still lets the rebuilds run so the install stays usable; the
+  // non-zero exit is what stops CI and release builds from shipping without it.
+  try {
+    patchNodePtyBinding();
+  } catch (err) {
+    failures.push({ module: "node-pty binding.gyp patch", error: err });
+  }
 
   // better-sqlite3 is intentionally NOT rebuilt: since v13 it is an N-API
   // addon loaded from the prebuilds/ binaries shipped inside the package.
@@ -22,6 +40,9 @@ async function runPostinstall() {
         electronVersion,
         onlyModules: [mod],
         force: true,
+        // The binding.gyp patch only exists in a source build; never let a
+        // prebuild stand in for it.
+        buildFromSource: true,
       });
     } catch (err) {
       failures.push({ module: mod, error: err });

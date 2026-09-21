@@ -20,6 +20,8 @@ export const DETERMINISTIC_PATTERNS = [
   /404\s+not\s+found/i,
   /\bnpm (error|err!).*(code\s+eresolve|eresolve\s+could\s+not\s+resolve)/i,
   /\bnpm (error|err!).*code\s+epeerinvalid/i,
+  // postinstall could not apply its node-pty binding.gyp patch (scripts/patchNodePtyBinding.cjs)
+  /node-pty binding\.gyp patch/i,
 ];
 
 // Transient failures: network disruptions that may resolve on retry.
