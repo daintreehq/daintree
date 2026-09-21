@@ -310,14 +310,39 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     window.electron.privacy.openDataFolder();
   };
 
+  const notifyClearCacheFailed = (title: string, message: string, onRetry: () => void) => {
+    notify({
+      type: "error",
+      // uiFeedback defaults to inbox-only, which would drop the Try again callback.
+      priority: "high",
+      title,
+      message,
+      actions: [{ label: "Try again", variant: "primary", onClick: onRetry }],
+      context: { eventKind: "uiFeedback" },
+    });
+  };
+
   const handleClearCache = async () => {
     setCacheClearing(true);
     setCacheCleared(false);
     try {
-      await window.electron.privacy.clearCache();
-      setCacheCleared(true);
-      setTimeout(() => setCacheCleared(false), 3000);
+      const { failed } = await window.electron.privacy.clearCache();
+      if (failed === 0) {
+        setCacheCleared(true);
+        setTimeout(() => setCacheCleared(false), 3000);
+      } else {
+        notifyClearCacheFailed(
+          "Couldn't clear all caches",
+          "Some cached data may remain. Try again to finish clearing it.",
+          () => void handleClearCache()
+        );
+      }
     } catch (err) {
+      notifyClearCacheFailed(
+        "Couldn't clear cache",
+        "Cached data may remain. Try again to finish clearing it.",
+        () => void handleClearCache()
+      );
       logError("Failed to clear cache", err);
     } finally {
       setCacheClearing(false);
@@ -519,7 +544,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             <SettingsSection
               icon={HardDrive}
               title="Clear cache"
-              description="Clear the HTTP disk cache and code caches. This does not affect your settings or data."
+              description="Clear the HTTP disk and code caches for the app, browser panels, portal, and dev previews. Sign-ins, site data, and settings aren't affected."
             >
               <Button
                 variant="outline"
