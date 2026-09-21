@@ -172,6 +172,33 @@ export function filterSettings(
 
   let results = scored.map((r) => r.entry);
 
+  // Relevance gate. Fuse's fuzziness is what lets a typo still find a setting,
+  // but with a well-spelled query it also returns rows that contain the term
+  // nowhere at all — searching "theme" surfaced the MCP server port, with
+  // nothing on the row to explain why it was there. A result the user has to
+  // interpret costs more than the one it displaced.
+  //
+  // So: when ANY result contains the query literally, keep only those. When
+  // none does, the query was probably mistyped and the fuzzy set is the whole
+  // value of the feature, so it survives untouched. Every indexed field counts
+  // as evidence, not just the title — a literal hit in a description is a real
+  // reason to be in the list, and it is visible to the reader.
+  const containsEveryToken = (entry: SettingsSearchEntry): boolean =>
+    tokens.every((token) => {
+      const haystacks = [
+        entry.title,
+        entry.tabLabel,
+        entry.description ?? "",
+        entry.section ?? "",
+        entry.subtabLabel ?? "",
+        ...(entry.keywords ?? []),
+      ];
+      return haystacks.some((h) => h.toLowerCase().includes(token));
+    });
+
+  const literal = results.filter(containsEveryToken);
+  if (literal.length > 0) results = literal;
+
   // Apply @modified filter if active
   if (filterModified) {
     const modifiedTabs = options?.modifiedTabs;

@@ -48,6 +48,35 @@ describe("filterSettings", () => {
     expect(filterSettings(SETTINGS_SEARCH_INDEX, "   ")).toHaveLength(0);
   });
 
+  it("drops fuzzy-only rows when something matches the query literally", () => {
+    // Fuse's fuzziness is what makes a typo still find a setting, but on a
+    // well-spelled query it also returned rows containing the term nowhere at
+    // all — "theme" surfaced the MCP server port, with nothing on the row to
+    // explain why. The invariant is about the READER: every row in a result
+    // set contains the thing that was searched for, whenever any row does.
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "theme");
+    expect(results.length).toBeGreaterThan(0);
+    for (const entry of results) {
+      const haystack = [
+        entry.title,
+        entry.tabLabel,
+        entry.description ?? "",
+        entry.section ?? "",
+        entry.subtabLabel ?? "",
+        ...(entry.keywords ?? []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      expect(haystack).toContain("theme");
+    }
+  });
+
+  it("still answers a misspelling, where fuzzy matching is the whole point", () => {
+    // The gate only fires when a literal match exists, so typo tolerance has
+    // to survive it untouched.
+    expect(filterSettings(SETTINGS_SEARCH_INDEX, "thme").length).toBeGreaterThan(0);
+  });
+
   it("matches by title text", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "Scrollback History");
     expect(results.length).toBeGreaterThan(0);

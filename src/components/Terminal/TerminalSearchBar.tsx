@@ -343,10 +343,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               "w-44 px-2 py-1 text-sm rounded-[var(--radius-sm)] transition-colors",
               "bg-surface-canvas border",
               "text-text-primary placeholder:text-text-placeholder",
-              // No local focus ring. The global `*:focus-visible` rule in
-              // index.css owns the ring's colour and width; a restated
-              // `focus:ring-*` here was both a second source of truth and a
-              // box-shadow, which forced-colors discards entirely.
+              // The ring is component-owned — only its transition is global —
+              // so this is the shared `Input` treatment rather than nothing.
+              // The previous ring was a `focus:ring-*` box-shadow in a status
+              // colour: forced-colors discards box-shadow entirely, and the
+              // colour was a second vocabulary. An `outline` survives there.
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
               searchStatus === "invalidRegex" ? "border-status-error" : "border-border-default"
             )}
           />
