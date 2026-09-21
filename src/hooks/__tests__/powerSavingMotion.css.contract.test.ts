@@ -153,7 +153,7 @@ describe("power-saving motion CSS", () => {
       }
     });
 
-    it("turns the spinner at under half its foreground frame rate", () => {
+    it("turns the spinner at no more than half its foreground frame rate", () => {
       const foreground = topLevelRules(css).find((rule) =>
         rule.selectors.includes(".animate-spin-slow")
       );
@@ -163,7 +163,7 @@ describe("power-saving motion CSS", () => {
       const reducedSteps = stepsOf(
         reducedRule(".animate-spin-slow")?.declarations.get("animation-timing-function")
       );
-      expect(reducedSteps).toBeLessThan(foregroundSteps / 2);
+      expect(reducedSteps).toBeLessThanOrEqual(foregroundSteps / 2);
     });
   });
 });

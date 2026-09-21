@@ -11,7 +11,7 @@ type CircleProps = SVGProps<SVGSVGElement> & { className?: string };
 // not run a transform animation on the compositor when its target is an svg
 // (trace: compositeFailed 1024, "transform-related property cannot be
 // accelerated on target"), so `animate-spin-slow` on the old svg re-ran style on
-// the main thread at display rate for a glyph that moves ten times a second.
+// the main thread at display rate for a glyph that moves 17 times a second.
 // The geometry mirrors the 16-unit grid above: r=6, 1.333 stroke, round caps.
 export function SpinnerCircle({ className, ...props }: HTMLAttributes<HTMLSpanElement>) {
   return (

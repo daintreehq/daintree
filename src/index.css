@@ -668,10 +668,14 @@ body,
 
 .animate-spin-slow {
   /* Shared phase is set by usePowerSavingMotion, including newly mounted icons.
-   * Stepped so the glyph changes ten times a second, not at display rate. Apply
+   * Stepped so the glyph changes about seventeen times a second, not at display
+   * rate: a composited transform that holds its value across vsyncs leaves the
+   * damage rect empty, so cc aborts the draw and no frame is swapped. The
+   * compositor still wakes every vsync either way, which is what a step rate
+   * cannot buy back — so the rate is set by the eye, at 9 degrees a step. Apply
    * it to HTML boxes only: Chromium keeps a transform animation whose target is
    * an <svg> on the main thread (see SpinnerCircle). */
-  animation: spin-slow 2.4s steps(24, end) infinite;
+  animation: spin-slow 2.4s steps(40, end) infinite;
   transform-origin: center;
   will-change: transform;
 }
@@ -2425,12 +2429,14 @@ body[data-power-saving="true"] .forge-status-error {
  * apply per keyframe interval). Only the timing function changes, so whatever
  * already resolved to `animation: none` for reduced motion stays still. */
 body[data-motion-rate="reduced"] .animate-spin-slow {
-  /* Lifted from 6. A rotation reads its own speed in a way a pulse does not,
-   * and this tier now covers a window that is visible and genuinely live
-   * underneath: its worktrees keep watching while blurred. Still under half
-   * the foreground rate, which the CSS contract test holds us to, and the
-   * compositor still sleeps between steps. */
-  animation-timing-function: steps(10, end);
+  /* Half the foreground rate, which the CSS contract test holds us to: 8.3
+   * steps a second at 18 degrees. Discrete rotation reads as ticking rather
+   * than motion below roughly 8 steps a second or past a 30 degree step, and
+   * this tier covers a window that is visible and genuinely live underneath —
+   * its worktrees keep watching while blurred. Dropping it further buys about
+   * four aborted draws a second against a compositor that wakes 60 times
+   * either way, so the rate is spent on being legible. */
+  animation-timing-function: steps(20, end);
 }
 
 body[data-motion-rate="reduced"] .animate-activity-pulse,
