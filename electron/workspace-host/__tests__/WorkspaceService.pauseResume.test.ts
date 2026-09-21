@@ -180,14 +180,16 @@ describe("WorkspaceService.pause/resume", () => {
 
   it("pause() stops PR service, pauses monitors, and lowers process priority", () => {
     const monitor = createAndRegisterMonitor();
-    const pauseSpy = vi.spyOn(monitor, "pausePolling");
+    const permissionsSpy = vi.spyOn(monitor, "applyPollingPermissions");
     const setPrioritySpy = vi.spyOn(os, "setPriority").mockImplementation(() => {});
 
     service.pause();
 
     expect(mockPullRequestService.stop).toHaveBeenCalled();
-    expect(pauseSpy).toHaveBeenCalled();
-    expect(service["pollingEnabled"]).toBe(false);
+    expect(permissionsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: false, backgroundWork: false })
+    );
+    expect(service["appliedPermissions"].status).toBe(false);
     expect(setPrioritySpy).toHaveBeenCalledWith(process.pid, os.constants.priority.PRIORITY_LOW);
   });
 
@@ -201,14 +203,16 @@ describe("WorkspaceService.pause/resume", () => {
     service.pause();
     vi.clearAllMocks();
 
-    const resumeSpy = vi.spyOn(monitor, "resumePolling");
+    const permissionsSpy = vi.spyOn(monitor, "applyPollingPermissions");
     const setPrioritySpy = vi.spyOn(os, "setPriority").mockImplementation(() => {});
 
     service.resume();
 
     expect(mockPullRequestService.start).toHaveBeenCalled();
-    expect(resumeSpy).toHaveBeenCalled();
-    expect(service["pollingEnabled"]).toBe(true);
+    expect(permissionsSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ status: true, backgroundWork: true })
+    );
+    expect(service["appliedPermissions"].status).toBe(true);
     expect(setPrioritySpy).toHaveBeenCalledWith(process.pid, os.constants.priority.PRIORITY_NORMAL);
   });
 
@@ -222,19 +226,19 @@ describe("WorkspaceService.pause/resume", () => {
     service.resume();
 
     expect(mockPullRequestService.start).not.toHaveBeenCalled();
-    expect(service["pollingEnabled"]).toBe(true);
+    expect(service["appliedPermissions"].status).toBe(true);
   });
 
   it("pause() is idempotent — second call does not re-pause monitors", () => {
     const monitor = createAndRegisterMonitor();
-    const pauseSpy = vi.spyOn(monitor, "pausePolling");
+    const permissionsSpy = vi.spyOn(monitor, "applyPollingPermissions");
     vi.spyOn(os, "setPriority").mockImplementation(() => {});
 
     service.pause();
     service.pause();
 
-    // pausePolling called only once because setPollingEnabled guards on current value
-    expect(pauseSpy).toHaveBeenCalledTimes(1);
+    // Pushed once: reconcilePolling compares against what it last applied.
+    expect(permissionsSpy).toHaveBeenCalledTimes(1);
     // But stop() is called each time (idempotent on the PR service side)
     expect(mockPullRequestService.stop).toHaveBeenCalledTimes(2);
   });

@@ -2398,7 +2398,12 @@ body[data-power-saving="true"] .forge-status-error {
  * apply per keyframe interval). Only the timing function changes, so whatever
  * already resolved to `animation: none` for reduced motion stays still. */
 body[data-motion-rate="reduced"] .animate-spin-slow {
-  animation-timing-function: steps(6, end);
+  /* Lifted from 6. A rotation reads its own speed in a way a pulse does not,
+   * and this tier now covers a window that is visible and genuinely live
+   * underneath: its worktrees keep watching while blurred. Still under half
+   * the foreground rate, which the CSS contract test holds us to, and the
+   * compositor still sleeps between steps. */
+  animation-timing-function: steps(10, end);
 }
 
 body[data-motion-rate="reduced"] .animate-activity-pulse,

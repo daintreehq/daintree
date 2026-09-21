@@ -119,7 +119,10 @@ import type { AgentStateChangeTrigger } from "../types/index.js";
 import type { AgentState, AgentId, WaitingReason } from "../../shared/types/agent.js";
 import type { PanelKind, PanelTitleMode } from "../../shared/types/panel.js";
 import type { ResourceProfile } from "../../shared/types/resourceProfile.js";
-import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
+import {
+  deriveAgentObservationLevel,
+  type PowerPolicyLevel,
+} from "../../shared/types/powerPolicy.js";
 import { getPowerPolicy } from "../window/powerPolicy.js";
 import type { SerializedTerminalSnapshot } from "../../shared/types/terminal.js";
 import type { BuiltInAgentId } from "../../shared/config/agentIds.js";
@@ -895,9 +898,17 @@ export class PtyClient extends EventEmitter {
     // which gets no config replay, and a host whose client was created after
     // the policy moved. Read live: main's policy is authoritative and a host
     // boots at `active`, so only a saving level needs sending.
-    const powerLevel = getPowerPolicy().level;
-    if (powerLevel !== "active") {
-      shard.send({ type: "set-power-policy", level: powerLevel });
+    const powerSnapshot = getPowerPolicy();
+    const observationLevel = deriveAgentObservationLevel(powerSnapshot);
+    // A host boots at `active` on both counts, so only a narrowed state needs
+    // sending. `active` observation cannot coincide with a non-active level
+    // (battery and blur both narrow it), so the level test covers both.
+    if (powerSnapshot.level !== "active") {
+      shard.send({
+        type: "set-power-policy",
+        level: powerSnapshot.level,
+        observationLevel,
+      });
     }
     // A project shard forked mid-session missed every earlier config setter
     // (resource profile, monitoring, persistence suppression) — those are
@@ -2004,9 +2015,9 @@ export class PtyClient extends EventEmitter {
     }
   }
 
-  setPowerPolicy(level: PowerPolicyLevel): void {
+  setPowerPolicy(level: PowerPolicyLevel, observationLevel: PowerPolicyLevel): void {
     for (const shard of this.shards.values()) {
-      shard.send({ type: "set-power-policy", level });
+      shard.send({ type: "set-power-policy", level, observationLevel });
     }
   }
 

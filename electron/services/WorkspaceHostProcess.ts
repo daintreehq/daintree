@@ -21,6 +21,7 @@ import { mainBootAbsMs, markPerformance } from "../utils/performance.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { getForgeProviderImplEntries } from "./forgeProviderRegistry.js";
 import type { ForgeProviderMatcher } from "../../shared/utils/forgeHostnames.js";
+import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
 
 const logger = createLogger("main:WorkspaceHost");
 const logInfo = (msg: string, ctx?: Record<string, unknown>) =>
@@ -205,6 +206,14 @@ export class WorkspaceHostProcess extends EventEmitter {
    * the first push. */
   private monitorConfigCache: MonitorConfig | null = null;
 
+  /** The app-wide workspace power policy, replayed on every `ready` alongside
+   * the monitor config. Without it a restarted or prewarmed host boots with
+   * every permission granted — watching, fetching, unattenuated — regardless
+   * of whether the screen is locked or every window is hidden, and stays that
+   * way until the next policy change happens to fire. `null` until the first
+   * push, which means nothing has ever narrowed it. */
+  private workspacePolicyCache: WorkspacePollingPolicy | null = null;
+
   /** Buffers for line-splitting stdout/stderr from the forked host. Forking
    * with `stdio:"pipe"` (instead of `"inherit"`) isolates the host from the
    * main process's fd 2 — critical on AppImage GUI launches where fd 2 points
@@ -385,6 +394,32 @@ export class WorkspaceHostProcess extends EventEmitter {
         requestId: UNTRACKED_MONITOR_CONFIG_REQUEST_ID,
         config,
       });
+    }
+  }
+
+  /**
+   * Record the workspace power policy for replay, and optionally deliver it
+   * now. The cache is written even when `deliver` is false: a dormant host
+   * that is skipped for a grant still has to come back from a restart holding
+   * the policy that is actually in force, not the all-permissions default.
+   */
+  setWorkspacePowerPolicy(policy: WorkspacePollingPolicy, deliver: boolean): void {
+    this.workspacePolicyCache = { ...policy };
+    if (deliver && this.isInitialized && this.child) {
+      this.send({ type: "set-workspace-power-policy", policy });
+    }
+  }
+
+  /**
+   * Deliver the cached policy now. For a host that was skipped for a grant
+   * while it sat dormant: it re-attaches holding a withdrawn policy it would
+   * otherwise keep reconciling against until an unrelated policy change fired.
+   * No-op before the first push — nothing has ever narrowed the default.
+   */
+  flushWorkspacePowerPolicy(): void {
+    if (this.workspacePolicyCache === null) return;
+    if (this.isInitialized && this.child) {
+      this.send({ type: "set-workspace-power-policy", policy: this.workspacePolicyCache });
     }
   }
 
@@ -1104,6 +1139,15 @@ export class WorkspaceHostProcess extends EventEmitter {
             type: "update-monitor-config",
             requestId: UNTRACKED_MONITOR_CONFIG_REQUEST_ID,
             config: this.monitorConfigCache,
+          });
+        }
+
+        // And the policy those cadences were derived for, or the host would
+        // watch and fetch at full permission behind a locked screen.
+        if (this.workspacePolicyCache !== null) {
+          this.send({
+            type: "set-workspace-power-policy",
+            policy: this.workspacePolicyCache,
           });
         }
 

@@ -77,7 +77,7 @@ function createMockDeps() {
     updateMonitorConfig: vi.fn(),
     refresh: vi.fn().mockResolvedValue(undefined),
     refreshOnWake: vi.fn().mockResolvedValue(undefined),
-    setPollingEnabled: vi.fn(),
+    setWorkspacePowerPolicy: vi.fn(),
     setPRPollCadence: vi.fn(),
     waitForReady: vi.fn().mockResolvedValue(undefined),
     pauseHealthCheck: vi.fn(),
@@ -109,9 +109,29 @@ function createMockDeps() {
 
 type Deps = ReturnType<typeof createMockDeps>;
 
+/**
+ * The three workspace permissions for a given situation. Spelled out per case
+ * rather than derived, so a change to the derivation has to be asserted here
+ * deliberately.
+ */
+const WORKSPACE_POLICY = {
+  /** Focused and visible: everything runs. */
+  active: { statusAllowed: true, backgroundWorkAllowed: true, attenuated: false },
+  /** Visible but nobody looking: keep watching, stop fetching, coalesce. */
+  unwatched: { statusAllowed: true, backgroundWorkAllowed: false, attenuated: true },
+  /** Hidden, minimized or locked: nothing to observe for. */
+  deep: { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true },
+} as const;
+
+function expectWorkspacePolicy(mocks: Deps, expected: { statusAllowed: boolean }): void {
+  expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+    expect.objectContaining(expected)
+  );
+}
+
 function clearServiceMocks(mocks: Deps): void {
   vi.mocked(mocks.workspaceClient.updateMonitorConfig).mockClear();
-  vi.mocked(mocks.workspaceClient.setPollingEnabled).mockClear();
+  vi.mocked(mocks.workspaceClient.setWorkspacePowerPolicy).mockClear();
   vi.mocked(mocks.workspaceClient.setPRPollCadence).mockClear();
   vi.mocked(mocks.workspaceClient.refresh).mockClear();
   vi.mocked(mocks.workspaceClient.refreshOnWake).mockClear();
@@ -223,11 +243,15 @@ describe("WindowFocusThrottle", () => {
 
     blur(main);
 
+    // The workspace host keeps watching a window the user can still see: only
+    // the fallback poll for unwatched worktrees stretches, to its 30s floor.
     expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
-      pollIntervalActive: 10_000,
+      pollIntervalActive: 30_000,
       pollIntervalBackground: 50_000,
     });
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.unwatched
+    );
     expect(mocks.workspaceClient.setPRPollCadence).toHaveBeenCalledWith(false);
     expect(mocks.statsService.updatePollInterval).toHaveBeenCalledWith(25_000);
     expect(mocks.ptyClient.setProcessTreePollInterval).toHaveBeenCalledWith(12_500);
@@ -278,13 +302,16 @@ describe("WindowFocusThrottle", () => {
       pollIntervalActive: 2_000,
       pollIntervalBackground: 10_000,
     });
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.active
+    );
     expect(mocks.workspaceClient.setPRPollCadence).toHaveBeenCalledWith(true);
     expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.refresh).toHaveBeenCalledWith(undefined, "focus");
 
-    // setPollingEnabled(true) must run before refresh() so the host is
-    // polling-enabled when the refresh broadcast arrives.
-    const enableOrder = vi.mocked(mocks.workspaceClient.setPollingEnabled).mock
+    // The policy must land before refresh() so the host is unattenuated when
+    // the refresh broadcast arrives.
+    const enableOrder = vi.mocked(mocks.workspaceClient.setWorkspacePowerPolicy).mock
       .invocationCallOrder[0];
     const refreshOrder = vi.mocked(mocks.workspaceClient.refresh).mock.invocationCallOrder[0];
     expect(enableOrder).toBeLessThan(refreshOrder);
@@ -307,7 +334,7 @@ describe("WindowFocusThrottle", () => {
     blur(main);
 
     expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledTimes(1);
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledTimes(1);
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledTimes(1);
     expect(mocks.statsService.updatePollInterval).toHaveBeenCalledTimes(1);
     expect(mocks.ptyClient.setProcessTreePollInterval).toHaveBeenCalledTimes(1);
     expect(mockSetDiskSpaceInterval).toHaveBeenCalledTimes(1);
@@ -322,32 +349,32 @@ describe("WindowFocusThrottle", () => {
     main.minimized = true;
     main.handlers.get("minimize")!();
 
-    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
-      pollIntervalActive: 20_000,
-      pollIntervalBackground: 100_000,
-    });
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.deep
+    );
     expect(mockSetDiskSpaceInterval).toHaveBeenCalledWith(3_000_000);
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep", "deep");
     clearServiceMocks(mocks);
 
-    // Restored but not yet focused: visible again, still nobody looking.
+    // Restored but not yet focused: visible again, still nobody looking. The
+    // observations that gate the OTHER pollers never moved (canObserve is
+    // false either way), so the workspace push has to be tracked on its own —
+    // without that this leg silently sends nothing and the sidebar stays dead
+    // until focus returns.
     main.minimized = false;
     main.handlers.get("restore")!();
-    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
-      pollIntervalActive: 10_000,
-      pollIntervalBackground: 50_000,
-    });
-    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.unwatched
+    );
     expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving", "active");
     clearServiceMocks(mocks);
 
     // Focus is what brings the user back: one refresh, foreground cadence.
     focus(main);
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expectWorkspacePolicy(mocks, { statusAllowed: true });
     expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active", "active");
   });
 
   it("treats a hidden window like a minimized one", () => {
@@ -358,7 +385,9 @@ describe("WindowFocusThrottle", () => {
     main.handlers.get("hide")!();
 
     expect(powerPolicyModule.getPowerPolicy().level).toBe("deep");
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.deep
+    );
 
     // showInactive(): visible again but never focused.
     main.visible = true;
@@ -375,17 +404,17 @@ describe("WindowFocusThrottle", () => {
     powerHandlers.get("lock-screen")!();
 
     expect(powerPolicyModule.getPowerPolicy()).toMatchObject({ level: "deep", canObserve: false });
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
-    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
-      pollIntervalActive: 20_000,
-      pollIntervalBackground: 100_000,
-    });
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.deep
+    );
     clearServiceMocks(mocks);
 
     powerHandlers.get("unlock-screen")!();
 
     expect(powerPolicyModule.getPowerPolicy().level).toBe("active");
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.active
+    );
     expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
     expect(mocks.statsService.refresh).toHaveBeenCalledTimes(1);
   });
@@ -406,7 +435,9 @@ describe("WindowFocusThrottle", () => {
       level: "active",
       canObserve: true,
     });
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.active
+    );
     expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
       pollIntervalActive: 2_000,
       pollIntervalBackground: 10_000,
@@ -427,7 +458,11 @@ describe("WindowFocusThrottle", () => {
       level: "saving",
       canObserve: false,
     });
-    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    // Still nobody looking, but the screen came back: status work is restored
+    // while the network cadence stays backed off.
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      WORKSPACE_POLICY.unwatched
+    );
     expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
   });
 
@@ -437,25 +472,22 @@ describe("WindowFocusThrottle", () => {
     powerHandlers.get("on-battery")!();
 
     expect(powerPolicyModule.getPowerPolicy()).toMatchObject({ level: "saving", canObserve: true });
-    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
-      pollIntervalActive: 4_000,
-      pollIntervalBackground: 20_000,
-    });
-    // Still observable: workspace polling stays on and nothing is refreshed.
-    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    expect(mocks.statsService.updatePollInterval).toHaveBeenCalledWith(10_000);
+    expect(mocks.ptyClient.setProcessTreePollInterval).toHaveBeenCalledWith(5_000);
+    // The user is still watching the sidebar, so the workspace host is not
+    // touched at all — its cadence follows the policy, not the multiplier.
+    expect(mocks.workspaceClient.updateMonitorConfig).not.toHaveBeenCalled();
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).not.toHaveBeenCalled();
     expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
     expect(focusThrottleModule.isFocusThrottled()).toBe(false);
     expect(focusThrottleModule.getFocusThrottlePollMultiplier()).toBe(2);
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving", "saving");
     clearServiceMocks(mocks);
 
     powerHandlers.get("on-ac")!();
 
-    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
-      pollIntervalActive: 2_000,
-      pollIntervalBackground: 10_000,
-    });
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active");
+    expect(mocks.statsService.updatePollInterval).toHaveBeenCalledWith(5_000);
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active", "active");
   });
 
   it("applies battery power reported at launch as soon as the throttle is set up", async () => {
@@ -468,12 +500,9 @@ describe("WindowFocusThrottle", () => {
 
     powerMonitorModule.setupWindowFocusThrottle(mocks.deps);
 
-    expect(mocks.workspaceClient.updateMonitorConfig).toHaveBeenCalledWith({
-      pollIntervalActive: 4_000,
-      pollIntervalBackground: 20_000,
-    });
+    expect(mocks.statsService.updatePollInterval).toHaveBeenCalledWith(10_000);
     // The pty host and any loaded view booted assuming `active`.
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving", "saving");
     expect(mockViewSend).toHaveBeenCalledWith("events:push", {
       name: "system:power-policy-changed",
       payload: expect.objectContaining({ level: "saving" }),
@@ -489,12 +518,14 @@ describe("WindowFocusThrottle", () => {
     powerHandlers.get("resume")!();
     await vi.advanceTimersByTimeAsync(2000);
 
-    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    // Woken behind a locked screen: nothing to observe for yet, and the
+    // network refresh stays owed to whoever comes back.
+    expectWorkspacePolicy(mocks, { statusAllowed: false });
     expect(mocks.workspaceClient.refreshOnWake).not.toHaveBeenCalled();
 
     powerHandlers.get("unlock-screen")!();
 
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expectWorkspacePolicy(mocks, { statusAllowed: true });
     expect(mocks.workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
     expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
   });
@@ -546,7 +577,7 @@ describe("WindowFocusThrottle", () => {
     releaseReady();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(mocks.workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    expect(mocks.workspaceClient.setWorkspacePowerPolicy).not.toHaveBeenCalled();
     expect(mocks.workspaceClient.refreshOnWake).not.toHaveBeenCalled();
   });
 
@@ -594,7 +625,7 @@ describe("WindowFocusThrottle", () => {
     powerMonitorModule.registerWindowForFocusThrottle(reopened.win);
 
     expect(powerPolicyModule.getPowerPolicy().level).toBe("active");
-    expect(mocks.workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expectWorkspacePolicy(mocks, { statusAllowed: true });
     expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
   });
 
@@ -631,7 +662,7 @@ describe("WindowFocusThrottle", () => {
     main.handlers.get("closed")!();
 
     expect(powerPolicyModule.getPowerPolicy().level).toBe("deep");
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep", "deep");
   });
 
   it("broadcasts every policy change to the renderer views", () => {

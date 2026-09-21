@@ -37,7 +37,10 @@ describe("ActivityMonitor power policy", () => {
   it.each(["active", "saving", "deep"] as const)(
     "backs a settled idle agent off to the %s quiet cadence",
     (level) => {
-      setPtyPowerLevel(level);
+      // The cadence tables are indexed by the OBSERVATION level, which main
+      // derives separately: a window on screen holds it at `active` however
+      // narrow the raw level is. Driven directly here.
+      setPtyPowerLevel(level, level);
       const setIntervalSpy = vi.spyOn(global, "setInterval");
       const monitor = createIdleAgent();
 
@@ -80,13 +83,12 @@ describe("ActivityMonitor power policy", () => {
     monitor.startPolling();
     const setIntervalSpy = vi.spyOn(global, "setInterval");
 
-    setPtyPowerLevel("saving");
+    setPtyPowerLevel("saving", "saving");
 
-    expect(setIntervalSpy).not.toHaveBeenCalledWith(expect.any(Function), 50);
-    expect(setIntervalSpy).not.toHaveBeenCalledWith(
-      expect.any(Function),
-      QUIET_POLLING_INTERVAL_MS.saving
-    );
+    // This monitor has no watchdog and is not backed off, so a level change
+    // owes it no timer at all. Asserting "not 50, not 5000" let a regression
+    // through: any other interval would have passed.
+    expect(setIntervalSpy).not.toHaveBeenCalled();
     monitor.dispose();
   });
 
@@ -168,6 +170,51 @@ describe("ActivityMonitor power policy", () => {
     monitor.dispose();
   });
 
+  it("keeps the active cadence for a blurred window that is still on screen", () => {
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
+    monitor.startPolling();
+    vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+    setIntervalSpy.mockClear();
+
+    // Clicking into another app takes the level to `saving` without taking the
+    // window off screen. The sidebar this agent's badge is drawn in is still
+    // being looked at, so its state has to keep confirming at full cadence.
+    // Clicking into another app on AC: the raw level narrows to `saving` while
+    // the observation level stays `active`, because the window the badge is
+    // drawn in is still on screen.
+    setPtyPowerLevel("saving", "active");
+
+    // Asserted positively: WAITING_WATCHDOG_INTERVAL_MS.active and
+    // QUIET_POLLING_INTERVAL_MS.saving are both 5000, so a "not called with
+    // 5000" assertion passes and fails for the wrong reasons.
+    const intervals = setIntervalSpy.mock.calls.map(([, ms]) => ms);
+    expect(intervals).toContain(QUIET_POLLING_INTERVAL_MS.active);
+    expect(intervals).toContain(WAITING_WATCHDOG_INTERVAL_MS.active);
+    expect(intervals).not.toContain(WAITING_WATCHDOG_INTERVAL_MS.saving);
+    expect(intervals).not.toContain(WAITING_WATCHDOG_INTERVAL_MS.deep);
+    monitor.dispose();
+  });
+
+  it("re-times when only the observation level moves", () => {
+    setPtyPowerLevel("saving", "active");
+    const setIntervalSpy = vi.spyOn(global, "setInterval");
+    const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
+    monitor.startPolling();
+    vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);
+    setIntervalSpy.mockClear();
+
+    // Unplugging while blurred: the raw level was already `saving` and stays
+    // there, and only the observation level narrows. Nothing re-times if the
+    // notification is gated on the raw level alone.
+    setPtyPowerLevel("saving", "saving");
+
+    const intervals = setIntervalSpy.mock.calls.map(([, ms]) => ms);
+    expect(intervals).toContain(QUIET_POLLING_INTERVAL_MS.saving);
+    expect(intervals).toContain(WAITING_WATCHDOG_INTERVAL_MS.saving);
+    monitor.dispose();
+  });
+
   it("stops listening for level changes once disposed", () => {
     const onChange = vi.spyOn(
       ActivityMonitor.prototype as unknown as { onPowerLevelChange: () => void },
@@ -193,7 +240,7 @@ describe("ActivityMonitor power policy", () => {
       "runWaitingWatchdogCheck"
     );
     const minuteOfWork = (level: "active" | "saving" | "deep") => {
-      setPtyPowerLevel(level);
+      setPtyPowerLevel(level, level);
       const monitor = createIdleAgent({ onWaitingTimeout: vi.fn() });
       monitor.startPolling();
       vi.advanceTimersByTime(FSM_IDLE_BACKOFF_SETTLE_MS);

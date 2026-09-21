@@ -62,6 +62,19 @@ function monitorConfigsSentTo(child: MockUtilityChild): unknown[] {
     .map((msg) => msg.config);
 }
 
+function policiesSentTo(child: MockUtilityChild): unknown[] {
+  return child.postMessage.mock.calls
+    .map(([msg]) => msg as { type?: string; policy?: unknown })
+    .filter((msg) => msg?.type === "set-workspace-power-policy")
+    .map((msg) => msg.policy);
+}
+
+const DEEP_POLICY = {
+  statusAllowed: false,
+  backgroundWorkAllowed: false,
+  attenuated: true,
+};
+
 describe("WorkspaceHostProcess — monitor-config relay", () => {
   beforeEach(() => {
     vi.resetModules();
@@ -136,6 +149,45 @@ describe("WorkspaceHostProcess — monitor-config relay", () => {
         backgroundGitWatcherCap: 6,
       },
     ]);
+    host.dispose();
+  });
+
+  it("replays the workspace power policy to the NEW child after restart", async () => {
+    const host = await createHost();
+    const firstChild = mockChildren[0] as MockUtilityChild;
+    firstChild.emit("message", { type: "ready" });
+
+    // Screen locked, say. Without the replay a host that crashes and restarts
+    // behind that lock comes back watching and fetching at full permission,
+    // and stays there until the next policy change happens to fire.
+    host.setWorkspacePowerPolicy(DEEP_POLICY, true);
+    expect(policiesSentTo(firstChild)).toEqual([DEEP_POLICY]);
+
+    firstChild.emit("exit", 1);
+    host.manualRestart();
+    const secondChild = mockChildren[1] as MockUtilityChild;
+    secondChild.emit("message", { type: "ready" });
+
+    expect(policiesSentTo(secondChild)).toEqual([DEEP_POLICY]);
+    host.dispose();
+  });
+
+  it("caches an undelivered policy so a dormant host restarts holding it", async () => {
+    const host = await createHost();
+    const firstChild = mockChildren[0] as MockUtilityChild;
+    firstChild.emit("message", { type: "ready" });
+
+    // A grant skipped for this host (dormant, kept behind a cached view) is
+    // still the policy in force — the restart has to honour it.
+    host.setWorkspacePowerPolicy(DEEP_POLICY, false);
+    expect(policiesSentTo(firstChild)).toEqual([]);
+
+    firstChild.emit("exit", 1);
+    host.manualRestart();
+    const secondChild = mockChildren[1] as MockUtilityChild;
+    secondChild.emit("message", { type: "ready" });
+
+    expect(policiesSentTo(secondChild)).toEqual([DEEP_POLICY]);
     host.dispose();
   });
 });

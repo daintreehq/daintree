@@ -20,14 +20,26 @@ import {
 import { RESOURCE_PROFILE_CONFIGS } from "../../shared/types/resourceProfile.js";
 import { getResourceProfileService } from "./serviceRefs.js";
 import {
+  ACTIVE_WORKSPACE_POLLING_POLICY,
+  deriveAgentObservationLevel,
+  deriveWorkspacePollingPolicy,
   powerPolicyPollMultiplier,
+  workspacePollingCadence,
   type PowerObservations,
   type PowerPolicySnapshot,
+  type WorkspacePollingPolicy,
 } from "../../shared/types/powerPolicy.js";
 import { watchLinuxPowerSource, type LinuxPowerSourceWatch } from "../services/linuxPowerSource.js";
-import { setPollThrottle } from "./focusThrottleState.js";
+import { setPollThrottle, setWorkspacePollingPolicy } from "./focusThrottleState.js";
 import { getPowerPolicy, subscribePowerPolicy, updatePowerObservations } from "./powerPolicy.js";
 import { publishPowerPolicy } from "./powerPolicyDelivery.js";
+
+/** Nothing observes anything while the machine sleeps. */
+const SUSPENDED_WORKSPACE_POLICY: WorkspacePollingPolicy = {
+  statusAllowed: false,
+  backgroundWorkAllowed: false,
+  attenuated: true,
+};
 
 let resumeTimeout: NodeJS.Timeout | null = null;
 // Only set on Linux, where it is the sole source of the battery observation.
@@ -146,7 +158,9 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
     }
     if (workspaceClient) {
       workspaceClient.pauseHealthCheck();
-      workspaceClient.setPollingEnabled(false);
+      // Through the cache, so wake reconciles against what the hosts hold. A
+      // sleeping machine observes nothing worth watching for.
+      pushWorkspacePolicy(workspaceClient, SUSPENDED_WORKSPACE_POLICY, profilePollingBaseline());
     }
     if (watchdog) {
       // Suppresses kill-on-miss across suspend. Without this, a long sleep
@@ -189,18 +203,24 @@ export function setupPowerMonitor(deps: PowerMonitorDeps): void {
         if (workspaceClient) {
           await workspaceClient.waitForReady();
           if (superseded()) return;
-          // Only re-enable polling and refresh if someone can see a window. If
-          // the app is still blurred or the screen is still locked (the usual
-          // state right after a laptop wakes), leave polling paused and owe the
-          // refresh — the power policy pays it once when the user comes back.
+          // Suspend pushed the suspended policy unconditionally, so recovery
+          // must reconcile explicitly: the usual post-wake observations are
+          // *unchanged* (still visible, still blurred), which means the policy
+          // subscription would never fire and polling would stay dead.
           evaluateWindowObservations();
-          const observable = getPowerPolicy().canObserve;
+          const snapshot = getPowerPolicy();
+          const observable = snapshot.canObserve;
           wakeRecoveryPending = false;
           refreshDecided = true;
-          if (observable) {
-            workspaceClient.setPollingEnabled(true);
-          }
+          pushWorkspacePolicy(
+            workspaceClient,
+            deriveWorkspacePollingPolicy(snapshot),
+            profilePollingBaseline()
+          );
           workspaceClient.resumeHealthCheck();
+          // The network refresh is still owed to focus: only `canObserve`
+          // means someone is waiting on it. Status polling resumed above
+          // regardless, so the sidebar catches up without it.
           if (observable) {
             wakeRefreshOwed = false;
             await workspaceClient.refreshOnWake();
@@ -275,8 +295,50 @@ let focusThrottleDeps: WindowFocusThrottleDeps | null = null;
 let unsubscribePowerPolicy: (() => void) | null = null;
 const trackedWindows = new Set<BrowserWindow>();
 // What applyPollingPolicy last pushed. Starts at the unthrottled state every
-// poller boots in, so the first transition is always a real change.
-const appliedPolling = { multiplier: 1, canObserve: true };
+// poller boots in, so the first transition is always a real change. The
+// workspace policy is tracked separately from `canObserve` because the two move
+// independently: visible→minimized→restored while blurred never changes
+// `canObserve`, and gating the workspace push on it would send neither leg.
+const appliedPolling = {
+  multiplier: 1,
+  canObserve: true,
+  workspace: { ...ACTIVE_WORKSPACE_POLLING_POLICY } as WorkspacePollingPolicy,
+};
+
+function workspacePolicyEquals(a: WorkspacePollingPolicy, b: WorkspacePollingPolicy): boolean {
+  return (
+    a.statusAllowed === b.statusAllowed &&
+    a.backgroundWorkAllowed === b.backgroundWorkAllowed &&
+    a.attenuated === b.attenuated
+  );
+}
+
+/**
+ * Push a workspace policy and record it, so every writer (policy change,
+ * suspend, wake recovery) leaves the cache describing what the hosts actually
+ * hold. Suspend used to bypass this cache entirely, which meant a machine that
+ * slept and woke while a window stayed visible-but-blurred saw no observation
+ * change on wake and so never re-enabled polling at all.
+ */
+function pushWorkspacePolicy(
+  workspaceClient: WorkspaceClient,
+  policy: WorkspacePollingPolicy,
+  baseline: { workspaceActive: number; workspaceBackground: number }
+): void {
+  const cadence = workspacePollingCadence(
+    {
+      pollIntervalActive: baseline.workspaceActive,
+      pollIntervalBackground: baseline.workspaceBackground,
+    },
+    policy
+  );
+  workspaceClient.updateMonitorConfig(cadence);
+  workspaceClient.setWorkspacePowerPolicy(policy);
+  appliedPolling.workspace = { ...policy };
+  // The other writer of these intervals derives them from the policy, not from
+  // the multiplier, so it has to see what was pushed.
+  setWorkspacePollingPolicy(policy);
+}
 
 /**
  * Polling baselines derive from the live resource profile, not hardcoded
@@ -307,7 +369,13 @@ function applyPollingPolicy(snapshot: PowerPolicySnapshot): void {
   if (!focusThrottleDeps) return;
   const multiplier = powerPolicyPollMultiplier(snapshot);
   const { canObserve } = snapshot;
-  if (multiplier === appliedPolling.multiplier && canObserve === appliedPolling.canObserve) {
+  const workspacePolicy = deriveWorkspacePollingPolicy(snapshot);
+  const workspaceChanged = !workspacePolicyEquals(workspacePolicy, appliedPolling.workspace);
+  if (
+    multiplier === appliedPolling.multiplier &&
+    canObserve === appliedPolling.canObserve &&
+    !workspaceChanged
+  ) {
     return;
   }
   const observabilityChanged = canObserve !== appliedPolling.canObserve;
@@ -320,22 +388,23 @@ function applyPollingPolicy(snapshot: PowerPolicySnapshot): void {
 
   const workspaceClient = focusThrottleDeps.getWorkspaceClient();
   if (workspaceClient) {
-    workspaceClient.updateMonitorConfig({
-      pollIntervalActive: baseline.workspaceActive * multiplier,
-      pollIntervalBackground: baseline.workspaceBackground * multiplier,
-    });
+    if (workspaceChanged) {
+      pushWorkspacePolicy(workspaceClient, workspacePolicy, baseline);
+    }
     if (observabilityChanged) {
-      workspaceClient.setPollingEnabled(canObserve);
       workspaceClient.setPRPollCadence(canObserve);
     }
     // A pending wake recovery refreshes on its own, settling any refresh an
     // earlier wake left owed; otherwise pay that debt, or refresh plainly.
+    // Watchers stayed armed through the blur, so this is usually a cheap
+    // reconciliation rather than N cold status passes — but the throttle in
+    // the host still bounds it when the user cycles windows.
     if (regainedObserver && !wakeRecoveryPending) {
       if (wakeRefreshOwed) {
         wakeRefreshOwed = false;
         void workspaceClient.refreshOnWake();
       } else {
-        void workspaceClient.refresh();
+        void workspaceClient.refresh(undefined, "focus");
       }
     }
   }
@@ -415,8 +484,15 @@ export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {
   unsubscribePowerPolicy?.();
   unsubscribePowerPolicy = subscribePowerPolicy((next, previous) => {
     applyPollingPolicy(next);
-    if (next.level !== previous.level) {
-      focusThrottleDeps?.getPtyClient()?.setPowerPolicy(next.level);
+    // Both levels are compared: agent observation follows its own derivation,
+    // so a transition can move it while the raw level holds still.
+    if (
+      next.level !== previous.level ||
+      deriveAgentObservationLevel(next) !== deriveAgentObservationLevel(previous)
+    ) {
+      focusThrottleDeps
+        ?.getPtyClient()
+        ?.setPowerPolicy(next.level, deriveAgentObservationLevel(next));
     }
     publishPowerPolicy(next);
   });
@@ -426,7 +502,7 @@ export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {
   const current = getPowerPolicy();
   applyPollingPolicy(current);
   if (current.level !== "active") {
-    deps.getPtyClient()?.setPowerPolicy(current.level);
+    deps.getPtyClient()?.setPowerPolicy(current.level, deriveAgentObservationLevel(current));
     publishPowerPolicy(current);
   }
 

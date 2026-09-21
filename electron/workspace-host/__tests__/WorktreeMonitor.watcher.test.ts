@@ -91,6 +91,13 @@ let capturedWatcherOptions: Record<string, unknown> | undefined;
 const capturedWatcherOptionsHistory: Record<string, unknown>[] = [];
 let watcherStartCallCount = 0;
 
+interface MockWatcherHandle {
+  updateDebouncePolicy(policy: Record<string, unknown>): void;
+}
+/** Every debounce retime pushed to a LIVE watcher, newest last. */
+let debouncePolicyUpdates: Record<string, unknown>[] = [];
+let capturedWatchers: MockWatcherHandle[] = [];
+
 vi.mock("../../utils/gitFileWatcher.js", () => {
   return {
     GitFileWatcher: class {
@@ -111,6 +118,10 @@ vi.mock("../../utils/gitFileWatcher.js", () => {
         capturedOnEmfileLimitReached = opts.onEmfileLimitReached;
         capturedWatcherOptions = opts;
         capturedWatcherOptionsHistory.push(opts);
+        capturedWatchers.push(this as unknown as MockWatcherHandle);
+      }
+      updateDebouncePolicy(policy: Record<string, unknown>) {
+        debouncePolicyUpdates.push(policy);
       }
       start() {
         watcherStartCallCount++;
@@ -208,6 +219,8 @@ describe("WorktreeMonitor", () => {
     capturedOnInotifyLimitReached = undefined;
     capturedOnEmfileLimitReached = undefined;
     capturedWatcherOptions = undefined;
+    debouncePolicyUpdates = [];
+    capturedWatchers = [];
     capturedWatcherOptionsHistory.length = 0;
     mockGetRepoOperationStateSync.mockReturnValue(undefined);
     vi.mocked(getGitDir).mockResolvedValue(null);
@@ -1443,6 +1456,89 @@ describe("WorktreeMonitor", () => {
       expect(mockGetWorktreeChangesWithStats.mock.calls.at(-1)?.[1]).toMatchObject({
         forceRefresh: true,
       });
+      monitor.stop();
+    });
+
+    it("keeps the watcher armed and observing when only the app stops being watched", async () => {
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      const armsBefore = capturedWatcherOptionsHistory.length;
+      const armedWith = capturedWatcherOptions as Record<string, unknown>;
+
+      // Visible but unfocused: status work continues, network work does not.
+      monitor.applyPollingPermissions({
+        status: true,
+        backgroundWork: false,
+        attenuated: true,
+      });
+
+      // The whole point: no teardown, no re-arm, no window in which events are
+      // lost. The watcher is retimed in place instead.
+      expect(monitor.hasWatcher).toBe(true);
+      expect(capturedWatcherOptionsHistory.length).toBe(armsBefore);
+      expect(debouncePolicyUpdates).toHaveLength(1);
+      const attenuated = debouncePolicyUpdates.at(-1)!;
+      expect(attenuated.worktreeLeadingDebounceMs).toBeUndefined();
+      expect(attenuated.worktreeMinDebounceMs as number).toBeGreaterThan(
+        armedWith.worktreeMinDebounceMs as number
+      );
+      expect(attenuated.worktreeMaxWaitMs as number).toBeGreaterThan(
+        armedWith.worktreeMaxWaitMs as number
+      );
+
+      // And it still reports: a change reaches the status pass without waiting
+      // for anyone to come back.
+      await vi.advanceTimersByTimeAsync(2_000);
+      const before = statusCalls();
+      fireGitChange();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(statusCalls()).toBe(before + 1);
+
+      monitor.applyPollingPermissions({ status: true, backgroundWork: true, attenuated: false });
+      expect(debouncePolicyUpdates).toHaveLength(2);
+      expect(debouncePolicyUpdates.at(-1)?.worktreeLeadingDebounceMs).toBeDefined();
+      expect(capturedWatcherOptionsHistory.length).toBe(armsBefore);
+
+      monitor.stop();
+    });
+
+    it("still tears the watcher down when the project itself is backgrounded", async () => {
+      const monitor = new WorktreeMonitor(ACTIVE_WORKTREE, WATCH_CONFIG, makeCallbacks(), "main");
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      monitor.applyPollingPermissions({
+        status: false,
+        backgroundWork: false,
+        attenuated: true,
+      });
+
+      expect(monitor.hasWatcher).toBe(false);
+      expect(vi.getTimerCount()).toBe(0);
+      monitor.stop();
+    });
+
+    it("keeps an agent-active worktree observing through a project background", async () => {
+      const monitor = new WorktreeMonitor(
+        { ...ACTIVE_WORKTREE, isCurrent: false },
+        WATCH_CONFIG,
+        makeCallbacks(),
+        "main"
+      );
+      monitor.agentActive = true;
+      await monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      monitor.applyPollingPermissions({
+        status: false,
+        backgroundWork: false,
+        attenuated: true,
+      });
+
+      // Unchanged precedent: the agent's own worktree is the product's core
+      // loop and keeps both its watcher and its poll through a pause.
+      expect(monitor.hasWatcher).toBe(true);
       monitor.stop();
     });
   });

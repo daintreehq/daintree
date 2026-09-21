@@ -18,6 +18,21 @@ const WATCHER_WORKTREE_MAX_WAIT_MS = 1500;
 // PERF-104 quiescence profile) is preserved.
 const WATCHER_WORKTREE_LEADING_DEBOUNCE_MS = 25;
 const WATCHER_WORKTREE_QUIET_WINDOW_MS = GIT_WATCH_SELF_TRIGGER_COOLDOWN_MS;
+/**
+ * Debounce policy while nobody is looking. The watcher keeps observing; we
+ * simply stop paying for sub-second reporting nobody is reading. The leading
+ * edge is dropped — its whole purpose is making one save feel instant — and
+ * both the trailing ramp and the max-wait ceiling grow, so a burst of agent
+ * writes coalesces into one status pass rather than several.
+ *
+ * The ceiling is raised rather than removed: an unbounded trailing debounce
+ * never flushes under a sustained write stream, which is precisely the
+ * workload here.
+ */
+const ATTENUATED_WORKTREE_MIN_DEBOUNCE_MS = 1_000;
+const ATTENUATED_WORKTREE_MAX_DEBOUNCE_MS = 2_000;
+const ATTENUATED_WORKTREE_MAX_WAIT_MS = 5_000;
+const ATTENUATED_GIT_DEBOUNCE_MS = 500;
 const WATCHER_ELEVATION_DOWNGRADE_DELAY_MS = 3_000;
 
 export type WatcherMode = "none" | "git-only" | "recursive";
@@ -109,6 +124,14 @@ export class WatcherController {
    * itself.
    */
   private pendingArm: { watcher: GitFileWatcher; mode: WatcherMode } | null = null;
+  /**
+   * The live watcher, kept alongside the disposable so its debounce policy can
+   * be retimed **in place**. Rebuilding it through `update()` would dispose and
+   * re-arm — a full re-resolve plus a window in which events are lost — which
+   * is exactly the teardown this attenuation exists to avoid.
+   */
+  private armedWatcher: GitFileWatcher | null = null;
+  private attenuated = false;
   private gitWatchDebounceTimer: NodeJS.Timeout | null = null;
   private gitWatchRefreshPending = false;
   private watcherRetryTimer: NodeJS.Timeout | null = null;
@@ -144,6 +167,35 @@ export class WatcherController {
 
   desiredMode(): "git-only" | "recursive" {
     return this.host.isElevated && this.host.recursiveAllowed ? "recursive" : "git-only";
+  }
+
+  /**
+   * Switch the coalescing policy without touching the watcher's lifetime.
+   * Applied to the live watcher in place and remembered for later arms.
+   */
+  setAttenuated(attenuated: boolean): void {
+    if (this.attenuated === attenuated) return;
+    this.attenuated = attenuated;
+    this.armedWatcher?.updateDebouncePolicy(this.debouncePolicy());
+  }
+
+  private debouncePolicy() {
+    if (!this.attenuated) {
+      return {
+        debounceMs: this.host.gitWatchDebounceMs,
+        worktreeMinDebounceMs: WATCHER_WORKTREE_MIN_DEBOUNCE_MS,
+        worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,
+        worktreeMaxWaitMs: WATCHER_WORKTREE_MAX_WAIT_MS,
+        worktreeLeadingDebounceMs: WATCHER_WORKTREE_LEADING_DEBOUNCE_MS,
+      };
+    }
+    return {
+      debounceMs: Math.max(this.host.gitWatchDebounceMs, ATTENUATED_GIT_DEBOUNCE_MS),
+      worktreeMinDebounceMs: ATTENUATED_WORKTREE_MIN_DEBOUNCE_MS,
+      worktreeMaxDebounceMs: ATTENUATED_WORKTREE_MAX_DEBOUNCE_MS,
+      worktreeMaxWaitMs: ATTENUATED_WORKTREE_MAX_WAIT_MS,
+      worktreeLeadingDebounceMs: undefined,
+    };
   }
 
   /**
@@ -190,15 +242,11 @@ export class WatcherController {
     const watcher = new GitFileWatcher({
       worktreePath: this.host.worktreePath,
       branch: this.host.branch,
-      debounceMs: this.host.gitWatchDebounceMs,
       onChange: () => this.handleGitFileChange(),
       onGitConfigChanged: () => this.host.onGitConfigChanged?.(),
       onWorktreeFilesChanged: (affectedDirs) => this.handleWorktreeFilesChanged(affectedDirs),
       watchWorktree: mode === "recursive",
-      worktreeMinDebounceMs: WATCHER_WORKTREE_MIN_DEBOUNCE_MS,
-      worktreeMaxDebounceMs: WATCHER_WORKTREE_MAX_DEBOUNCE_MS,
-      worktreeMaxWaitMs: WATCHER_WORKTREE_MAX_WAIT_MS,
-      worktreeLeadingDebounceMs: WATCHER_WORKTREE_LEADING_DEBOUNCE_MS,
+      ...this.debouncePolicy(),
       worktreeQuietWindowMs: WATCHER_WORKTREE_QUIET_WINDOW_MS,
       onWatcherFailed: () => this.handleWatcherFailed(),
       onInotifyLimitReached: () => this.host.onInotifyLimitReached(this.host.worktreeId),
@@ -224,7 +272,11 @@ export class WatcherController {
         return;
       }
       if (started) {
-        this.gitWatcher.value = toDisposable(() => watcher.dispose());
+        this.armedWatcher = watcher;
+        this.gitWatcher.value = toDisposable(() => {
+          if (this.armedWatcher === watcher) this.armedWatcher = null;
+          watcher.dispose();
+        });
         if (mode === "recursive" && this.wasDegraded) {
           // Recursive coverage restored after a degradation. Signal recovery
           // exactly once per degradation episode so the host can reset its

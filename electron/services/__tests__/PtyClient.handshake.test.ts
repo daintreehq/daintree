@@ -455,11 +455,12 @@ describe("PtyClient Handshake Protocol", () => {
       const client = createClient();
       mockChild.postMessage.mockClear();
 
-      client.setPowerPolicy("deep");
+      client.setPowerPolicy("deep", "deep");
 
       expect(mockChild.postMessage).toHaveBeenCalledWith({
         type: "set-power-policy",
         level: "deep",
+        observationLevel: "deep",
       });
     });
 
@@ -472,7 +473,9 @@ describe("PtyClient Handshake Protocol", () => {
       createClient();
 
       expect(powerPolicyCalls(mockChild)).toEqual([
-        [{ type: "set-power-policy", level: "saving" }],
+        // Battery with a focused window: the raw level narrows, and so does
+        // observation, because battery still backs agent polling off.
+        [{ type: "set-power-policy", level: "saving", observationLevel: "saving" }],
       ]);
     });
 
@@ -485,7 +488,11 @@ describe("PtyClient Handshake Protocol", () => {
 
       const calls = powerPolicyCalls(newChild);
       expect(calls).toHaveLength(1);
-      expect(calls[0][0]).toEqual({ type: "set-power-policy", level: "deep" });
+      expect(calls[0][0]).toEqual({
+        type: "set-power-policy",
+        level: "deep",
+        observationLevel: "deep",
+      });
     });
 
     it("replays no level while main is active — a host boots there", () => {

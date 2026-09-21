@@ -73,7 +73,7 @@ export type HostToWorkerMessage =
   | { type: "set-scrollback"; terminalId: string; lines: number }
   | { type: "free"; terminalId: string }
   | { type: "plugin-agent-registry"; registry: Record<string, AgentConfig> }
-  | { type: "power-policy"; level: PowerPolicyLevel }
+  | { type: "power-policy"; level: PowerPolicyLevel; observationLevel: PowerPolicyLevel }
   | {
       /**
        * `generation` is the pool slot's worker generation at post time (bumped

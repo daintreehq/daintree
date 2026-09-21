@@ -49,8 +49,13 @@ import { app, powerMonitor } from "electron";
 import { broadcastToRenderer } from "../../ipc/utils.js";
 import { ResourceProfileService, type ResourceProfileDeps } from "../ResourceProfileService.js";
 import { RESOURCE_PROFILE_CONFIGS } from "../../../shared/types/resourceProfile.js";
-import { setPollThrottle } from "../../window/focusThrottleState.js";
-import { derivePowerPolicy, powerPolicyPollMultiplier } from "../../../shared/types/powerPolicy.js";
+import { setPollThrottle, setWorkspacePollingPolicy } from "../../window/focusThrottleState.js";
+import {
+  ACTIVE_WORKSPACE_POLLING_POLICY,
+  derivePowerPolicy,
+  powerPolicyPollMultiplier,
+  workspacePollingCadence,
+} from "../../../shared/types/powerPolicy.js";
 import { resolveResourceProfileConfig } from "../../utils/resourceProfileConfig.js";
 import { resolveWebglThresholds } from "../../utils/webglContextBudget.js";
 import { resetAppMetricsSnapshotForTesting } from "../../utils/appMetricsSnapshot.js";
@@ -831,6 +836,53 @@ describe("ResourceProfileService", () => {
     expect(pty.setResourceProfile.mock.invocationCallOrder[0]!).toBeLessThan(
       pty.setProcessTreePollInterval.mock.invocationCallOrder[0]!
     );
+
+    service.stop();
+  });
+
+  it("keeps the workspace cadence attenuated across a profile push", () => {
+    // The two writers of the workspace intervals must agree. powerMonitor
+    // derives them from the workspace POLICY, not from the poll multiplier, so
+    // a profile transition landing while nobody is looking has to derive them
+    // the same way — pushing `baseline × multiplier` here would reinstate a
+    // cadence the policy had already stretched, silently and until the next
+    // focus change.
+    const deps = createDeps();
+    const workspace = deps.getWorkspaceClient() as unknown as { updateMonitorConfig: Mock };
+    const service = new ResourceProfileService(deps);
+
+    setPollThrottle({ throttled: true, multiplier: 5 });
+    setWorkspacePollingPolicy({
+      statusAllowed: true,
+      backgroundWorkAllowed: false,
+      attenuated: true,
+    });
+    try {
+      mockIsOnBatteryPower.mockReturnValue(true);
+      service.start();
+      // Drive a real profile transition — the second writer only pushes the
+      // workspace cadence when the profile actually moves.
+      mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 1300)]);
+      vi.advanceTimersByTime(60_000 + 30_000 + 30_000);
+    } finally {
+      setPollThrottle({ throttled: false, multiplier: 1 });
+      setWorkspacePollingPolicy(ACTIVE_WORKSPACE_POLLING_POLICY);
+    }
+
+    const config = RESOURCE_PROFILE_CONFIGS[service.getProfile()];
+    const expected = workspacePollingCadence(config, {
+      statusAllowed: true,
+      backgroundWorkAllowed: false,
+      attenuated: true,
+    });
+    expect(workspace.updateMonitorConfig).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pollIntervalActive: expected.pollIntervalActive,
+        pollIntervalBackground: expected.pollIntervalBackground,
+      })
+    );
+    // Not the multiplier the other pollers use.
+    expect(expected.pollIntervalActive).not.toBe(config.pollIntervalActive * 5);
 
     service.stop();
   });

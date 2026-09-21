@@ -398,7 +398,11 @@ export type PtyHostRequest =
    * ActivityMonitor quiet polling and watchdog, governor FD sweeps, analysis
    * worker memory samples — never the output-triggered paths.
    */
-  | { type: "set-power-policy"; level: PowerPolicyLevel }
+  | {
+      type: "set-power-policy";
+      level: PowerPolicyLevel;
+      observationLevel: PowerPolicyLevel;
+    }
   /**
    * Mirror the main-process plugin-agent registry into the pty-host (#10587).
    * The pty-host runs the activity monitor and resolves `getEffectiveAgentConfig`

@@ -8,7 +8,11 @@ import {
 } from "node:perf_hooks";
 import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { getFocusThrottlePollMultiplier } from "../window/focusThrottleState.js";
+import {
+  getFocusThrottlePollMultiplier,
+  getWorkspacePollingPolicy,
+} from "../window/focusThrottleState.js";
+import { workspacePollingCadence } from "../../shared/types/powerPolicy.js";
 import { logInfo } from "../utils/logger.js";
 import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import {
@@ -1105,14 +1109,19 @@ export class ResourceProfileService {
     // so a transition landing mid-blur can't silently un-throttle the pollers;
     // the next focus event rewrites baselines from the live profile.
     const pollMultiplier = getFocusThrottlePollMultiplier();
+    // The workspace host is the exception: its cadence follows the workspace
+    // policy, not the multiplier. Derived here with the same function
+    // powerMonitor uses, so whichever writer lands last produces the same
+    // numbers instead of reinstating an attenuation the other had lifted.
+    const workspaceCadence = workspacePollingCadence(config, getWorkspacePollingPolicy());
 
     // Update workspace-host polling intervals
     const workspaceClient = this.deps.getWorkspaceClient();
     if (workspaceClient) {
       try {
         workspaceClient.updateMonitorConfig({
-          pollIntervalActive: config.pollIntervalActive * pollMultiplier,
-          pollIntervalBackground: config.pollIntervalBackground * pollMultiplier,
+          pollIntervalActive: workspaceCadence.pollIntervalActive,
+          pollIntervalBackground: workspaceCadence.pollIntervalBackground,
           fetchIntervalActiveMs: config.fetchIntervalActiveMs,
           fetchIntervalBackgroundMs: config.fetchIntervalBackgroundMs,
           backgroundGitWatcherCap: config.backgroundGitWatcherCap,

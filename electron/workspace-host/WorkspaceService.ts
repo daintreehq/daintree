@@ -122,7 +122,12 @@ import {
   type ResolvedResourceEnvironments,
   type WorkspaceHostContext,
 } from "./WorktreeLifecycleService.js";
-import { WorktreeMonitor } from "./WorktreeMonitor.js";
+import { WorktreeMonitor, type WorktreePollingPermissions } from "./WorktreeMonitor.js";
+import { StatusAdmissionController } from "./StatusAdmissionController.js";
+import {
+  ACTIVE_WORKSPACE_POLLING_POLICY,
+  type WorkspacePollingPolicy,
+} from "../../shared/types/powerPolicy.js";
 import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
@@ -228,6 +233,13 @@ function isTransientWorktreeRemoveLockError(error: unknown): boolean {
 // allSettled, forceRefreshAfterGap catches). The underlying work isn't
 // cancelled, but the individual fs/git awaits are independently bounded.
 const POLL_QUEUE_TASK_TIMEOUT_MS = 60_000;
+
+/**
+ * Minimum gap between automatic focus revalidations, matching the cadence the
+ * PR service already uses for its own focus catch-up (and SWR's long-standing
+ * default). Only the automatic path is throttled.
+ */
+const FOCUS_REFRESH_THROTTLE_MS = 5_000;
 
 // Overall ceiling for a user-initiated full refresh. Guarantees the port
 // request always replies so the sidebar's Refresh button can never hang or be
@@ -432,6 +444,9 @@ export class WorkspaceService {
     concurrency: 3,
     timeout: POLL_QUEUE_TASK_TIMEOUT_MS,
   });
+  private readonly statusAdmission = new StatusAdmissionController();
+  /** When the last automatic focus revalidation ran; see FOCUS_REFRESH_THROTTLE_MS. */
+  private lastFocusRefreshAt = 0;
   private mainBranch: string = "main";
   private activeWorktreeId: string | null = null;
   private pollIntervalActive: number = DEFAULT_ACTIVE_WORKTREE_INTERVAL_MS;
@@ -536,7 +551,16 @@ export class WorkspaceService {
    * topology watcher and forge detection permanently off for this host (#11405).
    */
   private gitBacked: boolean | null = null;
-  private pollingEnabled: boolean = true;
+  // App-wide power policy, pushed by main and replayed on host restart. One of
+  // the two inputs to `derivePermissions()`; `backgrounded` is the other.
+  private appPolicy: WorkspacePollingPolicy = { ...ACTIVE_WORKSPACE_POLLING_POLICY };
+  // What `reconcilePolling()` last pushed to the monitors. Starts at the state
+  // every monitor boots in, so the first real transition always lands.
+  private appliedPermissions: WorktreePollingPermissions = {
+    status: true,
+    backgroundWork: true,
+    attenuated: false,
+  };
   private projectRootPath: string | null = null;
   // Immutable project id threaded from main via load-project (#11282). The host
   // has no DB access, so it can never re-derive this from the path — hashing the
@@ -937,7 +961,7 @@ export class WorkspaceService {
     const self = this;
     const topologyHost: TopologyWatcherHost = {
       get pollingEnabled() {
-        return self.pollingEnabled;
+        return self.appliedPermissions.status;
       },
       get projectRootPath() {
         return self.projectRootPath;
@@ -1056,7 +1080,7 @@ export class WorkspaceService {
       // Started independently of startWatcher() — that method no-ops when
       // `.git/worktrees/` is absent (the exact "all worktrees removed" case),
       // so gating the safety net on it would defeat its purpose (#8510).
-      if (this.pollingEnabled) {
+      if (this.appliedPermissions.status) {
         this.topologyWatcher.startSafetyTimer();
       }
 
@@ -1077,15 +1101,22 @@ export class WorkspaceService {
       this.statusTiming.markLoaded();
       this.sendEvent({ type: "load-project-result", requestId, success: true });
 
-      void Promise.allSettled([this.initializePRService(), this.refreshAll()]).then((results) => {
-        const [prResult, refreshResult] = results;
-        if (prResult?.status === "rejected") {
-          console.warn("[WorkspaceHost] PR service initialization failed:", prResult.reason);
+      // Automatic: a load is not proof anyone is looking. Hover-prefetch and
+      // dormant crash recovery reach this same path, and an ordinary load can
+      // be backgrounded while its remaining monitors sit in pollQueue.
+      // `startWithoutGitStatus()` has already emitted each initial snapshot, so
+      // the renderer has its rows either way, and resume owes the status pass.
+      void Promise.allSettled([this.initializePRService(), this.refreshAll(true)]).then(
+        (results) => {
+          const [prResult, refreshResult] = results;
+          if (prResult?.status === "rejected") {
+            console.warn("[WorkspaceHost] PR service initialization failed:", prResult.reason);
+          }
+          if (refreshResult?.status === "rejected") {
+            console.warn("[WorkspaceHost] Initial worktree refresh failed:", refreshResult.reason);
+          }
         }
-        if (refreshResult?.status === "rejected") {
-          console.warn("[WorkspaceHost] Initial worktree refresh failed:", refreshResult.reason);
-        }
-      });
+      );
     } catch (error) {
       // `formatErrorMessage`, not `(error as Error).message`: a non-Error throw
       // put a literal `undefined` in the "Couldn't load worktrees" banner. A
@@ -1804,7 +1835,8 @@ export class WorkspaceService {
       },
       this.mainBranch,
       this.pollQueue,
-      ++this.worktreeGeneration
+      ++this.worktreeGeneration,
+      this.statusAdmission
     );
 
     monitor.setIssueNumber(issueNumber ?? undefined);
@@ -1849,11 +1881,10 @@ export class WorkspaceService {
     }
 
     // A worktree that appears while the project is backgrounded (an agent's
-    // own `git worktree add`, an MCP create) joins paused, so start() never
-    // arms the watcher or poll loop the rest of the host has let go of.
-    if (!this.pollingEnabled) {
-      monitor.pausePolling();
-    }
+    // own worktree create, an MCP create) joins with the same permissions as
+    // its neighbours, so start() never arms a watcher or poll loop the rest of
+    // the host has let go of — and inherits the current attenuation.
+    monitor.applyPollingPermissions(this.appliedPermissions);
 
     if (skipInitialGitStatus) {
       monitor.startWithoutGitStatus();
@@ -2822,7 +2853,32 @@ export class WorkspaceService {
     this.sendEvent({ type: "set-active-result", requestId, success: true });
   }
 
-  async refresh(requestId: string, worktreeId?: string): Promise<{ ok: boolean; error?: string }> {
+  async refresh(
+    requestId: string,
+    worktreeId?: string,
+    reason: "manual" | "focus" = "manual"
+  ): Promise<{ ok: boolean; error?: string }> {
+    // Cycling windows fires focus repeatedly. Watchers stayed armed through
+    // the blur, so each of these is a reconciliation rather than a cold read —
+    // but a full pass still walks every monitor plus topology and PRs, and
+    // alt-tabbing twice a second should not queue that twice a second. The
+    // same 5s shape the PR service already uses for its focus catch-up.
+    if (reason === "focus") {
+      // Nothing to revalidate for: this host is backgrounded, or no window is
+      // on screen. Declining here rather than inside the per-monitor fan-out
+      // also spares the topology enumeration and the PR refresh that run
+      // alongside it, which have no guard of their own.
+      if (!this.appliedPermissions.status) {
+        this.sendEvent({ type: "refresh-result", requestId, success: true });
+        return { ok: true };
+      }
+      const now = Date.now();
+      if (now - this.lastFocusRefreshAt < FOCUS_REFRESH_THROTTLE_MS) {
+        this.sendEvent({ type: "refresh-result", requestId, success: true });
+        return { ok: true };
+      }
+      this.lastFocusRefreshAt = now;
+    }
     try {
       if (worktreeId) {
         const monitor = this.monitors.get(worktreeId);
@@ -2852,7 +2908,10 @@ export class WorkspaceService {
                 `[WorkspaceHost] refresh: topology re-discovery failed: ${(err as Error).message}`
               );
             }
-            await Promise.allSettled([this.refreshAll(), pullRequestService.refresh()]);
+            await Promise.allSettled([
+              this.refreshAll(reason === "focus"),
+              pullRequestService.refresh(),
+            ]);
           })(),
           HOST_REFRESH_TIMEOUT_MS,
           "refresh watchdog: all worktrees"
@@ -2880,7 +2939,9 @@ export class WorkspaceService {
    * D2/D3 tier and the changed-file preview from LIVE changes — a backgrounded
    * worktree's cached snapshot can be ~30s stale, which lets a force-delete
    * skip the typed-name gate and silently discard uncommitted work. This runs
-   * `monitor.refresh()` (which bypasses the adaptive-poll cache) and reads the
+   * `monitor.getFreshChanges()` (which bypasses both the adaptive-poll cache
+   * and the single-flight status pass, and is deliberately not subject to the
+   * automatic-refresh suspension guard) and reads the
    * resulting changes back off the same monitor, so the caller gets a value
    * that provably reflects the refresh — no dependency on the broadcast landing
    * on the (separate) worktree port first. Watchdogged like `refresh()` so a
@@ -2993,9 +3054,9 @@ export class WorkspaceService {
       const promises = Array.from(this.monitors.values()).map((monitor) =>
         wakeQueue.add(async () => {
           try {
-            await monitor.refresh();
+            await monitor.refresh({ automatic: true });
           } finally {
-            if (monitor.isRunning && this.pollingEnabled) {
+            if (monitor.isRunning && this.appliedPermissions.status) {
               monitor.reschedulePolling();
             }
           }
@@ -3006,9 +3067,18 @@ export class WorkspaceService {
       // counts catch up against the network state we just reconnected to.
       // Fire-and-forget — the fetch coordinator serializes per-repo and
       // failures don't block the wake refresh result.
-      for (const monitor of this.monitors.values()) {
-        if (monitor.isRunning) {
-          void monitor.triggerFetchNow();
+      //
+      // Gated on background-work permission, unlike a user-triggered fetch: a
+      // forced fetch bypasses the poll gate by design, and its success path
+      // reaches `refreshStatusForFetchSiblings` -> `triggerRefreshIfUpdating`,
+      // which starts a status pass with no guard of its own. Without this the
+      // wake sweep declines every direct refresh and then starts the same work
+      // by the back door.
+      if (this.appliedPermissions.backgroundWork) {
+        for (const monitor of this.monitors.values()) {
+          if (monitor.isRunning) {
+            void monitor.triggerFetchNow();
+          }
         }
       }
       await pullRequestService.refresh();
@@ -3118,13 +3188,13 @@ export class WorkspaceService {
     await this.syncMonitors(worktrees, this.activeWorktreeId, this.mainBranch, undefined, true);
   }
 
-  private async refreshAll(): Promise<void> {
+  private async refreshAll(automatic: boolean): Promise<void> {
     const promises = Array.from(this.monitors.values()).map((monitor) =>
       this.pollQueue.add(async () => {
         try {
-          await monitor.refresh();
+          await monitor.refresh({ automatic });
         } finally {
-          if (monitor.isRunning && this.pollingEnabled) {
+          if (monitor.isRunning && this.appliedPermissions.status) {
             monitor.reschedulePolling();
           }
         }
@@ -5315,30 +5385,80 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     this._lastAppliedThrottleMultiplier = safeMultiplier;
   }
 
+  /**
+   * The app-wide power policy, held as its own input. Never written by the
+   * project lifecycle and never overwriting it: both feed
+   * {@link reconcilePolling}, which is the only place the monitors are told
+   * what they may run. Replayed by main on host restart.
+   */
+  setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
+    this.appPolicy = { ...policy };
+    this.reconcilePolling();
+  }
+
+  /**
+   * Blunt all-or-nothing control, kept for callers that mean "this host can
+   * observe nothing at all" (and for the tests that pin that behaviour).
+   */
   setPollingEnabled(enabled: boolean): void {
-    if (this.pollingEnabled === enabled) return;
+    this.setWorkspacePowerPolicy(
+      enabled
+        ? ACTIVE_WORKSPACE_POLLING_POLICY
+        : { statusAllowed: false, backgroundWorkAllowed: false, attenuated: true }
+    );
+  }
 
-    this.pollingEnabled = enabled;
+  /**
+   * What this host may actually run, derived from both inputs. Status work
+   * needs the project foregrounded *and* a window someone could look at;
+   * network fetch and resource polling additionally need someone looking.
+   */
+  private derivePermissions(): WorktreePollingPermissions {
+    return {
+      status: !this.backgrounded && this.appPolicy.statusAllowed,
+      backgroundWork: !this.backgrounded && this.appPolicy.backgroundWorkAllowed,
+      attenuated: this.appPolicy.attenuated,
+    };
+  }
 
-    if (!enabled) {
+  /**
+   * Push the derived permissions to every monitor and the topology watcher.
+   * Idempotent, so any input may call it without checking whether it changed
+   * anything.
+   */
+  private reconcilePolling(): void {
+    const next = this.derivePermissions();
+    const previous = this.appliedPermissions;
+    if (
+      next.status === previous.status &&
+      next.backgroundWork === previous.backgroundWork &&
+      next.attenuated === previous.attenuated
+    ) {
+      return;
+    }
+    this.appliedPermissions = next;
+    this.statusAdmission.setAttenuated(next.attenuated);
+
+    for (const monitor of this.monitors.values()) {
+      monitor.applyPollingPermissions(next);
+    }
+
+    if (!next.status) {
       this.topologyWatcher.stop();
-      for (const monitor of this.monitors.values()) {
-        monitor.pausePolling();
-      }
-    } else if (this.gitBacked === false) {
+      return;
+    }
+    if (this.gitBacked === false) {
       // Foregrounding must not start the topology watcher for a workspace with
       // no repository — `loadProject` deliberately never started it, and this is
       // the one path that would otherwise revive it (#11405).
-    } else {
-      for (const monitor of this.monitors.values()) {
-        monitor.resumePolling();
-      }
-      void this.topologyWatcher.startWatcher();
-      // stop() (run on the !enabled branch) cleared the safety timer, so
-      // resume must restart it symmetrically (#8510).
-      this.topologyWatcher.startSafetyTimer();
-      this.topologyWatcher.scheduleReconcile();
+      return;
     }
+    if (previous.status) return;
+    void this.topologyWatcher.startWatcher();
+    // stop() (run when status work is withdrawn) cleared the safety timer, so
+    // restoring it must restart the timer symmetrically (#8510).
+    this.topologyWatcher.startSafetyTimer();
+    this.topologyWatcher.scheduleReconcile();
   }
 
   pause(): void {
@@ -5347,7 +5467,7 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     if (!this.backgrounded) console.log("[WorkspaceService] Pausing (backgrounded)");
     this.backgrounded = true;
     this.pendingResumeSettle = null;
-    this.setPollingEnabled(false);
+    this.reconcilePolling();
     this.prService.pause();
     // The pool keeps a backgrounded host for as long as its project's view is
     // cached (#12519), so the config backstop would otherwise tick for hours in
@@ -5374,7 +5494,10 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     }
     const wasBackgrounded = this.backgrounded;
     this.backgrounded = false;
-    this.setPollingEnabled(true);
+    // Reconcile rather than force-enable: foregrounding a project while the
+    // screen is locked or every window is hidden must not start polling that
+    // the app-wide policy has withdrawn.
+    this.reconcilePolling();
     if (this.wslDistroPollerSuspended) {
       this.wslDistroPollerSuspended = false;
       this.startWslDistroPoller();

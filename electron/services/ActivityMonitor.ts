@@ -44,7 +44,7 @@ import { CpuHighStateTracker } from "./pty/CpuHighStateTracker.js";
 import { WaitingWatchdog } from "./pty/WaitingWatchdog.js";
 import type { WaitingReason } from "../../shared/types/agent.js";
 import type { PowerPolicyLevel } from "../../shared/types/powerPolicy.js";
-import { getPtyPowerLevel, subscribePtyPowerLevel } from "./pty/ptyPowerPolicy.js";
+import { getAgentObservationLevel, subscribePtyPowerLevel } from "./pty/ptyPowerPolicy.js";
 
 const PROMPT_DEBOUNCE_MS = 500;
 const PROMPT_QUIET_MS = 200;
@@ -458,7 +458,7 @@ export class ActivityMonitor {
     if (this.isDisposed || !this.onWaitingTimeout) return;
     this.watchdogInterval = setInterval(
       () => this.runWaitingWatchdogCheck(Date.now()),
-      WAITING_WATCHDOG_INTERVAL_MS[getPtyPowerLevel()]
+      WAITING_WATCHDOG_INTERVAL_MS[getAgentObservationLevel()]
     );
     this.watchdogInterval.unref();
   }
@@ -469,7 +469,7 @@ export class ActivityMonitor {
     if (this.isDisposed) return;
     this.scheduleWaitingWatchdog();
     if (this.fsmIdleBackoffActive) {
-      this.applyPollingInterval(QUIET_POLLING_INTERVAL_MS[getPtyPowerLevel()]);
+      this.applyPollingInterval(QUIET_POLLING_INTERVAL_MS[getAgentObservationLevel()]);
     }
   }
 
@@ -1731,7 +1731,7 @@ export class ActivityMonitor {
       // moved the clock without clearing the timer.
       if (this.lastDataTimestamp !== armedAtData) return;
       this.fsmIdleBackoffActive = true;
-      this.applyPollingInterval(QUIET_POLLING_INTERVAL_MS[getPtyPowerLevel()]);
+      this.applyPollingInterval(QUIET_POLLING_INTERVAL_MS[getAgentObservationLevel()]);
     }, FSM_IDLE_BACKOFF_SETTLE_MS);
     this.fsmIdleBackoffTimer.unref();
   }
