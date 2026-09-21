@@ -57,7 +57,7 @@ export function registerTerminalInputActions(
 ): void {
   actions.set("terminal.inject", () => ({
     id: "terminal.inject",
-    title: "Inject Context",
+    title: "Inject context",
     description:
       "Write the active worktree's prepared context into a terminal, which is how an agent is handed a large codebase context. Name the target terminal explicitly — focus can drift between the call and its execution, and a mistarget types a multi-kilobyte dump into whatever pane happened to be focused. Target an idle terminal.",
     category: "terminal",
@@ -100,7 +100,7 @@ export function registerTerminalInputActions(
   // the renderer ever invokes it directly.
   actions.set("terminal.injectOwned", () => ({
     id: "terminal.injectOwned",
-    title: "Inject Context to Owned Terminal",
+    title: "Inject context to owned terminal",
     description:
       "Write the active worktree's prepared context into a terminal this connection created or was handed, which is how an agent it drives is given a large codebase context. Any other panel is refused. Target an idle terminal.",
     category: "terminal",
@@ -127,7 +127,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.copy", () => ({
     id: "terminal.copy",
-    title: "Copy Selection",
+    title: "Copy selection",
     description: "Copy the current terminal selection to clipboard",
     category: "terminal",
     kind: "command",
@@ -196,7 +196,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.interrupt", () => ({
     id: "terminal.interrupt",
-    title: "Interrupt Agent",
+    title: "Interrupt agent",
     description:
       "Stop the turn one named agent is running, leaving its panel and conversation intact. Sends cancel keystrokes, not prompt text an agent mid-turn would not read. Delivery is not acknowledged and the agent is not observed stopping, so read the terminal afterwards.",
     category: "terminal",
@@ -263,7 +263,7 @@ export function registerTerminalInputActions(
   // invokes it directly.
   actions.set("terminal.interruptOwned", () => ({
     id: "terminal.interruptOwned",
-    title: "Interrupt Owned Agent",
+    title: "Interrupt owned agent",
     description:
       "Stop the turn an agent is running in a panel this connection created or was handed, keeping the panel and its conversation. Sends cancel keystrokes, not prompt text an agent mid-turn would not read, and disposes of nothing. An idle agent, or one that binds a different cancel key, is refused rather than reported stopped. Read the terminal for the effect.",
     category: "terminal",
@@ -292,7 +292,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.copyLink", () => ({
     id: "terminal.copyLink",
-    title: "Copy Link Address",
+    title: "Copy link address",
     description: "Copy a URL to the clipboard",
     category: "terminal",
     kind: "command",
@@ -310,7 +310,7 @@ export function registerTerminalInputActions(
     // Opens the focused panel's context menu — a keyboard affordance for the
     // right-click menu, meaningless to pick from the palette itself.
     palette: { mode: "hidden" },
-    title: "Open Context Menu",
+    title: "Open context menu",
     description: "Open the context menu for the focused panel",
     category: "terminal",
     kind: "command",
@@ -331,7 +331,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.stashInput", () => ({
     id: "terminal.stashInput",
-    title: "Stash Input",
+    title: "Stash input",
     description: "Park the current hybrid input draft to a temporary stash slot",
     category: "terminal",
     kind: "command",
@@ -347,7 +347,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.popStash", () => ({
     id: "terminal.popStash",
-    title: "Restore Stashed Input",
+    title: "Restore stashed input",
     description: "Restore the previously stashed hybrid input draft",
     category: "terminal",
     kind: "command",
@@ -363,7 +363,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.bulkCommand", () => ({
     id: "terminal.bulkCommand",
-    title: "Fleet: Broadcast",
+    title: "Fleet: broadcast",
     description: "Arm every terminal in the current worktree for broadcast",
     category: "terminal",
     kind: "command",
@@ -377,7 +377,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.sendToAgent", () => ({
     id: "terminal.sendToAgent",
-    title: "Send to Agent",
+    title: "Send to agent",
     description: "Send terminal selection to another agent or terminal panel",
     category: "terminal",
     kind: "command",
@@ -401,7 +401,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.arm", () => ({
     id: "terminal.arm",
-    title: "Arm Terminal",
+    title: "Arm terminal",
     description:
       "Add a terminal to the set that receives the user's fleet broadcasts, so the next broadcast reaches it too. Read back the resulting set to confirm — a terminal that cannot be armed is ignored rather than reported as an error. This changes where the user's subsequent broadcast input lands.",
     category: "terminal",
@@ -437,7 +437,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.disarm", () => ({
     id: "terminal.disarm",
-    title: "Disarm Terminal",
+    title: "Disarm terminal",
     description:
       "Remove a terminal from the set that receives fleet broadcasts, so subsequent broadcasts skip it. Read back the resulting set to confirm. Disarming a terminal that was not armed does nothing rather than failing, so it is safe to call without checking first.",
     category: "terminal",
@@ -456,7 +456,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.disarmAll", () => ({
     id: "terminal.disarmAll",
-    title: "Disarm All",
+    title: "Disarm all",
     description:
       "Clear the fleet arming set entirely, so no terminal receives the user's broadcast input until something is armed again. This silently changes where the user's next broadcast lands, so prefer disarming individual terminals unless resetting is genuinely the intent.",
     category: "terminal",
@@ -473,7 +473,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.armByState", () => ({
     id: "terminal.armByState",
-    title: "Arm by State",
+    title: "Arm by state",
     description: "Arm all eligible agent terminals in a given agent state",
     category: "terminal",
     kind: "command",
@@ -500,7 +500,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.armAll", () => ({
     id: "terminal.armAll",
-    title: "Arm All Eligible",
+    title: "Arm all eligible",
     description: "Arm every eligible terminal",
     category: "terminal",
     kind: "command",
@@ -515,7 +515,7 @@ export function registerTerminalInputActions(
 
   actions.set("terminal.armDefault", () => ({
     id: "terminal.armDefault",
-    title: "Arm Current Worktree",
+    title: "Arm current worktree",
     description: "Arm all eligible terminals in the active worktree",
     category: "terminal",
     kind: "command",

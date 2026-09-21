@@ -30,7 +30,7 @@ export function registerWorktreeSessionActions(
 ): void {
   actions.set("worktree.sessions.minimizeAll", () => ({
     id: "worktree.sessions.minimizeAll",
-    title: "Dock All Sessions",
+    title: "Dock all sessions",
     description: "Move all grid sessions for a worktree to the dock",
     category: "worktree",
     kind: "command",
@@ -52,7 +52,7 @@ export function registerWorktreeSessionActions(
     // back into the grid. Renamed everywhere it surfaces so the palette, the
     // worktree menu and the audit trail name the same operation. The action ID
     // is load-bearing and stays.
-    title: "Move All Sessions To Grid",
+    title: "Move all sessions to grid",
     description: "Move all dock sessions for a worktree into the grid",
     category: "worktree",
     kind: "command",
@@ -69,7 +69,7 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.restartAll", () => ({
     id: "worktree.sessions.restartAll",
-    title: "Restart All Sessions",
+    title: "Restart all sessions",
     description: "Restart all sessions for a worktree",
     category: "worktree",
     kind: "command",
@@ -123,7 +123,7 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.resetRenderers", () => ({
     id: "worktree.sessions.resetRenderers",
-    title: "Reset Session Renderers",
+    title: "Reset session renderers",
     description: "Reset all xterm renderers for a worktree",
     category: "worktree",
     kind: "command",
@@ -167,7 +167,7 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.closeCompleted", () => ({
     id: "worktree.sessions.closeCompleted",
-    title: "Close Completed Sessions",
+    title: "Close completed sessions",
     description: "Close completed sessions for a worktree",
     category: "worktree",
     kind: "command",
@@ -186,7 +186,7 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.trashAll", () => ({
     id: "worktree.sessions.trashAll",
-    title: "Trash All Sessions",
+    title: "Trash all sessions",
     description: "Move all sessions for a worktree to trash",
     category: "worktree",
     kind: "command",
@@ -243,7 +243,7 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.endAll", () => ({
     id: "worktree.sessions.endAll",
-    title: "End All Sessions",
+    title: "End all sessions",
     description: "Permanently end all sessions for a worktree",
     category: "worktree",
     kind: "command",
@@ -306,7 +306,7 @@ export function registerWorktreeSessionActions(
 
   actions.set("worktree.sessions.clearHistory", () => ({
     id: "worktree.sessions.clearHistory",
-    title: "Clear Session History",
+    title: "Clear session history",
     description:
       "Permanently delete this worktree's recorded resumable-session history so those sessions no longer appear when resuming agents. Open sessions are unaffected, and bookmarked sessions are exempt, and deleting a bookmark is the only way to remove one.",
     category: "worktree",

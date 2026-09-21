@@ -34,7 +34,17 @@ export function HighlightedText({ text, indices }: HighlightedTextProps) {
   merged.forEach(([start, end], i) => {
     if (start > lastIndex) parts.push(text.substring(lastIndex, start));
     parts.push(
-      <span key={i} className="text-search-highlight-text">
+      // A neutral band, not accent. A query can match many substrings across
+      // many rows, so painting each one in the accent colour spends the accent
+      // budget on membership — the one thing the restraint rule names outright
+      // — and leaves the focused field competing with its own results.
+      //
+      // A background rather than weight: bolding the match was removed here
+      // deliberately because the row reflows as the user types. A band changes
+      // no metrics, and it is the same idiom document search already uses in
+      // the terminal, diff and code viewers, which keep the
+      // `search-highlight-*` tokens for exactly that job.
+      <span key={i} className="bg-overlay-medium text-text-primary">
         {text.substring(start, end + 1)}
       </span>
     );

@@ -3,7 +3,7 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 export function registerWindowActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("window.toggleFullscreen", () => ({
     id: "window.toggleFullscreen",
-    title: "Toggle Fullscreen",
+    title: "Toggle fullscreen",
     description: "Toggle fullscreen mode for the application window",
     category: "ui",
     kind: "command",
@@ -17,7 +17,7 @@ export function registerWindowActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("window.reload", () => ({
     id: "window.reload",
-    title: "Reload Window",
+    title: "Reload window",
     description: "Reload the renderer via Electron webContents",
     category: "ui",
     kind: "command",
@@ -31,7 +31,7 @@ export function registerWindowActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("window.forceReload", () => ({
     id: "window.forceReload",
-    title: "Force Reload Window",
+    title: "Force reload window",
     description: "Reload the renderer ignoring cache",
     category: "ui",
     kind: "command",
@@ -59,7 +59,7 @@ export function registerWindowActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("window.zoomIn", () => ({
     id: "window.zoomIn",
-    title: "Zoom In",
+    title: "Zoom in",
     description: "Increase zoom level",
     category: "ui",
     kind: "command",
@@ -73,7 +73,7 @@ export function registerWindowActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("window.zoomOut", () => ({
     id: "window.zoomOut",
-    title: "Zoom Out",
+    title: "Zoom out",
     description: "Decrease zoom level",
     category: "ui",
     kind: "command",
@@ -87,7 +87,7 @@ export function registerWindowActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("window.zoomReset", () => ({
     id: "window.zoomReset",
-    title: "Reset Zoom",
+    title: "Reset zoom",
     description: "Reset zoom level to default",
     category: "ui",
     kind: "command",
@@ -101,7 +101,7 @@ export function registerWindowActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("window.close", () => ({
     id: "window.close",
-    title: "Close Window",
+    title: "Close window",
     description: "Close the current window",
     category: "ui",
     kind: "command",

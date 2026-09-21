@@ -33,10 +33,19 @@ export function SegmentedToggle<T extends string>({
   onChange,
   className,
   density = "default",
+  ariaLabel,
+  testId,
 }: {
   options: SegmentedToggleOption<T>[];
   value: T;
   onChange: (value: T) => void;
+  /**
+   * Names the control as a group. A toggle whose options are self-describing
+   * ("Split"/"Unified") needs no group name; one whose options only make sense
+   * together ("Working tree"/"vs main") does.
+   */
+  ariaLabel?: string;
+  testId?: string;
   /**
    * `compact` for a 32px host-chrome strip.
    *
@@ -66,6 +75,9 @@ export function SegmentedToggle<T extends string>({
 
   return (
     <div
+      role={ariaLabel ? "group" : undefined}
+      aria-label={ariaLabel}
+      data-testid={testId}
       className={cn(
         "relative isolate flex bg-surface-sidebar rounded-lg p-0.5 shrink-0",
         className

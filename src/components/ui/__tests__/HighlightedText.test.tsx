@@ -5,23 +5,31 @@ import type { FuseResultMatch } from "@/hooks/useSearchablePalette";
 
 import { HighlightedText, findMatchIndices } from "../HighlightedText";
 
+/**
+ * The class the match wrapper carries, named once so these tests assert the
+ * behaviour — which runs get wrapped — rather than pinning a colour decision.
+ * The treatment must never be the accent token (accent is not for membership)
+ * and must not change text metrics, or the row reflows as the user types.
+ */
+const HIGHLIGHT_CLASS = "bg-overlay-medium";
+
 describe("HighlightedText", () => {
   it("renders plain text when indices are missing", () => {
     const { container } = render(<HighlightedText text="New Terminal" indices={undefined} />);
     expect(container.textContent).toBe("New Terminal");
-    expect(container.querySelector(".text-search-highlight-text")).toBeNull();
+    expect(container.querySelector(`.${HIGHLIGHT_CLASS}`)).toBeNull();
   });
 
   it("renders plain text when indices are empty", () => {
     const { container } = render(<HighlightedText text="New Terminal" indices={[]} />);
     expect(container.textContent).toBe("New Terminal");
-    expect(container.querySelector(".text-search-highlight-text")).toBeNull();
+    expect(container.querySelector(`.${HIGHLIGHT_CLASS}`)).toBeNull();
   });
 
   it("highlights the matched range and preserves full text content", () => {
     const { container } = render(<HighlightedText text="New Terminal" indices={[[4, 11]]} />);
     expect(container.textContent).toBe("New Terminal");
-    const marks = container.querySelectorAll(".text-search-highlight-text");
+    const marks = container.querySelectorAll(`.${HIGHLIGHT_CLASS}`);
     expect(marks).toHaveLength(1);
     expect(marks[0]?.textContent).toBe("Terminal");
     // Color alone differentiates — bold weight caused character-width jitter
@@ -32,7 +40,7 @@ describe("HighlightedText", () => {
   it("highlights a single character", () => {
     const { container } = render(<HighlightedText text="abc" indices={[[1, 1]]} />);
     expect(container.textContent).toBe("abc");
-    const marks = container.querySelectorAll(".text-search-highlight-text");
+    const marks = container.querySelectorAll(`.${HIGHLIGHT_CLASS}`);
     expect(marks).toHaveLength(1);
     expect(marks[0]?.textContent).toBe("b");
   });
@@ -48,7 +56,7 @@ describe("HighlightedText", () => {
       />
     );
     expect(container.textContent).toBe("font font");
-    const marks = container.querySelectorAll(".text-search-highlight-text");
+    const marks = container.querySelectorAll(`.${HIGHLIGHT_CLASS}`);
     expect(marks).toHaveLength(2);
     expect(marks[0]?.textContent).toBe("font");
     expect(marks[1]?.textContent).toBe("font");
@@ -68,7 +76,7 @@ describe("HighlightedText", () => {
       />
     );
     expect(container.textContent).toBe("abcdefghij");
-    const marks = container.querySelectorAll(".text-search-highlight-text");
+    const marks = container.querySelectorAll(`.${HIGHLIGHT_CLASS}`);
     expect(marks).toHaveLength(1);
     expect(marks[0]?.textContent).toBe("abcdefg");
   });
@@ -86,7 +94,7 @@ describe("HighlightedText", () => {
       />
     );
     expect(container.textContent).toBe("abcdefghi");
-    const marks = container.querySelectorAll(".text-search-highlight-text");
+    const marks = container.querySelectorAll(`.${HIGHLIGHT_CLASS}`);
     expect(marks).toHaveLength(1);
     expect(marks[0]?.textContent).toBe("abcdef");
   });
@@ -104,7 +112,7 @@ describe("HighlightedText", () => {
       />
     );
     expect(container.textContent).toBe("abcXefg");
-    const marks = container.querySelectorAll(".text-search-highlight-text");
+    const marks = container.querySelectorAll(`.${HIGHLIGHT_CLASS}`);
     expect(marks).toHaveLength(2);
     expect(marks[0]?.textContent).toBe("abc");
     expect(marks[1]?.textContent).toBe("efg");
@@ -124,7 +132,7 @@ describe("HighlightedText", () => {
       />
     );
     expect(container.textContent).toBe("abc");
-    expect(container.querySelectorAll(".text-search-highlight-text")).toHaveLength(0);
+    expect(container.querySelectorAll(`.${HIGHLIGHT_CLASS}`)).toHaveLength(0);
   });
 });
 

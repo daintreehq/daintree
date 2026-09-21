@@ -1216,7 +1216,17 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // screen readers are served by the debounced announcer effects below, not a
   // live region, so the persistent sort-disabled text isn't re-announced on
   // every keystroke (#9665).
-  const scopeText = showScope ? `${filteredCount} of ${scopeTotal} worktrees` : null;
+  // The state tabs above this line count a different set on purpose — non-main,
+  // and deliberately not narrowed by the query — so while a search is running
+  // the user reads "1 of 5 worktrees" directly under a tab saying "All 4" with
+  // no way to tell which number is lying. Neither is; say so rather than making
+  // one of them wrong. Only while a query is active: without one the two scopes
+  // differ by the main worktree alone, which the pinned card already explains.
+  const scopeText = showScope
+    ? hasQuery
+      ? `${filteredCount} of ${scopeTotal} worktrees · state tabs ignore search`
+      : `${filteredCount} of ${scopeTotal} worktrees`
+    : null;
   // Which filters, not just how many. A count tells the user the list is cut
   // down; it does not stop a sparse sidebar reading as an empty one.
   const activeFacetText = describeActiveFacets({

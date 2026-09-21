@@ -13,7 +13,7 @@ export function registerTerminalLayoutActions(
 ): void {
   actions.set("terminal.moveToDock", () => ({
     id: "terminal.moveToDock",
-    title: "Move to Dock",
+    title: "Move to dock",
     description:
       "Move a terminal out of the main grid into the sidebar dock, keeping its process running. This rearranges what the user sees and is reversible by moving it back. Name the target explicitly — an automated caller cannot see what the user has focused.",
     category: "terminal",
@@ -52,7 +52,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.moveToGrid", () => ({
     id: "terminal.moveToGrid",
-    title: "Move to Grid",
+    title: "Move to grid",
     description:
       "Move a terminal from the sidebar dock back into the main grid, keeping its process running. This rearranges what the user sees and is reversible. Name the target explicitly — an automated caller cannot see what the user has focused.",
     category: "terminal",
@@ -78,7 +78,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.toggleMaximize", () => ({
     id: "terminal.toggleMaximize",
-    title: "Toggle Maximize",
+    title: "Toggle maximize",
     description: "Toggle terminal maximize state (maximizes entire tab group if panel is grouped)",
     category: "terminal",
     kind: "command",
@@ -99,7 +99,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.maximize", () => ({
     id: "terminal.maximize",
-    title: "Maximize Terminal",
+    title: "Maximize terminal",
     description: "Toggle terminal maximize state (maximizes entire tab group if panel is grouped)",
     category: "terminal",
     kind: "command",
@@ -117,7 +117,7 @@ export function registerTerminalLayoutActions(
   // Terminal reordering
   actions.set("terminal.moveLeft", () => ({
     id: "terminal.moveLeft",
-    title: "Move Terminal Left",
+    title: "Move terminal left",
     description: "Move terminal left in the grid",
     category: "terminal",
     kind: "command",
@@ -146,7 +146,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.moveRight", () => ({
     id: "terminal.moveRight",
-    title: "Move Terminal Right",
+    title: "Move terminal right",
     description: "Move terminal right in the grid",
     category: "terminal",
     kind: "command",
@@ -175,7 +175,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.moveUp", () => ({
     id: "terminal.moveUp",
-    title: "Move Terminal Up",
+    title: "Move terminal up",
     description: "Move terminal up in the grid",
     category: "terminal",
     kind: "command",
@@ -214,7 +214,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.moveDown", () => ({
     id: "terminal.moveDown",
-    title: "Move Terminal Down",
+    title: "Move terminal down",
     description: "Move terminal down in the grid",
     category: "terminal",
     kind: "command",
@@ -253,7 +253,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.toggleDock", () => ({
     id: "terminal.toggleDock",
-    title: "Toggle Dock",
+    title: "Toggle dock",
     description:
       "Move a terminal between the grid and the dock, whichever it is not currently in. The move is recorded so the user can undo it. Name the target explicitly — an automated caller cannot see what the user has focused, and this rearranges what they see.",
     category: "terminal",
@@ -294,7 +294,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.toggleDockAll", () => ({
     id: "terminal.toggleDockAll",
-    title: "Toggle All Dock",
+    title: "Toggle all dock",
     description: "Toggle all terminals between grid and dock",
     category: "terminal",
     kind: "command",
@@ -329,7 +329,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("layout.undo", () => ({
     id: "layout.undo",
-    title: "Undo Layout Change",
+    title: "Undo layout change",
     description: "Undo the last panel layout change (drag-and-drop, move, reorder)",
     category: "terminal",
     kind: "command",
@@ -349,7 +349,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("layout.redo", () => ({
     id: "layout.redo",
-    title: "Redo Layout Change",
+    title: "Redo layout change",
     description: "Redo the last undone panel layout change",
     category: "terminal",
     kind: "command",
@@ -406,7 +406,7 @@ export function registerTerminalLayoutActions(
   // Canonical panel.gridLayout.* action IDs
   actions.set("panel.gridLayout.setStrategy", () => ({
     id: "panel.gridLayout.setStrategy",
-    title: "Set Grid Layout Strategy",
+    title: "Set grid layout strategy",
     description: "Set the panel grid layout strategy",
     category: "terminal",
     kind: "command",
@@ -418,7 +418,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("panel.gridLayout.setValue", () => ({
     id: "panel.gridLayout.setValue",
-    title: "Set Grid Layout Value",
+    title: "Set grid layout value",
     description: "Set the panel grid layout value (columns/rows count)",
     category: "terminal",
     kind: "command",
@@ -431,7 +431,7 @@ export function registerTerminalLayoutActions(
   // Legacy aliases for backward compatibility
   actions.set("terminal.gridLayout.setStrategy", () => ({
     id: "terminal.gridLayout.setStrategy",
-    title: "Set Grid Layout Strategy",
+    title: "Set grid layout strategy",
     description: "Set the panel grid layout strategy",
     category: "terminal",
     kind: "command",
@@ -443,7 +443,7 @@ export function registerTerminalLayoutActions(
 
   actions.set("terminal.gridLayout.setValue", () => ({
     id: "terminal.gridLayout.setValue",
-    title: "Set Grid Layout Value",
+    title: "Set grid layout value",
     description: "Set the panel grid layout value (columns/rows count)",
     category: "terminal",
     kind: "command",

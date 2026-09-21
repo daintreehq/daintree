@@ -127,7 +127,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("recipe.list", () =>
     defineAction({
       id: "recipe.list",
-      title: "List Recipes",
+      title: "List recipes",
       description:
         "List the saved recipes for the current project — named multi-terminal setups the user has configured, plus any a plugin contributes. Use this to discover recipe ids before running one; each entry reports its origin. It never fails, and it reports whether recipes are still loading: an empty list while loading means not read yet, not that the project has none.",
       category: "recipes",
@@ -176,7 +176,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("recipe.run", () =>
     defineAction({
       id: "recipe.run",
-      title: "Run Recipe",
+      title: "Run recipe",
       description:
         "Launch the terminals a saved recipe defines, in one worktree, as a repeatable multi-pane setup. Launch a single agent or a plain terminal instead when only one pane is wanted. This creates several panels at once and starts their configured commands or agents. Approving its prompt starts every terminal; a pre-authorized call starts at most three, so check what actually started.",
       category: "recipes",
@@ -275,7 +275,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("recipe.editor.open", () =>
     defineAction({
       id: "recipe.editor.open",
-      title: "Open Recipe Editor",
+      title: "Open recipe editor",
       description:
         "Put a recipe draft in front of the user in the editor, either blank for a worktree or loaded from an existing recipe. This is a handoff, not a write: nothing is saved or deleted until the person reviews the draft and saves it, so a success here means the editor is open, never that the recipe exists. An unknown recipe opens a blank draft rather than failing.",
       category: "recipes",
@@ -342,7 +342,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
 
   actions.set("recipe.manager.open", () => ({
     id: "recipe.manager.open",
-    title: "Manage Recipes",
+    title: "Manage recipes",
     description: "Open the recipe manager to view and manage global and project recipes",
     category: "recipes",
     kind: "command",
@@ -356,7 +356,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("recipe.saveToRepo", () =>
     defineAction({
       id: "recipe.saveToRepo",
-      title: "Save Recipe to Repository",
+      title: "Save recipe to repository",
       description:
         "Promote a recipe to in-repo storage (.daintree/recipes/) for git tracking and team sharing",
       category: "recipes",
@@ -378,7 +378,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("recipe.delete", () =>
     defineAction({
       id: "recipe.delete",
-      title: "Delete Recipe",
+      title: "Delete recipe",
       description: "Delete a recipe permanently",
       category: "recipes",
       kind: "command",
@@ -396,7 +396,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
   actions.set("recipe.editor.openFromLayout", () =>
     defineAction({
       id: "recipe.editor.openFromLayout",
-      title: "Open Recipe Editor From Layout",
+      title: "Open recipe editor from layout",
       description:
         "Turn a worktree's live terminals into a recipe draft and put it in front of the user in the editor. Use this to capture a layout someone already has open; the plain editor capability starts from nothing. It only hands off — the draft is not a recipe until the person saves it. A worktree with no live terminals is rejected.",
       category: "recipes",

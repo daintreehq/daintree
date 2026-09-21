@@ -483,6 +483,12 @@ function SettingsDialogInner({
     setActiveResultIndex(-1);
   }, [deferredQuery]);
 
+  const searchComboboxAria = settingsSearchComboboxAria(
+    searchResults,
+    activeResultIndex,
+    isSearching
+  );
+
   const handleSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === "Escape") {
       if (searchQuery) {
@@ -640,6 +646,7 @@ function SettingsDialogInner({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               aria-label="Search settings"
+              {...searchComboboxAria}
               className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-text-primary focus:outline-hidden"
             />
             {searchQuery && (
@@ -1450,6 +1457,41 @@ export function ScopeChip({
   );
 }
 
+/** The listbox half of the search combobox; `aria-controls` points here. */
+export const SEARCH_RESULTS_LISTBOX_ID = "settings-search-results";
+
+/**
+ * Stable DOM id for a result row, shared by the row and by the search input's
+ * `aria-activedescendant` — the accessible counterpart of the visual highlight.
+ */
+export function searchResultOptionId(resultId: string | undefined): string | undefined {
+  return resultId === undefined ? undefined : `settings-search-result-${resultId}`;
+}
+
+/**
+ * The combobox half of the APG pattern, spread onto the search input.
+ *
+ * The listbox only exists while results are on screen — `SearchResults` swaps
+ * in an EmptyState at zero — so expanded/controls/activedescendant are gated on
+ * that same condition rather than on the query alone, and the input never
+ * points at an id that isn't in the document.
+ */
+export function settingsSearchComboboxAria(
+  results: readonly { id: string }[],
+  activeIndex: number,
+  isSearching: boolean
+) {
+  const isOpen = isSearching && results.length > 0;
+  return {
+    role: "combobox" as const,
+    "aria-autocomplete": "list" as const,
+    "aria-expanded": isOpen,
+    "aria-controls": isOpen ? SEARCH_RESULTS_LISTBOX_ID : undefined,
+    "aria-activedescendant":
+      isOpen && activeIndex >= 0 ? searchResultOptionId(results[activeIndex]?.id) : undefined,
+  };
+}
+
 interface SearchResultsProps {
   results: ReturnType<typeof filterSettings>;
   query: string;
@@ -1464,7 +1506,7 @@ interface SearchResultsProps {
   projectLabel: string | null;
 }
 
-function SearchResults({
+export function SearchResults({
   results,
   query,
   cleanQuery,
@@ -1498,79 +1540,99 @@ function SearchResults({
   }
 
   return (
-    <div className="space-y-1">
+    <div>
       <div className="flex items-center justify-between mb-3">
         <p className="text-xs text-text-secondary">
           <span className="tabular-nums">{results.length}</span> result
           {results.length === 1 ? "" : "s"}
         </p>
-        <p className="text-3xs text-text-placeholder">
+        {/* Real instructions, not a placeholder — they take the secondary ramp. */}
+        <p className="text-3xs text-text-secondary">
           <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↑↓</kbd> navigate{" "}
           <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↵</kbd> go
         </p>
       </div>
-      {results.map((result, index) => (
-        <button
-          key={result.id}
-          ref={index === activeIndex ? activeRef : undefined}
-          onClick={() =>
-            onResultClick(
-              { tab: result.tab, subtab: result.subtab, sectionId: result.id },
-              result.requiresEnabled
-            )
-          }
-          className={cn(
-            "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-colors",
-            index === activeIndex
-              ? "bg-overlay-selected border-border-strong"
-              : "border-transparent hover:bg-overlay-soft hover:border-border-default",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
-          )}
-        >
-          <div className="flex items-center gap-3">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-0.5">
-                <ScopeChip
-                  scope={result.scope}
-                  projectLabel={projectLabel}
-                  crossScope={result.scope !== activeScope}
-                />
-                <span className="text-3xs font-medium text-text-secondary uppercase tracking-wide">
-                  {result.tabLabel}
-                </span>
-                {result.subtabLabel && (
-                  <>
-                    <span className="text-3xs text-daintree-text/30">›</span>
-                    <span className="text-3xs text-text-secondary">{result.subtabLabel}</span>
-                  </>
-                )}
-                <span className="text-3xs text-daintree-text/30">›</span>
-                <span className="text-3xs text-text-secondary">{result.section}</span>
-                {result.requiresEnabled && (
-                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs font-medium text-status-warning shrink-0">
-                    <AlertTriangle className="w-3 h-3" />
-                    Requires {midSentenceLabel(result.requiresEnabled.label)}
+      <div
+        id={SEARCH_RESULTS_LISTBOX_ID}
+        role="listbox"
+        aria-label="Search results"
+        className="space-y-1"
+      >
+        {results.map((result, index) => (
+          <button
+            key={result.id}
+            id={searchResultOptionId(result.id)}
+            // The button IS the option — a role="option" wrapper around a button
+            // would nest interactive roles. Overriding the implicit button role
+            // keeps the click while giving the listbox the child it requires and
+            // the input something to point at.
+            //
+            // Out of the Tab sequence: focus is virtual and owned by the input.
+            // Left tabbable, a Tab into a row moved DOM focus without moving the
+            // highlight, and the arrow keys — handled on the input — went dead.
+            role="option"
+            tabIndex={-1}
+            aria-selected={index === activeIndex}
+            ref={index === activeIndex ? activeRef : undefined}
+            onClick={() =>
+              onResultClick(
+                { tab: result.tab, subtab: result.subtab, sectionId: result.id },
+                result.requiresEnabled
+              )
+            }
+            className={cn(
+              "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-colors",
+              index === activeIndex
+                ? "bg-overlay-selected border-border-strong"
+                : "border-transparent hover:bg-overlay-soft hover:border-border-default",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+            )}
+          >
+            <div className="flex items-center gap-3">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <ScopeChip
+                    scope={result.scope}
+                    projectLabel={projectLabel}
+                    crossScope={result.scope !== activeScope}
+                  />
+                  <span className="text-3xs font-medium text-text-secondary uppercase tracking-wide">
+                    {result.tabLabel}
                   </span>
+                  {result.subtabLabel && (
+                    <>
+                      <span className="text-3xs text-daintree-text/30">›</span>
+                      <span className="text-3xs text-text-secondary">{result.subtabLabel}</span>
+                    </>
+                  )}
+                  <span className="text-3xs text-daintree-text/30">›</span>
+                  <span className="text-3xs text-text-secondary">{result.section}</span>
+                  {result.requiresEnabled && (
+                    <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs font-medium text-status-warning shrink-0">
+                      <AlertTriangle className="w-3 h-3" />
+                      Requires {midSentenceLabel(result.requiresEnabled.label)}
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm font-medium text-text-primary">
+                  <HighlightText text={result.title} query={query} />
+                </div>
+                <div className="text-xs text-text-secondary mt-0.5 leading-relaxed">
+                  <HighlightText text={result.description} query={query} />
+                </div>
+              </div>
+              <ChevronRight
+                className={cn(
+                  "w-4 h-4 text-daintree-text/20 shrink-0 transition-[color,translate] duration-150",
+                  index === activeIndex
+                    ? "text-daintree-text/40 translate-x-0.5"
+                    : "group-hover:text-daintree-text/40"
                 )}
-              </div>
-              <div className="text-sm font-medium text-text-primary">
-                <HighlightText text={result.title} query={query} />
-              </div>
-              <div className="text-xs text-text-secondary mt-0.5 leading-relaxed">
-                <HighlightText text={result.description} query={query} />
-              </div>
+              />
             </div>
-            <ChevronRight
-              className={cn(
-                "w-4 h-4 text-daintree-text/20 shrink-0 transition-[color,translate] duration-150",
-                index === activeIndex
-                  ? "text-daintree-text/40 translate-x-0.5"
-                  : "group-hover:text-daintree-text/40"
-              )}
-            />
-          </div>
-        </button>
-      ))}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

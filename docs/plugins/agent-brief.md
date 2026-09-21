@@ -241,7 +241,7 @@ Prefer container queries (`@container`, `@sm:`) over viewport breakpoints — yo
 
 **Borders** — `border-`, `divide-`, `ring-`
 
-`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive`
+`border-default` `border-subtle` `border-strong` `border-divider` `border-interactive` `border-input`
 
 **Status** — `bg-`, `text-`, `border-`
 

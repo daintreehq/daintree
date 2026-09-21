@@ -5,7 +5,7 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 export function registerPrefsUiActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   actions.set("preferences.showProjectPulse.set", () => ({
     id: "preferences.showProjectPulse.set",
-    title: "Set Project Pulse Visibility",
+    title: "Set project pulse visibility",
     description: "Show or hide the project pulse panel",
     category: "preferences",
     kind: "command",
@@ -21,7 +21,7 @@ export function registerPrefsUiActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("preferences.showDeveloperTools.set", () => ({
     id: "preferences.showDeveloperTools.set",
-    title: "Set Developer Tools Visibility",
+    title: "Set developer tools visibility",
     description: "Show or hide developer tools in the UI",
     category: "preferences",
     kind: "command",
@@ -37,7 +37,7 @@ export function registerPrefsUiActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("preferences.showGridAgentHighlights.set", () => ({
     id: "preferences.showGridAgentHighlights.set",
-    title: "Set Grid Agent Highlights Visibility",
+    title: "Set grid agent highlights visibility",
     description: "Show or hide agent state borders on grid panels",
     category: "preferences",
     kind: "command",
@@ -52,7 +52,7 @@ export function registerPrefsUiActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("preferences.showDockAgentHighlights.set", () => ({
     id: "preferences.showDockAgentHighlights.set",
-    title: "Set Dock Agent Highlights Visibility",
+    title: "Set dock agent highlights visibility",
     description: "Show or hide agent state borders on dock items",
     category: "preferences",
     kind: "command",
@@ -67,7 +67,7 @@ export function registerPrefsUiActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("preferences.showAgentTaskTitles.set", () => ({
     id: "preferences.showAgentTaskTitles.set",
-    title: "Set Agent Task Titles Visibility",
+    title: "Set agent task titles visibility",
     description: "Compose the agent's current task into terminal tab and header titles",
     category: "preferences",
     kind: "command",
@@ -82,7 +82,7 @@ export function registerPrefsUiActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("preferences.reduceAnimations.set", () => ({
     id: "preferences.reduceAnimations.set",
-    title: "Set Reduce UI Animations",
+    title: "Set reduce UI animations",
     description: "Minimize motion across the interface, independent of OS settings",
     category: "preferences",
     kind: "command",

@@ -18,7 +18,7 @@ import type { ActionContext } from "@shared/types/actions";
 export function registerWorktreeBulkActions(actions: ActionRegistry): void {
   actions.set("worktree.bulk.closeSessions", () => ({
     id: "worktree.bulk.closeSessions",
-    title: "Close Sessions for Selected Worktrees",
+    title: "Close sessions for selected worktrees",
     description: "End all sessions across the selected worktrees in the overview",
     category: "worktree",
     kind: "command",
@@ -38,7 +38,7 @@ export function registerWorktreeBulkActions(actions: ActionRegistry): void {
 
   actions.set("worktree.bulk.remove", () => ({
     id: "worktree.bulk.remove",
-    title: "Remove Selected Worktrees",
+    title: "Remove selected worktrees",
     description: "Delete every selected worktree from disk with a typed-name confirmation",
     category: "worktree",
     kind: "command",

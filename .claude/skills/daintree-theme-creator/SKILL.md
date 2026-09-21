@@ -8,7 +8,7 @@ description: Guide for creating, modifying and REVIEWING Daintree themes. Use wh
 Before starting, read the architecture documentation for full context:
 
 - `docs/themes/theme-system.md` — Three-layer pipeline, core model, component override pattern, runtime application, import flow
-- `docs/themes/theme-tokens.md` — Complete token reference (155 tokens), authoring vs resolved contracts, derivation defaults, contrast rules
+- `docs/themes/theme-tokens.md` — Complete token reference (156 tokens), authoring vs resolved contracts, derivation defaults, contrast rules
 
 **Before authoring or refining ANY theme, read [`resources/theme-review-workflow.md`](resources/theme-review-workflow.md).** It is the end-to-end process: sampling the hero art for real colours, solving the palette numerically before writing a line, the gate checklist, running the theme tour in the real app, the Codex review loop, the tier model, and a catalogue of traps that pass every test in the repo. It exists because Movile (#11874) needed six review rounds and every one found something the test suite could not.
 
@@ -19,7 +19,7 @@ When creating or replacing a built-in theme hero image or thumbnail, read [`reso
 Daintree themes flow through three layers. Each layer has a specific role:
 
 1. **Palette** — The visual foundation. A structured object defining surfaces, text, accent, borders, status, activity, terminal, syntax, and strategy. This is what theme authors write.
-2. **Semantic tokens** — Compiled from the palette by `createSemanticTokens()`. These become `--theme-*` CSS variables. ~155 tokens covering every app-wide visual concern.
+2. **Semantic tokens** — Compiled from the palette by `createSemanticTokens()`. These become `--theme-*` CSS variables. ~156 tokens covering every app-wide visual concern.
 3. **Component extensions** — Optional per-component CSS variable overrides for targeted styling (toolbar chrome, sidebar states, settings dialog, pulse cards, etc.).
 
 ## Key Files

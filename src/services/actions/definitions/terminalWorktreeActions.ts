@@ -22,7 +22,7 @@ export function registerTerminalWorktreeActions(
 
   actions.set("terminal.openWorktreeEditor", () => ({
     id: "terminal.openWorktreeEditor",
-    title: "Open Focused Terminal's Worktree Folder",
+    title: "Open focused terminal's worktree folder",
     description: "Open the folder for the focused terminal's worktree in your editor",
     category: "terminal",
     kind: "command",
@@ -57,7 +57,7 @@ export function registerTerminalWorktreeActions(
 
   actions.set("terminal.openWorktreeIssue", () => ({
     id: "terminal.openWorktreeIssue",
-    title: "Open Focused Terminal's Worktree Issue",
+    title: "Open focused terminal's worktree issue",
     description: "Open the issue associated with the focused terminal's worktree",
     category: "terminal",
     kind: "command",
@@ -94,7 +94,7 @@ export function registerTerminalWorktreeActions(
 
   actions.set("terminal.openWorktreePR", () => ({
     id: "terminal.openWorktreePR",
-    title: "Open Focused Terminal's Worktree Pull Request",
+    title: "Open focused terminal's worktree pull request",
     description: "Open the pull request associated with the focused terminal's worktree",
     category: "terminal",
     kind: "command",

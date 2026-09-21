@@ -81,7 +81,7 @@ export function registerWorktreeResourceActions(
   actions.set("worktree.resource.provision", () =>
     defineAction({
       id: "worktree.resource.provision",
-      title: "Provision Resource",
+      title: "Provision resource",
       description:
         "Run the configured provisioning commands for a worktree's remote resource, such as creating a cloud devbox. This creates real infrastructure and may incur cost; tearing it down is a separate step. It executes whatever the project configured, so confirm the target worktree is the intended one first.",
       category: "worktree",
@@ -120,7 +120,7 @@ export function registerWorktreeResourceActions(
   actions.set("worktree.resource.teardown", () =>
     defineAction({
       id: "worktree.resource.teardown",
-      title: "Teardown Resource",
+      title: "Teardown resource",
       description:
         "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy, and whether anything can be recovered, depends entirely on that configuration; read it before running this. The project's pause commands are the lighter path when the resource is still needed.",
       category: "worktree",
@@ -161,7 +161,7 @@ export function registerWorktreeResourceActions(
   actions.set("worktree.resource.resume", () =>
     defineAction({
       id: "worktree.resource.resume",
-      title: "Resume Resource",
+      title: "Resume resource",
       description:
         "Run the configured resume commands to bring a paused remote resource back up. This may take time and may incur cost from the moment it returns. Resuming something that was never paused does whatever the project's command does, so it is not guaranteed to be harmless.",
       category: "worktree",
@@ -200,7 +200,7 @@ export function registerWorktreeResourceActions(
   actions.set("worktree.resource.pause", () =>
     defineAction({
       id: "worktree.resource.pause",
-      title: "Pause Resource",
+      title: "Pause resource",
       description:
         "Run the project's configured pause commands for a worktree's remote resource, typically to stop a cloud devbox and save cost. These are arbitrary commands the project defines: resuming runs a separate sequence, and nothing guarantees it undoes what pausing did. Read the configuration before assuming this is reversible.",
       category: "worktree",
@@ -239,7 +239,7 @@ export function registerWorktreeResourceActions(
   actions.set("worktree.resource.status", () =>
     defineAction({
       id: "worktree.resource.status",
-      title: "Check Resource Status",
+      title: "Check resource status",
       description:
         "Run the configured status command for a worktree's remote resource, such as a cloud devbox, and report what it said. This executes a real command and waits for it, so it costs whatever that command costs. It reports nothing when no status command is configured, and a failing command fails the call rather than falling back to a cached answer — so a failure never masquerades as stale-but-fine.",
       category: "worktree",
@@ -287,7 +287,7 @@ export function registerWorktreeResourceActions(
   actions.set("worktree.resource.connect", () =>
     defineAction({
       id: "worktree.resource.connect",
-      title: "Connect to Resource",
+      title: "Connect to resource",
       description: "Open a terminal session connected to the worktree's remote resource",
       category: "worktree",
       kind: "command",

@@ -174,7 +174,9 @@ describe("BranchPickerPanel row metadata", () => {
 
   it("highlights the matched span of the name", () => {
     renderPanel([optionRow("feature/auth", { matchRanges: [[8, 11]] })]);
-    const marks = document.body.querySelectorAll(".text-search-highlight-text");
+    // The wrapper class, not the colour decision — that has changed twice.
+    // What matters is that exactly the matched run is wrapped.
+    const marks = document.body.querySelectorAll(".bg-overlay-medium");
     expect(Array.from(marks, (m) => m.textContent)).toEqual(["auth"]);
   });
 });

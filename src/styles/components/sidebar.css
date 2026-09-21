@@ -164,6 +164,35 @@ html[data-dragging="true"]
   outline: none;
 }
 
+/* ...but the keyboard cursor still needs a mark of its own. Revealing the row's
+   toolbar was the stated replacement for the suppressed ring, and on its own it
+   is not one: hover reveals the same toolbar AND tints the card identically, so
+   with the pointer resting on one row and the keyboard cursor on another the
+   two are indistinguishable and neither answers "where am I".
+
+   A LEFT inset edge, in the same neutral `border-strong` vocabulary the drop
+   target uses. Distinct from all three neighbours in this file by construction:
+   the active row marks its RIGHT edge in accent, the drop target draws a full
+   inset ring, and hover is fill-only. Keyboard-only, so the list still carries
+   no cursor chrome under the mouse — which is what the no-ring decision was
+   protecting.
+
+   Skipped on the active row: it already carries the accent right edge, so it is
+   never the ambiguous one, and painting both would put two edges on one card.
+   The grid selector covers grid-mode navigation, where focus stays on the
+   container and `:focus-visible` never matches a row. `:focus-visible` on the
+   grid rather than `:focus-within`: clicking a control inside the grid keeps
+   focus within it, and the cursor row kept an edge that is meant to exist only
+   while the keyboard is driving. */
+[data-worktree-row]:focus-visible
+  .sidebar-worktree-card:not([data-active="true"]):not([data-drop-target="true"]),
+.sidebar-root
+  [role="grid"]:focus-visible
+  [data-worktree-row][data-keyboard-cursor="true"]
+  .sidebar-worktree-card:not([data-active="true"]):not([data-drop-target="true"]) {
+  --card-edge: inset 2px 0 0 var(--theme-border-strong);
+}
+
 /* Reveal the per-row action toolbar whenever the row has keyboard focus
    (or any descendant does). Uses `:focus-visible` / `:has(:focus-visible)`
    rather than `:focus` / `:focus-within` so mousedown on a button does not

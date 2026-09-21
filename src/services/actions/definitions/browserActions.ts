@@ -48,7 +48,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
     // are requireContext above; these silent navigation ops are hidden — they
     // live on the browser toolbar, not the global palette.
     palette: { mode: "hidden" },
-    title: "Reload Browser",
+    title: "Reload browser",
     description: "Reload the browser panel",
     category: "browser",
     kind: "command",
@@ -68,7 +68,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.navigate", () => ({
     id: "browser.navigate",
-    title: "Navigate Browser",
+    title: "Navigate browser",
     description:
       "Point an existing browser panel at a different address. This replaces what that panel is showing, discarding any page state such as filled-in forms. Open a URL instead when no particular existing panel is the target.",
     category: "browser",
@@ -94,7 +94,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.openUrl", () => ({
     id: "browser.openUrl",
-    title: "Open URL in Browser",
+    title: "Open URL in browser",
     description:
       "Show a web page in a browser panel, reusing one that is already open rather than piling up duplicates. This creates a visible panel that consumes resources until closed. It loads the page for the user to see; it does not return the page's contents.",
     category: "browser",
@@ -130,7 +130,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.back", () => ({
     id: "browser.back",
     palette: { mode: "hidden" },
-    title: "Browser Back",
+    title: "Browser back",
     description: "Go back in browser history",
     category: "browser",
     kind: "command",
@@ -148,7 +148,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.forward", () => ({
     id: "browser.forward",
     palette: { mode: "hidden" },
-    title: "Browser Forward",
+    title: "Browser forward",
     description: "Go forward in browser history",
     category: "browser",
     kind: "command",
@@ -167,7 +167,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
 
   actions.set("browser.openExternal", () => ({
     id: "browser.openExternal",
-    title: "Open in External Browser",
+    title: "Open in external browser",
     description: "Open the current URL in external browser",
     category: "browser",
     kind: "command",
@@ -226,7 +226,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.setZoomLevel", () => ({
     id: "browser.setZoomLevel",
     palette: { mode: "hidden" },
-    title: "Set Browser Zoom Level",
+    title: "Set browser zoom level",
     description: "Set the zoom level for a browser panel",
     category: "browser",
     kind: "command",
@@ -249,7 +249,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.captureScreenshot", () => ({
     id: "browser.captureScreenshot",
     palette: { mode: "hidden" },
-    title: "Capture Browser Screenshot",
+    title: "Capture browser screenshot",
     description:
       "Capture what a browser or dev-preview panel is currently showing, as an image. Use this to see a rendered page — a running dev server, a deployed site — when its appearance is what matters. Name the panel to capture; without one it falls back to whichever is focused. It returns pixels rather than page text or markup.",
     category: "browser",
@@ -288,7 +288,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.toggleConsole", () => ({
     id: "browser.toggleConsole",
     palette: { mode: "hidden" },
-    title: "Toggle Browser Console",
+    title: "Toggle browser console",
     description: "Show or hide the browser console panel",
     category: "browser",
     kind: "command",
@@ -308,7 +308,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.clearConsole", () => ({
     id: "browser.clearConsole",
     palette: { mode: "hidden" },
-    title: "Clear Browser Console",
+    title: "Clear browser console",
     description: "Clear all captured console messages for the browser panel",
     category: "browser",
     kind: "command",
@@ -328,7 +328,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.getConsoleMessages", () => ({
     id: "browser.getConsoleMessages",
     palette: { mode: "hidden" },
-    title: "Get Browser Console Messages",
+    title: "Get browser console messages",
     description:
       "Read captured console output (logs, warnings, errors, and stack traces) from a dev preview panel. Returns the most recent messages plus error/warning counts so an agent can inspect runtime issues without opening the console UI.",
     category: "browser",
@@ -405,7 +405,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.toggleDevTools", () => ({
     id: "browser.toggleDevTools",
     palette: { mode: "hidden" },
-    title: "Toggle Browser DevTools",
+    title: "Toggle browser DevTools",
     description: "Open or close the browser panel's DevTools",
     category: "browser",
     kind: "command",
@@ -425,7 +425,7 @@ export function registerBrowserActions(actions: ActionRegistry, _callbacks: Acti
   actions.set("browser.hardReload", () => ({
     id: "browser.hardReload",
     palette: { mode: "hidden" },
-    title: "Hard Reload Browser",
+    title: "Hard reload browser",
     description: "Reload the browser panel bypassing HTTP cache",
     category: "browser",
     kind: "command",

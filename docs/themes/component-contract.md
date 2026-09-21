@@ -31,13 +31,13 @@ Three vocabularies are live in the codebase. **The semantic tokens are the curre
 
 | Vocabulary | Shape | Uses | Status |
 | --- | --- | --- | --- |
-| Semantic tokens | `text-text-secondary`, `bg-surface-panel`, `border-border-default`, `text-status-error` | thousands, and growing | **Current.** The validated contract is 155 tokens; the full list is in [theme-tokens.md](./theme-tokens.md). |
+| Semantic tokens | `text-text-secondary`, `bg-surface-panel`, `border-border-default`, `text-status-error` | thousands, and growing | **Current.** The validated contract is 156 tokens; the full list is in [theme-tokens.md](./theme-tokens.md). |
 | Legacy `daintree-*` aliases | `bg-daintree-accent/10`, `text-daintree-text/40` | hundreds, ratcheted down | Legacy. Five aliases over tokens that already have semantic names. Every solid use is gone (#12056), and #12065 took the text opacity ramp with it; what remains is the non-text alpha composites and a reviewed set of dim text carve-outs, which is the only reason the alias layer still has to generate. |
 | shadcn defaults | `text-muted-foreground`, `bg-muted`, `bg-popover` | hundreds | Legacy. Arrived with the vendored shadcn primitives. Nearly all are theme-backed (`--muted` resolves to `--theme-surface-panel`), so they render correctly — they are simply a third name for tokens that already have one. |
 
 The legacy count is the only one with an authoritative live number: `component-contract/no-legacy-daintree-utilities` in `scripts/baselines/eslint-warnings-baseline.json`, which can only fall. Read it there rather than trusting a figure in prose — that is the whole point of the ratchet. The other two rows are directional: semantic is several times the size of either legacy layer and is the one that grows.
 
-The `daintree-*` layer is pure aliasing — `--color-daintree-text` is defined in `src/index.css` as nothing but `var(--theme-text-primary)`. Two names for one token means neither reads as canonical, and because the alias layer covers five tokens against the semantic layer's 155, anything outside those five has no legacy spelling at all. That is why single class strings today mix both vocabularies.
+The `daintree-*` layer is pure aliasing — `--color-daintree-text` is defined in `src/index.css` as nothing but `var(--theme-text-primary)`. Two names for one token means neither reads as canonical, and because the alias layer covers five tokens against the semantic layer's 156, anything outside those five has no legacy spelling at all. That is why single class strings today mix both vocabularies.
 
 Migrate on the utility, keeping the prefix:
 

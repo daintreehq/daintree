@@ -26,7 +26,7 @@ import { getAssistantSupportedAgentIds } from "@shared/config/agentRegistry";
 export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("help.shortcuts", () => ({
     id: "help.shortcuts",
-    title: "Keyboard Shortcuts",
+    title: "Keyboard shortcuts",
     description: "Show keyboard shortcuts reference",
     category: "help",
     kind: "command",
@@ -40,7 +40,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("help.shortcutsAlt", () => ({
     id: "help.shortcutsAlt",
-    title: "Keyboard Shortcuts (Alt)",
+    title: "Keyboard shortcuts (Alt)",
     description: "Show keyboard shortcuts reference",
     category: "help",
     kind: "command",
@@ -116,7 +116,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("help.launchAgent", () => ({
     id: "help.launchAgent",
-    title: "Launch Help Agent",
+    title: "Launch help agent",
     description: "Open an AI agent in the help workspace folder",
     category: "help",
     kind: "command",
@@ -312,7 +312,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("help.openCommandsFolder", () => ({
     id: "help.openCommandsFolder",
-    title: "Open Assistant Commands Folder",
+    title: "Open assistant commands folder",
     description:
       "Open the folder where custom assistant commands and skills live (~/.daintree/assistant)",
     category: "help",
@@ -346,7 +346,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("help.gettingStarted.show", () => ({
     id: "help.gettingStarted.show",
-    title: "Getting Started",
+    title: "Getting started",
     description: "Show the getting started checklist",
     category: "help",
     kind: "command",
@@ -361,7 +361,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
 
   actions.set("help.togglePanel", () => ({
     id: "help.togglePanel",
-    title: "Toggle Help Panel",
+    title: "Toggle help panel",
     description: "Show or hide the help panel",
     category: "help",
     kind: "command",

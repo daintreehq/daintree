@@ -23,7 +23,7 @@ export function registerProjectCheckActions(
   actions.set("project.runCheck", () =>
     defineAction({
       id: "project.runCheck",
-      title: "Run Project Check",
+      title: "Run project check",
       description:
         "Run one of a project's detected commands and report its exit code and output. A command that fails is reported as a failed check rather than an error, so read the result rather than relying on the call succeeding. Detection finds every runnable script, not just checks, so verify an unfamiliar command before running it. Never use this for long-lived servers: they block until the timeout expires.",
       category: "project",

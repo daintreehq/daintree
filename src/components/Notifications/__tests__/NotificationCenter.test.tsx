@@ -1122,6 +1122,33 @@ describe("NotificationCenter — Needs attention pinned section", () => {
     expect(position & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  it("labels the chronological list whenever the pinned rail sits above it", () => {
+    // The rail is a preview, not a filter: a pinned entry still appears in the
+    // list below. With one notification in the app that drew the same row
+    // twice, separated by a divider and nothing else, and it read as a
+    // duplicate warning rather than as a summary of a list. The header is the
+    // only thing distinguishing the two, so it has to be there exactly when
+    // there is something above to be confused with.
+    setEntries([makeEntry({ type: "error", message: "Build failed", seenAsToast: false })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    const chrono = screen.getByTestId("chrono-section");
+    expect(within(chrono).getByText("All notifications")).toBeTruthy();
+  });
+
+  it("leaves the chronological list unlabelled when nothing is pinned above it", () => {
+    // No rail, nothing to disambiguate, so the header would be chrome for its
+    // own sake — the panel already says what it is.
+    setEntries([makeEntry({ type: "info", message: "Token saved", seenAsToast: true })]);
+
+    render(<NotificationCenter open onClose={vi.fn()} />);
+
+    expect(screen.queryByTestId("needs-attention-section")).toBeNull();
+    const chrono = screen.getByTestId("chrono-section");
+    expect(within(chrono).queryByText("All notifications")).toBeNull();
+  });
+
   it("caps the pinned section at 5 entries even when more unread severe entries exist", () => {
     const baseT = Date.now();
     const items = Array.from({ length: 7 }, (_, i) =>

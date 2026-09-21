@@ -9,7 +9,7 @@ export function registerNavigationActions(
 ): void {
   actions.set("nav.toggleSidebar", () => ({
     id: "nav.toggleSidebar",
-    title: "Toggle Sidebar",
+    title: "Toggle sidebar",
     description: "Toggle sidebar visibility",
     category: "navigation",
     kind: "command",
@@ -57,7 +57,7 @@ export function registerNavigationActions(
 
   actions.set("action.palette.open", () => ({
     id: "action.palette.open",
-    title: "Open Command Palette",
+    title: "Open command palette",
     description: "Search and execute any action",
     category: "navigation",
     kind: "command",
@@ -77,7 +77,7 @@ export function registerNavigationActions(
 
   actions.set("nav.toggleFocusMode", () => ({
     id: "nav.toggleFocusMode",
-    title: "Toggle Focus Mode",
+    title: "Toggle focus mode",
     description: "Toggle focus mode (hide sidebar and assistant panel)",
     category: "navigation",
     kind: "command",
@@ -92,7 +92,7 @@ export function registerNavigationActions(
 
   actions.set("nav.quickSwitcher", () => ({
     id: "nav.quickSwitcher",
-    title: "Quick Switcher",
+    title: "Quick switcher",
     description: "Search and switch between terminals, agents, and worktrees",
     category: "navigation",
     kind: "command",
@@ -106,7 +106,7 @@ export function registerNavigationActions(
 
   actions.set("nav.focusRegion.next", () => ({
     id: "nav.focusRegion.next",
-    title: "Focus Next Region",
+    title: "Focus next region",
     description: "Cycle focus to the next major UI region",
     category: "navigation",
     kind: "command",
@@ -120,7 +120,7 @@ export function registerNavigationActions(
 
   actions.set("nav.focusRegion.prev", () => ({
     id: "nav.focusRegion.prev",
-    title: "Focus Previous Region",
+    title: "Focus previous region",
     description: "Cycle focus to the previous major UI region",
     category: "navigation",
     kind: "command",
@@ -134,7 +134,7 @@ export function registerNavigationActions(
 
   actions.set("find.inFocusedPanel", () => ({
     id: "find.inFocusedPanel",
-    title: "Find in Focused Panel",
+    title: "Find in focused panel",
     description: "Open find/search in the focused panel",
     category: "navigation",
     kind: "command",

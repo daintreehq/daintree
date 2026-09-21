@@ -170,6 +170,19 @@ export class CliAvailabilityService {
   private inFlightCheck: Promise<CliAvailability> | null = null;
   private npmPrefixCache: { promise: Promise<string | null>; checkId: number } | null = null;
   private checkId = 0;
+  /**
+   * Duplicate-install warnings already broadcast in THIS process.
+   *
+   * The persisted milestone alone cannot carry the guarantee: every call reads
+   * `orchestrationMilestones` fresh at the top, so two availability passes that
+   * overlap before the first `store.set` lands both see an empty map and both
+   * broadcast. That put the same warning in the notification centre twice,
+   * which costs the user the one thing the inbox is for — telling them how many
+   * things actually need them.
+   *
+   * Marked synchronously, before the broadcast, so the window closes.
+   */
+  private readonly notifiedDuplicateInstalls = new Set<string>();
 
   async checkAvailability(): Promise<CliAvailability> {
     if (this.inFlightCheck) {
@@ -855,6 +868,10 @@ export class CliAvailabilityService {
 
       const milestoneKey = `duplicate-cli-warning:${agentId}`;
       if (milestones[milestoneKey]) continue;
+      // Claim the key before any await-free work below can broadcast it, so an
+      // overlapping pass that re-read the store cannot broadcast it too.
+      if (this.notifiedDuplicateInstalls.has(milestoneKey)) continue;
+      this.notifiedDuplicateInstalls.add(milestoneKey);
 
       const config = configById.get(agentId);
       const agentName = config?.name ?? agentId;
@@ -872,6 +889,9 @@ export class CliAvailabilityService {
         });
       } catch (err) {
         logger.error("Failed to broadcast duplicate-install toast", err, { agentId });
+        // Release the claim: a broadcast that never reached the renderer should
+        // still be retried on a later pass, exactly as it was before.
+        this.notifiedDuplicateInstalls.delete(milestoneKey);
         continue;
       }
 

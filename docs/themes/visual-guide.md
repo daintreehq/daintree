@@ -703,6 +703,7 @@ Borders use a 5-tier system from nearly invisible to prominent:
 | `border-default` | solid hex | solid hex | Primary borders on cards, inputs, panels |
 | `border-strong` | white 14% | black 14% | Focused elements, emphasized containers |
 | `border-interactive` | white 20% | black 10% | Hovered inputs, interactive element borders |
+| `border-input` | `border-strong` | `border-strong` | Resting edge of `Input` and `Textarea` — set it solid when the ladder value cannot carry 3:1 |
 
 **Polarity pattern:** Dark themes use white-alpha borders (they lighten). Light themes use black-alpha borders (they darken). This ensures borders are always visible as a step darker/lighter than their surface.
 

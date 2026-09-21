@@ -5,7 +5,7 @@ import { notify } from "@/lib/notify";
 export function registerActionActions(actions: ActionRegistry): void {
   actions.set("action.repeatLast", () => ({
     id: "action.repeatLast",
-    title: "Repeat Last Action",
+    title: "Repeat last action",
     description: "Re-dispatch the last user/menu/keybinding action with fresh context",
     category: "app",
     kind: "command",

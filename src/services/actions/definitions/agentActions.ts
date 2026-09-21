@@ -328,7 +328,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.launch", () => ({
     id: "agent.launch",
-    title: "Launch Agent",
+    title: "Launch agent",
     description:
       "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready; poll its state or a terminal status snapshot for that. A missing CLI opens a setup diagnostic panel instead. Keep concurrent launches modest.",
     category: "agent",
@@ -606,7 +606,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.palette", () => ({
     id: "agent.palette",
-    title: "Open Quick Switcher",
+    title: "Open quick switcher",
     description: "Open the quick switcher to find panels",
     category: "agent",
     kind: "command",
@@ -671,7 +671,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.terminal", () => ({
     id: "agent.terminal",
-    title: "Launch Terminal",
+    title: "Launch terminal",
     description:
       "Open a plain shell terminal with no agent attached, for running ordinary commands. Use an agent launch instead when the intent is to start an AI CLI. This creates a visible panel and starts a shell process, so it consumes resources until closed.",
     category: "agent",
@@ -698,7 +698,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.browser", () => ({
     id: "agent.browser",
-    title: "Launch Browser",
+    title: "Launch browser",
     description: "Launch a browser panel",
     category: "agent",
     kind: "command",
@@ -722,7 +722,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusNextWaiting", () => ({
     id: "agent.focusNextWaiting",
-    title: "Focus Next Waiting Agent",
+    title: "Focus next waiting agent",
     description:
       "Move keyboard focus to the next agent that is blocked waiting on the user, so it can be answered. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are waiting and why.",
     category: "agent",
@@ -743,7 +743,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusNextWaitingGlobal", () => ({
     id: "agent.focusNextWaitingGlobal",
-    title: "Focus Next Waiting Agent (All Projects)",
+    title: "Focus next waiting agent (all projects)",
     description:
       "Jump to the next project with a waiting agent. Cycles across all projects in sidebar order, wrapping around.",
     category: "agent",
@@ -806,7 +806,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusNextWorking", () => ({
     id: "agent.focusNextWorking",
-    title: "Focus Next Working Agent",
+    title: "Focus next working agent",
     description:
       "Move keyboard focus to the next agent that is currently working, to watch its progress. This changes what the user sees and is a navigation aid only — it reports no agent state. Use an agent status snapshot to find out which agents are working.",
     category: "agent",
@@ -827,7 +827,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusNextAgent", () => ({
     id: "agent.focusNextAgent",
-    title: "Focus Next Agent",
+    title: "Focus next agent",
     description:
       "Move keyboard focus to the next agent panel in order, cycling back to the first at the end. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
     category: "agent",
@@ -848,7 +848,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("dock.focusNextWaiting", () => ({
     id: "dock.focusNextWaiting",
-    title: "Focus Next Blocked Dock Agent",
+    title: "Focus next blocked dock agent",
     description: "Jump to the next waiting agent in the dock",
     category: "agent",
     kind: "command",
@@ -863,7 +863,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.getState", () => ({
     id: "agent.getState",
-    title: "Get Agent State",
+    title: "Get agent state",
     description:
       "Look up one agent's live state by its agent id, to tell whether it is working, waiting on the user, or finished. Use a terminal listing or status snapshot to enumerate terminals — this answers about a single agent only. It never fails: with no matching panel the result is flagged not found with empty fields, while a panel whose agent has exited stays found and carries its exit code.",
     category: "agent",
@@ -935,7 +935,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agentSessionHistory.list", () => ({
     id: "agentSessionHistory.list",
-    title: "List Resumable Sessions",
+    title: "List resumable sessions",
     description:
       "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them: it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope resolves. Old sessions are pruned by retention, so absence does not prove one never existed.",
     category: "agent",
@@ -1011,7 +1011,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agentSessionHistory.resume", () => ({
     id: "agentSessionHistory.resume",
-    title: "Resume Agent Session",
+    title: "Resume agent session",
     description:
       "Relaunch one closed agent session by its exact id and hand back the pane carrying it. Resume is directory-coupled: it relaunches in the worktree the session was recorded in, so the worktree you name scopes the lookup and one recorded elsewhere is refused. Calling twice brings the live pane forward rather than a second agent on one transcript. It opens off-screen unless that worktree is active.",
     category: "agent",
@@ -1363,7 +1363,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.listToolbar", () => ({
     id: "agent.listToolbar",
-    title: "List Toolbar Agents",
+    title: "List toolbar agents",
     description:
       "List the built-in agents together with whether each one currently shows in the toolbar. Use this to see what the user has surfaced without reading full agent settings. Visibility is resolved for you: an agent can be explicitly pinned, explicitly hidden, or left to follow whether its CLI is installed, so read the resolved visibility rather than inferring it from pinning alone.",
     category: "agent",
@@ -1405,7 +1405,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.listAvailable", () => ({
     id: "agent.listAvailable",
-    title: "List Available Agents",
+    title: "List available agents",
     description:
       "List every registered agent, built-in, user-defined and plugin-contributed, from the authoritative registry, including ones not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
     category: "agent",
@@ -1556,7 +1556,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.listPresets", () => ({
     id: "agent.listPresets",
-    title: "List Agent Presets",
+    title: "List agent presets",
     description:
       "List the launch presets for one agent, merged across user settings, repository preset files and CCR discovery in the precedence the launcher applies, so every id returned is one a launch will accept. Identity only: no environment values or flags. While the completeness flag is false a source is still loading.",
     category: "agent",
@@ -1606,7 +1606,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
 
   actions.set("agent.focusPreviousAgent", () => ({
     id: "agent.focusPreviousAgent",
-    title: "Focus Previous Agent",
+    title: "Focus previous agent",
     description:
       "Move keyboard focus to the previous agent panel in order, cycling to the last at the beginning. This changes what the user sees and reports no agent state; use a terminal listing to enumerate panels instead.",
     category: "agent",

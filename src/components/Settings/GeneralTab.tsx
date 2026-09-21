@@ -964,11 +964,17 @@ export function GeneralTab({
                                 {status && (
                                   <span
                                     data-agent-status={status.label}
-                                    className="flex shrink-0 items-center gap-1.5 text-status-warning"
+                                    className="flex shrink-0 items-center gap-1.5"
                                     aria-hidden="true"
                                   >
-                                    <status.Icon className="w-3.5 h-3.5" />
-                                    <span className="text-xs">{status.label}</span>
+                                    {/* Severity rides the glyph, never the prose. Status-coloured
+                                        text was measured and rejected: the status tokens fail
+                                        4.5:1 as body text on most themes, and the notification
+                                        surfaces already carry warnings this way. */}
+                                    <status.Icon className="w-3.5 h-3.5 text-status-warning" />
+                                    <span className="text-xs text-text-secondary">
+                                      {status.label}
+                                    </span>
                                   </span>
                                 )}
                                 {/* The row has always navigated; nothing on it said so. A

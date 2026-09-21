@@ -48,6 +48,65 @@ describe("filterSettings", () => {
     expect(filterSettings(SETTINGS_SEARCH_INDEX, "   ")).toHaveLength(0);
   });
 
+  it("drops fuzzy-only rows when something matches the query literally", () => {
+    // Fuse's fuzziness is what makes a typo still find a setting, but on a
+    // well-spelled query it also returned rows containing the term nowhere at
+    // all — "theme" surfaced the MCP server port, with nothing on the row to
+    // explain why. The invariant is about the READER: every row in a result
+    // set contains the thing that was searched for, whenever any row does.
+    const results = filterSettings(SETTINGS_SEARCH_INDEX, "theme");
+    expect(results.length).toBeGreaterThan(0);
+    for (const entry of results) {
+      const haystack = [
+        entry.title,
+        entry.tabLabel,
+        entry.description ?? "",
+        entry.section ?? "",
+        entry.subtabLabel ?? "",
+        ...(entry.keywords ?? []),
+      ]
+        .join(" ")
+        .toLowerCase();
+      expect(haystack).toContain("theme");
+    }
+  });
+
+  it("decides on literal matches only among rows that are eligible to be shown", () => {
+    // A literal hit that a hard filter is about to remove must not evict the
+    // eligible fuzzy rows first — that returned an empty list.
+    const base = {
+      scope: "global" as const,
+      kind: "section" as const,
+      section: "S",
+      description: "",
+    };
+    const index = [
+      { ...base, id: "g", tab: "general" as const, tabLabel: "General", title: "Theme" },
+      {
+        ...base,
+        id: "p",
+        scope: "project" as const,
+        tab: "project:general" as const,
+        tabLabel: "Project",
+        title: "Themes",
+      },
+    ] as unknown as Parameters<typeof filterSettings>[0];
+
+    const noProject = filterSettings(index, "themes", { hasProject: false });
+    expect(noProject.map((r) => r.id)).toEqual(["g"]);
+
+    const modifiedOnly = filterSettings(index, "themes @modified", {
+      modifiedTabs: new Set(["general"]) as never,
+    });
+    expect(modifiedOnly.map((r) => r.id)).toEqual(["g"]);
+  });
+
+  it("still answers a misspelling, where fuzzy matching is the whole point", () => {
+    // The gate only fires when a literal match exists, so typo tolerance has
+    // to survive it untouched.
+    expect(filterSettings(SETTINGS_SEARCH_INDEX, "thme").length).toBeGreaterThan(0);
+  });
+
   it("matches by title text", () => {
     const results = filterSettings(SETTINGS_SEARCH_INDEX, "Scrollback History");
     expect(results.length).toBeGreaterThan(0);
@@ -165,26 +224,43 @@ describe("countMatchesPerTab", () => {
   });
 });
 
+/**
+ * The class the match wrapper carries. Named once so these tests assert the
+ * BEHAVIOUR — matched runs are wrapped, unmatched ones are not, casing and full
+ * text survive — rather than pinning a colour decision that has already changed
+ * twice. Two properties are load-bearing and asserted separately below: the
+ * treatment must not be the accent token (accent is not for membership), and it
+ * must not change text metrics (the row must not reflow as the user types).
+ */
+const HIGHLIGHT_CLASS = "bg-overlay-medium";
+
 describe("HighlightText", () => {
+  it("does not spend the accent budget on matches", () => {
+    const html = renderToStaticMarkup(HighlightText({ text: "Font size", query: "font" }));
+    expect(html).not.toContain("text-search-highlight-text");
+    expect(html).not.toContain("accent");
+  });
+
   it("renders plain text when query is empty", () => {
     const html = renderToStaticMarkup(HighlightText({ text: "Hello World", query: "" }));
-    expect(html).not.toContain("text-search-highlight-text");
+    expect(html).not.toContain(HIGHLIGHT_CLASS);
     expect(html).toContain("Hello World");
   });
 
   it("wraps matching text in a highlight span", () => {
     const html = renderToStaticMarkup(HighlightText({ text: "Font size setting", query: "font" }));
-    expect(html).toContain("text-search-highlight-text");
-    // Bold weight removed — color alone differentiates the match, so width
-    // does not shift as the user types.
+    expect(html).toContain(HIGHLIGHT_CLASS);
+    // No weight change: bolding reflows the row as the user types. Whatever
+    // the highlight treatment becomes, it must not alter text metrics.
     expect(html).not.toContain("font-semibold");
+    expect(html).not.toContain("font-bold");
     // The matched portion should be inside the highlight span
     expect(html.toLowerCase()).toContain(">font<");
   });
 
   it("is case-insensitive in highlighting", () => {
     const html = renderToStaticMarkup(HighlightText({ text: "GitHub Token", query: "github" }));
-    expect(html).toContain("text-search-highlight-text");
+    expect(html).toContain(HIGHLIGHT_CLASS);
     // Original casing preserved
     expect(html).toContain("GitHub");
   });
@@ -193,7 +269,7 @@ describe("HighlightText", () => {
     const html = renderToStaticMarkup(
       HighlightText({ text: "font family font size", query: "font" })
     );
-    const highlightCount = (html.match(/text-search-highlight-text/g) ?? []).length;
+    const highlightCount = (html.match(new RegExp(HIGHLIGHT_CLASS, "g")) ?? []).length;
     expect(highlightCount).toBeGreaterThanOrEqual(2);
   });
 

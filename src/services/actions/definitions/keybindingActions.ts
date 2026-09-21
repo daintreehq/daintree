@@ -8,7 +8,7 @@ export function registerKeybindingActions(
 ): void {
   actions.set("keybinding.getOverrides", () => ({
     id: "keybinding.getOverrides",
-    title: "Get Keybinding Overrides",
+    title: "Get keybinding overrides",
     description:
       "Read the keyboard shortcuts the user has deliberately customised. Only explicit overrides are included — the built-in defaults are not — so an empty result means the user has customised nothing, not that no shortcuts exist.",
     category: "settings",
@@ -24,7 +24,7 @@ export function registerKeybindingActions(
 
   actions.set("keybinding.setOverride", () => ({
     id: "keybinding.setOverride",
-    title: "Set Keybinding Override",
+    title: "Set keybinding override",
     description: "Set keybinding override for an action",
     category: "settings",
     kind: "command",
@@ -40,7 +40,7 @@ export function registerKeybindingActions(
 
   actions.set("keybinding.removeOverride", () => ({
     id: "keybinding.removeOverride",
-    title: "Remove Keybinding Override",
+    title: "Remove keybinding override",
     description: "Remove keybinding override for an action",
     category: "settings",
     kind: "command",
@@ -56,7 +56,7 @@ export function registerKeybindingActions(
 
   actions.set("keybinding.resetAll", () => ({
     id: "keybinding.resetAll",
-    title: "Reset All Keybinding Overrides",
+    title: "Reset all keybinding overrides",
     description: "Reset all keybinding overrides",
     category: "settings",
     kind: "command",

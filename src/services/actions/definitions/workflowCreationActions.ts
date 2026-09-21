@@ -159,7 +159,7 @@ export function registerWorkflowCreationActions(
   actions.set("worktree.createWithRecipe", () =>
     defineAction({
       id: "worktree.createWithRecipe",
-      title: "Create Managed Worktree",
+      title: "Create managed worktree",
       description:
         "Create a managed git worktree — Daintree's own creator, which also copies project config, initializes submodules and runs setup. Name the creation mode: a new branch, an existing branch checked out exactly as asked, or a pull request. A recipe is OPTIONAL; pass one only to also launch terminals. Project setup runs in the background and can still fail after this returns.",
       category: "worktree",
@@ -491,7 +491,7 @@ export function registerWorkflowCreationActions(
   actions.set("workflow.startWorkOnIssue", () =>
     defineAction({
       id: "workflow.startWorkOnIssue",
-      title: "Start Work on Issue",
+      title: "Start work on issue",
       description:
         "Fetch an issue, create a worktree with a derived branch, launch a terminal-backed agent, and inject context. Returns the issue identity plus worktreeId, worktreePath, branch, terminalId, recipe spawn counts, assignment outcome, and contextInjected. An unknown or non-terminal agentId is rejected before the issue lookup, so no worktree is created.",
       category: "worktree",

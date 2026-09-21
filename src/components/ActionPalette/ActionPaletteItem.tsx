@@ -1,11 +1,24 @@
 import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { Pin, PinOff, EyeOff, TriangleAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { createTooltipWithShortcut } from "@/lib/platform";
 import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import type { ActionPaletteItem as ActionPaletteItemType } from "@/hooks/useActionPalette";
 import { ACTION_CATEGORY_COLORS, ACTION_CATEGORY_DEFAULT_COLOR } from "@/config/categoryColors";
 
 const PIN_REJECT_DURATION_MS = 2500;
+
+/**
+ * Palette-local chords for the row controls, which are presentational spans
+ * (ARIA forbids interactive descendants of `role="option"`) and so have no
+ * keyboard path of their own. Bare Alt is free: no default keybinding uses an
+ * unmodified-Alt chord, and the obvious Mod+Shift mnemonics are taken —
+ * Cmd/Ctrl+Shift+P opens this palette and Cmd/Ctrl+Shift+H launches the help
+ * agent. `ActionPalette` handles both on the search input and preventDefaults,
+ * so neither ever reaches the field as text.
+ */
+export const PIN_SHORTCUT = "Alt+P";
+export const HIDE_SHORTCUT = "Alt+H";
 
 interface ActionPaletteItemProps {
   item: ActionPaletteItemType;
@@ -216,10 +229,13 @@ function ActionPaletteItemInner({
           )}
           {pinRejected && (
             <div
-              className="text-3xs leading-snug text-status-error mt-0.5 truncate"
+              // Severity rides the glyph, never the prose: the message keeps the
+              // secondary text ramp and the triangle carries the refusal.
+              className="flex items-center gap-1 text-3xs leading-snug text-text-secondary mt-0.5 truncate"
               role="status"
               aria-live="polite"
             >
+              <TriangleAlert className="shrink-0 size-3 text-status-error" aria-hidden="true" />
               Can't pin destructive actions
             </div>
           )}
@@ -237,12 +253,12 @@ function ActionPaletteItemInner({
           <span
             role="presentation"
             data-testid="action-palette-hide"
-            title="Hide from Recently used"
+            title={createTooltipWithShortcut("Hide from Recently used", HIDE_SHORTCUT)}
             onPointerDown={(e) => e.preventDefault()}
             onClick={handleHideClick}
             className={cn(
               "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0",
-              "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
+              "text-text-secondary opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
               "hover:bg-overlay-soft hover:text-text-primary transition-colors",
               "focus-visible:opacity-100"
             )}
@@ -255,15 +271,18 @@ function ActionPaletteItemInner({
             role="presentation"
             data-testid="action-palette-pin"
             data-pinned={isPinned}
-            title={isPinned ? "Unpin from Favorites" : "Pin to Favorites"}
+            title={createTooltipWithShortcut(
+              isPinned ? "Unpin from Favorites" : "Pin to Favorites",
+              PIN_SHORTCUT
+            )}
             onPointerDown={(e) => e.preventDefault()}
             onClick={handlePinClick}
             className={cn(
               "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0",
               "transition-colors hover:bg-overlay-soft",
               isPinned
-                ? "text-daintree-text/70 opacity-100"
-                : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
+                ? "text-text-secondary opacity-100"
+                : "text-text-secondary opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
               "hover:text-text-primary focus-visible:opacity-100"
             )}
           >
@@ -284,7 +303,7 @@ function ActionPaletteItemInner({
         {isConfirmTier && (
           <TriangleAlert
             aria-hidden="true"
-            className="shrink-0 size-3 text-daintree-text/40 transition-colors group-aria-selected:text-daintree-text/50"
+            className="shrink-0 size-3 text-text-secondary transition-colors group-aria-selected:text-text-primary"
           />
         )}
       </div>

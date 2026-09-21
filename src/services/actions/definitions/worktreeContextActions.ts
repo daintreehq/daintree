@@ -331,7 +331,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.copyTree", () =>
     defineAction({
       id: "worktree.copyTree",
-      title: "Copy Worktree Context",
+      title: "Copy worktree context",
       description: "Generate and copy context for a worktree to clipboard",
       category: "worktree",
       kind: "command",
@@ -470,7 +470,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.copyContext", () =>
     defineAction({
       id: "worktree.copyContext",
-      title: "Copy Worktree Context (Alias)",
+      title: "Copy worktree context (alias)",
       description:
         "Alias for generating a worktree context bundle. It accepts a subset of the copy-tree capability's arguments — path scoping is not available here, so use that capability directly for a scoped copy.",
       category: "worktree",
@@ -503,7 +503,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.inject", () =>
     defineAction({
       id: "worktree.inject",
-      title: "Inject Worktree Context into Focused Terminal",
+      title: "Inject worktree context into focused terminal",
       description: "Inject this worktree's context into the currently focused terminal",
       category: "worktree",
       kind: "command",
@@ -543,7 +543,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.openEditor", () =>
     defineAction({
       id: "worktree.openEditor",
-      title: "Open in Editor",
+      title: "Open in editor",
       description: "Open a worktree folder in the project's configured external editor",
       category: "worktree",
       kind: "command",
@@ -573,7 +573,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.openReviewHub", () =>
     defineAction({
       id: "worktree.openReviewHub",
-      title: "Open Review Hub",
+      title: "Open review hub",
       description: "Open the Review Hub for a worktree to review uncommitted changes",
       category: "worktree",
       kind: "command",
@@ -596,7 +596,7 @@ export function registerWorktreeContextActions(
 
         await usePanelDialogStore.getState().openPanelDialog({
           kind: "review",
-          title: "Review & Commit",
+          title: "Review & commit",
           worktreeId: targetWorktreeId,
           // The AI note's first line if it is still current, else "". Never any
           // other source — a substituted commit message caused a real bad push
@@ -866,7 +866,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.reveal", () =>
     defineAction({
       id: "worktree.reveal",
-      title: "Reveal Worktree",
+      title: "Reveal worktree",
       description: "Reveal a worktree folder in the OS file manager",
       category: "worktree",
       kind: "command",
@@ -887,7 +887,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.compareDiff", () =>
     defineAction({
       id: "worktree.compareDiff",
-      title: "Compare Worktree Diff",
+      title: "Compare worktree diff",
       description:
         "Compare two worktrees and list the files that differ between their branches, a page at a time. Use this to survey the shape of a change; read a single file's diff afterwards for its contents. It is read-only and opens no UI. Ask for the merge-base comparison when the goal is to see what a pull request would show, rather than every difference between the two tips.",
       category: "worktree",
@@ -1002,7 +1002,7 @@ export function registerWorktreeContextActions(
   actions.set("worktree.reviewReadiness", () =>
     defineAction({
       id: "worktree.reviewReadiness",
-      title: "Review Readiness",
+      title: "Review readiness",
       description:
         "Judge whether a worktree is ready to commit, push and merge, and list what is blocking it. This is a read-only summary: it reads git state and performs no git or forge mutation. Signals that depend on forge data report as unknown rather than as passing when that data has not arrived, so an unknown is genuinely unknown and should not be read as a green light.",
       category: "worktree",

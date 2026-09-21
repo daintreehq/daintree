@@ -426,7 +426,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.openIssues", () =>
     defineAction({
       id: "forge.openIssues",
-      title: "Open Issues",
+      title: "Open issues",
       description:
         "Open the forge's issue list for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use the issue-listing capability to actually retrieve issues.",
       category: "forge",
@@ -454,7 +454,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.openPRs", () =>
     defineAction({
       id: "forge.openPRs",
-      title: "Open Pull Requests",
+      title: "Open pull requests",
       description:
         "Open the forge's pull-request list for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use the pull-request listing capability to actually retrieve PRs.",
       category: "forge",
@@ -482,7 +482,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.openCommits", () =>
     defineAction({
       id: "forge.openCommits",
-      title: "Open Commits",
+      title: "Open commits",
       description:
         "Open the forge's commit history for this project in the system browser, for a human to read. This hands off to another application rather than returning data — use a git history capability to actually retrieve commits.",
       category: "forge",
@@ -532,7 +532,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.openIssue", () =>
     defineAction({
       id: "forge.openIssue",
-      title: "Open Issue",
+      title: "Open issue",
       description:
         "Open one issue on the forge in the system browser, for a human to read. This hands off to another application rather than returning data — use the single-issue lookup to retrieve its title, body or state.",
       category: "forge",
@@ -574,7 +574,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.assignIssue", () =>
     defineAction({
       id: "forge.assignIssue",
-      title: "Assign Issue",
+      title: "Assign issue",
       description:
         "Assign an issue to a user on the active forge. Read back the resulting assignee list rather than assuming the request applied in full: forges silently drop accounts that lack access to the repository, so the returned list is what actually landed. Assigning someone already assigned is harmless.",
       category: "forge",
@@ -610,7 +610,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.unassignIssue", () =>
     defineAction({
       id: "forge.unassignIssue",
-      title: "Unassign Issue",
+      title: "Unassign issue",
       description:
         "Remove one user's assignment from an issue on the active forge. Read back the resulting assignee list to confirm what remains. Removing someone who was not assigned is harmless rather than an error, so this is safe to call without checking first.",
       category: "forge",
@@ -644,7 +644,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.approvePR", () =>
     defineAction({
       id: "forge.approvePR",
-      title: "Approve Pull Request",
+      title: "Approve pull request",
       description:
         "Submit an approving review on a pull request, visible to everyone watching it on the forge. This is a public act of sign-off, so read the PR first. The forge rejects approvals it does not permit — approving your own pull request, most commonly — and a provider with no review support fails outright rather than silently doing nothing.",
       category: "forge",
@@ -672,7 +672,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.requestChanges", () =>
     defineAction({
       id: "forge.requestChanges",
-      title: "Request Changes on Pull Request",
+      title: "Request changes on pull request",
       description:
         "Submit a request-changes review on a pull request, which blocks merging on most forges until it is resolved. This is publicly visible and requires an explanatory body, so write the reasoning for the author. A provider without review support fails rather than silently doing nothing.",
       category: "forge",
@@ -700,7 +700,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.dismissReview", () =>
     defineAction({
       id: "forge.dismissReview",
-      title: "Dismiss Pull Request Review",
+      title: "Dismiss pull request review",
       description:
         "Dismiss a submitted review on a pull request, clearing the block it placed on merging. This is publicly visible, usually needs elevated permissions, and requires a message explaining why. Identify the review by the forge's own review id, which nothing on this surface can list — dismissing the wrong one silently unblocks a merge someone intended to gate.",
       category: "forge",
@@ -734,7 +734,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.requestReviewers", () =>
     defineAction({
       id: "forge.requestReviewers",
-      title: "Request Pull Request Reviewers",
+      title: "Request pull request reviewers",
       description:
         "Request reviewers on a pull request, notifying each of them on the forge. Supply at least one account or team. Read back the resulting request list rather than assuming it applied: it includes reviewers requested earlier and omits any the forge refused, typically for lacking repository access.",
       category: "forge",
@@ -773,7 +773,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.validateToken", () =>
     defineAction({
       id: "forge.validateToken",
-      title: "Validate Forge Token",
+      title: "Validate forge token",
       description:
         "Ask the selected provider to validate a forge access token without saving it to Daintree. Use this to verify credentials before storing them. Providers validate however they choose — a live authentication round trip for most, locally for offline ones — so a rejection may mean an expired or insufficiently scoped token rather than a malformed one.",
       category: "forge",
@@ -810,7 +810,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.getRepoStats", () =>
     defineAction({
       id: "forge.getRepoStats",
-      title: "Get Repo Stats",
+      title: "Get repo stats",
       description:
         "Get headline repository counts, commits, issues and pull requests, from the active forge provider. Use this for a cheap overview rather than paging a list to count it. Results are cached and may be stale; bypassing the cache costs a live round trip against your rate limit. A provider failure comes back as an error field on an otherwise valid result, so check it before trusting the counts.",
       category: "forge",
@@ -842,7 +842,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.listIssues", () =>
     defineAction({
       id: "forge.listIssues",
-      title: "List Issues",
+      title: "List issues",
       description:
         "List repository issues from the active forge provider, a page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
       category: "forge",
@@ -875,7 +875,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.listPRs", () =>
     defineAction({
       id: "forge.listPRs",
-      title: "List Pull Requests",
+      title: "List pull requests",
       description:
         "List repository pull requests from the active forge provider, a page at a time. Use this to DISCOVER or filter PRs; for numbers you already have, use the singular or plural PR lookup instead of paging to find them. Search takes a provider-native query fragment, not plain text, and routes through the search API rather than the list cache. Bypassing that cache spends a live round trip.",
       category: "forge",
@@ -906,7 +906,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.getIssue", () =>
     defineAction({
       id: "forge.getIssue",
-      title: "Get Issue",
+      title: "Get issue",
       description:
         "Fetch one issue by number from the active forge provider, including its body. This is the direct lookup: reach for it instead of paging the issue listing to find a number you already have. An issue that does not exist comes back empty rather than failing, so treat empty as absence, not an error. It reports how many comments exist but not their text; read the comment thread for that.",
       category: "forge",
@@ -940,7 +940,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.listIssueComments", () =>
     defineAction({
       id: "forge.listIssueComments",
-      title: "List Issue Comments",
+      title: "List issue comments",
       description:
         "Read one page of an issue's comment thread from the active forge provider. Use it when comment text matters: the single-issue lookup reports only how many exist. Comments arrive oldest first, so reaching the newest reply means paging to the end. An empty page genuinely means nobody has commented; a missing issue or a provider that cannot read threads fails instead, so silence is never ambiguous.",
       category: "forge",
@@ -985,7 +985,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.getPR", () =>
     defineAction({
       id: "forge.getPR",
-      title: "Get Pull Request",
+      title: "Get pull request",
       description:
         "Fetch ONE known pull request number from the active forge provider, with its body, draft state and branches. For two or more known numbers use the plural lookup instead of calling this repeatedly; to discover numbers you do not have, page the PR listing. Read it before editing or merging so the current state is known. A pull request that does not exist comes back as `pr: null` rather than failing.",
       category: "forge",
@@ -1014,7 +1014,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.getPRs", () =>
     defineAction({
       id: "forge.getPRs",
-      title: "Get Pull Requests",
+      title: "Get pull requests",
       description: `Fetch ${FORGE_GET_PRS_MIN}-${FORGE_GET_PRS_MAX} KNOWN pull request numbers in one call — reach for this instead of calling the single-PR lookup once per number. Results come back in the order asked, each with its own status: found, not_found, or unresolved. Treat unresolved as "could not find out", never as "does not exist". Use the PR listing instead when the numbers are not already known.`,
       category: "forge",
       kind: "query",
@@ -1060,7 +1060,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.getCIStatus", () =>
     defineAction({
       id: "forge.getCIStatus",
-      title: "Get CI Status",
+      title: "Get CI status",
       description:
         "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by a minute, so poll for a settled verdict.",
       category: "forge",
@@ -1093,7 +1093,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.getChecks", () =>
     defineAction({
       id: "forge.getChecks",
-      title: "Get CI Checks",
+      title: "Get CI checks",
       description:
         "List every CI check on one pull request: name, run state, conclusion, and a log link where the forge reports one. Reach for it once the roll-up shows trouble. A check with no conclusion has not passed; the roll-up stays the authority on whether a PR is green. An empty list means no checks, a null one no such PR, and a provider that cannot read checks fails instead.",
       category: "forge",
@@ -1241,7 +1241,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.createIssue", () =>
     defineAction({
       id: "forge.createIssue",
-      title: "Create Issue",
+      title: "Create issue",
       description:
         "File a new issue on the active forge. This is publicly visible and notifies watchers. Labels must already exist on the repository — the forge rejects the request rather than creating them, so confirm the names first.",
       category: "forge",
@@ -1300,7 +1300,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.closeIssue", () =>
     defineAction({
       id: "forge.closeIssue",
-      title: "Close Issue",
+      title: "Close issue",
       description:
         "Close an issue on the active forge, optionally recording why it was closed. This is publicly visible and reversible by reopening. Prefer stating a reason, since it distinguishes finished work from something declined or duplicated.",
       category: "forge",
@@ -1355,7 +1355,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.reopenIssue", () =>
     defineAction({
       id: "forge.reopenIssue",
-      title: "Reopen Issue",
+      title: "Reopen issue",
       description:
         "Reopen a closed issue, putting it back in the active queue and notifying watchers. This is publicly visible and reversible by closing it again.",
       category: "forge",
@@ -1437,7 +1437,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.editIssue", () =>
     defineAction({
       id: "forge.editIssue",
-      title: "Edit Issue",
+      title: "Edit issue",
       description:
         "Change an issue's title or body on the active forge. Supply at least one of them; whichever is omitted is left as it is, so this cannot accidentally blank a field. The new text replaces the old wholesale rather than appending, and the edit is publicly visible.",
       category: "forge",
@@ -1467,7 +1467,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.addIssueComment", () =>
     defineAction({
       id: "forge.addIssueComment",
-      title: "Add Issue Comment",
+      title: "Add issue comment",
       description:
         "Post a comment on an issue, visible to everyone watching it and delivered as a notification. Comments cannot be edited or withdrawn through this capability, so treat posting as final.",
       category: "forge",
@@ -1492,7 +1492,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.addIssueLabel", () =>
     defineAction({
       id: "forge.addIssueLabel",
-      title: "Add Issue Label",
+      title: "Add issue label",
       description:
         "Add one existing label to an issue. This is additive — labels already on the issue are kept — so read back the returned label set to see the result. The label must already exist on the repository; the forge rejects an unknown name rather than creating it.",
       category: "forge",
@@ -1518,7 +1518,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
   actions.set("forge.removeIssueLabel", () =>
     defineAction({
       id: "forge.removeIssueLabel",
-      title: "Remove Issue Label",
+      title: "Remove issue label",
       description:
         "Remove one label from an issue. Unlike adding, this fails when the label is not currently on the issue, so check the issue's labels first rather than calling speculatively. Read back the remaining label set to confirm the result.",
       category: "forge",
