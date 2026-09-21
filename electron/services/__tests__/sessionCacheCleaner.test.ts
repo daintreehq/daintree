@@ -184,6 +184,20 @@ describe("clearAllSessionCaches — live sessions", () => {
     expect(result).toEqual({ cleared: 2, failed: 1 });
   });
 
+  it("reports a code-cache failure even when the HTTP clear succeeds", async () => {
+    const preview = fakeSession(partitionDir("dev-preview-alpha-main-panel1"));
+    preview.clearCodeCaches.mockRejectedValue(new Error("code cache busy"));
+    const browser = fakeSession(partitionDir("browser-alpha"));
+    trackSession(asSession(preview));
+    trackSession(asSession(browser));
+
+    const result = await clearAllSessionCaches();
+
+    expect(preview.clearCache).toHaveBeenCalledTimes(1);
+    expect(browser.clearCodeCaches).toHaveBeenCalledWith({});
+    expect(result).toEqual({ cleared: 2, failed: 1 });
+  });
+
   it("counts a session once when both cache clears fail, including synchronous throws", async () => {
     defaultSession.clearCache.mockRejectedValue(new Error("http"));
     defaultSession.clearCodeCaches.mockImplementation(() => {
@@ -304,6 +318,36 @@ describe("clearAllSessionCaches — unopened partitions on disk", () => {
     expect(fs.existsSync(path.join(dir, "Code Cache", "js", "index"))).toBe(true);
     expectPreserved(dir);
     expect(result).toEqual({ cleared: 1, failed: 1 });
+  });
+
+  it("reports a detached cache that can't be removed and removes it on the next clear", async () => {
+    const dir = seedPartition("browser-stuck");
+    vi.spyOn(fs.promises, "rm").mockRejectedValueOnce(
+      Object.assign(new Error("EBUSY: resource busy"), { code: "EBUSY" })
+    );
+
+    expect(await clearAllSessionCaches()).toEqual({ cleared: 1, failed: 1 });
+    expect(fs.readdirSync(dir).filter((name) => name.includes("daintree-clearing"))).toHaveLength(
+      1
+    );
+
+    expect(await clearAllSessionCaches()).toEqual({ cleared: 2, failed: 0 });
+    expectCachesRemoved(dir);
+    expectPreserved(dir);
+  });
+
+  it("follows a symlinked partition dir and clears only its caches", async () => {
+    const relocated = path.join(sessionData, "relocated-browser");
+    fs.mkdirSync(partitionsRoot, { recursive: true });
+    fs.renameSync(seedPartition("browser-moved"), relocated);
+    fs.symlinkSync(relocated, partitionDir("browser-moved"), "dir");
+
+    const result = await clearAllSessionCaches();
+
+    expectCachesRemoved(relocated);
+    expectPreserved(relocated);
+    expect(fs.lstatSync(partitionDir("browser-moved")).isSymbolicLink()).toBe(true);
+    expect(result).toEqual({ cleared: 2, failed: 0 });
   });
 
   it("reports failure when the partition directory can't be listed", async () => {

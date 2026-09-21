@@ -313,6 +313,8 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
   const notifyClearCacheFailed = (title: string, message: string, onRetry: () => void) => {
     notify({
       type: "error",
+      // uiFeedback defaults to inbox-only, which would drop the Try again callback.
+      priority: "high",
       title,
       message,
       actions: [{ label: "Try again", variant: "primary", onClick: onRetry }],
@@ -331,14 +333,14 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
       } else {
         notifyClearCacheFailed(
           "Couldn't clear all caches",
-          "Some app or browser caches couldn't be removed and still hold cached data.",
+          "Some cached data may remain. Try again to finish clearing it.",
           () => void handleClearCache()
         );
       }
     } catch (err) {
       notifyClearCacheFailed(
         "Couldn't clear cache",
-        "Cached data couldn't be removed.",
+        "Cached data may remain. Try again to finish clearing it.",
         () => void handleClearCache()
       );
       logError("Failed to clear cache", err);

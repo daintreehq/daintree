@@ -10,9 +10,17 @@ const DETACHED_MARKER = ".daintree-clearing-";
 const DETACHED_DIR_PATTERN = /^(Cache|Code Cache)\.daintree-clearing-[0-9a-f]+$/;
 
 export interface ClearSessionCachesResult {
-  /** Sessions and unopened partitions whose HTTP and code caches were fully cleared. */
+  /**
+   * Live sessions whose clear calls completed without rejecting, plus unopened
+   * partitions whose cache dirs were removed. Electron resolves the Session
+   * clears without a backend status, so completion is the strongest signal.
+   */
   cleared: number;
-  /** Sessions, partitions, or discovery steps where any part of the clear failed. */
+  /**
+   * Sessions, partitions, or discovery steps where any part of the clear
+   * failed. Not disjoint from `cleared`: a live partition can count in both
+   * when its API clear succeeds but a leftover sweep fails.
+   */
   failed: number;
 }
 
@@ -106,8 +114,9 @@ async function clearPartitionDirs(
   }
 
   for (const entry of entries) {
-    // Symlinked or non-directory entries are never ours to traverse.
-    if (!entry.isDirectory()) continue;
+    // A symlinked partition dir is followed, as Chromium does; only its cache
+    // dirs are touched, and fs.rm never follows links beneath them.
+    if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     if (classifyPartition(`persist:${entry.name}`) === "unknown") continue;
 
     const outcome = await clearPartitionDir(path.join(partitionsRoot, entry.name), handled);

@@ -282,6 +282,7 @@ describe("PrivacyDataTab", () => {
         expect(mockNotify).toHaveBeenCalledWith(
           expect.objectContaining({
             type: "error",
+            priority: "high",
             title: "Couldn't clear all caches",
             context: { eventKind: "uiFeedback" },
           })
@@ -310,7 +311,11 @@ describe("PrivacyDataTab", () => {
 
       await waitFor(() => {
         expect(mockNotify).toHaveBeenCalledWith(
-          expect.objectContaining({ type: "error", title: "Couldn't clear cache" })
+          expect.objectContaining({
+            type: "error",
+            priority: "high",
+            title: "Couldn't clear cache",
+          })
         );
       });
       expect(screen.queryByText("Cache Cleared")).toBeNull();
