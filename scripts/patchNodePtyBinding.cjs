@@ -23,7 +23,9 @@ function skipTrivia(source, i) {
 
 // Walks the gyp dict or list opening at `open`, skipping strings and comments.
 // Returns its closing index, its own keys (name → where the value starts),
-// and its own string items.
+// and its own string items. Returns null on anything it does not model —
+// triple quotes, adjacent-string concatenation, tuples — since each could
+// hide or fake a key.
 function scanContainer(source, open) {
   const keys = new Map();
   const items = [];
@@ -35,12 +37,14 @@ function scanContainer(source, open) {
       if (eol === -1) return null;
       i = eol;
     } else if (ch === "'" || ch === '"') {
+      if (source.startsWith(ch.repeat(3), i)) return null;
       let end = i + 1;
       while (end < source.length && source[end] !== ch) end += source[end] === "\\" ? 2 : 1;
       if (end >= source.length) return null;
+      const next = skipTrivia(source, end + 1);
+      if (source[next] === "'" || source[next] === '"') return null;
       if (closers.length === 1) {
         const text = source.slice(i + 1, end);
-        const next = skipTrivia(source, end + 1);
         if (source[next] !== ":") {
           items.push(text);
         } else if (keys.has(text) || text.includes("\\")) {
@@ -52,6 +56,8 @@ function scanContainer(source, open) {
         }
       }
       i = end;
+    } else if (ch === "(") {
+      return null;
     } else if (ch === "{" || ch === "[") {
       closers.push(ch === "{" ? "}" : "]");
     } else if (ch === "}" || ch === "]") {

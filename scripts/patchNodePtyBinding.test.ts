@@ -145,6 +145,18 @@ describe("patchNodePtyBindingGyp", () => {
     expect(() => patchNodePtyBindingGyp(twice)).toThrow(/duplicate or escaped/);
   });
 
+  it("refuses Python syntax that could split or disguise a key", () => {
+    const disguised = [
+      `{\n  'target_defaults': {\n    'def' 'ines': ['OTHER'],\n  },\n}\n`,
+      `{\n  'target_defaults': {\n    ('defines'): ['OTHER'],\n  },\n}\n`,
+      `{\n  'target_defaults': {\n    'defines': ['${DEFINE}' '_OTHER'],\n  },\n}\n`,
+      `{\n  'note': '''a' 'target_defaults': {} 'a''',\n}\n`,
+    ];
+    for (const source of disguised) {
+      expect(() => patchNodePtyBindingGyp(source)).toThrow(/could not read/);
+    }
+  });
+
   it("throws when target_defaults is missing", () => {
     expect(() => patchNodePtyBindingGyp("{\n  'targets': [],\n}\n")).toThrow(
       /no top-level target_defaults/
