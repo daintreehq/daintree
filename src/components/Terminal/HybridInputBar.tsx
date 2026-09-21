@@ -313,8 +313,26 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     // bar would (#11809). Called with no argument, which is what keeps the
     // shift/cmd fleet gestures a click carries out of a drop. Absent for the
     // Assistant, whose input bar owns no selectable pane.
-    const { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles } =
-      useDragDrop(editorViewRef, cwd, onActivate);
+    const {
+      handleDragEnter,
+      handleDragOver,
+      handleDragLeave,
+      handleDrop,
+      resetDragState,
+      isDragOverFiles,
+    } = useDragDrop(editorViewRef, cwd, onActivate);
+
+    // The dialog unmounts its body once its exit animation ends, and can close
+    // under a hovering file — a slow submission collapses it mid-drag. Chromium
+    // then fires the pending dragleave at the detached node, which React never
+    // sees, so the depth the body accumulated would pin the overlay on the
+    // compact bar. Stable identity, or every re-render would detach and reset.
+    const releaseModalDropTarget = useCallback(
+      (node: HTMLDivElement | null) => {
+        if (!node) resetDragState();
+      },
+      [resetDragState]
+    );
 
     const { imagePasteExtension, filePasteExtension, plainPasteKeymap } = usePasteExtensions(cwd);
 
@@ -1132,6 +1150,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               Outside the scrolling host, so the overlay covers the visible
               editor instead of scrolling away with a long draft. */}
           <div
+            ref={releaseModalDropTarget}
             className="relative flex-1 min-h-0 flex flex-col overflow-hidden"
             onDragEnter={handleDragEnter}
             onDragOver={handleDragOver}

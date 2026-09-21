@@ -18,7 +18,7 @@ import ts from "typescript";
 // handlers reach both hosts, and that is the half that drifted. Source
 // enforcement rather than a rendering assertion is a cost call: standing up
 // the whole bar, its stores and the dialog to dispatch one drop buys a single
-// assertion, and jsdom has no native drag hit-testing to make it meaningful.
+// assertion.
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const BAR_PATH = path.resolve(TEST_DIR, "../HybridInputBar.tsx");
@@ -81,22 +81,28 @@ function expressionOf(attribute: ts.JsxAttribute | undefined): ts.Expression | u
 }
 
 /**
- * Whether the element's `ref` is `refName` itself, or a callback that assigns
- * `refName.current` — the two shapes the hosts use.
+ * Whether the element's `ref` is `refName` itself, or a callback that stores
+ * its node in `refName.current` — the two shapes the hosts use. Only the node
+ * counts: a callback that merely clears some other ref is not bound to it.
  */
 function refBinds(node: JsxNode, refName: string): boolean {
   const expression = expressionOf(attributeOf(node, "ref"));
   if (!expression) return false;
   if (ts.isIdentifier(expression)) return expression.text === refName;
+  if (!ts.isArrowFunction(expression) && !ts.isFunctionExpression(expression)) return false;
+  const param = expression.parameters[0]?.name;
+  if (!param || !ts.isIdentifier(param)) return false;
   let assigns = false;
-  walk(expression, (inner) => {
+  walk(expression.body, (inner) => {
     if (
       ts.isBinaryExpression(inner) &&
       inner.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
       ts.isPropertyAccessExpression(inner.left) &&
       inner.left.name.text === "current" &&
       ts.isIdentifier(inner.left.expression) &&
-      inner.left.expression.text === refName
+      inner.left.expression.text === refName &&
+      ts.isIdentifier(inner.right) &&
+      inner.right.text === param.text
     ) {
       assigns = true;
     }
@@ -115,8 +121,14 @@ function isDropTarget(node: JsxNode): boolean {
   return Object.keys(DROP_HANDLERS).some((prop) => attributeOf(node, prop) !== undefined);
 }
 
+/**
+ * The first element from the host outwards that handles any drag event. It
+ * starts at the host itself, so a handler there or on anything between it and
+ * the intended target is what gets checked — and fails as incomplete — rather
+ * than being skipped while it intercepts the drop.
+ */
 function nearestDropTargetAround(node: JsxNode): JsxNode | undefined {
-  for (let current = node.parent; current; current = current.parent) {
+  for (let current: ts.Node | undefined = node; current; current = current.parent) {
     if (
       (ts.isJsxElement(current) || ts.isJsxSelfClosingElement(current)) &&
       isDropTarget(current)
@@ -135,11 +147,12 @@ function isWithin(node: ts.Node, ancestor: ts.Node): boolean {
 }
 
 /**
- * Drag props not bound by name to the matching hook handler. A spread does not
- * count: its contents are invisible here, so accepting one would let a refactor
- * drop a prop and keep this suite green.
+ * Drag props not bound by name to the matching hook handler. Spreads are
+ * rejected outright: their contents are invisible here, so one could override
+ * a handler, or stand in for a dropped one, and keep this suite green.
  */
 function unboundHandlers(node: JsxNode): string[] {
+  if (openingOf(node).attributes.properties.some(ts.isJsxSpreadAttribute)) return ["{...spread}"];
   return Object.entries(DROP_HANDLERS)
     .filter(([prop, handler]) => {
       const expression = expressionOf(attributeOf(node, prop));
@@ -155,23 +168,28 @@ function overlaysWithin(node: JsxNode, source: ts.SourceFile): JsxNode[] {
 describe("HybridInputBar drop targets (#12570)", () => {
   it("takes every drop handler from a single useDragDrop call", () => {
     const source = parseBar();
-    const bindings: ts.ObjectBindingPattern[] = [];
+    const calls: ts.CallExpression[] = [];
     walk(source, (node) => {
       if (
         ts.isCallExpression(node) &&
         ts.isIdentifier(node.expression) &&
-        node.expression.text === "useDragDrop" &&
-        ts.isVariableDeclaration(node.parent) &&
-        ts.isObjectBindingPattern(node.parent.name)
+        node.expression.text === "useDragDrop"
       ) {
-        bindings.push(node.parent.name);
+        calls.push(node);
       }
     });
 
     // Two instances would each keep their own drag depth and hover state, and
     // the hosts would disagree about whether a drag is in progress.
-    expect(bindings).toHaveLength(1);
-    const bound = bindings[0].elements.flatMap((element) =>
+    expect(calls).toHaveLength(1);
+    const declaration = calls[0].parent;
+    expect(
+      ts.isVariableDeclaration(declaration) && ts.isObjectBindingPattern(declaration.name)
+    ).toBe(true);
+    if (!ts.isVariableDeclaration(declaration) || !ts.isObjectBindingPattern(declaration.name)) {
+      return;
+    }
+    const bound = declaration.name.elements.flatMap((element) =>
       !element.propertyName && ts.isIdentifier(element.name) ? [element.name.text] : []
     );
     expect(bound).toEqual(expect.arrayContaining(Object.values(DROP_HANDLERS)));
@@ -181,8 +199,8 @@ describe("HybridInputBar drop targets (#12570)", () => {
     const source = parseBar();
     const target = elementWithRef(source, "inputShellRef");
 
+    expect(nearestDropTargetAround(elementWithRef(source, "compactEditorHostRef"))).toBe(target);
     expect(unboundHandlers(target)).toEqual([]);
-    expect(isWithin(elementWithRef(source, "compactEditorHostRef"), target)).toBe(true);
     expect(overlaysWithin(target, source)).toHaveLength(1);
   });
 
