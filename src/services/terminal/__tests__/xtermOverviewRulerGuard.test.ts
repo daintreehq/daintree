@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { Terminal } from "@xterm/xterm";
 import { guardOverviewRulerRefresh } from "../xtermOverviewRulerGuard";
 
 interface FakeDecoration {
@@ -79,7 +78,7 @@ function makeTerminal() {
   };
   // The constructor queues the first draw before anyone can install a guard.
   ruler._queueRefresh(true);
-  const terminal = { _core: { _overviewRulerRenderer: ruler } } as unknown as Terminal;
+  const terminal = { _core: { _overviewRulerRenderer: ruler } };
   return { terminal, ruler, events, flush, frames };
 }
 
@@ -203,12 +202,10 @@ describe("guardOverviewRulerRefresh", () => {
   });
 
   it("fails open when the ruler is missing or its internals drifted", () => {
-    expect(guardOverviewRulerRefresh({ _core: {} } as unknown as Terminal)).toBe(false);
-    expect(guardOverviewRulerRefresh({} as unknown as Terminal)).toBe(false);
+    expect(guardOverviewRulerRefresh({ _core: {} })).toBe(false);
+    expect(guardOverviewRulerRefresh({})).toBe(false);
     expect(
-      guardOverviewRulerRefresh({
-        _core: { _overviewRulerRenderer: { _queueRefresh() {} } },
-      } as unknown as Terminal)
+      guardOverviewRulerRefresh({ _core: { _overviewRulerRenderer: { _queueRefresh() {} } } })
     ).toBe(false);
   });
 

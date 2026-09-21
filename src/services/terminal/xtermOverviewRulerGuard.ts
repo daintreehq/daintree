@@ -1,5 +1,3 @@
-import type { Terminal } from "@xterm/xterm";
-
 /**
  * Stop xterm's overview ruler repainting after every render when it has
  * nothing to draw (#12584).
@@ -44,9 +42,9 @@ interface OverviewRulerLike {
 
 const guarded = new WeakSet<OverviewRulerLike>();
 
-function getRuler(terminal: Terminal): OverviewRulerLike | undefined {
+function getRuler(terminal: object): OverviewRulerLike | undefined {
   try {
-    return (terminal as Terminal & { _core?: { _overviewRulerRenderer?: OverviewRulerLike } })._core
+    return (terminal as { _core?: { _overviewRulerRenderer?: OverviewRulerLike } })._core
       ?._overviewRulerRenderer;
   } catch {
     return undefined;
@@ -72,10 +70,11 @@ function emptyPictureKey(ruler: OverviewRulerLike): string | undefined {
 }
 
 /**
- * Install the guard on the terminal's overview ruler. Idempotent; returns
- * whether the ruler is guarded. Call after `terminal.open()`.
+ * Install the guard on an xterm `Terminal`'s overview ruler. Idempotent;
+ * returns whether the ruler is guarded. Call after `terminal.open()`. Typed
+ * as `object` because everything it reads is private to xterm.
  */
-export function guardOverviewRulerRefresh(terminal: Terminal): boolean {
+export function guardOverviewRulerRefresh(terminal: object): boolean {
   try {
     const ruler = getRuler(terminal);
     if (!ruler) return false;
