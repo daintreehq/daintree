@@ -151,6 +151,12 @@ const closeSharedDbMock = vi.hoisted(() => ({
 
 vi.mock("../../services/persistence/db.js", () => closeSharedDbMock);
 
+const vadDrainMock = vi.hoisted(() => ({
+  waitForRetiringVadProcesses: vi.fn((_budgetMs: number) => Promise.resolve(0)),
+}));
+
+vi.mock("../../services/voice/openaiVadProcess.js", () => vadDrainMock);
+
 const closeTelemetryMock = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 
 vi.mock("../../services/TelemetryService.js", () => ({
@@ -294,6 +300,7 @@ import {
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_DEADLINE_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
+  VAD_DRAIN_BUDGET_MS,
 } from "../shutdownConfig.js";
 
 function makeDeps(overrides?: Partial<ShutdownDeps>): ShutdownDeps {
@@ -648,6 +655,58 @@ describe("registerShutdownHandler", () => {
         "[MAIN] Failed to close SQLite connection:",
         expect.any(Error)
       );
+      warnSpy.mockRestore();
+    });
+  });
+
+  describe("voice VAD drain at quit (#12577)", () => {
+    it("waits for the VAD process voice teardown retired before exiting", async () => {
+      const order: string[] = [];
+      let releaseDrain!: () => void;
+      const drained = new Promise<void>((resolve) => {
+        releaseDrain = resolve;
+      });
+      vadDrainMock.waitForRetiringVadProcesses.mockImplementationOnce(async (budgetMs) => {
+        order.push(`vad-wait:${budgetMs}`);
+        await drained;
+        order.push("vad-drained");
+        return 0;
+      });
+      closeSharedDbMock.closeSharedDb.mockImplementationOnce(() => {
+        order.push("closeSharedDb");
+      });
+
+      const { beforeQuitCb } = await setup({
+        getCleanupIpcHandlers: vi.fn(() => () => {
+          order.push("cleanupIpc");
+        }),
+      });
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => expect(order).toContain("closeSharedDb"));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      releaseDrain();
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+      // The wait starts right after IPC cleanup so it overlaps the disposals.
+      expect(order).toEqual([
+        "cleanupIpc",
+        `vad-wait:${VAD_DRAIN_BUDGET_MS}`,
+        "closeSharedDb",
+        "vad-drained",
+      ]);
+    });
+
+    it("exits cleanly when a VAD process is still draining at the budget", async () => {
+      vadDrainMock.waitForRetiringVadProcesses.mockResolvedValueOnce(1);
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+      const { beforeQuitCb } = await setup({});
+      await beforeQuitCb(makeEvent());
+
+      await vi.waitFor(() => expect(appMock.exit).toHaveBeenCalledWith(0));
+      expect(warnSpy).toHaveBeenCalledWith("[MAIN] 1 VAD process(es) still draining at quit");
       warnSpy.mockRestore();
     });
   });

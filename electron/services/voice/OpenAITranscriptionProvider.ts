@@ -1,6 +1,3 @@
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { Worker } from "node:worker_threads";
 import WebSocket from "ws";
 import type { VoiceInputError, VoiceInputSettings } from "../../../shared/types/ipc/api.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -12,25 +9,11 @@ import {
   type VoiceStartResult,
   type VoiceTranscriptionEvent,
 } from "./TranscriptionProvider.js";
-import type { VadWorkerInbound, VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
+import type { VadWorkerOutbound } from "./openaiVadWorkerProtocol.js";
+import { OpenAIVadProcess, type VadRetireReason } from "./openaiVadProcess.js";
 import { formatKeytermPrompt, sanitizeOpenAIKeywords } from "../voiceContextKeyterms.js";
 
 const P = "[VoiceTranscription:openai]";
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-/**
- * Resolves the compiled VAD worker on disk. esbuild emits this provider into a
- * shared chunk under `dist-electron/electron/chunks/`, so `__dirname` may point
- * at that chunks dir — step up to the electron root, then to the worker's own
- * output path. Mirrors the host-process path resolution in
- * `WorkspaceHostProcess.ts`.
- */
-function resolveVadWorkerPath(): string {
-  const electronDir = path.basename(__dirname) === "chunks" ? path.dirname(__dirname) : __dirname;
-  // From `dist-electron/electron/` down to the worker's bundled location.
-  return path.join(electronDir, "services", "voice", "openaiVadWorker.js");
-}
 
 /**
  * Wire shape of `session.audio.input.transcription` for `gpt-live-transcribe`.
@@ -272,11 +255,11 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   private drainPromise: Promise<void> | null = null;
   private isDraining = false;
 
-  // VAD side-chain. The worker runs Silero v5 on a worker thread and reports
-  // speech-start/speech-end events that drive commits. `vadWorkerSessionId`
-  // tags the spawning session so a message arriving after teardown (or after a
+  // VAD side-chain. A utility process runs Silero v5 and reports
+  // speech-start/speech-end events that drive commits. Its handlers are tagged
+  // with the spawning session so a message arriving after teardown (or after a
   // new session started) is ignored — the stale-callback guard from #4850/#4851.
-  private vadWorker: Worker | null = null;
+  private vadWorker: OpenAIVadProcess | null = null;
   private isSpeaking = false;
   // True once the VAD has reported at least one speech-end this connection. The
   // barge-in clear on speech-start is gated on it: audio buffered after a
@@ -1028,16 +1011,13 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Posts a chunk to the VAD worker. The chunk is copied (not transferred) so
-   * the original ArrayBuffer stays usable for the OpenAI send on this thread.
+   * Posts a chunk to the VAD process. Posting structured-clones it, so the
+   * original ArrayBuffer stays usable for the OpenAI send on this thread.
    */
   private feedVad(chunk: ArrayBuffer): void {
     if (!this.vadWorker || this.vadDegraded) return;
-    // Copy (not transfer) the original chunk — it's still needed for the OpenAI
-    // send on this thread. The copy is transferred so the worker owns it.
-    const copy = chunk.slice(0);
     try {
-      this.vadWorker.postMessage({ type: "audio", pcm: copy } satisfies VadWorkerInbound, [copy]);
+      this.vadWorker.post({ type: "audio", pcm: chunk });
     } catch (err) {
       logWarn(`${P} Failed to post audio to VAD worker`, {
         message: formatErrorMessage(err, "vad post failed"),
@@ -1088,10 +1068,10 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
    * reconnect. Use `cleanupPreviousSession()` for a full session reset.
    */
   private cleanupConnection(): void {
-    // Terminate the VAD worker with the connection — a reconnect re-spawns it
-    // fresh on the next `session.updated`, so VAD state never straddles two
-    // physical sockets.
-    this.stopVadWorker();
+    // Retire the VAD with the connection — a reconnect re-spawns it fresh on
+    // the next `session.updated`, so VAD state never straddles two physical
+    // sockets.
+    this.stopVadWorker("connection-closed");
     this.clearHeartbeat();
     this.connection = null;
     this.isReady = false;
@@ -1119,7 +1099,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     this.preConnectBufferBytes = 0;
     this.clearConnectTimeout();
     this.clearDrainTimeout();
-    this.stopVadWorker();
+    this.stopVadWorker("session-end");
     this.vadDegraded = false;
     this.clearHeartbeat();
     this.clearReconnectTimer();
@@ -1156,96 +1136,69 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
   }
 
   /**
-   * Spawns the VAD side-chain worker for the current session. Speech-boundary
+   * Spawns the VAD side-chain process for the current session. Speech-boundary
    * events it reports drive `input_audio_buffer.commit`/`clear`. Every message
    * is guarded by `mySessionId` so a message arriving after this session was
    * torn down (or superseded by a new `start()`) is ignored (#4850/#4851). If
-   * the worker can't be spawned or its model fails to load, we fall back to a
-   * periodic backstop commit (degraded mode) so dictation still works.
+   * the process can't be spawned, its model fails to load, or it dies — a
+   * native ONNX abort included (#12577) — we fall back to a periodic backstop
+   * commit (degraded mode) so dictation still works.
    */
   private startVadWorker(mySessionId: number): void {
-    this.stopVadWorker();
+    this.stopVadWorker("respawn");
     this.isSpeaking = false;
     this.vadHasEndedSpeech = false;
     this.vadDegraded = false;
     this.preRollChunks = [];
     this.preRollBytes = 0;
 
-    let worker: Worker;
+    let vad: OpenAIVadProcess;
+    const isCurrent = (): boolean => this.sessionId === mySessionId && this.vadWorker === vad;
     try {
-      worker = new Worker(resolveVadWorkerPath());
+      vad = new OpenAIVadProcess(mySessionId, {
+        onMessage: (message: VadWorkerOutbound) => {
+          if (!isCurrent()) return;
+          switch (message.type) {
+            case "speech-start":
+              this.handleVadSpeechStart();
+              return;
+            case "speech-end":
+              this.handleVadSpeechEnd();
+              return;
+            case "error":
+              logError(`${P} VAD error — degraded mode`, { message: message.message });
+              this.enterDegradedMode(mySessionId);
+              return;
+          }
+        },
+        onUnexpectedExit: () => {
+          if (!isCurrent()) return;
+          this.enterDegradedMode(mySessionId);
+        },
+      });
     } catch (err) {
-      logError(`${P} Failed to spawn VAD worker — degraded mode`, {
-        message: formatErrorMessage(err, "worker spawn failed"),
+      logError(`${P} Failed to spawn VAD process — degraded mode`, {
+        message: formatErrorMessage(err, "VAD spawn failed"),
       });
       this.enterDegradedMode(mySessionId);
       return;
     }
-    this.vadWorker = worker;
-    logDebug(`${P} VAD worker spawned`, { sessionId: mySessionId });
-
-    worker.on("message", (message: VadWorkerOutbound) => {
-      if (this.sessionId !== mySessionId || this.vadWorker !== worker) return;
-      switch (message.type) {
-        case "ready":
-          logInfo(`${P} VAD worker ready`);
-          return;
-        case "speech-start":
-          this.handleVadSpeechStart();
-          return;
-        case "speech-end":
-          this.handleVadSpeechEnd();
-          return;
-        case "error":
-          logError(`${P} VAD worker error — degraded mode`, { message: message.message });
-          this.enterDegradedMode(mySessionId);
-          return;
-      }
-    });
-
-    worker.on("error", (err) => {
-      if (this.sessionId !== mySessionId || this.vadWorker !== worker) return;
-      logError(`${P} VAD worker thread error — degraded mode`, {
-        message: formatErrorMessage(err, "worker error"),
-      });
-      this.enterDegradedMode(mySessionId);
-    });
-
-    worker.on("exit", (code) => {
-      if (this.sessionId !== mySessionId || this.vadWorker !== worker) return;
-      if (code !== 0) {
-        logError(`${P} VAD worker exited unexpectedly — degraded mode`, { code });
-        this.enterDegradedMode(mySessionId);
-      }
-    });
+    this.vadWorker = vad;
   }
 
   /**
-   * Retires the VAD worker and clears all VAD-derived state. Safe to call
-   * when no worker is running. Does not touch `vadDegraded` so a degraded
+   * Retires the VAD process and clears all VAD-derived state. Safe to call
+   * when no process is running. Does not touch `vadDegraded` so a degraded
    * session that's being torn down doesn't briefly re-arm speech gating.
    */
-  private stopVadWorker(): void {
+  private stopVadWorker(reason: VadRetireReason): void {
     this.clearBackstopTimer();
     this.isSpeaking = false;
     this.preRollChunks = [];
     this.preRollBytes = 0;
-    const worker = this.vadWorker;
+    const vad = this.vadWorker;
     this.vadWorker = null;
-    if (worker) this.retireVadWorker(worker);
-  }
-
-  private retireVadWorker(worker: Worker): void {
-    // Terminating a thread during ONNX initialization/inference can abort the
-    // whole process in a native callback. Let its destroy handler drain that
-    // work and release the model. Retain the guarded error/exit listeners.
-    worker.removeAllListeners("message");
-    worker.unref();
-    try {
-      worker.postMessage({ type: "destroy" } satisfies VadWorkerInbound);
-    } catch {
-      // The worker has already exited.
-    }
+    vad?.retire(reason);
   }
 
   /**
@@ -1258,9 +1211,9 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     if (this.sessionId !== mySessionId || this.vadDegraded) return;
     this.vadDegraded = true;
     this.isSpeaking = false;
-    const worker = this.vadWorker;
+    const vad = this.vadWorker;
     this.vadWorker = null;
-    if (worker) this.retireVadWorker(worker);
+    vad?.retire("degraded");
     logWarn(`${P} VAD degraded — committing on ${VAD_MAX_SEGMENT_MS}ms backstop only`);
     this.startBackstopTimer("vad-degraded-backstop");
   }
@@ -1401,7 +1354,7 @@ export class OpenAITranscriptionProvider implements TranscriptionProvider {
     }
 
     this.isDraining = true;
-    this.stopVadWorker();
+    this.stopVadWorker("stop");
     this.emit({ type: "status", status: "finishing" });
 
     // Flush whatever audio accumulated since the last interval commit so its

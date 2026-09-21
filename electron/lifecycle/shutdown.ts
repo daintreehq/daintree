@@ -54,6 +54,7 @@ import { closeSharedDb } from "../services/persistence/db.js";
 import { closeTelemetry } from "../services/TelemetryService.js";
 import { isSmokeTest } from "../setup/environment.js";
 import { stopPerformanceTraceIfActive } from "../utils/performanceTrace.js";
+import { waitForRetiringVadProcesses } from "../services/voice/openaiVadProcess.js";
 import { isSignalShutdown, clearSafetyBeltTimer } from "./signalShutdownState.js";
 import {
   CAPTURE_DELIVERY_BUDGET_MS,
@@ -61,6 +62,7 @@ import {
   CLEANUP_TIMEOUT_MS,
   PROJECT_GRACEFUL_KILL_TIMEOUT_MS,
   SHUTDOWN_TAIL_TIMEOUT_MS,
+  VAD_DRAIN_BUDGET_MS,
 } from "./shutdownConfig.js";
 import {
   getActiveShutdown,
@@ -715,6 +717,18 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         cleanupIpc();
         deps.setCleanupIpcHandlers(null);
       }
+      // Tearing down voice above only asks its VAD process to drain in-flight
+      // ONNX work and exit (#12577). Start the bounded wait now so it overlaps
+      // the disposals below, and settle it before the chain resolves.
+      const vadDrain = waitForRetiringVadProcesses(VAD_DRAIN_BUDGET_MS)
+        .then((pending) => {
+          if (pending > 0) {
+            console.warn(`[MAIN] ${pending} VAD process(es) still draining at quit`);
+          }
+        })
+        .catch((error) => {
+          console.warn("[MAIN] VAD drain at quit failed:", error);
+        });
       const cleanupErr = deps.getCleanupErrorHandlers();
       if (cleanupErr) {
         cleanupErr();
@@ -770,6 +784,9 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
       } catch (error) {
         console.warn("[MAIN] Failed to close SQLite connection:", error);
       }
+
+      currentPhase = "vad-drain";
+      await vadDrain;
     });
 
   const timeoutPromise = new Promise<never>((_, reject) => {
