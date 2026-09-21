@@ -47,6 +47,7 @@ import {
 } from "../services/AgentCompileCacheCleanupService.js";
 import { runAssistantScratchCleanup } from "../services/AssistantScratchService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
+import { requestNativeCrashDumpPrune } from "../services/CrashDumpRetentionService.js";
 import {
   pruneOldLogs,
   pruneOldLogsAsync,
@@ -536,6 +537,9 @@ export async function initGlobalServices(
               // the next idle tick.
               requestAgentCompileCacheCleanup().catch((err) => {
                 logError("[DiskSpaceMonitor] agent compile cache cleanup threw", err);
+              });
+              requestNativeCrashDumpPrune().catch((err) => {
+                logError("[DiskSpaceMonitor] native crash-dump prune threw", err);
               });
               try {
                 const retentionDays = store.get("privacy")?.logRetentionDays ?? 30;
@@ -1282,6 +1286,19 @@ export async function initGlobalServices(
       // Heap snapshots land in app.getPath("logs") (a separate dir from
       // userData/logs) and are bounded by count, not age — see pruneHeapSnapshots.
       await pruneHeapSnapshotsAsync(app.getPath("logs"), MAX_HEAP_SNAPSHOTS);
+    },
+  });
+
+  registerDeferredTask({
+    name: "prune-native-crash-dumps",
+    // Fire-and-forget: nothing downstream reads the result, so a large dump
+    // backlog must not serialize the rest of the queue. CrashRecoveryService
+    // classified the previous session against these dumps synchronously in
+    // main.ts, and the prune refuses to run until it has.
+    run: () => {
+      requestNativeCrashDumpPrune().catch((err) => {
+        logError("[MAIN] native crash-dump prune threw", err);
+      });
     },
   });
 

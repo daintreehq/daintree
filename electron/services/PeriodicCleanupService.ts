@@ -23,6 +23,7 @@ import { app, powerMonitor } from "electron";
 import { runScratchCleanup } from "./ScratchCleanupService.js";
 import { runAssistantScratchCleanup } from "./AssistantScratchService.js";
 import { requestAgentCompileCacheCleanup } from "./AgentCompileCacheCleanupService.js";
+import { requestNativeCrashDumpPrune } from "./CrashDumpRetentionService.js";
 import {
   pruneOldLogs,
   pruneHeapSnapshotsAsync,
@@ -128,6 +129,13 @@ class PeriodicCleanupService {
       await pruneHeapSnapshotsAsync(app.getPath("logs"), MAX_HEAP_SNAPSHOTS);
     } catch (err) {
       logError("[PeriodicCleanup] heap snapshot prune threw", err);
+    }
+    try {
+      // Independent of privacy.logRetentionDays — native dumps have their own
+      // fixed age/count/byte policy (crashDumpRetention.ts).
+      await requestNativeCrashDumpPrune();
+    } catch (err) {
+      logError("[PeriodicCleanup] native crash-dump prune threw", err);
     }
     try {
       // Age out assistant audit-log records past the configured retention

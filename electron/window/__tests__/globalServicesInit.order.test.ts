@@ -212,6 +212,10 @@ vi.mock("../../services/AgentCompileCacheCleanupService.js", () => ({
   requestAgentCompileCacheCleanup: vi.fn(async () => {}),
 }));
 
+vi.mock("../../services/CrashDumpRetentionService.js", () => ({
+  requestNativeCrashDumpPrune: vi.fn(async () => null),
+}));
+
 // GpuCrashMonitorService is NOT a deferred task — it stays eager pre-window in
 // main.ts so the `child-process-gone` listener installs before GPU spawn.
 // Mock kept defensively to short-circuit any transitive import via mocked
@@ -803,6 +807,7 @@ describe("initGlobalServices task ordering", () => {
       "help-session-pty",
       "session-eviction",
       "prune-old-logs",
+      "prune-native-crash-dumps",
       "trashed-pid-cleanup",
       "scratch-cleanup",
       "assistant-scratch-cleanup",
@@ -1310,6 +1315,66 @@ describe("initGlobalServices task ordering", () => {
       expect(logErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining("agent compile cache cleanup threw"),
         sweepError
+      );
+    });
+  });
+
+  it("prune-native-crash-dumps task starts the prune without holding the deferred queue", async () => {
+    const { requestNativeCrashDumpPrune } =
+      await import("../../services/CrashDumpRetentionService.js");
+    const requestSpy = requestNativeCrashDumpPrune as ReturnType<typeof vi.fn>;
+    requestSpy.mockClear();
+    let settle: (value: null) => void = () => {};
+    requestSpy.mockReturnValueOnce(
+      new Promise<null>((resolve) => {
+        settle = resolve;
+      })
+    );
+    const fakeRegistry = { all: () => [], size: 0 } as unknown as WindowRegistry;
+    await initGlobalServices(fakeRegistry);
+    expect(requestSpy).not.toHaveBeenCalled();
+
+    const run = registeredTaskRuns.get("prune-native-crash-dumps");
+    expect(run).toBeDefined();
+    // The prune is still pending, but the task has already returned.
+    expect(run!()).toBeUndefined();
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+    settle(null);
+  });
+
+  it("prunes native crash dumps on the disk-critical edge only (#12563)", async () => {
+    const { requestNativeCrashDumpPrune } =
+      await import("../../services/CrashDumpRetentionService.js");
+    const requestSpy = requestNativeCrashDumpPrune as ReturnType<typeof vi.fn>;
+    requestSpy.mockClear();
+
+    const monitorOptions = await captureDiskMonitorOptions();
+
+    monitorOptions.onCriticalChange(false);
+    expect(requestSpy).not.toHaveBeenCalled();
+
+    monitorOptions.onCriticalChange(true);
+    expect(requestSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("logs but does not reject when the disk-critical native crash-dump prune fails", async () => {
+    const { requestNativeCrashDumpPrune } =
+      await import("../../services/CrashDumpRetentionService.js");
+    const { logError } = await import("../../utils/logger.js");
+    const requestSpy = requestNativeCrashDumpPrune as ReturnType<typeof vi.fn>;
+    const logErrorSpy = logError as ReturnType<typeof vi.fn>;
+    requestSpy.mockClear();
+    logErrorSpy.mockClear();
+    const pruneError = new Error("EACCES");
+    requestSpy.mockRejectedValueOnce(pruneError);
+
+    const monitorOptions = await captureDiskMonitorOptions();
+    monitorOptions.onCriticalChange(true);
+
+    await vi.waitFor(() => {
+      expect(logErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("native crash-dump prune threw"),
+        pruneError
       );
     });
   });

@@ -24,6 +24,7 @@ import {
   OWNER_RWX_DIR_MODE,
 } from "../utils/fs.js";
 import { WATCHDOG_KILL_FLAG_NAME } from "../watchdog-host-core.js";
+import { markCrashRecoveryInspectionComplete } from "../utils/crashDumpRetention.js";
 
 const MAX_CRASH_LOGS = 10;
 const MARKER_FILENAME = "running.lock";
@@ -107,6 +108,9 @@ export class CrashRecoveryService {
 
   initialize(): void {
     this.pendingCrash = this.consumeMarker();
+    // The previous session is now classified against the on-disk Crashpad
+    // dumps, so native-dump retention may start deleting them.
+    markCrashRecoveryInspectionComplete();
     this.writeMarker();
     console.log("[CrashRecovery] Initialized, pending crash:", this.pendingCrash !== null);
   }
@@ -1097,9 +1101,10 @@ export class CrashRecoveryService {
     } catch {
       return false;
     }
-    // Crashpad shards dumps across these three subdirectories depending on
-    // their lifecycle. A dump can appear in any of them at next launch.
-    const subdirs = ["new", "pending", "completed"];
+    // macOS and Linux shard dumps across new/pending/completed by lifecycle;
+    // Windows keeps every report in reports/. A dump can appear in any of them
+    // at next launch.
+    const subdirs = ["new", "pending", "completed", "reports"];
     for (const subdir of subdirs) {
       const fullPath = path.join(dumpsDir, subdir);
       try {
