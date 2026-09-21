@@ -310,14 +310,37 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
     window.electron.privacy.openDataFolder();
   };
 
+  const notifyClearCacheFailed = (title: string, message: string, onRetry: () => void) => {
+    notify({
+      type: "error",
+      title,
+      message,
+      actions: [{ label: "Try again", variant: "primary", onClick: onRetry }],
+      context: { eventKind: "uiFeedback" },
+    });
+  };
+
   const handleClearCache = async () => {
     setCacheClearing(true);
     setCacheCleared(false);
     try {
-      await window.electron.privacy.clearCache();
-      setCacheCleared(true);
-      setTimeout(() => setCacheCleared(false), 3000);
+      const { failed } = await window.electron.privacy.clearCache();
+      if (failed === 0) {
+        setCacheCleared(true);
+        setTimeout(() => setCacheCleared(false), 3000);
+      } else {
+        notifyClearCacheFailed(
+          "Couldn't clear all caches",
+          "Some app or browser caches couldn't be removed and still hold cached data.",
+          () => void handleClearCache()
+        );
+      }
     } catch (err) {
+      notifyClearCacheFailed(
+        "Couldn't clear cache",
+        "Cached data couldn't be removed.",
+        () => void handleClearCache()
+      );
       logError("Failed to clear cache", err);
     } finally {
       setCacheClearing(false);
@@ -519,7 +542,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             <SettingsSection
               icon={HardDrive}
               title="Clear cache"
-              description="Clear the HTTP disk cache and code caches. This does not affect your settings or data."
+              description="Clear the HTTP disk and code caches for the app, browser panels, portal, and dev previews. Sign-ins, site data, and settings aren't affected."
             >
               <Button
                 variant="outline"

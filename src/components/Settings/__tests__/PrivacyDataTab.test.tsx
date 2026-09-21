@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor, within } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { PrivacyDataTab } from "../PrivacyDataTab";
 import { ANALYTICS_EVENTS } from "@shared/config/telemetry";
@@ -37,7 +37,7 @@ function createPrivacyApi(overrides: Partial<typeof window.electron.privacy> = {
     setTelemetryLevel: vi.fn().mockResolvedValue(undefined),
     setLogRetention: vi.fn().mockResolvedValue(undefined),
     openDataFolder: vi.fn(),
-    clearCache: vi.fn().mockResolvedValue(undefined),
+    clearCache: vi.fn().mockResolvedValue({ cleared: 5, failed: 0 }),
     resetAllData: vi.fn(),
     ...overrides,
   };
@@ -248,5 +248,82 @@ describe("PrivacyDataTab", () => {
     expect(mockNotify).toHaveBeenCalledWith(
       expect.objectContaining({ type: "error", title: "Couldn't save setting" })
     );
+  });
+
+  describe("clear cache", () => {
+    const clearCacheButton = () => screen.getByText("Clear Cache").closest("button")!;
+
+    type ClearCache = typeof window.electron.privacy.clearCache;
+
+    function renderWithClearCache(clearCache: ClearCache) {
+      window.electron.privacy.clearCache = clearCache;
+      render(<PrivacyDataTab activeSubtab="storage" onSubtabChange={vi.fn()} />);
+    }
+
+    it("shows the cleared label only when every cache cleared", async () => {
+      const clearCache = vi.fn<ClearCache>().mockResolvedValue({ cleared: 5, failed: 0 });
+      renderWithClearCache(clearCache);
+
+      fireEvent.click(clearCacheButton());
+
+      await waitFor(() => {
+        expect(screen.queryByText("Cache Cleared")).not.toBeNull();
+      });
+      expect(mockNotify).not.toHaveBeenCalled();
+    });
+
+    it("reports a partial failure instead of claiming success", async () => {
+      const clearCache = vi.fn<ClearCache>().mockResolvedValue({ cleared: 4, failed: 1 });
+      renderWithClearCache(clearCache);
+
+      fireEvent.click(clearCacheButton());
+
+      await waitFor(() => {
+        expect(mockNotify).toHaveBeenCalledWith(
+          expect.objectContaining({
+            type: "error",
+            title: "Couldn't clear all caches",
+            context: { eventKind: "uiFeedback" },
+          })
+        );
+      });
+      expect(screen.queryByText("Cache Cleared")).toBeNull();
+      expect(clearCacheButton().disabled).toBe(false);
+    });
+
+    it("reports a rejected clear and retries from the toast action", async () => {
+      const retryLabels: string[] = [];
+      let retry: (() => void) | undefined;
+      mockNotify.mockImplementationOnce(
+        (payload: { actions?: Array<{ label: string; onClick: () => void }> }) => {
+          retryLabels.push(...(payload.actions ?? []).map((action) => action.label));
+          retry = payload.actions?.[0]?.onClick;
+        }
+      );
+      const clearCache = vi
+        .fn<ClearCache>()
+        .mockRejectedValueOnce(new Error("IPC fail"))
+        .mockResolvedValueOnce({ cleared: 5, failed: 0 });
+      renderWithClearCache(clearCache);
+
+      fireEvent.click(clearCacheButton());
+
+      await waitFor(() => {
+        expect(mockNotify).toHaveBeenCalledWith(
+          expect.objectContaining({ type: "error", title: "Couldn't clear cache" })
+        );
+      });
+      expect(screen.queryByText("Cache Cleared")).toBeNull();
+
+      expect(retryLabels).toEqual(["Try again"]);
+      act(() => {
+        retry?.();
+      });
+
+      await waitFor(() => {
+        expect(screen.queryByText("Cache Cleared")).not.toBeNull();
+      });
+      expect(clearCache).toHaveBeenCalledTimes(2);
+    });
   });
 });

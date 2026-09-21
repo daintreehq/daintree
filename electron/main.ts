@@ -21,6 +21,7 @@ import { getOsToAppBootMs, markPerformance } from "./utils/performance.js";
 import { getCompileCacheMeta } from "./utils/hostPerformance.js";
 import { startPerformanceTraceIfEnabled } from "./utils/performanceTrace.js";
 import { enforceIpcSenderValidation, setupPermissionLockdown } from "./setup/security.js";
+import { startSessionCacheTracking } from "./services/sessionCacheCleaner.js";
 import {
   registerAppProtocol,
   registerDaintreeFileProtocol,
@@ -745,6 +746,10 @@ if (!gotTheLock) {
     setStopDiskSpaceMonitor,
     windowRegistry,
   });
+
+  // Before whenReady so the eagerly created persist:daintree / persist:portal
+  // sessions are recorded for Settings → Clear cache (#12562).
+  startSessionCacheTracking();
 
   app.whenReady().then(async () => {
     try {

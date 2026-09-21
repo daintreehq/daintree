@@ -1464,7 +1464,7 @@ export interface GeneratedIpcInvokeMap {
   };
   "privacy:clear-cache": {
     args: [];
-    result: void;
+    result: { cleared: number; failed: number };
   };
   "privacy:get-data-folder-path": {
     args: [];
