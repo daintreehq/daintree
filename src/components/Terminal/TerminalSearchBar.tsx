@@ -422,8 +422,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               <span
                 data-terminal-search-status
                 className={cn(
+                  // "No results" and "Invalid regex" step up in ink, not into
+                  // status red: severity-coloured prose is a settled no here, the
+                  // words already say what happened, and the invalid case marks
+                  // the field's own border.
                   "text-xs px-1.5 cursor-help underline decoration-dotted underline-offset-2",
-                  searchStatus === "found" ? "text-text-secondary" : "text-status-error"
+                  searchStatus === "found" ? "text-text-secondary" : "text-text-primary"
                 )}
               >
                 {statusText}
@@ -438,7 +442,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             data-terminal-search-status
             className={cn(
               "text-xs px-1.5",
-              searchStatus === "found" ? "text-text-secondary" : "text-status-error"
+              searchStatus === "found" ? "text-text-secondary" : "text-text-primary"
             )}
           >
             {statusText}
