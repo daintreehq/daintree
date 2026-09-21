@@ -103,7 +103,20 @@ describe("HybridInputBar layout contract", () => {
 
   it("gives the canvas track a zero min-width so it can actually shrink", () => {
     // Flex items default to `min-width: auto`, which stops the canvas
-    // shrinking past its longest unbreakable token.
-    expect(declarations()).toMatch(/className="relative min-w-0 flex-1"/);
+    // shrinking past its longest unbreakable token. Matched on the track's
+    // distinguishing pair rather than its whole class string, so adding an
+    // unrelated utility to it does not fail this.
+    const track = /className="[^"]*\bflex-1\b[^"]*"/.exec(declarations())?.[0] ?? "";
+
+    expect(track).toMatch(/\bmin-w-0\b/);
+  });
+
+  it("holds the canvas track at the control height so one line stays centred", () => {
+    // A single-line canvas is 20px beside 24px controls, so bottom anchoring
+    // alone drops it 2px. The track carries the control height instead.
+    const track = /className="[^"]*\bflex-1\b[^"]*"/.exec(declarations())?.[0] ?? "";
+
+    expect(track).toMatch(/\bmin-h-6\b/);
+    expect(track).toMatch(/\bitems-center\b/);
   });
 });

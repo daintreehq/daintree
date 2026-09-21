@@ -1058,8 +1058,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
                 {/* `min-w-0`: a flex item defaults to `min-width: auto`, so the
                     canvas refused to shrink past its longest unbreakable token
-                    and pushed the trailing controls toward the shell edge. */}
-                <div className="relative min-w-0 flex-1">
+                    and pushed the trailing controls toward the shell edge.
+
+                    `min-h-6` + centring keeps the single-line case aligned. A
+                    one-line canvas is 20px against 24px controls, so bottom
+                    anchoring alone would sit it 2px low — the track holds the
+                    control height and centres the canvas inside it, and once
+                    the draft grows past 24px both are moot. */}
+                <div className="relative flex min-h-6 min-w-0 flex-1 items-center">
                   <div
                     ref={(node) => {
                       editorHostRef.current = node;
