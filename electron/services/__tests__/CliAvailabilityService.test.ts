@@ -9,7 +9,7 @@ import { CliAvailabilityService } from "../CliAvailabilityService.js";
 import { getAgentConfig, getAgentIds } from "../../../shared/config/agentRegistry.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
-import { broadcastToRenderer } from "../../ipc/utils.js";
+import { sendToPrimaryRenderer } from "../../ipc/utils.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { logBuffer } from "../LogBuffer.js";
 import { getLogLevelOverrides, setLogLevelOverrides } from "../../utils/logger.js";
@@ -104,7 +104,7 @@ vi.mock("../../store.js", () => ({
 // without spinning up real BrowserWindows. The CHANNELS module is real
 // (no mock) — the duplicate-emit code uses CHANNELS.NOTIFICATION_SHOW_TOAST.
 vi.mock("../../ipc/utils.js", () => ({
-  broadcastToRenderer: vi.fn(),
+  sendToPrimaryRenderer: vi.fn(),
 }));
 
 /**
@@ -1922,7 +1922,7 @@ describe("CliAvailabilityService", () => {
   });
 
   describe("duplicate CLI detection (#6054)", () => {
-    const mockedBroadcast = vi.mocked(broadcastToRenderer);
+    const mockedBroadcast = vi.mocked(sendToPrimaryRenderer);
 
     it("requests all PATH matches via `which -a` on Unix", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));

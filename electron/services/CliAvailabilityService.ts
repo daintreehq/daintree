@@ -18,7 +18,7 @@ import {
 import { refreshPath, expandWindowsEnvVars } from "../setup/environment.js";
 import { store } from "../store.js";
 import { CHANNELS } from "../ipc/channels.js";
-import { broadcastToRenderer } from "../ipc/utils.js";
+import { sendToPrimaryRenderer } from "../ipc/utils.js";
 import { getDefaultWslDistro } from "../utils/wsl.js";
 import { createLogger } from "../utils/logger.js";
 
@@ -882,7 +882,10 @@ export class CliAvailabilityService {
       const alsoFound = remainder > 0 ? `${preview}, and ${remainder} more` : preview;
 
       try {
-        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        // One renderer, not all of them. Every view mounts the toast listener
+        // and they share a persisted notification history, so a broadcast put
+        // this warning in the inbox once per open project view.
+        sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "warning",
           title: `Multiple ${agentName} installations found`,
           message: `Active: ${active}. Also found: ${alsoFound}. Pick one install method and remove the others so the most up-to-date version launches.`,
