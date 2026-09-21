@@ -513,7 +513,7 @@ describe("SidebarContent workspace error banner — issue #8394", () => {
     // `worktree.restartService` remains enabled even after banner dismissal.
     expect(source).toContain("bannerDismissed");
     expect(source).toContain("setBannerDismissed");
-    expect(source).toMatch(/onClose=\{onBannerDismiss\}/);
+    expect(source).toMatch(/onClose=\{canDismissErrorBanner \? onBannerDismiss : undefined\}/);
     expect(source).not.toContain("useWorktreeStore");
   });
 
@@ -613,6 +613,15 @@ describe("SidebarContent disconnected project — issue #12576", () => {
       /\{worktreeLoadErrorBanner \?\?\s*\(isProjectDisconnected && error === null \? \(\s*<WorktreeLoadErrorBanner error=\{WORKTREE_DISCONNECTED_MESSAGE\} \/>/
     );
     expect(source).toContain("\"The workspace service isn't connected, so worktrees can't load.\"");
+  });
+
+  it("keeps the service error pinned while it is all that explains an empty, disconnected sidebar", () => {
+    // Dismissing it there used to leave a bare "Worktrees" header — no
+    // explanation and no Restart action — once the nudge stopped covering it.
+    expect(source).toContain(
+      "const canDismissErrorBanner = worktrees.length > 0 || !isProjectDisconnected;"
+    );
+    expect(source).toMatch(/error !== null && \(!bannerDismissed \|\| !canDismissErrorBanner\) \?/);
   });
 
   it("keeps the loading skeleton ahead of the disconnected fallback", () => {

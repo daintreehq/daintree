@@ -1572,9 +1572,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
   // working through transient poll failures. Hoisted before the early returns
   // so a `setFatalError` that fires before the first snapshot is still
   // actionable from the zero-worktrees branch — its only recovery path is the
-  // banner's "Restart Service" button.
+  // banner's "Restart Service" button. Over an empty, disconnected sidebar it
+  // is also the only explanation on screen, so it can't be dismissed there.
+  const canDismissErrorBanner = worktrees.length > 0 || !isProjectDisconnected;
   const errorBanner =
-    error !== null && !bannerDismissed ? (
+    error !== null && (!bannerDismissed || !canDismissErrorBanner) ? (
       <InlineStatusBanner
         icon={AlertTriangle}
         title="Workspace service unavailable"
@@ -1582,7 +1584,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
         severity="warning"
         role="status"
         ariaLive="polite"
-        onClose={onBannerDismiss}
+        onClose={canDismissErrorBanner ? onBannerDismiss : undefined}
         closeAriaLabel="Dismiss error"
         actions={[
           {

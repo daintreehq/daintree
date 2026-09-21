@@ -11,14 +11,21 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
  * A load failure worth retrying: one main or the port watchdog reported, or an
  * open project whose worktree store settled without ever receiving a snapshot.
  * The second has no error of its own to show, which is why it used to read as
- * an empty repository instead of a connection failure (#12576).
+ * an empty repository instead of a connection failure (#12576). A workspace
+ * service error is excluded — a crashed host needs `worktree.restartService`,
+ * which Retry's reload can't stand in for.
  */
 function hasRetryableWorktreeLoadFailure(): boolean {
   const { worktreeLoadError, currentProject } = useProjectStore.getState();
   if (worktreeLoadError !== null) return true;
   if (!currentProject) return false;
   const viewState = getCurrentViewStoreOrNull()?.getState();
-  return viewState !== undefined && !viewState.isInitialized && !viewState.isLoading;
+  return (
+    viewState !== undefined &&
+    !viewState.isInitialized &&
+    !viewState.isLoading &&
+    viewState.error === null
+  );
 }
 
 export function registerWorktreeServiceActions(

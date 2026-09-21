@@ -282,6 +282,50 @@ describe("WorktreePortBroker adversarial", () => {
     );
   });
 
+  it("keeps the existing entry when the host refuses a replacement", () => {
+    // A host in restart backoff has no child to take the port. Retiring the
+    // view's entry first would drop it from the reverse map, so the restart's
+    // closePortsForHost → reBrokerForHost pass would never reconnect it.
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+    sendAck(webContents, { token: 1 });
+    host.attachWorktreePort = vi.fn(() => false);
+
+    expect(
+      broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents), { force: true })
+    ).toBe(false);
+
+    expect(broker.hasPort(webContents.id)).toBe(true);
+    expect(createdChannels[0].port1.close).not.toHaveBeenCalled();
+    expect(createdChannels[1].port1.close).toHaveBeenCalledTimes(1);
+    expect(broker.closePortsForHost("/tmp/project")).toEqual([webContents.id]);
+  });
+
+  it("retires a port at the main-frame commit, even one the outgoing document confirmed", () => {
+    // Posted after did-start-navigation fired, so only the commit can tell the
+    // broker the document that received (and acknowledged) it is gone.
+    const broker = new WorktreePortBroker();
+    const host = createHost();
+    const webContents = createWebContents();
+
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+    sendAck(webContents, { token: 1 });
+    webContents.emit("did-navigate", {}, "app://daintree/index.html", 200, "OK");
+
+    expect(broker.hasPort(webContents.id)).toBe(false);
+    expect(createdChannels[0].port1.close).toHaveBeenCalledTimes(1);
+    expect(webContents.listenerCount("did-navigate")).toBe(0);
+    expect(webContents.listenerCount("did-start-navigation")).toBe(0);
+    expect(webContents.listenerCount("destroyed")).toBe(0);
+
+    broker.brokerPort(asWorkspaceHostProcess(host), asWebContents(webContents));
+    expect(createdChannels).toHaveLength(2);
+    expect(webContents.listenerCount("did-navigate")).toBe(1);
+  });
+
   it("stops listening for receipts on dispose", () => {
     const broker = new WorktreePortBroker();
     expect(ipcMain.listenerCount(CHANNELS.WORKTREE_PORT_ACK)).toBe(1);

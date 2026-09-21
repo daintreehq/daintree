@@ -72,8 +72,8 @@ export class WorktreePortBroker {
    * - port2 goes to the renderer WebContentsView
    *
    * A channel the renderer has confirmed to the same host is reused rather than
-   * torn down. Any other existing port for the view is closed first and a fresh
-   * one posted — including an unconfirmed one, which may never have arrived.
+   * torn down. Any other existing port for the view is replaced by a fresh one
+   * — including an unconfirmed one, which may never have arrived.
    */
   brokerPort(
     host: WorkspaceHostProcess,
@@ -108,12 +108,12 @@ export class WorktreePortBroker {
           ? "forced"
           : "unconfirmed";
 
-    // Close existing port for this view if any (also removes old listeners)
-    this.closePortsForView(wcId);
-
     const { port1, port2 } = new MessageChannelMain();
 
-    // Send port1 to the workspace host (uses new worktree port protocol)
+    // Send port1 to the workspace host (uses new worktree port protocol).
+    // Attached before the existing entry is retired: a host mid-restart
+    // refuses the attach, and the view has to stay in `hostToViews` for the
+    // restart's re-broker to find it rather than waiting on another Retry.
     const attached = host.attachWorktreePort(port1);
     if (!attached) {
       port1.close();
@@ -125,6 +125,9 @@ export class WorktreePortBroker {
       });
       return false;
     }
+
+    // Close existing port for this view if any (also removes old listeners)
+    this.closePortsForView(wcId);
 
     const token = ++this.nextToken;
 
@@ -156,17 +159,27 @@ export class WorktreePortBroker {
         this.closePortsForView(wcId);
       }
     };
+    // A port posted while a main-frame navigation is in flight went to the
+    // outgoing document, which can even acknowledge it before the commit
+    // replaces it. `did-start-navigation` fired before this entry existed, so
+    // retire it at the commit instead; the new document's did-finish-load
+    // re-broker then posts one it will actually hold.
+    const onCommit = () => {
+      this.closePortsForView(wcId);
+    };
     const onPortClose = () => {
       this.closePortsForView(wcId);
     };
     webContents.once("destroyed", onDestroyed);
     webContents.on("did-start-navigation", onNavigation);
+    webContents.on("did-navigate", onCommit);
     port1.on("close", onPortClose);
 
     const cleanupListeners = () => {
       port1.removeListener("close", onPortClose);
       webContents.removeListener("destroyed", onDestroyed);
       webContents.removeListener("did-start-navigation", onNavigation);
+      webContents.removeListener("did-navigate", onCommit);
     };
 
     // Track the entry
