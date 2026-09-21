@@ -5,6 +5,7 @@ import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 import { TabButton } from "../TabButton";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
+import { GLYPH_SELECTOR } from "@/components/icons/__tests__/glyphBox";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -423,9 +424,10 @@ describe("TabButton", () => {
     // The state icon is the only element that combines "shrink-0" with
     // "motion-reduce:animate-none" (TabButton.tsx). That class combo is a
     // stable identifier across all six AgentState values.
+    // The working glyph is a CSS-drawn span, the other states are svgs.
     const queryStateIcon = (container: Element) =>
-      Array.from(container.querySelectorAll("svg")).find((svg) => {
-        const cls = svg.getAttribute("class") ?? "";
+      Array.from(container.querySelectorAll(GLYPH_SELECTOR)).find((glyph) => {
+        const cls = glyph.getAttribute("class") ?? "";
         return cls.includes("motion-reduce:animate-none");
       });
 
@@ -435,6 +437,8 @@ describe("TabButton", () => {
       );
       const spinner = container.querySelector(".text-state-working");
       expect(spinner).not.toBeNull();
+      // The helper the negative cases below rely on has to see this glyph.
+      expect(queryStateIcon(container)).toBe(spinner);
     });
 
     it("does not render state icon when agentState='exited'", () => {

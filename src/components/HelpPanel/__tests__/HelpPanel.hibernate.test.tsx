@@ -2088,7 +2088,7 @@ describe("HelpPanel — assistant header state indicator", () => {
     expect(announcer.textContent).toBe("Assistant is working");
     // Exactly one working marker on screen, and it belongs to a tab — not zero (the
     // state would be invisible) and not two (the header would be drawing it again).
-    const markers = container.querySelectorAll("svg.animate-spin-slow");
+    const markers = container.querySelectorAll(".animate-spin-slow");
     expect(markers).toHaveLength(1);
     expect(markers[0]!.closest('[role="tab"]')).not.toBeNull();
   });
