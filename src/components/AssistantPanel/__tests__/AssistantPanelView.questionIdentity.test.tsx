@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { installPreviewShims } from "../__preview__/previewShims";
 import { PROSE_SPECIMEN } from "../__preview__/proseSpecimen";
 import { AssistantPanelView } from "../AssistantPanelView";
@@ -68,13 +69,15 @@ describe("AssistantPanelView question identity", () => {
     const onAnswerQuestion = vi.fn().mockReturnValue(true);
     const view = (q: AssistantQuestion) => (
       <WorktreeStoreProvider>
-        <AssistantPanelView
-          state={stateWith(q)}
-          onSubmit={() => true}
-          onInterrupt={() => {}}
-          onDecideApproval={() => {}}
-          onAnswerQuestion={onAnswerQuestion}
-        />
+        <TooltipProvider>
+          <AssistantPanelView
+            state={stateWith(q)}
+            onSubmit={() => true}
+            onInterrupt={() => {}}
+            onDecideApproval={() => {}}
+            onAnswerQuestion={onAnswerQuestion}
+          />
+        </TooltipProvider>
       </WorktreeStoreProvider>
     );
 

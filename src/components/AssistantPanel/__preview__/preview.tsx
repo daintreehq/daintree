@@ -2,6 +2,8 @@ import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import { WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { UI_TOOLTIP_DELAY_DURATION, UI_TOOLTIP_SKIP_DELAY_DURATION } from "@/lib/animationUtils";
 import { installPreviewShims } from "./previewShims";
 import { useAppThemeStore } from "@/store/appThemeStore";
 import { useTerminalFontStore } from "@/store/terminalFontStore";
@@ -213,7 +215,16 @@ createRoot(document.getElementById("root")!).render(
         fixture threw and the page rendered blank, which is the worst way for a visual
         review tool to fail: it looks like the panel, and it is nothing. */}
     <WorktreeStoreProvider>
-      <App />
+      {/* The composer's attach button carries a tooltip, so the harness needs a provider
+          above it — with the app's own timings, since a review of hover behaviour on
+          Radix's slower defaults would be reviewing a surface the product never shows. */}
+      <TooltipProvider
+        delayDuration={UI_TOOLTIP_DELAY_DURATION}
+        skipDelayDuration={UI_TOOLTIP_SKIP_DELAY_DURATION}
+        disableHoverableContent
+      >
+        <App />
+      </TooltipProvider>
     </WorktreeStoreProvider>
   </StrictMode>
 );
