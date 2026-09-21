@@ -464,9 +464,13 @@ test.describe("Full: agent-state transition latency and hidden-pane delivery", (
     }
   });
 
-  // A TUI re-queries the terminal on focus-in and xterm answers through onData,
-  // the path directing listens on (4fc44b85b2).
-  test("selecting a pane whose agent re-queries on focus-in does not enter directing", async () => {
+  // A TUI can re-query the terminal after pane selection and xterm answers
+  // through onData, the path directing listens on (4fc44b85b2).
+  test("terminal query replies after pane selection do not enter directing", async () => {
+    const windowsSkipReason =
+      "ConPTY does not reliably expose xterm-generated query replies in the child stdin";
+    test.info().annotations.push({ type: "platform-skip", description: windowsSkipReason });
+    test.skip(process.platform === "win32", windowsSkipReason);
     test.setTimeout(180_000);
     const { window } = ctx;
 
@@ -485,6 +489,7 @@ test.describe("Full: agent-state transition latency and hidden-pane delivery", (
     await switchWorktree(window, "main");
     await expect(agentPanel).toBeVisible({ timeout: T_LONG });
     await agentPanel.locator(SEL.terminal.xtermRows).click();
+    await sendFakeAgentCommand(fakeBinDir, "query");
 
     // Every reply must have made the round trip, or the run exercised nothing.
     const replies = () => readFakeAgentStdin(fakeBinDir).slice(stdinBefore);

@@ -25,7 +25,7 @@ export const FAKE_AGENT_STREAM_OFF = "__DAINTREE_FAKE_CLAUDE_STREAM_OFF__";
 
 export const FAKE_AGENT_MARK_OUTPUT = "FAKE_CLAUDE_MARK_";
 
-type FakeAgentCommand = "work" | "idle" | "stream-on" | "stream-off" | "mark";
+type FakeAgentCommand = "work" | "idle" | "stream-on" | "stream-off" | "mark" | "query";
 
 interface FakeAgentEvent {
   cmd: FakeAgentCommand;
@@ -155,6 +155,7 @@ export function installFakeAgent(repoDir: string, options: FakeAgentOptions = {}
       "  else if (cmd === 'stream-on') startStream();",
       "  else if (cmd === 'stream-off') stopStream();",
       "  else if (cmd === 'mark') { markSeq += 1; process.stdout.write(markOutput + markSeq + '\\r\\n'); }",
+      "  else if (cmd === 'query') process.stdout.write('\\u001b[6n\\u001b[c\\u001b]11;?\\u0007');",
       "  else return;",
       "  fs.appendFileSync(eventsFile, JSON.stringify({ cmd, at, streamSeq }) + '\\n');",
       "};",

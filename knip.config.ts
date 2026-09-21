@@ -40,6 +40,8 @@ const config: KnipConfig = {
     "scripts/perf/memory-bench-compare.ts",
     "scripts/perf/memory-growth-compare.ts",
     "scripts/perf/project-switch-rotation-compare.ts",
+    "scripts/perf/foreground-terminal.ts",
+    "scripts/perf/lib/foregroundAgent.cjs",
     "scripts/perf/verify-baselines.ts",
     "scripts/perf/diagnose.ts",
     "scripts/perf/journeys/report.ts",
