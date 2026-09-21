@@ -97,3 +97,6 @@ export { SqliteIcon } from "./SqliteIcon";
 // Terminal tools
 export { TmuxIcon } from "./TmuxIcon";
 export { NeovimIcon } from "./NeovimIcon";
+
+// Formats
+export { MarkdownIcon } from "./MarkdownIcon";
