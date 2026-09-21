@@ -41,6 +41,7 @@ import {
   resetRendererUnpauseBreaker,
 } from "./TerminalReflowController";
 import { resumeXtermRender, suspendXtermRender } from "./xtermRenderSuspension";
+import { guardOverviewRulerRefresh } from "./xtermOverviewRulerGuard";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
@@ -1671,6 +1672,7 @@ class TerminalInstanceService {
     managed.isOpened = true;
     this.clearAttachError(id, managed);
     logDebug(`[TIS] Opened terminal ${id}`);
+    guardOverviewRulerRefresh(managed.terminal);
     // Opened inside a cached view (background restore parks whole projects):
     // suspend before xterm's observer delivers its first "visible" entry.
     if (isProjectViewCached()) suspendXtermRender(managed.terminal);
