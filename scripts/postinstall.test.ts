@@ -58,7 +58,7 @@ describe("postinstall", () => {
     vi.clearAllMocks();
     consoleErrorSpy.mockImplementation(() => {});
     consoleLogSpy.mockImplementation(() => {});
-    mockRebuild.mockResolvedValue(undefined);
+    mockRebuild.mockReset().mockResolvedValue(undefined);
     mockExecSync.mockReturnValue(undefined);
     mockReadFileSync.mockReset().mockReturnValue(UNPATCHED_GYP);
     mockWriteFileSync.mockReset();
@@ -260,6 +260,20 @@ describe("postinstall", () => {
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
     expect(errorCalls).toMatch(/node-pty binding\.gyp patch: ENOENT/);
+  });
+
+  it("fails the install when the patched binding.gyp cannot be written", async () => {
+    mockWriteFileSync.mockImplementation(() => {
+      throw new Error("EACCES: permission denied");
+    });
+
+    await runPostinstall();
+
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(process.exitCode).toBe(1);
+
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/node-pty binding\.gyp patch: EACCES/);
   });
 
   it("reports a patch failure alongside a rebuild failure", async () => {

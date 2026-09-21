@@ -20,9 +20,13 @@ export const DETERMINISTIC_PATTERNS = [
   /404\s+not\s+found/i,
   /\bnpm (error|err!).*(code\s+eresolve|eresolve\s+could\s+not\s+resolve)/i,
   /\bnpm (error|err!).*code\s+epeerinvalid/i,
-  // postinstall could not apply its node-pty binding.gyp patch (scripts/patchNodePtyBinding.cjs)
-  /node-pty binding\.gyp patch/i,
 ];
+
+// Deterministic failures that outrank the transient overrides below: postinstall
+// keeps rebuilding after its node-pty binding.gyp patch fails
+// (scripts/patchNodePtyBinding.cjs), so a network blip in one of those
+// rebuilds must not turn a patch that can never apply into a retry.
+export const PRIORITY_DETERMINISTIC_PATTERNS = [/node-pty binding\.gyp patch/i];
 
 // Transient failures: network disruptions that may resolve on retry.
 export const TRANSIENT_PATTERNS = [
@@ -58,6 +62,10 @@ export const TRANSIENT_OVERRIDE_PATTERNS = [
  */
 export function classifyFailure(stderrText) {
   if (!stderrText) return "unknown";
+
+  for (const pattern of PRIORITY_DETERMINISTIC_PATTERNS) {
+    if (pattern.test(stderrText)) return "deterministic";
+  }
 
   for (const pattern of TRANSIENT_OVERRIDE_PATTERNS) {
     if (pattern.test(stderrText)) return "transient";

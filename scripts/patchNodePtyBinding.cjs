@@ -7,13 +7,27 @@
 // patch finds the define already in place and changes nothing.
 const DEFINE = "NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS";
 
-const ANCHOR = /(['"])target_defaults\1\s*:\s*\{/g;
-const KEY_COLON = /\s*:/y;
+function skipTrivia(source, i) {
+  while (i < source.length) {
+    if (/\s/.test(source[i])) {
+      i++;
+    } else if (source[i] === "#") {
+      const eol = source.indexOf("\n", i);
+      i = eol === -1 ? source.length : eol + 1;
+    } else {
+      break;
+    }
+  }
+  return i;
+}
 
-// Top-level keys of the gyp dict whose `{` sits at `open`, plus its closing index.
-function scanDict(source, open) {
-  const keys = [];
-  let depth = 0;
+// Walks the gyp dict or list opening at `open`, skipping strings and comments.
+// Returns its closing index, its own keys (name → where the value starts),
+// and its own string items.
+function scanContainer(source, open) {
+  const keys = new Map();
+  const items = [];
+  const closers = [];
   for (let i = open; i < source.length; i++) {
     const ch = source[i];
     if (ch === "#") {
@@ -24,35 +38,54 @@ function scanDict(source, open) {
       let end = i + 1;
       while (end < source.length && source[end] !== ch) end += source[end] === "\\" ? 2 : 1;
       if (end >= source.length) return null;
-      KEY_COLON.lastIndex = end + 1;
-      if (depth === 1 && KEY_COLON.test(source)) keys.push(source.slice(i + 1, end));
+      if (closers.length === 1) {
+        const text = source.slice(i + 1, end);
+        const next = skipTrivia(source, end + 1);
+        if (source[next] !== ":") {
+          items.push(text);
+        } else if (keys.has(text) || text.includes("\\")) {
+          throw new Error(
+            `cannot read key '${text}' in node-pty's binding.gyp (duplicate or escaped)`
+          );
+        } else {
+          keys.set(text, next + 1);
+        }
+      }
       i = end;
     } else if (ch === "{" || ch === "[") {
-      depth++;
+      closers.push(ch === "{" ? "}" : "]");
     } else if (ch === "}" || ch === "]") {
-      depth--;
-      if (depth === 0) return { keys, close: i };
+      if (closers.pop() !== ch) return null;
+      if (closers.length === 0) return { open, close: i, keys, items };
     }
   }
   return null;
 }
 
-function patchNodePtyBindingGyp(source) {
-  const anchors = [...source.matchAll(ANCHOR)];
-  if (anchors.length !== 1) {
-    throw new Error(
-      `expected one target_defaults block in node-pty's binding.gyp, found ${anchors.length}`
-    );
-  }
-  const open = anchors[0].index + anchors[0][0].length - 1;
-  const dict = scanDict(source, open);
-  if (!dict) {
-    throw new Error("could not find the end of target_defaults in node-pty's binding.gyp");
-  }
+function containerAt(source, index, bracket, name) {
+  const open = skipTrivia(source, index);
+  const container = source[open] === bracket ? scanContainer(source, open) : null;
+  if (!container) throw new Error(`could not read ${name} in node-pty's binding.gyp`);
+  return container;
+}
 
-  if (dict.keys.includes("defines")) {
-    const block = source.slice(open, dict.close);
-    if (new RegExp(`['"]${DEFINE}(=[^'"]*)?['"]`).test(block)) return source;
+function patchNodePtyBindingGyp(source) {
+  const root = containerAt(source, 0, "{", "the top-level dict");
+  if (!root.keys.has("target_defaults")) {
+    throw new Error("node-pty's binding.gyp has no top-level target_defaults");
+  }
+  const defaults = containerAt(source, root.keys.get("target_defaults"), "{", "target_defaults");
+
+  if (defaults.keys.has("defines")) {
+    const defines = containerAt(
+      source,
+      defaults.keys.get("defines"),
+      "[",
+      "target_defaults.defines"
+    );
+    if (defines.items.some((item) => item === DEFINE || item.startsWith(`${DEFINE}=`))) {
+      return source;
+    }
     // A second `defines` key would silently replace theirs (or ours).
     throw new Error(
       `node-pty's target_defaults already declares defines; add ${DEFINE} to that list instead`
@@ -60,9 +93,11 @@ function patchNodePtyBindingGyp(source) {
   }
 
   const eol = source.includes("\r\n") ? "\r\n" : "\n";
-  const indent = /\n([ \t]*)\S/.exec(source.slice(open))?.[1] ?? "  ";
+  const indent = /\n([ \t]*)\S/.exec(source.slice(defaults.open))?.[1] ?? "  ";
   return (
-    source.slice(0, open + 1) + `${eol}${indent}'defines': ['${DEFINE}'],` + source.slice(open + 1)
+    source.slice(0, defaults.open + 1) +
+    `${eol}${indent}'defines': ['${DEFINE}'],` +
+    source.slice(defaults.open + 1)
   );
 }
 

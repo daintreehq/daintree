@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   classifyFailure,
   DETERMINISTIC_PATTERNS,
+  PRIORITY_DETERMINISTIC_PATTERNS,
   TRANSIENT_OVERRIDE_PATTERNS,
   TRANSIENT_PATTERNS,
 } from "./npm-ci-retry.mjs";
@@ -68,14 +69,6 @@ describe("npm-ci-retry", () => {
 
     it("matches EPEERINVALID", () => {
       const stderr = "npm ERR! code EPEERINVALID\nnpm ERR! peer dependency mismatch\n";
-      expect(classifyFailure(stderr)).toBe("deterministic");
-    });
-
-    it("matches a failed node-pty binding.gyp patch, even beside a network blip", () => {
-      const stderr =
-        "npm error Postinstall failures (1):\n" +
-        "npm error   node-pty binding.gyp patch: expected one target_defaults block in node-pty's binding.gyp, found 0\n" +
-        "npm warn fetch failed, retrying ECONNRESET\n";
       expect(classifyFailure(stderr)).toBe("deterministic");
     });
   });
@@ -218,15 +211,41 @@ Postinstall failures (2):
     it("handles case-insensitive matching", () => {
       expect(classifyFailure("Gyp Err! build failed\neconnreset\n")).toBe("deterministic");
     });
+
+    it("never retries a failed node-pty binding.gyp patch", () => {
+      const patchFailure =
+        "  node-pty binding.gyp patch: node-pty's binding.gyp has no top-level target_defaults\n";
+      expect(classifyFailure(`Postinstall failures (1):\n${patchFailure}`)).toBe("deterministic");
+      expect(classifyFailure(`npm warn fetch failed ECONNRESET\n${patchFailure}`)).toBe(
+        "deterministic"
+      );
+    });
+
+    it("keeps a failed binding.gyp patch deterministic beside a node-gyp network timeout", () => {
+      const stderr = `
+ConnectTimeoutError: Connect Timeout Error (attempted addresses: 104.18.17.205:443, timeout: 10000ms)
+    at onConnectTimeout (/home/runner/work/daintree/daintree/node_modules/node-gyp/node_modules/undici/lib/core/connect.js:237:24) {
+  code: 'UND_ERR_CONNECT_TIMEOUT'
+}
+
+Postinstall failures (2):
+  node-pty binding.gyp patch: node-pty's binding.gyp has no top-level target_defaults
+  node-pty: node-gyp failed to rebuild '/home/runner/work/daintree/daintree/node_modules/node-pty'
+`;
+      expect(TRANSIENT_OVERRIDE_PATTERNS.some((p) => p.test(stderr))).toBe(true);
+      expect(classifyFailure(stderr)).toBe("deterministic");
+    });
   });
 
   describe("pattern coverage", () => {
-    const allDeterministic = DETERMINISTIC_PATTERNS.map((p) => p.source);
+    const allDeterministic = [...PRIORITY_DETERMINISTIC_PATTERNS, ...DETERMINISTIC_PATTERNS].map(
+      (p) => p.source
+    );
     const allTransientOverride = TRANSIENT_OVERRIDE_PATTERNS.map((p) => p.source);
     const allTransient = TRANSIENT_PATTERNS.map((p) => p.source);
 
     it("covers every deterministic pattern", () => {
-      expect(DETERMINISTIC_PATTERNS).toHaveLength(11);
+      expect(DETERMINISTIC_PATTERNS).toHaveLength(10);
     });
 
     it("covers every transient pattern", () => {
