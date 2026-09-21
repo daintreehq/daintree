@@ -82,8 +82,10 @@ function hasSvelteKitApp(
       return found;
     })
     .catch(() => {
-      // A failed lookup is retried next time rather than hiding the button for good.
-      detected.delete(key);
+      // A failed lookup is retried next time rather than hiding the button for
+      // good. Its own entry only: one that outlived the TTL must not evict the
+      // lookup that replaced it.
+      if (detected.get(key)?.pending === pending) detected.delete(key);
       return false;
     });
   detected.set(key, { at: Date.now(), pending });
@@ -106,7 +108,7 @@ export function siteBuilderApplies(context: DevPreviewToolContext): Promise<bool
 
 /** Why a command is refused where the builder does not apply. */
 export const SITE_BUILDER_UNAVAILABLE_REASON =
-  "SvelteKit Tools needs a SvelteKit app in this worktree";
+  "SvelteKit Tools couldn't find a SvelteKit app in this worktree";
 
 /**
  * The dev preview toolbar toggle. Where it is shown is the host's call — it

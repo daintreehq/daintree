@@ -313,9 +313,10 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
         `detect:${args.projectId}:${args.worktreeId}:${worktreePath}`,
         () => discoverSvelteKitApps(scopedReader, worktreePath)
       );
-      // `complete` is not decoration: zero apps on a truncated walk is a scan
-      // that ran out, and a caller that reads it as "no SvelteKit here" is
-      // reporting a conclusion we never reached.
+      // `complete` is how sure the count is, not whether the tool applies: the
+      // toggle needs an app that was found, since almost every real repository
+      // stops the walk. Zero apps on a truncated walk is still "none found",
+      // never "no SvelteKit here".
       return { appCount: discovery.apps.length, complete: discovery.complete };
     }
   );

@@ -541,8 +541,13 @@ export class InspectorController implements DevPreviewToolSession {
       worktreeId: context.worktreeId,
       worktreePath: context.worktreePath,
     });
-    this.pageReady = context.isWebviewReady && context.url.length > 0;
-    if (this.pageReady && this.state.binding.status === "failed") {
+    const pageReady = context.isWebviewReady && context.url.length > 0;
+    // The page arriving is a new round whatever the binding is doing: a bind
+    // already in flight when it arrives would otherwise fail into a budget
+    // the wait for the server had spent, and stop trying beside a live page.
+    if (pageReady && !this.pageReady) this.connectAttempts = 0;
+    this.pageReady = pageReady;
+    if (pageReady && this.state.binding.status === "failed") {
       // A fresh round, not the next step of the old one: the failures so far
       // were a preview with no page, and a bind that now loses a race with the
       // page registering itself would otherwise wait out a backoff grown for
@@ -871,6 +876,12 @@ export class InspectorController implements DevPreviewToolSession {
   async detach(): Promise<void> {
     const binding = this.state.binding;
     this.bindRequest++;
+    // Superseding the request silences any retry waiting on it, so the state
+    // must stop promising one.
+    this.clearConnectRetry();
+    if (binding.status === "failed" && binding.retrying) {
+      this.patchState({ binding: { ...binding, retrying: false } });
+    }
     if (binding.status !== "bound") return;
     this.patchState({
       binding: { status: "detached", panelId: binding.panelId, reason: "requested" },
