@@ -166,8 +166,8 @@ function inspector(page: Page) {
 
 /**
  * SvelteKit Tools against a real SvelteKit 2 / Svelte 5 / Tailwind 4
- * dev server, through the real app: enable the built-in, switch it on from the
- * plugin tray so it starts the site in a dev preview, toggle it from the
+ * dev server, through the real app: enable the built-in, switch it on with its
+ * command so it starts the site in a dev preview, toggle it from the
  * preview's own toolbar, point at an element, walk up to the component that
  * drew it, then hand that component to an agent terminal and watch the site
  * change.
@@ -264,7 +264,7 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     expect(kinds.map((kind) => kind.id).filter((id) => id.startsWith(PLUGIN_ID))).toEqual([]);
   });
 
-  test("the plugin tray switches SvelteKit Tools on, starting the site in a dev preview", async () => {
+  test("the command switches SvelteKit Tools on, starting the site in a dev preview", async () => {
     const { window } = ctx;
     const port = await freePort();
     await saveCurrentProjectSettings(window, {
@@ -272,8 +272,8 @@ test.describe.serial("Plugin: SvelteKit Tools", () => {
     });
     await expect(window.locator("webview")).toHaveCount(0);
 
-    await window.getByRole("button", { name: "Plugin tray" }).click();
-    await window.getByRole("menuitem", { name: TOGGLE_TITLE }).click();
+    const result = await dispatch(window, TOGGLE_ACTION);
+    expect(result.ok).toBe(true);
 
     // Toggling a tool uses none of the plugin's capabilities, so no confirm.
     await expect(window.getByRole("dialog", { name: `Run '${TOGGLE_TITLE}'?` })).toHaveCount(0);

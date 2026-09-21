@@ -165,7 +165,7 @@ export async function activate(host: BuiltinPluginHostApi): Promise<() => void> 
       keywords: ["svelte", "sveltekit", "tools", "inspect", "inspector", "preview", "agent"],
       // Toggling a preview tool exercises none of the plugin's capabilities, so
       // it asks for none: the host elevates a command to a confirm prompt from
-      // what it requires, and a dialog on every toolbar click is not that.
+      // what it requires, and a dialog on every run of the command is not that.
       requires: [],
     },
     async () => host.dispatch("devPreview.toggleTool", { toolId: BUILDER_TOOL_ID })
