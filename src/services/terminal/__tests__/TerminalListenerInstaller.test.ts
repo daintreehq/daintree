@@ -496,6 +496,53 @@ describe("installTerminalBoundListeners", () => {
     expect(deps.onWriteParsedReflow).toHaveBeenCalledWith(managed);
   });
 
+  it("keeps parsed output live without scrolling an already pinned viewport", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged();
+    const deps = makeDeps();
+    terminal.buffer.active.baseY = 2000;
+    terminal.buffer.active.viewportY = 2000;
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(managed.terminal, managed, "t1", deps);
+
+    captured.onWriteParsed!();
+    expect(deps.scrollToBottomSafe).not.toHaveBeenCalled();
+    expect(deps.notifyParsed).toHaveBeenCalledWith("t1");
+    expect(deps.onWriteParsedReflow).toHaveBeenCalledWith(managed);
+
+    // New output can move the tail ahead of the viewport. Following it must
+    // still work, even though a previous parsed chunk needed no scroll.
+    terminal.buffer.active.baseY = 2001;
+    captured.onWriteParsed!();
+    expect(deps.scrollToBottomSafe).toHaveBeenCalledWith(managed);
+  });
+
+  it("preserves selection and user scrollback while avoiding redundant tail refreshes", () => {
+    const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
+    const terminal = makeMockTerminal(captured);
+    const managed = makeMockManaged();
+    const deps = makeDeps();
+    managed.terminal = terminal as unknown as ManagedTerminal["terminal"];
+    installTerminalBoundListeners(managed.terminal, managed, "t1", deps);
+
+    terminal.hasSelection.mockReturnValue(true);
+    captured.onWriteParsed!();
+    expect(managed.isUserScrolledBack).toBe(true);
+    expect(deps.updateScrollState).toHaveBeenCalledWith("t1", true);
+
+    terminal.hasSelection.mockReturnValue(false);
+    terminal.buffer.active.baseY = 100;
+    captured.onWriteParsed!();
+    expect(deps.scrollToBottomSafe).not.toHaveBeenCalled();
+
+    managed.isUserScrolledBack = false;
+    managed.isAltBuffer = true;
+    captured.onWriteParsed!();
+    expect(deps.scrollToBottomSafe).not.toHaveBeenCalled();
+    expect(deps.notifyParsed).toHaveBeenCalledTimes(3);
+  });
+
   it("populates and clears the cached selection on selection change", () => {
     const captured: CapturedCallbacks = { onTitleChangeHandlers: [] };
     const terminal = makeMockTerminal(captured);

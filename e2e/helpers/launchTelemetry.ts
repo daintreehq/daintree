@@ -150,11 +150,10 @@ function stderrWrite(chunk: unknown, encodingOrCb?: unknown, cb?: unknown): bool
     // Swallow — don't forward raw Playwright debug to GHA stderr.
     return true;
   }
-  return originalStderrWrite!.call(
-    process.stderr,
+  return Reflect.apply(originalStderrWrite!, process.stderr, [
     chunk,
-    ...([encodingOrCb, cb].filter(Boolean) as Parameters<typeof process.stderr.write>)
-  ) as boolean;
+    ...[encodingOrCb, cb].filter(Boolean),
+  ]) as boolean;
 }
 
 export function install(): void {

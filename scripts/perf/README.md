@@ -607,3 +607,19 @@ The compare refuses (exit 2) when the two runs' configs differ in anything but l
 The output is Chromium's JSON Trace Event Format — open it directly at https://ui.perfetto.dev (drag-and-drop the `.json` file, no conversion needed).
 
 Tracing adds measurable overhead to the traced process, so `--trace` is opt-in and gated behind a second env flag (`DAINTREE_PERF_TRACE`) that normal runs never set. **Do not mix `--trace` runs into baseline timing numbers** — capture traces in a separate session. Trace files can be large (tens of MB) and are transient build artifacts under `.tmp/`.
+
+## Foreground agent terminal
+
+`foreground-terminal` measures a real visible Electron/WebGL terminal on Apple Silicon macOS using a deterministic local agent fixture. Build with `npm run build:e2e` first, then close any test app before rebuilding. It uses a temporary profile and repository, launches the fixture through the agent toolbar, and leaves the installed application and user agent configuration alone.
+
+```sh
+npm run perf foreground-terminal -- --scenario spinner --seconds 30 --rounds 3 --output .tmp/perf-results/foreground-spinner.json
+```
+
+Choose exactly one scenario: `idle` (waiting agent), `spinner` (10 Hz changing composer), `redundant` (10 Hz identical composer), `stream` (20 lines/second), `typing` (5 characters/second), or `two-spinner` (two visible working agents). The window is 1728 × 1000 CSS pixels at DPR 2 with Menlo 12px. Every round starts a fresh app and waits eight seconds after the expected agent state appears.
+
+The native desktop must stay unlocked. The sampler rejects a locked session before launch and at both measurement endpoints; renderer power-saving mode is also rejected. For unattended comparisons, keep the display awake for the bounded run (for example, `caffeinate -d -i -t 1800`) and do not change focus or lock the screen. This does not change persistent power settings.
+
+CPU is cumulative CPU time across Electron's app-process inventory, expressed as percent of one core. Shells and agent subprocesses are excluded. GPU is the matching processes' macOS AGX accumulated device time divided by elapsed wall time; it is **not** utilization of all GPU cores, and excludes WindowServer. Neither metric measures power consumption. The JSON records the apparatus and built-app hashes, actual terminal geometry, process breakdown, render and write counts, input latency samples, and working-to-waiting latency. A changed process/GPU-client inventory, missing output, inadequate output cadence, unconfirmed input, or missing state transition fails the run.
+
+Use identical apparatus and geometry for both arms, measure serially without concurrent tests/builds, and interleave fresh reference runs. A single reading is not a speedup claim. `--trace` adds renderer CPU profiles, Chromium traces, and refresh call stacks for diagnosis; those runs are explicitly marked diagnostic and must not be compared with ordinary measurements. This benchmark is a mechanism measurement: rendering, IPC, PTY and the state detector are real, but the producer is synthetic and does not establish arbitrary live-agent detection accuracy or model performance.
