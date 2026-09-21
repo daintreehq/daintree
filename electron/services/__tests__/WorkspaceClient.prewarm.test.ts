@@ -39,7 +39,7 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
       return `req-${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
     }
 
-    send = vi.fn(() => true);
+    send = vi.fn((_msg?: unknown) => true);
 
     sendWithResponse = vi.fn(<T>(request: { requestId: string; type: string }): Promise<T> => {
       return new Promise<T>((resolve, reject) => {
@@ -52,6 +52,19 @@ const { mockHosts, MockWorkspaceHostProcess } = vi.hoisted(() => {
     resumeHealthCheck = vi.fn();
     dispose = vi.fn(() => {
       this._isDisposed = true;
+    });
+
+    // Mirrors the real host: the policy is cached for replay on every host and
+    // only delivered to the ones the client chose.
+    cachedWorkspacePolicy: unknown = null;
+    setWorkspacePowerPolicy = vi.fn((policy: unknown, deliver: boolean) => {
+      this.cachedWorkspacePolicy = policy;
+      if (deliver) this.send({ type: "set-workspace-power-policy", policy });
+    });
+
+    flushWorkspacePowerPolicy = vi.fn(() => {
+      if (this.cachedWorkspacePolicy === null) return;
+      this.send({ type: "set-workspace-power-policy", policy: this.cachedWorkspacePolicy });
     });
 
     setLogLevelOverrides = vi.fn();
