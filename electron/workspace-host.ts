@@ -566,7 +566,7 @@ port.on("message", async (rawMsg: any) => {
         break;
 
       case "refresh":
-        await workspaceService.refresh(request.requestId, request.worktreeId);
+        await workspaceService.refresh(request.requestId, request.worktreeId, request.reason);
         break;
 
       case "refresh-on-wake":
@@ -642,8 +642,8 @@ port.on("message", async (rawMsg: any) => {
         );
         break;
 
-      case "set-polling-enabled":
-        workspaceService.setPollingEnabled(request.enabled);
+      case "set-workspace-power-policy":
+        workspaceService.setWorkspacePowerPolicy(request.policy);
         break;
 
       case "set-pr-poll-cadence":

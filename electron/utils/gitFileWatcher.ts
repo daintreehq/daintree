@@ -196,11 +196,14 @@ export class GitFileWatcher {
   private disposed = false;
   private worktreeSubscription: { unsubscribe(): Promise<void> } | null = null;
   private readonly worktreePath: string;
-  private readonly debounceMs: number;
-  private readonly worktreeMinDebounceMs: number;
-  private readonly worktreeMaxDebounceMs: number;
-  private readonly worktreeMaxWaitMs: number | undefined;
-  private readonly worktreeLeadingDebounceMs: number | undefined;
+  // Debounce policy is retimed in place by `updateDebouncePolicy` when the app
+  // stops being watched, so these are not readonly. A timer already armed
+  // keeps its original delay; the next event uses the new policy.
+  private debounceMs: number;
+  private worktreeMinDebounceMs: number;
+  private worktreeMaxDebounceMs: number;
+  private worktreeMaxWaitMs: number | undefined;
+  private worktreeLeadingDebounceMs: number | undefined;
   private readonly worktreeQuietWindowMs: number;
   private lastWorktreeFlushAt = 0;
   /** Per-event ramp applied inside the min..max range. Private tuning constant. */
@@ -259,6 +262,26 @@ export class GitFileWatcher {
     this.onEmfileLimitReached = options.onEmfileLimitReached;
     this.currentBranch = options.branch;
     this.watchWorktree = options.watchWorktree ?? false;
+  }
+
+  /**
+   * Retime the debounce policy on a running watcher. Cheaper and safer than
+   * disposing and re-arming: no directory re-walk, and no window in which an
+   * event lands with nothing listening. In-flight timers keep the delay they
+   * were armed with — at most one more burst reports at the old cadence.
+   */
+  updateDebouncePolicy(policy: {
+    debounceMs: number;
+    worktreeMinDebounceMs: number;
+    worktreeMaxDebounceMs: number;
+    worktreeMaxWaitMs: number | undefined;
+    worktreeLeadingDebounceMs: number | undefined;
+  }): void {
+    this.debounceMs = policy.debounceMs;
+    this.worktreeMinDebounceMs = policy.worktreeMinDebounceMs;
+    this.worktreeMaxDebounceMs = policy.worktreeMaxDebounceMs;
+    this.worktreeMaxWaitMs = policy.worktreeMaxWaitMs;
+    this.worktreeLeadingDebounceMs = policy.worktreeLeadingDebounceMs;
   }
 
   async start(): Promise<boolean> {

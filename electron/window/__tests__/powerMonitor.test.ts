@@ -63,7 +63,8 @@ function createMockWorkspaceClient(overrides: Partial<WorkspaceClient> = {}): Wo
   return {
     pauseHealthCheck: vi.fn(),
     resumeHealthCheck: vi.fn(),
-    setPollingEnabled: vi.fn(),
+    setWorkspacePowerPolicy: vi.fn(),
+    updateMonitorConfig: vi.fn(),
     waitForReady: vi.fn().mockResolvedValue(undefined),
     refresh: vi.fn().mockResolvedValue(undefined),
     refreshOnWake: vi.fn().mockResolvedValue(undefined),
@@ -88,7 +89,7 @@ describe("setupPowerMonitor", () => {
 
     mockGetAllWindows = vi.fn(() => []);
     // Default to a focused window so existing resume tests still see
-    // setPollingEnabled(true) — the blur-during-resume guard is exercised
+    // the workspace policy push — the blur-during-resume guard is exercised
     // in dedicated tests below.
     mockGetFocusedWindow = vi.fn(() => ({}));
 
@@ -158,7 +159,9 @@ describe("setupPowerMonitor", () => {
     expect(ptyClient.pauseHealthCheck).toHaveBeenCalledTimes(1);
     expect(ptyClient.pauseAll).toHaveBeenCalledTimes(1);
     expect(workspaceClient.pauseHealthCheck).toHaveBeenCalledTimes(1);
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
+    expect(workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ statusAllowed: false })
+    );
   });
 
   it("does not trigger refresh before the 2s resume debounce elapses", async () => {
@@ -172,7 +175,7 @@ describe("setupPowerMonitor", () => {
     await vi.advanceTimersByTimeAsync(1999);
 
     expect(workspaceClient.waitForReady).not.toHaveBeenCalled();
-    expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    expect(workspaceClient.setWorkspacePowerPolicy).not.toHaveBeenCalled();
     expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
   });
 
@@ -184,8 +187,8 @@ describe("setupPowerMonitor", () => {
         callLog.push("waitForReady");
         return Promise.resolve();
       }),
-      setPollingEnabled: vi.fn((enabled: boolean) => {
-        callLog.push(`setPollingEnabled(${enabled})`);
+      setWorkspacePowerPolicy: vi.fn((policy: { statusAllowed: boolean }) => {
+        callLog.push(`setWorkspacePowerPolicy(status=${policy.statusAllowed})`);
       }),
       resumeHealthCheck: vi.fn(() => {
         callLog.push("resumeHealthCheck");
@@ -213,7 +216,7 @@ describe("setupPowerMonitor", () => {
 
     expect(callLog).toEqual([
       "waitForReady",
-      "setPollingEnabled(true)",
+      "setWorkspacePowerPolicy(status=true)",
       "resumeHealthCheck",
       "refreshOnWake",
     ]);
@@ -247,7 +250,9 @@ describe("setupPowerMonitor", () => {
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ statusAllowed: true })
+    );
   });
 
   it("cancels a pending resume refresh when a suspend arrives before the debounce fires", async () => {
@@ -263,8 +268,12 @@ describe("setupPowerMonitor", () => {
     await vi.advanceTimersByTimeAsync(3000);
 
     expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(false);
-    expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    expect(workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ statusAllowed: false })
+    );
+    expect(workspaceClient.setWorkspacePowerPolicy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ statusAllowed: true })
+    );
   });
 
   it("still resumes pty and broadcasts SYSTEM_WAKE when workspaceClient is null", async () => {
@@ -347,7 +356,7 @@ describe("setupPowerMonitor", () => {
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(workspaceClient.waitForReady).toHaveBeenCalledTimes(1);
-    expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalled();
+    expect(workspaceClient.setWorkspacePowerPolicy).not.toHaveBeenCalled();
     expect(workspaceClient.resumeHealthCheck).not.toHaveBeenCalled();
     expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
     expect(wc.send).not.toHaveBeenCalled();
@@ -355,7 +364,9 @@ describe("setupPowerMonitor", () => {
     resolveReady!();
     await vi.advanceTimersByTimeAsync(0);
 
-    expect(workspaceClient.setPollingEnabled).toHaveBeenCalledWith(true);
+    expect(workspaceClient.setWorkspacePowerPolicy).toHaveBeenCalledWith(
+      expect.objectContaining({ statusAllowed: true })
+    );
     expect(workspaceClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
     expect(workspaceClient.refreshOnWake).toHaveBeenCalledTimes(1);
     expect(wc.send).toHaveBeenCalledWith(
@@ -378,11 +389,12 @@ describe("setupPowerMonitor", () => {
     expect(workspaceClient.refresh).not.toHaveBeenCalled();
   });
 
-  it("does not re-enable polling on resume if the app is still fully blurred", async () => {
-    // Scenario: user blurs app → blur-throttle pauses polling → machine
-    // suspends → wakes while no window is focused. Resume must NOT
-    // re-enable polling, otherwise the blur pause is silently undone.
-    // The power policy re-enables polling on the next focus event.
+  it("restores status polling on resume when a window is still visible but blurred", async () => {
+    // A machine that sleeps and wakes with Daintree visible on a second screen
+    // reports IDENTICAL observations before and after: still visible, still
+    // blurred. Nothing fires, so recovery has to reconcile the policy itself
+    // rather than wait for a change that never comes — otherwise suspend's
+    // withdrawal is permanent and the sidebar never ticks again.
     mockGetFocusedWindow.mockReturnValue(null);
     const workspaceClient = createMockWorkspaceClient();
     setupPowerMonitor({
@@ -390,14 +402,19 @@ describe("setupPowerMonitor", () => {
       getWorkspaceClient: () => workspaceClient,
     });
 
+    powerHandlers.get("suspend")!();
     powerHandlers.get("resume")!();
     await vi.advanceTimersByTimeAsync(2000);
 
     expect(workspaceClient.waitForReady).toHaveBeenCalledTimes(1);
-    expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    expect(workspaceClient.setWorkspacePowerPolicy).toHaveBeenLastCalledWith({
+      statusAllowed: true,
+      backgroundWorkAllowed: false,
+      attenuated: true,
+    });
     expect(workspaceClient.resumeHealthCheck).toHaveBeenCalledTimes(1);
-    // The wake refresh is owed to the next focus rather than run unseen — the
-    // power policy pays it once when the user comes back.
+    // The network refresh is a different question: nobody is waiting on it, so
+    // it stays owed to whoever comes back.
     expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
   });
 
@@ -414,7 +431,9 @@ describe("setupPowerMonitor", () => {
     powerHandlers.get("resume")!();
     await vi.advanceTimersByTimeAsync(2000);
 
-    expect(workspaceClient.setPollingEnabled).not.toHaveBeenCalledWith(true);
+    expect(workspaceClient.setWorkspacePowerPolicy).not.toHaveBeenCalledWith(
+      expect.objectContaining({ statusAllowed: true })
+    );
     expect(workspaceClient.refreshOnWake).not.toHaveBeenCalled();
   });
 

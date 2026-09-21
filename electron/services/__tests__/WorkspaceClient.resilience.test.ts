@@ -2740,16 +2740,37 @@ describe("WorkspaceClient multi-process manager", () => {
         const requestTypes = (host: MockHost) =>
           host.sendWithResponse.mock.calls.map(([req]: any) => req.type);
 
-        it("re-enables polling only on attached hosts, but disables it everywhere", async () => {
+        it("grants permissions only to attached hosts, but withdraws them everywhere", async () => {
           await oneAttachedOneDormant();
 
-          client.setPollingEnabled(true);
+          const active = {
+            statusAllowed: true,
+            backgroundWorkAllowed: true,
+            attenuated: false,
+          };
+          client.setWorkspacePowerPolicy(active);
           expect(h(0).send).not.toHaveBeenCalled();
-          expect(h(1).send).toHaveBeenCalledWith({ type: "set-polling-enabled", enabled: true });
+          expect(h(1).send).toHaveBeenCalledWith({
+            type: "set-workspace-power-policy",
+            policy: active,
+          });
 
-          client.setPollingEnabled(false);
-          expect(h(0).send).toHaveBeenCalledWith({ type: "set-polling-enabled", enabled: false });
-          expect(h(1).send).toHaveBeenCalledWith({ type: "set-polling-enabled", enabled: false });
+          // Attenuation is not a grant: a host that keeps watching still has to
+          // hear that it may stop fetching, dormant or not.
+          const unwatched = {
+            statusAllowed: true,
+            backgroundWorkAllowed: false,
+            attenuated: true,
+          };
+          client.setWorkspacePowerPolicy(unwatched);
+          expect(h(0).send).toHaveBeenCalledWith({
+            type: "set-workspace-power-policy",
+            policy: unwatched,
+          });
+          expect(h(1).send).toHaveBeenCalledWith({
+            type: "set-workspace-power-policy",
+            policy: unwatched,
+          });
         });
 
         it("refresh, refreshOnWake and refreshPullRequests reach only attached hosts", async () => {

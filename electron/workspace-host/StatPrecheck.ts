@@ -11,6 +11,21 @@ const FS_OP_TIMEOUT_MS = 5_000;
 // worktrees. Recursive-watched worktrees are exempt: their watcher observes
 // every working-tree write and forces a refresh itself.
 const FULL_STATUS_MAX_AGE_MS = 120_000;
+/**
+ * The same ceiling for a recursively-watched worktree, matched to the watcher
+ * tier's 5-minute heartbeat.
+ *
+ * Recursive coverage used to be a blanket exemption: its watcher observes every
+ * working-tree write, so a skip was always trustworthy. That reasoning holds
+ * only while the watcher actually reports. A watcher that has silently gone
+ * dark — the case the heartbeat exists to catch — leaves the pre-check skipping
+ * forever, and because a skip stamps `lastGitStatusCompletedAt` the
+ * heartbeat-gap detector sees a perfectly healthy monitor. The heartbeat was
+ * never the safety net it was documented to be. Bounding the skip at the
+ * heartbeat's own period costs one full status per worktree per five minutes
+ * and makes the net real.
+ */
+const RECURSIVE_FULL_STATUS_MAX_AGE_MS = 300_000;
 // Sentinel for "this git path doesn't exist". Used so the baseline can
 // stably record absence (packed-refs, detached HEAD's branch ref) and still
 // match on the next stat pass without forcing a real git check.
@@ -156,19 +171,21 @@ export class StatPrecheck {
     );
   }
 
-  private isFullStatusRecent(): boolean {
-    return Date.now() - this.fullStatusAt < FULL_STATUS_MAX_AGE_MS;
+  private isFullStatusRecent(maxAgeMs: number): boolean {
+    return Date.now() - this.fullStatusAt < maxAgeMs;
   }
 
   /**
-   * Whether the caller may skip a full git-status pass. Only trustworthy
-   * while a recursive watcher covers the working tree (its events force
-   * refreshes) or the baseline is still within FULL_STATUS_MAX_AGE_MS of the
-   * last full pass — past that, pure working-tree edits on an
-   * unwatched/git-only worktree would stay invisible indefinitely.
+   * Whether the caller may skip a full git-status pass. Trustworthy only while
+   * the baseline is still within the coverage's staleness budget of the last
+   * full pass: two minutes unwatched or git-only, where pure working-tree edits
+   * perturb nothing we stat, and five minutes under a recursive watcher, whose
+   * events force refreshes but only for as long as it is genuinely reporting.
    */
   async shouldSkip(gitDir: string, recursivelyWatched: boolean): Promise<boolean> {
-    const skipTrustworthy = recursivelyWatched || this.isFullStatusRecent();
+    const skipTrustworthy = this.isFullStatusRecent(
+      recursivelyWatched ? RECURSIVE_FULL_STATUS_MAX_AGE_MS : FULL_STATUS_MAX_AGE_MS
+    );
     if (this.baseline === null || !skipTrustworthy) return false;
 
     const baselineAt = this.baselineAt;

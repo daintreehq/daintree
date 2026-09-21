@@ -24,6 +24,7 @@ import { SnapshotBuilder, type SnapshotBuilderHost } from "./SnapshotBuilder.js"
 import { StatPrecheck, type StatPrecheckHost } from "./StatPrecheck.js";
 import { BaseDivergence, type BaseDivergenceHost } from "./BaseDivergence.js";
 import { GitStatusPass, type GitStatusPassHost } from "./GitStatusPass.js";
+import type { StatusAdmissionController } from "./StatusAdmissionController.js";
 import { withTimeout } from "../utils/withTimeout.js";
 
 // Hard ceiling for individual filesystem syscalls on the poll path. On a
@@ -60,6 +61,21 @@ const STATUS_INITIAL_DELAY_MAX_MS = 5_000;
 function randomBetween(minMs: number, maxMs: number): number {
   if (maxMs <= minMs) return minMs;
   return minMs + Math.floor(Math.random() * (maxMs - minMs));
+}
+
+/**
+ * What a monitor may run right now, derived by WorkspaceService from the
+ * project lifecycle and the app-wide power policy together. Three permissions
+ * rather than one boolean: observing a worktree, fetching from its remote, and
+ * how expensively we may act on what we observe are separately affordable.
+ */
+export interface WorktreePollingPermissions {
+  /** Git status may run and the watcher may stay armed. */
+  status: boolean;
+  /** Scheduled network fetch and resource-command polling may run. */
+  backgroundWork: boolean;
+  /** Coalesce harder and meter automatic status passes. */
+  attenuated: boolean;
 }
 
 export interface WorktreeMonitorConfig {
@@ -161,11 +177,19 @@ export class WorktreeMonitor {
   private resumeTimer: NodeJS.Timeout | null = null;
   private _isRunning: boolean = false;
   private _isUpdating: boolean = false;
-  // False while the project is backgrounded (WorkspaceService.pause). Gates
-  // fetch and resource polling outright; status work and the watcher are
-  // gated on `statusWorkAllowed`, which lets an agent-active worktree keep
-  // them through a pause.
-  private pollingEnabled: boolean = true;
+  // Whether this worktree may run git status and hold a watcher at all.
+  // Withdrawn when the project is backgrounded (WorkspaceService.pause) or
+  // nobody can see a window; an agent-active worktree keeps working through
+  // either, via `statusWorkAllowed`.
+  private statusPollingEnabled: boolean = true;
+  // Whether scheduled *network* fetch and resource-command polling may run.
+  // Held to the stricter "someone is looking" bar than status work: a fetch
+  // nobody is waiting on can wait, and it costs a request rather than a stat.
+  private backgroundPollingEnabled: boolean = true;
+  // Consume change signals cheaply: longer watcher coalescing, and automatic
+  // status passes admitted through the host's rate budget. Set while nobody is
+  // looking. Never stops observation — only paces what we do about it.
+  private attenuated: boolean = false;
   // Set when a pause tore down a recursive watcher, so resume can tell the
   // file browser its listings may have missed writes in the meantime.
   private recursiveLostToPause: boolean = false;
@@ -303,6 +327,8 @@ export class WorktreeMonitor {
   private pollingStrategy: AdaptivePollingStrategy;
   private noteReader: NoteFileReader;
   private pollQueue?: PQueue;
+  /** Host-wide budget for automatic status passes while attenuated. */
+  private readonly statusAdmission?: StatusAdmissionController;
   private readonly snapshotBuilder: SnapshotBuilder;
   private readonly statPrecheck: StatPrecheck;
   private readonly baseDivergence: BaseDivergence;
@@ -326,8 +352,10 @@ export class WorktreeMonitor {
     private callbacks: WorktreeMonitorCallbacks,
     private mainBranch: string,
     pollQueue?: PQueue,
-    generation: number = 0
+    generation: number = 0,
+    statusAdmission?: StatusAdmissionController
   ) {
+    this.statusAdmission = statusAdmission;
     this.id = worktree.id;
     this.generation = generation;
     this.path = worktree.path;
@@ -368,7 +396,7 @@ export class WorktreeMonitor {
         return monitor._isRunning;
       },
       get pollingEnabled() {
-        return monitor.pollingEnabled;
+        return monitor.backgroundPollingEnabled;
       },
       get isCurrent() {
         return monitor._isCurrent;
@@ -393,7 +421,7 @@ export class WorktreeMonitor {
         return monitor._isRunning;
       },
       get pollingEnabled() {
-        return monitor.pollingEnabled;
+        return monitor.backgroundPollingEnabled;
       },
       get hasResourceConfig() {
         return monitor._hasResourceConfig;
@@ -464,7 +492,17 @@ export class WorktreeMonitor {
         // detached, that rethrow would reach the host's exit-on-unhandled-
         // rejection guard. This path also drains requests parked with
         // `markPending()` (resume catch-up, heartbeat-gap recovery).
-        void monitor.updateGitStatus(true).catch(() => {});
+        //
+        // Admission is a no-op while someone is looking — a save reaches the
+        // sidebar without waiting behind anyone. While attenuated it bounds
+        // how fast N worktrees under agent writes may fork git, coalescing to
+        // one pending pass each rather than dropping any.
+        const run = () => void monitor.updateGitStatus(true).catch(() => {});
+        if (monitor.statusAdmission) {
+          monitor.statusAdmission.request(monitor.id, run);
+        } else {
+          run();
+        }
       },
       onInotifyLimitReached: (worktreeId: string) =>
         monitor.callbacks.onInotifyLimitReached?.(worktreeId),
@@ -1103,7 +1141,7 @@ export class WorktreeMonitor {
     if (!changed || !this._isRunning) {
       return;
     }
-    if (!value && !this.pollingEnabled) {
+    if (!value && !this.statusPollingEnabled) {
       // The agent finished while the project is backgrounded: this worktree
       // is now as idle as its neighbours, so it lets go of its watcher and
       // poll loop the same way. Its final state lands with resume's catch-up.
@@ -1133,12 +1171,13 @@ export class WorktreeMonitor {
   }
 
   /**
-   * Status work (watcher-driven refreshes and the timed poll) runs while the
-   * project is in the foreground, and on a backgrounded project only where an
-   * agent is working — that worktree's freshness is the product's core loop.
+   * Status work (watcher-driven refreshes and the timed poll) runs while this
+   * worktree's project is in the foreground of a window someone could look at,
+   * and where neither holds only where an agent is working — that worktree's
+   * freshness is the product's core loop.
    */
   private get statusWorkAllowed(): boolean {
-    return this.pollingEnabled || this._agentActive;
+    return this.statusPollingEnabled || this._agentActive;
   }
 
   get isMainWorktree(): boolean {
@@ -1570,6 +1609,8 @@ export class WorktreeMonitor {
     this._pollAbortController.abort();
     this.clearTimers();
     this.watcherController.stop();
+    // A parked automatic pass would run against a stopped monitor.
+    this.statusAdmission?.cancel(this.id);
   }
 
   /**
@@ -1640,18 +1681,77 @@ export class WorktreeMonitor {
   }
 
   /**
-   * The project was backgrounded. Fetch and resource polling stop everywhere.
-   * A worktree without a working agent also stops its status poll and lets go
-   * of its watcher entirely — including the focused one, since nobody is
-   * looking at it. An agent-active worktree keeps both.
+   * Apply the permissions WorkspaceService derived from the project lifecycle
+   * and the app-wide power policy. The single entry point: both axes reach the
+   * monitor through here, so neither can overwrite the other's decision.
+   *
+   * Attenuation is applied first and unconditionally — a worktree that keeps
+   * working through a pause (an agent is running in it) must still pick up the
+   * cheaper cadence.
    */
-  pausePolling(): void {
-    this.pollingEnabled = false;
-    this.fetchScheduler.clearTimer();
-    this.clearResourcePollTimer();
+  applyPollingPermissions(permissions: WorktreePollingPermissions): void {
+    this.applyAttenuation(permissions.attenuated);
+    this.backgroundPollingEnabled = permissions.backgroundWork;
+    if (!permissions.backgroundWork) {
+      this.fetchScheduler.clearTimer();
+      this.clearResourcePollTimer();
+    }
+    if (permissions.status === this.statusPollingEnabled) {
+      if (permissions.backgroundWork && this._isRunning) {
+        this.scheduleResourcePoll();
+        this.fetchScheduler.schedule(true);
+      }
+      return;
+    }
+    if (permissions.status) {
+      this.resumeStatusPolling(permissions.backgroundWork);
+    } else {
+      this.pauseStatusPolling();
+    }
+  }
+
+  /**
+   * Status work is withdrawn. A worktree without a working agent stops its
+   * status poll and lets go of its watcher entirely — including the focused
+   * one, since nobody can see it. An agent-active worktree keeps both.
+   */
+  private pauseStatusPolling(): void {
+    this.statusPollingEnabled = false;
     if (!this._agentActive) {
       this.suspendStatusWork();
     }
+  }
+
+  /**
+   * Retime this monitor for the attenuated or full cadence. The watcher stays
+   * armed across the transition: tearing it down and rebuilding would cost a
+   * full directory walk and open a window where events are lost outright,
+   * which is the failure this whole change exists to remove.
+   */
+  private applyAttenuation(attenuated: boolean): void {
+    if (this.attenuated === attenuated) return;
+    this.attenuated = attenuated;
+    this.watcherController.setAttenuated(attenuated);
+    // The armed poll timer still holds the old cadence. Re-arming it is safe
+    // here — unlike `resumePolling`'s catch-up, nothing is owed, so dropping
+    // the pending timer loses nothing.
+    if (this.pollingTimer) {
+      clearTimeout(this.pollingTimer);
+      this.pollingTimer = null;
+      this.scheduleNextPoll();
+    }
+  }
+
+  /**
+   * The project was backgrounded. Kept as the direct entry point for the
+   * lifecycle-only path and its tests; permission changes route through
+   * {@link applyPollingPermissions}.
+   */
+  pausePolling(): void {
+    this.backgroundPollingEnabled = false;
+    this.fetchScheduler.clearTimer();
+    this.clearResourcePollTimer();
+    this.pauseStatusPolling();
   }
 
   /**
@@ -1663,11 +1763,22 @@ export class WorktreeMonitor {
    * `reschedulePolling()` could clear, dropping the catch-up) is needed.
    */
   resumePolling(): void {
-    if (!this._isRunning) return;
+    this.backgroundPollingEnabled = true;
+    this.resumeStatusPolling(true);
+  }
+
+  private resumeStatusPolling(scheduleBackgroundWork: boolean): void {
+    if (!this._isRunning) {
+      // Still record the grant: `start()` reads `statusWorkAllowed`, so a
+      // monitor that has not started yet must not begin life suspended after
+      // the permission that suspended it was lifted.
+      this.statusPollingEnabled = true;
+      return;
+    }
 
     const wasSuspended = !this.statusWorkAllowed;
     this.pollingStrategy.reset();
-    this.pollingEnabled = true;
+    this.statusPollingEnabled = true;
 
     if (wasSuspended) {
       this.watcherController.ensureState();
@@ -1682,8 +1793,10 @@ export class WorktreeMonitor {
       }, jitter);
     }
 
-    this.scheduleResourcePoll();
-    this.fetchScheduler.schedule(true);
+    if (scheduleBackgroundWork) {
+      this.scheduleResourcePoll();
+      this.fetchScheduler.schedule(true);
+    }
   }
 
   /**

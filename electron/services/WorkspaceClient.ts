@@ -41,6 +41,7 @@ import type {
 } from "../../shared/types/ipc.js";
 import type { ProjectPulse, PulseRangeDays } from "../../shared/types/pulse.js";
 import type { GitFileDiffResult } from "../../shared/types/ipc/git.js";
+import type { WorkspacePollingPolicy } from "../../shared/types/powerPolicy.js";
 import type { HostLoadKind } from "./ProjectSwitchStatusTiming.js";
 
 const STATES_INFLIGHT_COALESCE_WINDOW_MS = 150;
@@ -272,7 +273,7 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
-  async refresh(worktreeId?: string): Promise<void> {
+  async refresh(worktreeId?: string, reason: "manual" | "focus" = "manual"): Promise<void> {
     for (const entry of this.pool.attachedEntries()) {
       try {
         const requestId = entry.host.generateRequestId();
@@ -280,6 +281,7 @@ export class WorkspaceClient extends EventEmitter {
           type: "refresh",
           requestId,
           worktreeId,
+          reason,
         });
       } catch {
         // Host may be crashed
@@ -361,12 +363,21 @@ export class WorkspaceClient extends EventEmitter {
     }
   }
 
-  setPollingEnabled(enabled: boolean): void {
-    // Disabling reaches every host; re-enabling only the attached ones, or each
-    // focus regain would restart a paused dormant host's watchers and polling.
-    const targets = enabled ? this.pool.attachedEntries() : this.pool.entries.values();
+  /**
+   * Push the app-wide workspace power policy. The host holds it as its own
+   * input and derives what it may run from it *and* its project-lifecycle
+   * state, so this never un-backgrounds a paused project.
+   *
+   * A policy that withdraws a permission reaches every host; one that grants
+   * reaches only the attached ones. A dormant host that is retained behind a
+   * cached view must not be woken by a focus return — it catches up when a
+   * window re-attaches and foregrounds it.
+   */
+  setWorkspacePowerPolicy(policy: WorkspacePollingPolicy): void {
+    const grantsOnly = policy.statusAllowed && policy.backgroundWorkAllowed;
+    const targets = grantsOnly ? this.pool.attachedEntries() : this.pool.entries.values();
     for (const entry of targets) {
-      entry.host.send({ type: "set-polling-enabled", enabled });
+      entry.host.send({ type: "set-workspace-power-policy", policy });
     }
   }
 

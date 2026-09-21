@@ -26,6 +26,7 @@ import type {
 import type { CIStatusState, Credentials, RepoRef } from "./forge.js";
 import type { ForgeProviderMatcher } from "../utils/forgeHostnames.js";
 import type { PluginWorktreeLinked } from "./plugin.js";
+import type { WorkspacePollingPolicy } from "./powerPolicy.js";
 import type {
   CopyTreeOptions,
   CopyTreeProgress,
@@ -483,7 +484,17 @@ export type WorkspaceHostRequest =
   | { type: "get-monitor"; requestId: string; worktreeId: string }
   // Worktree operations
   | { type: "set-active"; requestId: string; worktreeId: string; silent?: boolean }
-  | { type: "refresh"; requestId: string; worktreeId?: string }
+  | {
+      type: "refresh";
+      requestId: string;
+      worktreeId?: string;
+      /**
+       * `focus` marks the automatic revalidation main fires when the user
+       * comes back. Only that one is throttled — a manual refresh, a project
+       * activation and an owed wake recovery must always run.
+       */
+      reason?: "manual" | "focus";
+    }
   | { type: "refresh-on-wake"; requestId: string }
   | { type: "refresh-prs"; requestId: string }
   | { type: "get-pr-status"; requestId: string }
@@ -533,8 +544,9 @@ export type WorkspaceHostRequest =
       offset?: number;
       maxBytes?: number;
     }
-  // Polling control
-  | { type: "set-polling-enabled"; enabled: boolean }
+  // App-wide workspace power policy. The host keeps it as a separate input
+  // from its own project-lifecycle state and derives permissions from both.
+  | { type: "set-workspace-power-policy"; policy: WorkspacePollingPolicy }
   // PR polling cadence control (window-focus aware)
   | { type: "set-pr-poll-cadence"; focused: boolean }
   // WSL-routed git opt-in / banner dismissal (Windows only)

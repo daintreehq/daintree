@@ -225,4 +225,34 @@ describe("WorkspaceService refresh resilience (escape hatch)", () => {
       success: true,
     });
   });
+
+  it("throttles repeated automatic focus revalidations but never a manual one", async () => {
+    const m1 = registerMonitor("/test/wt-1");
+    vi.spyOn(service as any, "discoverAndSyncWorktrees").mockResolvedValue(undefined);
+    const r1 = vi.spyOn(m1, "refresh").mockResolvedValue(undefined);
+
+    await service.refresh("focus-1", undefined, "focus");
+    expect(r1).toHaveBeenCalledTimes(1);
+
+    // Cycling windows: the second and third arrive inside the throttle window
+    // and coalesce into the first. They still answer, so the caller is never
+    // left waiting on a reply that will not come.
+    await service.refresh("focus-2", undefined, "focus");
+    await service.refresh("focus-3", undefined, "focus");
+    expect(r1).toHaveBeenCalledTimes(1);
+    expect(mockSendEvent).toHaveBeenCalledWith({
+      type: "refresh-result",
+      requestId: "focus-3",
+      success: true,
+    });
+
+    // The user pressing Refresh is not an automatic revalidation and must
+    // always run, throttle window or not.
+    await service.refresh("manual-1");
+    expect(r1).toHaveBeenCalledTimes(2);
+
+    vi.setSystemTime(Date.now() + 5_001);
+    await service.refresh("focus-4", undefined, "focus");
+    expect(r1).toHaveBeenCalledTimes(3);
+  });
 });
