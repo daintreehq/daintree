@@ -17,10 +17,28 @@ const { getAllAtFileTokens } = await import("../../hybridInputParsing");
 
 const CWD = "/Users/greg/Projects/daintree";
 
+/** The slice of a dispatched transaction spec these specs read back. */
+interface DispatchedSpec {
+  changes: { from: number; insert: string };
+  effects: { value: ChipValue }[];
+  selection: { anchor: number };
+}
+
+interface ChipValue {
+  from: number;
+  to: number;
+  filePath: string;
+  fileName?: string;
+  fileSize?: number;
+  thumbnailUrl?: string;
+}
+
+type Dispatch = Mock<(spec: DispatchedSpec) => void>;
+
 /** `before` is the document text ahead of the caret; whitespace unless a test says otherwise. */
 function fakeView(head = 0, before = " ".repeat(head)) {
-  const dispatch = vi.fn();
-  const focus = vi.fn();
+  const dispatch: Dispatch = vi.fn<(spec: DispatchedSpec) => void>();
+  const focus = vi.fn<() => void>();
   const view = {
     state: {
       selection: { main: { head } },
@@ -29,16 +47,20 @@ function fakeView(head = 0, before = " ".repeat(head)) {
     dispatch,
     focus,
   } as unknown as EditorView;
-  return { view, dispatch, focus, ref: { current: view } as React.RefObject<EditorView | null> };
+  const ref: React.RefObject<EditorView | null> = { current: view };
+  return { view, dispatch, focus, ref };
 }
 
-function insertedText(dispatch: ReturnType<typeof vi.fn>): string {
-  return dispatch.mock.calls[0]?.[0]?.changes?.insert as string;
+function dispatched(dispatch: Dispatch): DispatchedSpec {
+  return dispatch.mock.calls[0]![0];
 }
 
-function effectValues(dispatch: ReturnType<typeof vi.fn>): Record<string, unknown>[] {
-  const effects = dispatch.mock.calls[0]?.[0]?.effects as { value: Record<string, unknown> }[];
-  return effects.map((e) => e.value);
+function insertedText(dispatch: Dispatch): string {
+  return dispatched(dispatch).changes.insert;
+}
+
+function effectValues(dispatch: Dispatch): ChipValue[] {
+  return dispatched(dispatch).effects.map((e) => e.value);
 }
 
 function deferred<T>() {
@@ -50,20 +72,24 @@ function deferred<T>() {
 }
 
 let pickAttachments: Mock<() => Promise<string[]>>;
-let thumbnailFromPath: ReturnType<typeof vi.fn>;
+let thumbnailFromPath: Mock<(filePath: string) => Promise<{ thumbnailDataUrl: string }>>;
 
 beforeEach(() => {
   logError.mockClear();
   pickAttachments = vi.fn<() => Promise<string[]>>(async () => []);
-  thumbnailFromPath = vi.fn(async () => ({ thumbnailDataUrl: "data:image/png;base64,x" }));
-  (window as unknown as { electron: unknown }).electron = {
-    clipboard: { pickAttachments, thumbnailFromPath },
-  };
+  thumbnailFromPath = vi.fn<(filePath: string) => Promise<{ thumbnailDataUrl: string }>>(
+    async () => ({ thumbnailDataUrl: "data:image/png;base64,x" })
+  );
+  Object.defineProperty(window, "electron", {
+    configurable: true,
+    writable: true,
+    value: { clipboard: { pickAttachments, thumbnailFromPath } },
+  });
 });
 
 afterEach(() => {
   vi.restoreAllMocks();
-  delete (window as unknown as { electron?: unknown }).electron;
+  Reflect.deleteProperty(window, "electron");
 });
 
 describe("useAttachFiles", () => {
@@ -162,12 +188,12 @@ describe("useAttachFiles", () => {
     // Image effects are emitted ahead of file effects, so read them back in
     // document order.
     const spans = effectValues(dispatch)
-      .sort((a, b) => (a.from as number) - (b.from as number))
-      .map((chip) => insert.slice((chip.from as number) - head, (chip.to as number) - head));
+      .sort((a, b) => a.from - b.from)
+      .map((chip) => insert.slice(chip.from - head, chip.to - head));
     expect(spans[1]).toBe("/tmp/b.png");
     expect(getAllAtFileTokens(spans[0]!).map((t) => t.path)).toEqual(["a.ts"]);
     expect(getAllAtFileTokens(spans[2]!).map((t) => t.path)).toEqual(["c d.md"]);
-    expect(dispatch.mock.calls[0]![0].selection).toEqual({ anchor: head + insert.length });
+    expect(dispatched(dispatch).selection).toEqual({ anchor: head + insert.length });
   });
 
   // Type a sentence, then reach for the button: the caret sits right after the
@@ -185,9 +211,7 @@ describe("useAttachFiles", () => {
     const doc = before + insertedText(dispatch);
     expect(getAllAtFileTokens(doc).map((t) => t.path)).toEqual(["a.ts"]);
     expect(doc.split(/\s+/)).toContain("/tmp/b.png");
-    const spans = effectValues(dispatch).map((chip) =>
-      doc.slice(chip.from as number, chip.to as number)
-    );
+    const spans = effectValues(dispatch).map((chip) => doc.slice(chip.from, chip.to));
     expect(spans.sort()).toEqual(["/tmp/b.png", "@a.ts"].sort());
   });
 
@@ -233,7 +257,7 @@ describe("useAttachFiles", () => {
   });
 
   it("doesn't open the picker when there is no editor to insert into", async () => {
-    const ref = { current: null } as React.RefObject<EditorView | null>;
+    const ref: React.RefObject<EditorView | null> = { current: null };
     const { result } = renderHook(() => useAttachFiles(ref, CWD));
 
     await act(async () => {
@@ -248,7 +272,7 @@ describe("useAttachFiles", () => {
     pickAttachments.mockReturnValue(pending.promise);
     const original = fakeView();
     const replacement = fakeView();
-    const ref = original.ref as { current: EditorView | null };
+    const ref = original.ref;
     const { result } = renderHook(() => useAttachFiles(ref, CWD));
 
     let run!: Promise<void>;
@@ -277,7 +301,7 @@ describe("useAttachFiles", () => {
     act(() => {
       run = result.current();
     });
-    (ref as { current: EditorView | null }).current = null;
+    ref.current = null;
 
     await act(async () => {
       pending.resolve([`${CWD}/a.ts`]);

@@ -270,8 +270,9 @@ describe("useDragDrop", () => {
       await result.current.handleDrop(dropEvent([fakeFile("App.tsx")]));
     });
 
-    const insert = dispatch.mock.calls[0]?.[0]?.changes?.insert as string;
-    expect(getAllAtFileTokens(before + insert).map((t) => t.path)).toEqual(["src/App.tsx"]);
+    expect(getAllAtFileTokens(before + insertedToken(dispatch)).map((t) => t.path)).toEqual([
+      "src/App.tsx",
+    ]);
     expect(chipSpellings(dispatch, before.length)).toEqual(["@src/App.tsx"]);
   });
 
