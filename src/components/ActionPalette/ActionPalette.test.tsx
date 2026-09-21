@@ -62,6 +62,8 @@ import type {
 } from "@/hooks/useActionPalette";
 import { usePaletteStore } from "@/store/paletteStore";
 import { usePreferencesStore } from "@/store/preferencesStore";
+import { useActionPrefsStore } from "@/store/actionPrefsStore";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
 function makeItem(id: string, title: string): ActionPaletteItemType {
   return {
@@ -528,6 +530,168 @@ describe("ActionPalette", () => {
       // The control is presentational inside `role="option"` now, so it carries
       // no name of its own — identify it by the row it belongs to instead.
       expect(hideButtons[0]?.closest('[role="option"]')?.textContent).toContain("Beta");
+    });
+  });
+
+  describe("row-control keyboard commands", () => {
+    // The pin and hide controls are presentational spans inside `role="option"`,
+    // so these chords are their only keyboard path. They act on whichever row
+    // aria-activedescendant names, and DOM focus never leaves the input.
+    const ROWS = [makeItem("a.alpha", "Alpha"), makeItem("b.beta", "Beta")];
+
+    const SECTIONED = [
+      { id: "favorites", label: "Favorites", start: 0, count: 1 },
+      { id: "category:worktree", label: "Worktrees", start: 1, count: 1 },
+    ];
+
+    beforeEach(() => {
+      useActionPrefsStore.setState({ pinnedActionIds: [], hiddenActionIds: [] });
+      useAnnouncerStore.setState({ polite: null, assertive: null });
+    });
+
+    function renderRows(props: Partial<React.ComponentProps<typeof ActionPalette>> = {}) {
+      const pinAction = vi.fn((_item: ActionPaletteItemType) => true);
+      const unpinAction = vi.fn((_id: string) => {});
+      const hideAction = vi.fn((_item: ActionPaletteItemType) => {});
+      render(
+        <ActionPalette
+          {...baseProps}
+          query="al"
+          results={ROWS}
+          totalResults={ROWS.length}
+          selectedIndex={1}
+          pinAction={pinAction}
+          unpinAction={unpinAction}
+          hideAction={hideAction}
+          {...props}
+        />
+      );
+      return { pinAction, unpinAction, hideAction };
+    }
+
+    it("pins the active row and announces it", () => {
+      const { pinAction } = renderRows();
+
+      expect(fireKey("p", { altKey: true })).toBe(true);
+
+      expect(pinAction).toHaveBeenCalledTimes(1);
+      expect(pinAction.mock.calls[0]?.[0]).toMatchObject({ id: "b.beta" });
+      expect(useAnnouncerStore.getState().polite?.msg).toContain("Beta");
+    });
+
+    it("unpins when the active row is already pinned", () => {
+      useActionPrefsStore.setState({ pinnedActionIds: ["b.beta"] });
+      const { pinAction, unpinAction } = renderRows();
+
+      fireKey("p", { altKey: true });
+
+      expect(unpinAction).toHaveBeenCalledWith("b.beta");
+      expect(pinAction).not.toHaveBeenCalled();
+    });
+
+    it("announces the refusal when the active row can't be pinned", () => {
+      const pinAction = vi.fn((_item: ActionPaletteItemType) => false);
+      renderRows({ pinAction });
+
+      fireKey("p", { altKey: true });
+
+      expect(pinAction).toHaveBeenCalledTimes(1);
+      expect(useAnnouncerStore.getState().assertive?.msg).toMatch(/destructive/i);
+    });
+
+    it("hides the active row on the search body, where every row offers it", () => {
+      const { hideAction } = renderRows();
+
+      expect(fireKey("h", { altKey: true })).toBe(true);
+
+      expect(hideAction).toHaveBeenCalledTimes(1);
+      expect(hideAction.mock.calls[0]?.[0]).toMatchObject({ id: "b.beta" });
+    });
+
+    it("refuses to hide a browse row outside Recently used", () => {
+      // The control isn't rendered there either — offering the command would
+      // promise an eviction that rail can't perform.
+      const { hideAction } = renderRows({ query: "", sections: SECTIONED });
+
+      fireKey("h", { altKey: true });
+
+      expect(hideAction).not.toHaveBeenCalled();
+    });
+
+    it("hides a Recently used row on the browse rail", () => {
+      const { hideAction } = renderRows({
+        query: "",
+        sections: [
+          { id: "favorites", label: "Favorites", start: 0, count: 1 },
+          { id: "recently-used", label: "Recently used", start: 1, count: 1 },
+        ],
+      });
+
+      fireKey("h", { altKey: true });
+
+      expect(hideAction).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses to hide a pinned row", () => {
+      useActionPrefsStore.setState({ pinnedActionIds: ["b.beta"] });
+      const { hideAction } = renderRows();
+
+      fireKey("h", { altKey: true });
+
+      expect(hideAction).not.toHaveBeenCalled();
+    });
+
+    it("leaves DOM focus in the search input", () => {
+      const { pinAction } = renderRows();
+      const input = document.createElement("input");
+      document.body.appendChild(input);
+      input.focus();
+
+      const onKeyDown = lastSearchablePaletteProps.current?.onKeyDown as (
+        e: React.KeyboardEvent<HTMLInputElement>
+      ) => void;
+      act(() => {
+        onKeyDown({
+          key: "p",
+          altKey: true,
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: false,
+          currentTarget: input,
+          preventDefault: () => {},
+          get defaultPrevented() {
+            return true;
+          },
+        } as unknown as React.KeyboardEvent<HTMLInputElement>);
+      });
+
+      expect(pinAction).toHaveBeenCalledTimes(1);
+      expect(document.activeElement).toBe(input);
+      input.remove();
+    });
+
+    it("claims the chord even on a row that doesn't offer the command", () => {
+      // Unhandled, macOS would compose ⌥H into a dead-key symbol in the query.
+      renderRows({ query: "", sections: SECTIONED });
+      expect(fireKey("h", { altKey: true })).toBe(true);
+    });
+
+    it("surfaces both chords in the footer while the active row offers them", () => {
+      renderRows();
+      expect(screen.getByText("pin")).toBeTruthy();
+      expect(screen.getByText("hide")).toBeTruthy();
+    });
+
+    it("drops the hide hint when the active row can't be hidden", () => {
+      renderRows({ query: "", sections: SECTIONED });
+      expect(screen.getByText("pin")).toBeTruthy();
+      expect(screen.queryByText("hide")).toBeNull();
+    });
+
+    it("names the inverse once the active row is pinned", () => {
+      useActionPrefsStore.setState({ pinnedActionIds: ["b.beta"] });
+      renderRows();
+      expect(screen.getByText("unpin")).toBeTruthy();
     });
   });
 });

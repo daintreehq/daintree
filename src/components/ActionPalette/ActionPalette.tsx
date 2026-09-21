@@ -13,7 +13,10 @@ import {
   UI_EXIT_EASING,
 } from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
-import { ActionPaletteItem } from "./ActionPaletteItem";
+import { isMac } from "@/lib/platform";
+import { parseChord } from "@/lib/kbdShortcut";
+import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
+import { ActionPaletteItem, HIDE_SHORTCUT, PIN_SHORTCUT } from "./ActionPaletteItem";
 import {
   RECENTLY_USED_SECTION_ID,
   type ActionPaletteItem as ActionPaletteItemType,
@@ -47,6 +50,25 @@ const PREFIX_MAP: Record<string, PrefixRouteSpec> = {
 };
 
 const COMMANDS_LABEL = PREFIX_MAP[">"]!.label;
+
+// Display tokens for the row-control chords, resolved once: the platform can't
+// change under a running renderer.
+const PIN_CHORD_KEYS = parseChord(PIN_SHORTCUT, isMac())[0] ?? [];
+const HIDE_CHORD_KEYS = parseChord(HIDE_SHORTCUT, isMac())[0] ?? [];
+
+/**
+ * Which row command an Alt chord names, or null.
+ *
+ * macOS composes Option+letter into a symbol (⌥P arrives as "π"), so `code` is
+ * the layout-independent read; `key` is the fallback for platforms and tests
+ * that don't populate it.
+ */
+function altCommandLetter(e: React.KeyboardEvent): "pin" | "hide" | null {
+  const token = (e.code || e.key).toLowerCase();
+  if (token === "keyp" || token === "p") return "pin";
+  if (token === "keyh" || token === "h") return "hide";
+  return null;
+}
 
 // A query that contains `/`, `\`, or a leading `.` / `~` looks like a path or
 // filename — surface the projects hint so users discover the prefix. Heuristic
@@ -302,8 +324,57 @@ export function ActionPalette({
     animationDuration: UI_PALETTE_EXIT_DURATION,
   });
 
+  // Hide only evicts from the frecency band, so the command is offered exactly
+  // where the control is: on any search row, or on a Recently used row of the
+  // browse rail. Offering it elsewhere would promise an eviction that row can't
+  // perform.
+  const canHideIndex = useCallback(
+    (index: number): boolean => {
+      if (!showSections) return true;
+      const band = sections.find((section) => section.id === RECENTLY_USED_SECTION_ID);
+      return band !== undefined && index >= band.start && index < band.start + band.count;
+    },
+    [showSections, sections]
+  );
+
+  const activeItem = selectedIndex >= 0 ? results[selectedIndex] : undefined;
+  const activeIsPinned = activeItem !== undefined && pinnedActionIds.includes(activeItem.id);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLInputElement>) => {
+      // The row's pin and hide controls are presentational spans — ARIA forbids
+      // interactive descendants of `role="option"` — so the only keyboard path
+      // to them is here, against whichever row aria-activedescendant names.
+      // DOM focus never leaves the input.
+      if (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey) {
+        const command = altCommandLetter(e);
+        if (command) {
+          // Claimed whether or not it applies to this row: on macOS the
+          // unhandled chord would otherwise compose a dead-key symbol into the
+          // query.
+          e.preventDefault();
+          const item = selectedIndex >= 0 ? results[selectedIndex] : undefined;
+          if (!item) return;
+          const isPinned = pinnedActionIds.includes(item.id);
+          const announce = useAnnouncerStore.getState().announce;
+          if (command === "pin") {
+            if (isPinned) {
+              unpinAction(item.id);
+              announce(`${item.title} unpinned from Favorites`);
+            } else if (pinAction(item)) {
+              announce(`${item.title} pinned to Favorites`);
+            } else {
+              announce("Can't pin destructive actions", "assertive");
+            }
+            return;
+          }
+          if (isPinned || item.danger === "confirm" || !canHideIndex(selectedIndex)) return;
+          hideAction(item);
+          announce(`${item.title} hidden from Recently used`);
+          return;
+        }
+      }
+
       // Backspace at position 0 (no selection) pops the active chip and
       // restores global action search. Mirrors the asymmetric Escape stack:
       // first Backspace clears the mode, subsequent Backspace acts normally.
@@ -341,7 +412,17 @@ export function ActionPalette({
       // exits, which is what lets the prefix-hint close effect still run.
       usePaletteStore.getState().openPalette(route.paletteId);
     },
-    [activeMode, query]
+    [
+      activeMode,
+      query,
+      results,
+      selectedIndex,
+      pinnedActionIds,
+      pinAction,
+      unpinAction,
+      hideAction,
+      canHideIndex,
+    ]
   );
 
   // Mirror showSections (`!query.trim()`) so a whitespace-only buffer collapses
@@ -374,6 +455,17 @@ export function ActionPalette({
     (selectedItem: ActionPaletteItemType | null): React.ReactNode => {
       let body: React.ReactNode;
 
+      // The row controls have no other discoverable surface — they're
+      // presentational spans with a mouse tooltip — so the chord that reaches
+      // them rides the footer, and only while the row actually offers it.
+      const rowHints: { keys: string[]; label: string }[] = [];
+      if (activeItem) {
+        rowHints.push({ keys: PIN_CHORD_KEYS, label: activeIsPinned ? "unpin" : "pin" });
+        if (!activeIsPinned && activeItem.danger !== "confirm" && canHideIndex(selectedIndex)) {
+          rowHints.push({ keys: HIDE_CHORD_KEYS, label: "hide" });
+        }
+      }
+
       // Mode-active footer: name what Enter does in the current scope so the
       // user can't accidentally fire the wrong primary action.
       if (activeMode === "commands") {
@@ -383,7 +475,7 @@ export function ActionPalette({
             // Backspace keeps its chip: inside a mode it pops the scope rather
             // than deleting a character, which is the one thing here a user
             // can't infer from every other list they've used.
-            hints={[{ keys: ["⌫"], label: "exit scope" }]}
+            hints={[{ keys: ["⌫"], label: "exit scope" }, ...rowHints]}
           />
         );
       } else if (results.length === 0 && looksLikePath(query)) {
@@ -395,7 +487,7 @@ export function ActionPalette({
         // so we keep that affordance while still owning the wrapper id used by
         // aria-describedby.
         const phrase = `to ${(selectedItem?.title ?? "Run action").trim().toLowerCase()}`;
-        body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} />;
+        body = <PaletteFooterHints primaryHint={{ keys: ["↵"], label: phrase }} hints={rowHints} />;
       }
 
       return (
@@ -405,7 +497,17 @@ export function ActionPalette({
         </div>
       );
     },
-    [activeMode, query, results.length, footerHintId, showPrefixHints]
+    [
+      activeMode,
+      query,
+      results.length,
+      footerHintId,
+      showPrefixHints,
+      activeItem,
+      activeIsPinned,
+      canHideIndex,
+      selectedIndex,
+    ]
   );
 
   const chipNode = chipShouldRender ? <ModeChip label={chipLabel} isVisible={chipVisible} /> : null;
