@@ -153,9 +153,12 @@ export function SpinningIcon({
   useLayoutEffect(() => () => clearTimer(), [clearTimer]);
 
   return (
+    // Block-level and shrink-wrapped, like the `display: block` svg it wraps:
+    // an inline box would add a line box to buttons that are not flex
+    // containers, and a full-width one would rotate about the wrong centre.
     <span
       ref={setWrapperRef}
-      className={cn("inline-flex shrink-0", wrapperClassName, spinning && "animate-spin")}
+      className={cn("flex w-fit shrink-0", wrapperClassName, spinning && "animate-spin")}
     >
       <Icon {...rest} className={className} />
     </span>

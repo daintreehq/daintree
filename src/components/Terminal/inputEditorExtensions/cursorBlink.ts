@@ -17,7 +17,8 @@ import { COMPOSER_CURSOR_BLINK_MS } from "@/lib/animationUtils";
  * The timer runs only while the editor has focus, and every focus, selection
  * or document change restarts it from the visible phase — the same "cursor
  * shows the moment it moves" behaviour the built-in blink gets by swapping
- * between its two keyframe names.
+ * between its two keyframe names. Performance mode keeps the cursor solid, as
+ * its blanket `animation: none` did for the CSS blink.
  */
 export function createCursorBlink(): Extension {
   return [drawSelection({ cursorBlinkRate: 0 }), noCssBlink, cursorBlinkPlugin];
@@ -51,8 +52,23 @@ class CursorBlink {
   private restart(): void {
     this.stop();
     this.setHidden(false);
-    if (!this.view.hasFocus) return;
-    this.timer = setInterval(() => this.setHidden(!this.hidden), COMPOSER_CURSOR_BLINK_MS / 2);
+    if (!this.view.hasFocus || this.performanceMode()) return;
+    this.timer = setInterval(() => this.tick(), COMPOSER_CURSOR_BLINK_MS / 2);
+  }
+
+  private tick(): void {
+    // Performance mode switched on mid-blink: settle visible until the next
+    // focus, selection or document change re-evaluates.
+    if (this.performanceMode()) {
+      this.stop();
+      this.setHidden(false);
+      return;
+    }
+    this.setHidden(!this.hidden);
+  }
+
+  private performanceMode(): boolean {
+    return this.view.dom.ownerDocument.body?.dataset.performanceMode === "true";
   }
 
   private stop(): void {

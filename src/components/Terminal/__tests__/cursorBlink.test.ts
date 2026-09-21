@@ -120,6 +120,40 @@ describe("createCursorBlink", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("keeps the cursor solid in performance mode", () => {
+    document.body.dataset.performanceMode = "true";
+    try {
+      const v = mount();
+      focus(v);
+      vi.advanceTimersByTime(COMPOSER_CURSOR_BLINK_MS * 3);
+      expect(isHidden(v)).toBe(false);
+    } finally {
+      delete document.body.dataset.performanceMode;
+    }
+  });
+
+  it("settles visible when performance mode turns on mid-blink", () => {
+    const v = mount();
+    focus(v);
+    vi.advanceTimersByTime(HALF);
+    expect(isHidden(v)).toBe(true);
+
+    document.body.dataset.performanceMode = "true";
+    try {
+      vi.advanceTimersByTime(HALF);
+      expect(isHidden(v)).toBe(false);
+      vi.advanceTimersByTime(COMPOSER_CURSOR_BLINK_MS * 3);
+      expect(isHidden(v)).toBe(false);
+    } finally {
+      delete document.body.dataset.performanceMode;
+    }
+
+    // Leaving performance mode resumes on the next interaction.
+    v.dispatch({ selection: EditorSelection.cursor(2) });
+    vi.advanceTimersByTime(HALF);
+    expect(isHidden(v)).toBe(true);
+  });
+
   it("clears its timer when the editor is destroyed", () => {
     // CodeMirror schedules its own timers during teardown, so check the blink's
     // interval specifically rather than the global count.

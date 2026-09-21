@@ -54,7 +54,8 @@ function getRuler(terminal: Terminal): OverviewRulerLike | undefined {
 }
 
 // Any decoration at all counts: only search matches are registered today, and
-// they all draw on the ruler. A presence check keeps the render path O(1).
+// they all draw on the ruler. `decorations` copies xterm's list, so this runs
+// only on a draw, where xterm walks the same list, or after an empty one.
 function hasDecorations(ruler: OverviewRulerLike): boolean {
   const decorations = ruler._decorationService?.decorations;
   if (!decorations) return true;
