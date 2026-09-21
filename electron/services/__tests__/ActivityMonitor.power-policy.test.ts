@@ -122,6 +122,35 @@ describe("ActivityMonitor power policy", () => {
     monitor.dispose();
   });
 
+  it("keeps a live waiting agent whose keepalives land between slow probes", () => {
+    setPtyPowerLevel("deep");
+    const onStateChange = vi.fn();
+    const onWaitingTimeout = vi.fn();
+    const monitor = new ActivityMonitor("agent-1", 1000, onStateChange, {
+      simpleOutputState: true,
+      getVisibleLines: () => ["> "],
+      getCursorLine: () => "> ",
+      initialState: "idle",
+      skipInitialStateEmit: true,
+      pollingIntervalMs: 50,
+      processStateValidator: { hasActiveChildren: () => false },
+      onWaitingTimeout,
+      maxWaitingSilenceMs: 1000,
+    });
+
+    // An invisible title refresh 6s into every 15s probe gap: 9s old when the
+    // probe runs, so only a window spanning the gap can see it.
+    vi.advanceTimersByTime(6000);
+    for (let i = 0; i < 6; i++) {
+      monitor.onData("\x1b]0;agent\x07");
+      vi.advanceTimersByTime(WAITING_WATCHDOG_INTERVAL_MS.deep);
+    }
+
+    expect(onStateChange).not.toHaveBeenCalled();
+    expect(onWaitingTimeout).not.toHaveBeenCalled();
+    monitor.dispose();
+  });
+
   it("allocates no watchdog timer for a monitor with nothing to fire", () => {
     const setIntervalSpy = vi.spyOn(global, "setInterval");
     const monitor = createIdleAgent();

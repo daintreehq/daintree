@@ -11,21 +11,25 @@ export interface DecorativeMotionSignals {
   documentHidden: boolean;
 }
 
+type LoopingMotionMode = "full" | "reduced" | "stopped";
+
 /**
- * Whether looping decorative motion (working spinner, activity pulses, the
- * watched-panel bell, skeleton shimmer) should stop. One looping element keeps
- * the compositor producing frames at display rate for as long as it runs, so
- * it stops whenever main's power policy is saving (battery, blurred, locked,
- * hidden), the profile is `efficiency`, or this view can't be seen. A cached
- * view needs its own signal: it keeps reporting `visible` (see viewCacheState).
+ * How looping motion (working spinner, activity pulses, the watched-panel bell,
+ * skeleton shimmer) should run. A loop eased at display rate keeps the
+ * compositor producing frames for as long as it runs, so main's power policy
+ * (battery, blurred) and the `efficiency` profile drop it to a few discrete
+ * steps per second. They never stop it: a window left visible beside other work
+ * is still glanced at, and a frozen spinner reads as a hung agent. Motion stops
+ * only where nothing can be seen at all — locked or hidden (`deep`), a hidden
+ * document, or a cached view, which keeps reporting `visible` and so needs its
+ * own signal (see viewCacheState).
  */
-export function shouldSuspendDecorativeMotion(signals: DecorativeMotionSignals): boolean {
-  return (
-    signals.powerLevel !== "active" ||
-    signals.profile === "efficiency" ||
-    signals.viewCached ||
-    signals.documentHidden
-  );
+export function loopingMotionMode(signals: DecorativeMotionSignals): LoopingMotionMode {
+  if (signals.powerLevel === "deep" || signals.viewCached || signals.documentHidden) {
+    return "stopped";
+  }
+  if (signals.powerLevel === "saving" || signals.profile === "efficiency") return "reduced";
+  return "full";
 }
 
 // Latest level from main, kept at module scope (one view per V8 context). The
@@ -35,8 +39,9 @@ export function shouldSuspendDecorativeMotion(signals: DecorativeMotionSignals):
 let latestPowerLevel: PowerPolicyLevel = "active";
 
 /**
- * Mirrors {@link shouldSuspendDecorativeMotion} onto `body[data-power-saving]`,
- * which the scoped loop list in `src/index.css` keys off. Deliberately separate
+ * Mirrors {@link loopingMotionMode} onto `body[data-power-saving]` (stopped) and
+ * `body[data-motion-rate="reduced"]`, which the scoped loop lists in
+ * `src/index.css` key off. Deliberately separate
  * from performance mode: that is a user preference that also strips one-shot
  * transitions and backdrop effects, while this only stops what loops.
  */
@@ -62,16 +67,21 @@ export function usePowerSavingMotion(): void {
     document.addEventListener("animationstart", onAnimationStart);
     document.querySelectorAll(".animate-spin-slow").forEach(synchronizeSpinner);
     const apply = () => {
-      const suspend = shouldSuspendDecorativeMotion({
+      const mode = loopingMotionMode({
         powerLevel: latestPowerLevel,
         profile: useResourceProfileStore.getState().profile,
         viewCached: isProjectViewCached(),
         documentHidden: document.visibilityState === "hidden",
       });
-      if (suspend) {
+      if (mode === "stopped") {
         document.body.dataset.powerSaving = "true";
       } else {
         delete document.body.dataset.powerSaving;
+      }
+      if (mode === "reduced") {
+        document.body.dataset.motionRate = "reduced";
+      } else {
+        delete document.body.dataset.motionRate;
       }
     };
 
@@ -93,6 +103,7 @@ export function usePowerSavingMotion(): void {
       document.removeEventListener("visibilitychange", apply);
       document.removeEventListener("animationstart", onAnimationStart);
       delete document.body.dataset.powerSaving;
+      delete document.body.dataset.motionRate;
     };
   }, []);
 }

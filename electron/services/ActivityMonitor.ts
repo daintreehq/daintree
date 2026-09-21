@@ -308,6 +308,8 @@ export class ActivityMonitor {
   private fsmIdleBackoffTimer?: ReturnType<typeof setTimeout>;
   private fsmIdleBackoffActive = false;
   private readonly unsubscribePowerLevel: () => void;
+  // Survives watchdog re-timing, so a probe knows the real gap it covers.
+  private lastWatchdogProbeAt = Date.now();
 
   // Tier-aware recovery thresholds (#6641). The output volume detector is now
   // sample-cadence invariant (#6666), so only the working-signal debouncer
@@ -2020,6 +2022,8 @@ export class ActivityMonitor {
       lastDataTimestamp: this.lastDataTimestamp,
       terminalId: this.terminalId,
       spawnedAt: this.spawnedAt,
+      sinceLastProbeMs: now - this.lastWatchdogProbeAt,
     });
+    this.lastWatchdogProbeAt = now;
   }
 }

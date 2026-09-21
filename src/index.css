@@ -2371,13 +2371,14 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   backdrop-filter: none !important;
 }
 
-/* Power saving (#12515) — battery, blurred, locked or hidden window, the
- * efficiency profile, or a cached view (usePowerSavingMotion). Stops only what
- * LOOPS: one looping element keeps the compositor producing frames at display
- * rate for as long as it runs. An explicit list, never a wildcard, so one-shot
- * transitions and Radix Presence exits are untouched. Each glyph keeps its
- * resting frame and colour, so a working agent still reads as working — the
- * same static rendering reduced motion already uses. Transient loaders
+/* Power saving (#12515) — nothing visible: locked or hidden window, hidden
+ * document, or a cached view (usePowerSavingMotion). Stops only what LOOPS: one
+ * looping element keeps the compositor producing frames at display rate for as
+ * long as it runs. An explicit list, never a wildcard, so one-shot transitions
+ * and Radix Presence exits are untouched. Each glyph keeps its resting frame
+ * and colour — the same static rendering reduced motion already uses. A window
+ * that can still be seen never gets this; it gets the reduced rate below.
+ * Transient loaders
  * (`animate-spin`, the gated skeleton pulses) are left alone: they end on
  * their own, and a frozen one would read as a hang. */
 body[data-power-saving="true"] .animate-spin-slow,
@@ -2389,6 +2390,29 @@ body[data-power-saving="true"] .status-working,
 body[data-power-saving="true"] .forge-status-error {
   animation: none;
   will-change: auto;
+}
+
+/* Reduced rate — battery, a blurred but visible window, or the efficiency
+ * profile. The loops keep running so a glance still shows what is working, but
+ * eased motion at display rate becomes a few discrete steps per second (steps
+ * apply per keyframe interval). Only the timing function changes, so whatever
+ * already resolved to `animation: none` for reduced motion stays still. */
+body[data-motion-rate="reduced"] .animate-spin-slow {
+  animation-timing-function: steps(6, end);
+}
+
+body[data-motion-rate="reduced"] .animate-activity-pulse,
+body[data-motion-rate="reduced"] .animate-breathe,
+body[data-motion-rate="reduced"] .animate-pulse,
+body[data-motion-rate="reduced"] .motion-safe\:animate-pulse,
+body[data-motion-rate="reduced"] .status-working,
+body[data-motion-rate="reduced"] .forge-status-error {
+  animation-timing-function: steps(2, end);
+}
+
+body[data-motion-rate="reduced"] .animate-skeleton-shimmer::after,
+body[data-motion-rate="reduced"] .pulse-skeleton-shimmer::after {
+  animation-timing-function: steps(8, end);
 }
 
 /* `animation: none` alone leaves the shimmer's gradient stripe parked mid-bone. */

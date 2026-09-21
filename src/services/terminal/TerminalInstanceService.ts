@@ -254,8 +254,8 @@ class TerminalInstanceService {
         terminalClient.acknowledgePortData(id, bytes, chunkCount),
       acknowledgeData: (id, bytes) => terminalClient.acknowledgeData(id, bytes),
       notifyWriteComplete: (id, bytes) => this.dataBuffer.notifyWriteComplete(id, bytes),
-      incrementUnseen: (id, isScrolledBack) =>
-        this.unseenTracker.incrementUnseen(id, isScrolledBack),
+      incrementUnseen: (id, isScrolledBack, count) =>
+        this.unseenTracker.incrementUnseen(id, isScrolledBack, count),
       onWrite: (id) => this.burstController.onPtyWrite(id),
     });
 

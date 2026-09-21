@@ -100,7 +100,7 @@ export interface WriteControllerDeps {
   acknowledgePortData: (id: string, bytes: number, chunkCount: number) => void;
   acknowledgeData: (id: string, bytes: number) => void;
   notifyWriteComplete: (id: string, bytes: number) => void;
-  incrementUnseen: (id: string, isScrolledBack: boolean) => void;
+  incrementUnseen: (id: string, isScrolledBack: boolean, count?: number) => void;
   // Synchronous notification that a real PTY write is about to paint —
   // fires only on the actual write path (after hibernated / deferred-restore
   // early-exits), before terminal.write(). Used by TerminalInstanceService
@@ -298,7 +298,7 @@ export class TerminalWriteController {
       // queued: the viewport anchor snapshots this count from inside the
       // parser at an ESC[3J, and a batch still in the queue is redraw output
       // that must land on the far side of that snapshot (#12398).
-      this.deps.incrementUnseen(id, managed.isUserScrolledBack);
+      this.deps.incrementUnseen(id, managed.isUserScrolledBack, chunkCount);
 
       this.deps.acknowledgePortData(id, renderedBytes, chunkCount);
       if (ackBytes !== null) {

@@ -585,11 +585,12 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
               win.__energyPolicyChanges.push({
                 at: performance.now(),
                 saving: document.body.dataset.powerSaving ?? null,
+                motionRate: document.body.dataset.motionRate ?? null,
               })
             );
             policyObserver.observe(document.body, {
               attributes: true,
-              attributeFilter: ["data-power-saving"],
+              attributeFilter: ["data-power-saving", "data-motion-rate"],
             });
             win.__energyCleanup.push({ dispose: () => policyObserver.disconnect() });
             for (const id of ids) {

@@ -18,11 +18,14 @@ export class TerminalUnseenOutputTracker {
   // but nothing is published until `releaseUnseen` settles it.
   private heldIds = new Set<string>();
 
-  incrementUnseen(id: string, isUserScrolledBack: boolean): void {
+  // `count` is how many host writes the landed batch merged. A hidden pane
+  // coalesces a dense burst into one xterm write, and counting that as one
+  // would leave a three-write burst under the pill's threshold.
+  incrementUnseen(id: string, isUserScrolledBack: boolean, count = 1): void {
     if (!isUserScrolledBack) return;
 
     const current = this.unseenById.get(id) ?? 0;
-    const next = current + 1;
+    const next = current + (Number.isFinite(count) && count >= 1 ? Math.floor(count) : 1);
     this.unseenById.set(id, next);
     if (this.heldIds.has(id)) return;
 
@@ -32,7 +35,8 @@ export class TerminalUnseenOutputTracker {
     // UI state, so suppress those notifications. The raw count continues to
     // accumulate in `unseenById` and the snapshot is refreshed from it on
     // the next relevant event (clearUnseen / updateScrollState).
-    const crossesThreshold = current === 0 || current === UNSEEN_THRESHOLD;
+    const crossesThreshold =
+      current === 0 || (current <= UNSEEN_THRESHOLD && next > UNSEEN_THRESHOLD);
     if (crossesThreshold) {
       this.updateSnapshot(id, isUserScrolledBack, next);
       this.notify(id);

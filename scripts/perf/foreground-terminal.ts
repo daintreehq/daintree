@@ -265,7 +265,9 @@ for (let round = 0; round < rounds; round++) {
             renderer?._canvas?.isConnected && renderer._gl && !renderer._gl.isContextLost()
           ),
           visibility: document.visibilityState,
-          powerSaving: document.body.dataset.powerSaving === "true",
+          powerSaving:
+            document.body.dataset.powerSaving === "true" ||
+            document.body.dataset.motionRate === "reduced",
           dpr: devicePixelRatio,
           fontFamily: term.options.fontFamily,
           fontSize: term.options.fontSize,
@@ -357,7 +359,9 @@ for (let round = 0; round < rounds; round++) {
           return {
             cols: term.cols,
             rows: term.rows,
-            powerSaving: document.body.dataset.powerSaving === "true",
+            powerSaving:
+              document.body.dataset.powerSaving === "true" ||
+              document.body.dataset.motionRate === "reduced",
             liveWebglCanvas: Boolean(
               renderer?._canvas?.isConnected && renderer._gl && !renderer._gl.isContextLost()
             ),
