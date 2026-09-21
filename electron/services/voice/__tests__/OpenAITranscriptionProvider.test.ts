@@ -321,10 +321,14 @@ describe("OpenAITranscriptionProvider", () => {
     vadWorkers.length = 0;
     throwOnVadConstruct = false;
     logCalls.length = 0;
+    // Retirement arms a real SIGKILL backstop; fake pids must never reach the OS.
+    vi.spyOn(process, "kill").mockImplementation(() => true);
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    // End every fake VAD process so none lingers in the module's retiring set.
+    for (const worker of vadWorkers) worker.emitExit(0);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -1039,7 +1043,7 @@ describe("OpenAITranscriptionProvider", () => {
   });
 
   it("requests native VAD cleanup without killing pending work on stop", async () => {
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const kill = vi.mocked(process.kill);
     const service = new OpenAITranscriptionProvider();
     await bringSessionReady(service);
     const worker = latestVadWorker();
@@ -1051,31 +1055,41 @@ describe("OpenAITranscriptionProvider", () => {
 
   // ── VAD process isolation (#12577) ───────────────────────────────────────
 
-  it("degrades instead of failing when the VAD process dies mid-session", async () => {
-    const service = new OpenAITranscriptionProvider();
-    const { socket } = await bringSessionReady(service);
-    const worker = latestVadWorker();
-    worker.emitSpawn();
-    worker.emitReady();
+  // 6: a native ONNX abort (Electron 42 reports the SIGABRT'd child as 6).
+  // 1: the child's own fatal-error handler. 0: a child that simply went away.
+  it.each([6, 1, 0])(
+    "degrades instead of failing when the VAD process exits with code %i mid-session",
+    async (code) => {
+      const service = new OpenAITranscriptionProvider();
+      const events: VoiceTranscriptionEvent[] = [];
+      service.onEvent((event) => events.push(event));
+      const { socket } = await bringSessionReady(service);
+      const worker = latestVadWorker();
+      worker.emitSpawn();
+      worker.emitReady();
 
-    // A native ONNX abort: Electron 42 reports the SIGABRT'd child as code 6.
-    worker.emitExit(6);
+      worker.emitExit(code);
 
-    // The dead process is not sent a destroy, and nothing more is fed to it.
-    expect(worker.posted).not.toContainEqual({ type: "destroy" });
-    const postedBefore = worker.posted.length;
-    feedCommittableAudio(service);
-    expect(worker.posted).toHaveLength(postedBefore);
-    // Dictation carries on at the backstop cadence.
-    vi.advanceTimersByTime(8_000);
-    expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(1);
-    const exitLog = logCalls.find(([message]) =>
-      String(message).includes("VAD process exited unexpectedly")
-    );
-    expect(exitLog?.at(-1)).toMatchObject({ code: 6 });
+      // The dead process is not sent a destroy, and nothing more is fed to it.
+      expect(worker.posted).not.toContainEqual({ type: "destroy" });
+      const postedBefore = worker.posted.length;
+      feedCommittableAudio(service);
+      expect(worker.posted).toHaveLength(postedBefore);
+      // Dictation carries on at the backstop cadence, with nothing surfaced to
+      // the user as a failure.
+      vi.advanceTimersByTime(8_000);
+      expect(socket.sentJson().filter((p) => p.type === "input_audio_buffer.commit")).toHaveLength(
+        1
+      );
+      expect(events.some((event) => event.type === "error")).toBe(false);
+      const exitLog = logCalls.find(([message]) =>
+        String(message).includes("VAD process exited unexpectedly")
+      );
+      expect(exitLog?.at(-1)).toMatchObject({ code });
 
-    service.stop();
-  });
+      service.stop();
+    }
+  );
 
   it("ignores the exit of a VAD process retired by an earlier session", async () => {
     const service = new OpenAITranscriptionProvider();
@@ -1133,12 +1147,23 @@ describe("OpenAITranscriptionProvider", () => {
     expect(order.every((index) => index >= 0)).toBe(true);
     expect([...order].sort((a, b) => a - b)).toEqual(order);
 
-    const vadEntries = logCalls
-      .filter(([message]) => String(message).includes("VAD"))
-      .map((args) => JSON.stringify(args));
-    for (const entry of vadEntries) {
-      expect(entry).not.toContain("secret transcript");
-      expect(entry).not.toContain("pcm");
+    // Structural, not textual: an ArrayBuffer stringifies to `{}`, so a string
+    // search alone would miss logged audio.
+    const carriesAudio = (value: unknown, depth = 0): boolean => {
+      if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return true;
+      if (Array.isArray(value) && value.length > 16 && value.every((v) => typeof v === "number")) {
+        return true;
+      }
+      if (value && typeof value === "object" && depth < 4) {
+        return Object.values(value).some((v) => carriesAudio(v, depth + 1));
+      }
+      return false;
+    };
+    const vadEntries = logCalls.filter(([message]) => String(message).includes("VAD"));
+    expect(vadEntries.length).toBeGreaterThan(0);
+    for (const args of vadEntries) {
+      expect(args.some((arg) => carriesAudio(arg))).toBe(false);
+      expect(JSON.stringify(args)).not.toContain("secret transcript");
     }
   });
 

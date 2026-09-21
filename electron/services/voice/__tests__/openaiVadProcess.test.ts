@@ -1,24 +1,17 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
-type Listener = (...args: unknown[]) => void;
-
-class FakeChild {
+/** A real EventEmitter, so an `error` with no listener throws as it would in main. */
+class FakeChild extends EventEmitter {
   pid: number | undefined;
   posted: unknown[] = [];
-  private listeners = new Map<string, Listener[]>();
 
   constructor(pid: number | undefined) {
+    super();
     this.pid = pid;
-  }
-  on(event: string, listener: Listener): this {
-    this.listeners.set(event, [...(this.listeners.get(event) ?? []), listener]);
-    return this;
   }
   postMessage(message: unknown): void {
     this.posted.push(message);
-  }
-  emit(event: string, ...args: unknown[]): void {
-    for (const listener of this.listeners.get(event) ?? []) listener(...args);
   }
 }
 
@@ -55,6 +48,7 @@ vi.mock("../../../utils/logger.js", () => ({
 type VadModule = typeof import("../openaiVadProcess.js");
 
 let vadModule: VadModule;
+let kill: MockInstance<typeof process.kill>;
 
 function spawn(handlers: Partial<ConstructorParameters<VadModule["OpenAIVadProcess"]>[1]> = {}) {
   const vad = new vadModule.OpenAIVadProcess(7, {
@@ -75,6 +69,8 @@ beforeEach(async () => {
   state.spawnWithoutPid = false;
   vi.resetModules();
   vadModule = await import("../openaiVadProcess.js");
+  // Fake pids must never reach the OS.
+  kill = vi.spyOn(process, "kill").mockImplementation(() => true);
   vi.useFakeTimers();
 });
 
@@ -112,7 +108,6 @@ describe("OpenAIVadProcess", () => {
   });
 
   it("asks for a drain once and kills only a process that outlives the drain window", () => {
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
     const { vad, child } = spawn();
     vad.retire("session-end");
     vad.retire("session-end");
@@ -125,7 +120,6 @@ describe("OpenAIVadProcess", () => {
   });
 
   it("clears the kill backstop when the process drains and exits", () => {
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
     const { vad, child } = spawn();
     vad.retire("stop");
     child.emit("message", { type: "drained" });
@@ -140,8 +134,30 @@ describe("OpenAIVadProcess", () => {
     );
   });
 
+  it("still kills a process that drained but never exited", () => {
+    const { vad, child } = spawn();
+    vad.retire("stop");
+    child.emit("message", { type: "drained" });
+    vi.advanceTimersByTime(vadModule.VAD_RETIRE_KILL_MS);
+    expect(kill).toHaveBeenCalledWith(child.pid, "SIGKILL");
+  });
+
+  it("consumes a fatal V8 error from the child and still degrades on the exit that follows", () => {
+    const onUnexpectedExit = vi.fn();
+    const { child } = spawn({ onUnexpectedExit });
+    expect(() => child.emit("error", "FatalError", "vad.js:1", "{ report }")).not.toThrow();
+    child.emit("exit", 1);
+    expect(onUnexpectedExit).toHaveBeenCalledWith(1);
+    expect(JSON.stringify(state.logs)).not.toContain("{ report }");
+  });
+
+  it("consumes a fatal V8 error from a retired child", () => {
+    const { vad, child } = spawn();
+    vad.retire("stop");
+    expect(() => child.emit("error", "FatalError", "vad.js:1", "{ report }")).not.toThrow();
+  });
+
   it("kills a process that only spawns after its drain window closed", () => {
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
     state.spawnWithoutPid = true;
     const { vad, child } = spawn();
     vad.retire("stop");
@@ -164,7 +180,7 @@ describe("OpenAIVadProcess", () => {
   });
 
   it("tolerates a process that exits between the pid read and the signal", () => {
-    vi.spyOn(process, "kill").mockImplementation(() => {
+    kill.mockImplementation(() => {
       throw Object.assign(new Error("no such process"), { code: "ESRCH" });
     });
     const { vad } = spawn();
@@ -217,11 +233,15 @@ describe("waitForRetiringVadProcesses", () => {
   });
 
   it("gives up at the budget and reports what is still draining", async () => {
-    vi.spyOn(process, "kill").mockImplementation(() => true);
     const { vad } = spawn();
     vad.retire("stop");
-    const waiting = vadModule.waitForRetiringVadProcesses(1_000);
-    await vi.advanceTimersByTimeAsync(1_000);
-    await expect(waiting).resolves.toBe(1);
+    let settled: number | undefined;
+    void vadModule.waitForRetiringVadProcesses(1_000).then((pending) => {
+      settled = pending;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(1);
   });
 });

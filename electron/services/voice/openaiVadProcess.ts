@@ -90,6 +90,17 @@ export class OpenAIVadProcess {
       if (this.killDue) this.killUndrained();
     });
     this.child.on("message", (message: VadWorkerOutbound) => this.handleMessage(message));
+    // A fatal V8 error in the child. UtilityProcess is an EventEmitter, so with
+    // no listener this would throw in main. The exit that always follows does
+    // the degrading; the diagnostic report stays out of the log.
+    this.child.on("error", (type, location) => {
+      logWarn(`${P} VAD process fatal error`, {
+        sessionId,
+        pid: this.child.pid,
+        type,
+        location,
+      });
+    });
     this.child.on("exit", (code) => this.handleExit(code));
   }
 

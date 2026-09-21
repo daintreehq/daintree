@@ -141,6 +141,9 @@ class MockVadWorker {
   emitSpeechEnd(): void {
     this.fire("message", { type: "speech-end" });
   }
+  emitExit(code: number): void {
+    this.fire("exit", code);
+  }
 }
 
 const vadWorkers: MockVadWorker[] = [];
@@ -223,10 +226,14 @@ describe("VoiceTranscriptionService (coordinator)", () => {
   beforeEach(() => {
     instances.length = 0;
     vadWorkers.length = 0;
+    // Retirement arms a real SIGKILL backstop; fake pids must never reach the OS.
+    vi.spyOn(process, "kill").mockImplementation(() => true);
     vi.useFakeTimers();
   });
 
   afterEach(() => {
+    // End every fake VAD process so none lingers in the module's retiring set.
+    for (const worker of vadWorkers) worker.emitExit(0);
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
