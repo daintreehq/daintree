@@ -46,8 +46,8 @@ const guarded = new WeakSet<OverviewRulerLike>();
 
 function getRuler(terminal: Terminal): OverviewRulerLike | undefined {
   try {
-    return (terminal as Terminal & { _core?: { _overviewRulerRenderer?: OverviewRulerLike } })
-      ._core?._overviewRulerRenderer;
+    return (terminal as Terminal & { _core?: { _overviewRulerRenderer?: OverviewRulerLike } })._core
+      ?._overviewRulerRenderer;
   } catch {
     return undefined;
   }

@@ -58,7 +58,9 @@ describe("createCursorBlink", () => {
   });
 
   it("keeps the same period as the CSS blink it replaces", () => {
-    expect(COMPOSER_CURSOR_BLINK_MS).toBe(getDrawSelectionConfig(EditorState.create()).cursorBlinkRate);
+    expect(COMPOSER_CURSOR_BLINK_MS).toBe(
+      getDrawSelectionConfig(EditorState.create()).cursorBlinkRate
+    );
   });
 
   it("runs no timer while the editor is unfocused", () => {
