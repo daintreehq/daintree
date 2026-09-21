@@ -114,7 +114,9 @@ function elementWithRef(source: ts.SourceFile, refName: string): JsxNode {
   const matches = jsxNodes(source).filter((node) => refBinds(node, refName));
   // Guards the guard: a renamed ref would otherwise leave nothing to check.
   expect(matches, `elements bound to ${refName}`).toHaveLength(1);
-  return matches[0];
+  const [match] = matches;
+  if (!match) throw new Error(`no element bound to ${refName}`);
+  return match;
 }
 
 function isDropTarget(node: JsxNode): boolean {
@@ -182,12 +184,13 @@ describe("HybridInputBar drop targets (#12570)", () => {
     // Two instances would each keep their own drag depth and hover state, and
     // the hosts would disagree about whether a drag is in progress.
     expect(calls).toHaveLength(1);
-    const declaration = calls[0].parent;
-    expect(
-      ts.isVariableDeclaration(declaration) && ts.isObjectBindingPattern(declaration.name)
-    ).toBe(true);
-    if (!ts.isVariableDeclaration(declaration) || !ts.isObjectBindingPattern(declaration.name)) {
-      return;
+    const declaration = calls[0]?.parent;
+    if (
+      !declaration ||
+      !ts.isVariableDeclaration(declaration) ||
+      !ts.isObjectBindingPattern(declaration.name)
+    ) {
+      throw new Error("useDragDrop's result is not destructured into its handlers");
     }
     const bound = declaration.name.elements.flatMap((element) =>
       !element.propertyName && ts.isIdentifier(element.name) ? [element.name.text] : []
@@ -220,6 +223,6 @@ describe("HybridInputBar drop targets (#12570)", () => {
     // scroll away with a long draft instead of covering the visible editor.
     const overlays = overlaysWithin(target, source);
     expect(overlays).toHaveLength(1);
-    expect(isWithin(overlays[0], host)).toBe(false);
+    expect(overlays.filter((overlay) => isWithin(overlay, host))).toEqual([]);
   });
 });
