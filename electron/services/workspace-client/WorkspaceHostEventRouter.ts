@@ -1,7 +1,7 @@
 import path from "path";
 import { events } from "../events.js";
 import { CHANNELS } from "../../ipc/channels.js";
-import { broadcastToRenderer } from "../../ipc/utils.js";
+import { broadcastToRenderer, sendToPrimaryRenderer } from "../../ipc/utils.js";
 import { notifyError } from "../../ipc/errorHandlers.js";
 import { clearWslGitEntry } from "../../store.js";
 import { gitServiceCache } from "../GitServiceCache.js";
@@ -382,7 +382,9 @@ export class WorkspaceHostEventRouter {
       case "inotify-limit-reached": {
         if (this.inotifyLimitToastSent) break;
         this.inotifyLimitToastSent = true;
-        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        // An OS-wide limit, unlike the per-worktree toast above — send it once
+        // rather than once per open project view. Same for EMFILE below.
+        sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "warning",
           title: "File watching degraded",
           message:
@@ -412,7 +414,7 @@ export class WorkspaceHostEventRouter {
       case "emfile-limit-reached": {
         if (this.emfileLimitToastSent) break;
         this.emfileLimitToastSent = true;
-        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "warning",
           title: "File watching degraded",
           message:

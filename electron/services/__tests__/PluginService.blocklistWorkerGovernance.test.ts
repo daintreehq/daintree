@@ -32,6 +32,7 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn(() => null),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const sendToPrimaryRendererMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
@@ -59,6 +60,7 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  sendToPrimaryRenderer: sendToPrimaryRendererMock,
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -302,7 +304,7 @@ describe("PluginService blocklist / kill-switch (#10891)", () => {
     const service = new PluginService(tmpDir, undefined, { blocklistService: svc });
     await service.initialize();
 
-    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+    expect(sendToPrimaryRendererMock).toHaveBeenCalledWith(
       CHANNELS.NOTIFICATION_SHOW_TOAST,
       expect.objectContaining({
         type: "warning",

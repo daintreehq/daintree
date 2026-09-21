@@ -81,10 +81,10 @@ function RecipeListItem({
         PALETTE_ROW_CLASS,
         "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
         // No resting fill. A backplate on every row made three recipes read as
-          // three stacked cards, so the selected one had to out-shout two
-          // neighbours instead of being the only lit row. Every other palette in
-          // the app rests flat and lets PALETTE_ROW_CLASS's rail carry selection.
-          "hover:bg-overlay-subtle",
+        // three stacked cards, so the selected one had to out-shout two
+        // neighbours instead of being the only lit row. Every other palette in
+        // the app rests flat and lets PALETTE_ROW_CLASS's rail carry selection.
+        "hover:bg-overlay-subtle",
         recipe.shadowedBy && "opacity-60"
       )}
       aria-selected={isSelected}

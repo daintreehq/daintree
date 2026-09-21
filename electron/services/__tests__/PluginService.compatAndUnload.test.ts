@@ -32,6 +32,7 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn(() => null),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const sendToPrimaryRendererMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
@@ -59,6 +60,7 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  sendToPrimaryRenderer: sendToPrimaryRendererMock,
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -280,7 +282,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    expect(sendToPrimaryRendererMock).not.toHaveBeenCalled();
   });
 
   it("rejects a plugin when app version does not satisfy engines.daintree", async () => {
@@ -302,7 +304,7 @@ describe("engines.daintree compatibility gate", () => {
     expect(errorSpy).toHaveBeenCalledWith(
       expect.stringContaining('Plugin "acme.incompatible" requires Daintree ^0.7.0')
     );
-    expect(broadcastToRendererMock).toHaveBeenCalledWith(
+    expect(sendToPrimaryRendererMock).toHaveBeenCalledWith(
       CHANNELS.NOTIFICATION_SHOW_TOAST,
       expect.objectContaining({
         type: "error",
@@ -323,7 +325,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    expect(sendToPrimaryRendererMock).not.toHaveBeenCalled();
   });
 
   it("loads plugins that omit engines.daintree with a warning", async () => {
@@ -336,7 +338,7 @@ describe("engines.daintree compatibility gate", () => {
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('Plugin "acme.no-engines" does not declare engines.daintree')
     );
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    expect(sendToPrimaryRendererMock).not.toHaveBeenCalled();
   });
 
   it("loads plugins with empty engines object (daintree absent) with a warning", async () => {
@@ -366,7 +368,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toEqual([]);
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    expect(sendToPrimaryRendererMock).not.toHaveBeenCalled();
   });
 
   it("rejects plugins requiring a future major version", async () => {
@@ -380,7 +382,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toEqual([]);
-    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    expect(sendToPrimaryRendererMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not attempt main import or register contributions for incompatible plugins", async () => {
@@ -424,7 +426,7 @@ describe("engines.daintree compatibility gate", () => {
 
     const names = service.listPlugins().map((p) => p.manifest.name);
     expect(names).toEqual(["acme.good"]);
-    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    expect(sendToPrimaryRendererMock).toHaveBeenCalledTimes(1);
   });
 
   it("accepts the wildcard range '*'", async () => {
@@ -438,7 +440,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    expect(sendToPrimaryRendererMock).not.toHaveBeenCalled();
   });
 
   it("rejects whitespace-only range strings at the schema layer", async () => {
@@ -452,7 +454,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toEqual([]);
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    expect(sendToPrimaryRendererMock).not.toHaveBeenCalled();
   });
 
   it("rejects an app prerelease that is below a non-prerelease range's lower bound", async () => {
@@ -466,7 +468,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toEqual([]);
-    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    expect(sendToPrimaryRendererMock).toHaveBeenCalledTimes(1);
   });
 
   it("accepts an exact-version range when the app matches precisely", async () => {
@@ -480,7 +482,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toHaveLength(1);
-    expect(broadcastToRendererMock).not.toHaveBeenCalled();
+    expect(sendToPrimaryRendererMock).not.toHaveBeenCalled();
   });
 
   it("rejects an exact-version range when the app does not match", async () => {
@@ -494,7 +496,7 @@ describe("engines.daintree compatibility gate", () => {
     await service.initialize();
 
     expect(service.listPlugins()).toEqual([]);
-    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    expect(sendToPrimaryRendererMock).toHaveBeenCalledTimes(1);
   });
 });
 
