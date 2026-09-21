@@ -202,7 +202,11 @@ function ActivityGlyph({
   inFlight: boolean;
 }) {
   if (inFlight) {
-    return <Loader2 aria-hidden className="w-3 h-3 shrink-0 animate-spin" />;
+    return (
+      <span aria-hidden className="inline-flex shrink-0 animate-spin">
+        <Loader2 className="w-3 h-3" />
+      </span>
+    );
   }
   if (activity.isError) {
     return <X aria-hidden className="w-3 h-3 shrink-0" />;

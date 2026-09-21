@@ -5,14 +5,15 @@ import { cn } from "@/lib/utils";
 import { getPerformanceModeFloor, UI_SPIN_CYCLE_MS } from "@/lib/animationUtils";
 
 interface SpinningIconProps extends Omit<LucideProps, "ref"> {
-  /** The Lucide icon to render (e.g. `RefreshCw`). Rendered directly, so the
-   *  spin runs on the same `<svg>` the call site would have rendered itself —
-   *  no wrapping element, no changed transform origin. Must be a STABLE
-   *  component identity: swapping `icon` mid-spin replaces the `<svg>` and
-   *  restarts its animation from 0°. */
+  /** The Lucide icon to render (e.g. `RefreshCw`). Every other prop, including
+   *  `className`, goes to its `<svg>` unchanged. */
   icon: LucideIcon;
   /** True while the underlying operation is running. Drives the spin. */
   active: boolean;
+  /** Classes for the wrapper that rotates. Placement such as margins belongs
+   *  here rather than on the icon: a margin inside the rotating box would move
+   *  its centre off the glyph. */
+  wrapperClassName?: string;
 }
 
 /**
@@ -20,7 +21,12 @@ interface SpinningIconProps extends Omit<LucideProps, "ref"> {
  * rotation, keeps spinning while `active`, and — crucially — finishes the
  * current rotation before stopping rather than snapping back to 0°.
  *
- * The stop is driven by the icon's own `animationiteration` DOM event, not a
+ * The rotation runs on an HTML wrapper, not the `<svg>`: Chromium cannot run a
+ * transform animation on the compositor when its target is an svg, so it
+ * re-runs style on the main thread every frame for as long as the icon spins
+ * (#12584). Wrapped, the same spin composites.
+ *
+ * The stop is driven by the wrapper's own `animationiteration` DOM event, not a
  * wall-clock timer: the class is removed only at a true 360° boundary (visually
  * identical to 0°), and the compositor's animation clock stays correct even when
  * Chromium throttles background tabs. Requirement mapping:
@@ -44,10 +50,16 @@ interface SpinningIconProps extends Omit<LucideProps, "ref"> {
  * during the finishing tail keeps the existing rotation going (smooth, never a
  * snap) rather than re-arming a fresh full-rotation debt for the new press.
  */
-export function SpinningIcon({ icon: Icon, active, className, ...rest }: SpinningIconProps) {
+export function SpinningIcon({
+  icon: Icon,
+  active,
+  className,
+  wrapperClassName,
+  ...rest
+}: SpinningIconProps) {
   const [spinning, setSpinning] = useState(active);
 
-  const svgRef = useRef<SVGSVGElement | null>(null);
+  const wrapperRef = useRef<HTMLSpanElement | null>(null);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // A stop was requested (active went false) but we're waiting for the current
   // rotation to complete. Cleared when it does, or when active rises again.
@@ -77,9 +89,9 @@ export function SpinningIcon({ icon: Icon, active, className, ...rest }: Spinnin
     (event: Event) => {
       // Ignore a bubbling animation from a descendant or from a stale node that
       // has already been swapped out.
-      if (event.target !== svgRef.current) return;
+      if (event.target !== wrapperRef.current) return;
       // Only Tailwind's `spin` keyframe marks a rotation boundary — a second
-      // looping animation on this SVG would otherwise stop the spin at its own
+      // looping animation on this wrapper would otherwise stop the spin at its own
       // (arbitrary) phase. Plain Events (jsdom, which never runs CSS animations)
       // aren't AnimationEvents and pass through.
       if (
@@ -101,13 +113,13 @@ export function SpinningIcon({ icon: Icon, active, className, ...rest }: Spinnin
     [clearTimer]
   );
 
-  const setSvgRef = useCallback(
-    (node: SVGSVGElement | null) => {
-      const previous = svgRef.current;
+  const setWrapperRef = useCallback(
+    (node: HTMLSpanElement | null) => {
+      const previous = wrapperRef.current;
       if (previous && previous !== node) {
         previous.removeEventListener("animationiteration", handleIteration);
       }
-      svgRef.current = node;
+      wrapperRef.current = node;
       if (node) node.addEventListener("animationiteration", handleIteration);
     },
     [handleIteration]
@@ -140,5 +152,12 @@ export function SpinningIcon({ icon: Icon, active, className, ...rest }: Spinnin
 
   useLayoutEffect(() => () => clearTimer(), [clearTimer]);
 
-  return <Icon {...rest} ref={setSvgRef} className={cn(className, spinning && "animate-spin")} />;
+  return (
+    <span
+      ref={setWrapperRef}
+      className={cn("inline-flex shrink-0", wrapperClassName, spinning && "animate-spin")}
+    >
+      <Icon {...rest} className={className} />
+    </span>
+  );
 }

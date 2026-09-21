@@ -285,7 +285,12 @@ export function AgentInstallSection({
             disabled={isRefreshingCli}
             className="text-text-secondary hover:text-text-primary"
           >
-            <SpinningIcon icon={RefreshCw} active={isRefreshingCli} size={14} className="mr-1.5" />
+            <SpinningIcon
+              icon={RefreshCw}
+              active={isRefreshingCli}
+              size={14}
+              wrapperClassName="mr-1.5"
+            />
             Re-check
           </Button>
         </div>

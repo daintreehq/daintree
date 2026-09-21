@@ -10,13 +10,18 @@ import { logError } from "@/utils/logger";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { HOST_CRASH_RECOVERING_COPY, getHostCrashBannerCopy } from "./recoveryCopy";
 
+// The banner sizes and places its icon through `className`, so those classes
+// land on the rotating wrapper and the glyph fills it. Spinning the svg itself
+// would keep Chromium restyling it on the main thread every frame (#12584).
 function SpinnerIcon({ className, style }: { className?: string; style?: CSSProperties }) {
   return (
-    <Loader2
-      className={cn("animate-spin motion-reduce:animate-none", className)}
+    <span
+      className={cn("inline-flex animate-spin motion-reduce:animate-none", className)}
       style={style}
       aria-hidden="true"
-    />
+    >
+      <Loader2 className="size-full" />
+    </span>
   );
 }
 

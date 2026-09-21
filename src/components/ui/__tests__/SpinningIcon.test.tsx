@@ -5,7 +5,13 @@ import { RefreshCw } from "lucide-react";
 import { SpinningIcon } from "../SpinningIcon";
 import { UI_SPIN_CYCLE_MS } from "@/lib/animationUtils";
 
-/** The single spinning `<svg>` the component renders. */
+/** The HTML wrapper that carries the rotation. */
+function spinnerOf(container: HTMLElement): HTMLSpanElement {
+  const wrapper = container.firstElementChild;
+  if (!(wrapper instanceof HTMLSpanElement)) throw new Error("no wrapper rendered");
+  return wrapper;
+}
+
 function svgOf(container: HTMLElement): SVGSVGElement {
   const svg = container.querySelector("svg");
   if (!svg) throw new Error("no svg rendered");
@@ -13,7 +19,7 @@ function svgOf(container: HTMLElement): SVGSVGElement {
 }
 
 function isSpinning(container: HTMLElement): boolean {
-  return svgOf(container).classList.contains("animate-spin");
+  return spinnerOf(container).classList.contains("animate-spin");
 }
 
 /** jsdom never runs CSS animations, so the real `animationiteration` never
@@ -49,20 +55,20 @@ describe("SpinningIcon", () => {
 
   it("keeps spinning across rotation boundaries while active", () => {
     const { container } = render(<SpinningIcon icon={RefreshCw} active={true} />);
-    const svg = svgOf(container);
-    fireIteration(svg);
-    fireIteration(svg);
+    const spinner = spinnerOf(container);
+    fireIteration(spinner);
+    fireIteration(spinner);
     expect(isSpinning(container)).toBe(true);
   });
 
   it("holds the spin past a fast completion until the next rotation boundary, then stops", () => {
     const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
-    const svg = svgOf(container);
+    const spinner = spinnerOf(container);
     // Operation resolves — but the current rotation must finish first.
     rerender(<SpinningIcon icon={RefreshCw} active={false} />);
     expect(isSpinning(container)).toBe(true);
     // The rotation completes: class is removed exactly at the 360° boundary.
-    fireIteration(svg);
+    fireIteration(spinner);
     expect(isSpinning(container)).toBe(false);
   });
 
@@ -73,21 +79,21 @@ describe("SpinningIcon", () => {
     rerender(<SpinningIcon icon={RefreshCw} active={true} />);
     rerender(<SpinningIcon icon={RefreshCw} active={false} />);
     expect(isSpinning(container)).toBe(true);
-    fireIteration(svgOf(container));
+    fireIteration(spinnerOf(container));
     expect(isSpinning(container)).toBe(false);
   });
 
   it("only stops on the first boundary after the operation ends, not before", () => {
     const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
-    const svg = svgOf(container);
+    const spinner = spinnerOf(container);
     // Long operation: several boundaries pass while still active.
-    fireIteration(svg);
-    fireIteration(svg);
+    fireIteration(spinner);
+    fireIteration(spinner);
     expect(isSpinning(container)).toBe(true);
     rerender(<SpinningIcon icon={RefreshCw} active={false} />);
     // Still spinning until the next boundary.
     expect(isSpinning(container)).toBe(true);
-    fireIteration(svg);
+    fireIteration(spinner);
     expect(isSpinning(container)).toBe(false);
   });
 
@@ -117,12 +123,12 @@ describe("SpinningIcon", () => {
   it("cancels a pending stop when the operation restarts before completion", () => {
     vi.useFakeTimers();
     const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
-    const svg = svgOf(container);
+    const spinner = spinnerOf(container);
     rerender(<SpinningIcon icon={RefreshCw} active={false} />);
     // Re-activated during the finishing tail.
     rerender(<SpinningIcon icon={RefreshCw} active={true} />);
     // The stale stop request must not fire on the next boundary...
-    fireIteration(svg);
+    fireIteration(spinner);
     expect(isSpinning(container)).toBe(true);
     // ...nor via the (now-cancelled) backstop timer.
     act(() => {
@@ -133,28 +139,44 @@ describe("SpinningIcon", () => {
 
   it("ignores an iteration bubbling from a descendant node", () => {
     const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
-    const svg = svgOf(container);
-    const child = svg.querySelector("path");
-    expect(child).not.toBeNull();
+    const spinner = spinnerOf(container);
     rerender(<SpinningIcon icon={RefreshCw} active={false} />);
-    // A bubbling animationiteration whose target is a child <path>, not the
-    // spinning <svg>, must not be mistaken for the icon's own boundary.
-    if (child) fireIteration(child);
+    // A bubbling animationiteration whose target is the icon or one of its
+    // paths, not the spinning wrapper, must not be mistaken for its boundary.
+    fireIteration(svgOf(container));
+    const path = svgOf(container).querySelector("path");
+    expect(path).not.toBeNull();
+    if (path) fireIteration(path);
     expect(isSpinning(container)).toBe(true);
-    // The real boundary (target === svg) still stops it.
-    fireIteration(svg);
+    // The real boundary (target === wrapper) still stops it.
+    fireIteration(spinner);
     expect(isSpinning(container)).toBe(false);
   });
 
-  it("forwards Lucide props and merges className", () => {
+  it("forwards Lucide props and className to the icon", () => {
     const { container } = render(
       <SpinningIcon icon={RefreshCw} active={true} className="w-3.5 h-3.5" size={14} />
     );
     const svg = svgOf(container);
     expect(svg.classList.contains("w-3.5")).toBe(true);
     expect(svg.classList.contains("h-3.5")).toBe(true);
-    expect(svg.classList.contains("animate-spin")).toBe(true);
     expect(svg.getAttribute("width")).toBe("14");
+  });
+
+  it("never animates the svg itself, which Chromium cannot composite", () => {
+    const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
+    expect(isSpinning(container)).toBe(true);
+    expect(svgOf(container).classList.contains("animate-spin")).toBe(false);
+    rerender(<SpinningIcon icon={RefreshCw} active={false} />);
+    expect(svgOf(container).classList.contains("animate-spin")).toBe(false);
+  });
+
+  it("puts placement classes on the rotating wrapper, not inside it", () => {
+    const { container } = render(
+      <SpinningIcon icon={RefreshCw} active={true} wrapperClassName="mr-1.5" />
+    );
+    expect(spinnerOf(container).classList.contains("mr-1.5")).toBe(true);
+    expect(svgOf(container).classList.contains("mr-1.5")).toBe(false);
   });
 
   it("clears the backstop timer on unmount", () => {
@@ -191,19 +213,19 @@ describe("SpinningIcon", () => {
   it("ignores an animationiteration from a different animation on the same node", () => {
     if (typeof AnimationEvent === "undefined") return; // jsdom without AnimationEvent
     const { container, rerender } = render(<SpinningIcon icon={RefreshCw} active={true} />);
-    const svg = svgOf(container);
+    const spinner = spinnerOf(container);
     rerender(<SpinningIcon icon={RefreshCw} active={false} />);
     // A second looping animation (not Tailwind's `spin`) reaching its own
     // boundary must not stop the refresh spin at an arbitrary phase.
     act(() => {
-      svg.dispatchEvent(
+      spinner.dispatchEvent(
         new AnimationEvent("animationiteration", { animationName: "pulse", bubbles: true })
       );
     });
     expect(isSpinning(container)).toBe(true);
     // The real `spin` boundary still stops it.
     act(() => {
-      svg.dispatchEvent(
+      spinner.dispatchEvent(
         new AnimationEvent("animationiteration", { animationName: "spin", bubbles: true })
       );
     });
