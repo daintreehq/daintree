@@ -361,6 +361,7 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
   const maxHeightPx = config.maxHeightPx ?? MAX_TEXTAREA_HEIGHT_PX;
   let lastHeight = 0;
   let lastOverflowY = "";
+  let lastMultiline: boolean | null = null;
 
   return EditorView.updateListener.of((update) => {
     if (!update.docChanged && !update.viewportChanged && !update.geometryChanged) return;
@@ -376,7 +377,11 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
               ? view.defaultLineHeight
               : LINE_HEIGHT_PX;
         const isEmpty = view.state.doc.length === 0;
-        return computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty);
+        return {
+          ...computeAutoSize(view.contentHeight, lineHeight, maxHeightPx, isEmpty),
+          lineHeight,
+          isEmpty,
+        };
       },
       write(measured) {
         if (measured.next !== lastHeight) {
@@ -388,6 +393,29 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
         if (newOverflowY !== lastOverflowY) {
           lastOverflowY = newOverflowY;
           view.scrollDOM.style.overflowY = newOverflowY;
+        }
+
+        // "The draft has wrapped", published on the editor's own element so the
+        // composer shell can read it with `:has()` — no React state, no
+        // re-render per keystroke. It gates whether a narrow pane moves its
+        // trailing controls onto their own row.
+        //
+        // The latch is load-bearing, not caution. That row hands the canvas
+        // back ~60px, often exactly enough for the draft that just wrapped to
+        // fit one line again — so clearing on that re-narrows the canvas,
+        // re-wraps the draft and sets the marker again, forever. Measured at
+        // 260px: three flips mid-word without it, one with. Deduping identical
+        // writes does not help, because the values genuinely alternate.
+        //
+        // Releasing only on an empty draft is what breaks the loop: emptiness
+        // is the one condition no layout change can manufacture. Sending
+        // clears the draft, so an ordinary submit resets it.
+        const wrapped = measured.next > measured.lineHeight;
+        const isMultiline = measured.isEmpty ? false : lastMultiline === true || wrapped;
+        if (isMultiline !== lastMultiline) {
+          lastMultiline = isMultiline;
+          if (isMultiline) view.dom.dataset.composerMultiline = "true";
+          else delete view.dom.dataset.composerMultiline;
         }
       },
     });

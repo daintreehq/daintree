@@ -958,7 +958,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             ref={inputShellRef}
             className={cn(
               "group/shell relative",
-              "flex w-full items-center gap-1.5 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
+              // `items-end`, not `items-center`: centred controls tracked the
+              // canvas midpoint, so the attach target sat at a different height
+              // for every draft length. `flex-wrap` lets the trailing group drop
+              // to its own row (see below) by wrapping rather than reordering,
+              // which leaves DOM and focus order untouched.
+              "flex w-full flex-wrap items-end gap-1.5 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
@@ -1041,14 +1046,20 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               type="button"
               onClick={openPicker}
               disabled={disabled}
-              className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden"
+              // `h-6` gives the picker a 24px target without changing the
+              // glyph: at `leading-5` alone the button was 20px tall, under the
+              // WCAG 2.5.8 floor, and its spacing circle overlaps the canvas.
+              className="flex h-6 shrink-0 items-center select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65 hover:text-daintree-accent/85 transition-colors cursor-pointer focus-visible:outline-hidden"
               aria-label="Open command picker"
             >
               ❯
             </button>
             <ContextMenu>
               <ContextMenuTrigger asChild onContextMenu={handleEditorContextMenu}>
-                <div className="relative flex-1">
+                {/* `min-w-0`: a flex item defaults to `min-width: auto`, so the
+                    canvas refused to shrink past its longest unbreakable token
+                    and pushed the trailing controls toward the shell edge. */}
+                <div className="relative min-w-0 flex-1">
                   <div
                     ref={(node) => {
                       editorHostRef.current = node;
@@ -1074,7 +1085,15 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
               </ContextMenuContent>
             </ContextMenu>
-            <div className="flex items-center pr-1.5">
+            {/* Drops to its own row — handing the canvas back the ~60px (~80px
+                with the stash button) it otherwise reserves beside every line —
+                only when the pane is under 320px AND the draft has wrapped.
+
+                Both halves are load-bearing. 320px is the knee: at 360px the
+                draft still reads, at 300px it is starved. But width alone put a
+                near-empty button row under all ten panes of a tiled fleet,
+                where one-line drafts were paying nothing for the gutter. */}
+            <div className="flex items-center justify-end pr-1.5 @max-[20rem]/composer:group-has-[[data-composer-multiline]]/shell:basis-full">
               <Tooltip>
                 <TooltipTrigger asChild>
                   <button
@@ -1100,7 +1119,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     <button
                       type="button"
                       onClick={handlePopStash}
-                      className="flex items-center justify-center h-5 w-5 rounded-sm text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
+                      // 24px to clear the WCAG 2.5.8 floor. The spacing
+                      // exception cannot rescue a smaller one here — its circle
+                      // overlaps the attach and mic targets either side.
+                      className="flex items-center justify-center h-6 w-6 rounded-full text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
                       aria-label="Restore stashed input"
                     >
                       <Archive className="h-3.5 w-3.5" />
@@ -1134,7 +1156,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       <>
         <div
           ref={rootRef}
-          className={cn("relative w-full shrink-0", disabled && "pointer-events-none", className)}
+          // The shell reflows against the pane's own width, not the window's:
+          // one window holds panes from ~220px to full width depending on the
+          // split. Same mechanism as `@container/header` on `PanelHeader`.
+          className={cn(
+            "@container/composer relative w-full shrink-0",
+            disabled && "pointer-events-none",
+            className
+          )}
           onPointerDownCapture={(e) => {
             if (disabled) return;
             if (e.button !== 0) return;

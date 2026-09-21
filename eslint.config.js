@@ -747,6 +747,11 @@ export default tseslint.config(
       "src/components/Terminal/hooks/**/*.{ts,tsx}",
       "src/components/Terminal/inputEditorExtensions/**/*.{ts,tsx}",
       "src/store/terminalInputStore.ts",
+      // The composer's visual-review harness. The restriction here is about
+      // keeping heavy packages out of the app bundle; a `__preview__` entry is
+      // its own Vite entrypoint (`hybrid-input-preview.html`) and never reaches
+      // it, and the harness needs a real `EditorState` to seed a stashed draft.
+      "src/components/Terminal/__preview__/hybridInput.tsx",
     ],
     rules: { "no-restricted-imports": "off" },
   },
