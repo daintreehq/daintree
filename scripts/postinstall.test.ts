@@ -4,6 +4,8 @@ import Module from "module";
 
 const mockRebuild = vi.fn();
 const mockExecSync = vi.fn();
+const mockReadFileSync = vi.fn();
+const mockWriteFileSync = vi.fn();
 
 const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -11,6 +13,10 @@ const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
 const originalExitCode = process.exitCode;
 
 const POSTINSTALL_CMD = "node node_modules/node-pty/scripts/post-install.js";
+const SWALLOW_DEFINE = "NODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS";
+const BINDING_GYP = path.resolve(__dirname, "..", "node_modules", "node-pty", "binding.gyp");
+const UNPATCHED_GYP = "{\n  'target_defaults': {\n    'dependencies': [],\n  },\n}\n";
+const PATCHED_GYP = `{\n  'target_defaults': {\n    'defines': ['${SWALLOW_DEFINE}'],\n    'dependencies': [],\n  },\n}\n`;
 
 afterAll(() => {
   consoleErrorSpy.mockRestore();
@@ -33,6 +39,9 @@ describe("postinstall", () => {
       if (id === "child_process") {
         return { execSync: mockExecSync };
       }
+      if (id === "fs") {
+        return { readFileSync: mockReadFileSync, writeFileSync: mockWriteFileSync };
+      }
       return originalRequire.apply(this, [id]);
     } as typeof Module.prototype.require;
   }
@@ -49,8 +58,10 @@ describe("postinstall", () => {
     vi.clearAllMocks();
     consoleErrorSpy.mockImplementation(() => {});
     consoleLogSpy.mockImplementation(() => {});
-    mockRebuild.mockResolvedValue(undefined);
+    mockRebuild.mockReset().mockResolvedValue(undefined);
     mockExecSync.mockReturnValue(undefined);
+    mockReadFileSync.mockReset().mockReturnValue(UNPATCHED_GYP);
+    mockWriteFileSync.mockReset();
     process.exitCode = undefined;
 
     setupMocks();
@@ -86,6 +97,7 @@ describe("postinstall", () => {
           electronVersion: "42.3.3",
           buildPath: path.resolve(__dirname, ".."),
           force: true,
+          buildFromSource: true,
         })
       );
     }
@@ -99,7 +111,8 @@ describe("postinstall", () => {
       cwd: path.resolve(__dirname, ".."),
     });
     // node-pty post-install is the only execSync call — guards against a
-    // patch-package (or other) step being reintroduced ahead of it.
+    // patch-package (or other) step being reintroduced ahead of it. The
+    // binding.gyp patch runs in-process.
     expect(mockExecSync).toHaveBeenCalledTimes(1);
     expect(process.exitCode).toBeUndefined();
   });
@@ -192,6 +205,88 @@ describe("postinstall", () => {
 
     const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
     expect(errorCalls).toMatch(/node-pty/);
+    expect(errorCalls).toMatch(/win-job-object/);
+  });
+
+  it("patches node-pty's binding.gyp before rebuilding node-pty", async () => {
+    await runPostinstall();
+
+    expect(mockReadFileSync).toHaveBeenCalledWith(BINDING_GYP, "utf8");
+    expect(mockWriteFileSync).toHaveBeenCalledTimes(1);
+    const [writtenPath, written] = mockWriteFileSync.mock.calls[0];
+    expect(writtenPath).toBe(BINDING_GYP);
+    expect(written).toContain(`'defines': ['${SWALLOW_DEFINE}'],`);
+    expect(mockWriteFileSync.mock.invocationCallOrder[0]).toBeLessThan(
+      mockRebuild.mock.invocationCallOrder[0]
+    );
+    expect(rebuiltModules()[0]).toBe("node-pty");
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("leaves an already-patched binding.gyp untouched", async () => {
+    mockReadFileSync.mockReturnValue(PATCHED_GYP);
+
+    await runPostinstall();
+
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("fails the install but still rebuilds everything when the patch cannot apply", async () => {
+    mockReadFileSync.mockReturnValue("{\n  'targets': [],\n}\n");
+
+    await runPostinstall();
+
+    expect(mockWriteFileSync).not.toHaveBeenCalled();
+    expect(rebuiltModules()).toEqual(["node-pty", "win-job-object", "posix-pty-reaper"]);
+    expect(mockExecSync).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(1);
+
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/node-pty binding\.gyp patch/);
+    expect(errorCalls).toMatch(/target_defaults/);
+  });
+
+  it("fails the install when binding.gyp cannot be read", async () => {
+    mockReadFileSync.mockImplementation(() => {
+      throw new Error("ENOENT: no such file or directory");
+    });
+
+    await runPostinstall();
+
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(process.exitCode).toBe(1);
+
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/node-pty binding\.gyp patch: ENOENT/);
+  });
+
+  it("fails the install when the patched binding.gyp cannot be written", async () => {
+    mockWriteFileSync.mockImplementation(() => {
+      throw new Error("EACCES: permission denied");
+    });
+
+    await runPostinstall();
+
+    expect(mockRebuild).toHaveBeenCalledTimes(3);
+    expect(process.exitCode).toBe(1);
+
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/node-pty binding\.gyp patch: EACCES/);
+  });
+
+  it("reports a patch failure alongside a rebuild failure", async () => {
+    mockReadFileSync.mockReturnValue("{}\n");
+    mockRebuild.mockResolvedValueOnce(undefined);
+    mockRebuild.mockRejectedValueOnce(new Error("win-job-object failed"));
+
+    await runPostinstall();
+
+    expect(process.exitCode).toBe(1);
+    const errorCalls = consoleErrorSpy.mock.calls.flat().join(" ");
+    expect(errorCalls).toMatch(/Postinstall failures \(2\)/);
+    expect(errorCalls).toMatch(/node-pty binding\.gyp patch/);
     expect(errorCalls).toMatch(/win-job-object/);
   });
 });
