@@ -5,6 +5,8 @@ const retryProjectLoadMock = vi.fn<() => Promise<void>>();
 const setWorktreeLoadErrorMock = vi.fn<(error: string | null) => void>();
 
 let worktreeLoadError: string | null = null;
+let currentProject: { id: string } | null = null;
+let viewState: { isInitialized: boolean; isLoading: boolean; error: string | null } | null = null;
 
 vi.mock("@/clients", () => ({
   worktreeClient: {
@@ -13,13 +15,14 @@ vi.mock("@/clients", () => ({
 }));
 
 vi.mock("@/store/createWorktreeStore", () => ({
-  getCurrentViewStoreOrNull: () => null,
+  getCurrentViewStoreOrNull: () => (viewState ? { getState: () => viewState } : null),
 }));
 
 vi.mock("@/store/projectStore", () => ({
   useProjectStore: {
     getState: () => ({
       worktreeLoadError,
+      currentProject,
       setWorktreeLoadError: setWorktreeLoadErrorMock,
     }),
   },
@@ -52,6 +55,8 @@ describe("worktree.retryProjectLoad (#8400)", () => {
     retryProjectLoadMock.mockResolvedValue(undefined);
     setWorktreeLoadErrorMock.mockReset();
     worktreeLoadError = null;
+    currentProject = null;
+    viewState = null;
   });
 
   it("is a safe action (no confirm gate)", () => {
@@ -70,6 +75,41 @@ describe("worktree.retryProjectLoad (#8400)", () => {
     const action = getAction();
     expect(action.isEnabled({})).toBe(true);
     expect(action.disabledReason({})).toBeUndefined();
+  });
+
+  it("is enabled for an open project whose worktree store settled without a snapshot (#12576)", () => {
+    // No error to show, but no port either — the state that used to read as an
+    // empty repository. It must be retryable, not a dead end.
+    currentProject = { id: "p1" };
+    viewState = { isInitialized: false, isLoading: false, error: null };
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(true);
+    expect(action.disabledReason({})).toBeUndefined();
+  });
+
+  it("stays disabled while the first snapshot is still loading or once one has landed", () => {
+    currentProject = { id: "p1" };
+    viewState = { isInitialized: false, isLoading: true, error: null };
+    expect(getAction().isEnabled({})).toBe(false);
+
+    viewState = { isInitialized: true, isLoading: false, error: null };
+    expect(getAction().isEnabled({})).toBe(false);
+  });
+
+  it("leaves a crashed workspace service to Restart service", () => {
+    // setFatalError also leaves the store uninitialized and settled, but a
+    // reload can't bring back a host that exhausted its restart budget.
+    currentProject = { id: "p1" };
+    viewState = { isInitialized: false, isLoading: false, error: "Workspace service crashed" };
+    const action = getAction();
+    expect(action.isEnabled({})).toBe(false);
+    expect(action.disabledReason({})).toBe("No worktree load failure to retry");
+  });
+
+  it("stays disabled for an unbound view", () => {
+    currentProject = null;
+    viewState = { isInitialized: false, isLoading: false, error: null };
+    expect(getAction().isEnabled({})).toBe(false);
   });
 
   it("clears the banner after a successful retry", async () => {

@@ -513,7 +513,7 @@ describe("SidebarContent workspace error banner — issue #8394", () => {
     // `worktree.restartService` remains enabled even after banner dismissal.
     expect(source).toContain("bannerDismissed");
     expect(source).toContain("setBannerDismissed");
-    expect(source).toMatch(/onClose=\{onBannerDismiss\}/);
+    expect(source).toMatch(/onClose=\{canDismissErrorBanner \? onBannerDismiss : undefined\}/);
     expect(source).not.toContain("useWorktreeStore");
   });
 
@@ -569,5 +569,67 @@ describe("SidebarContent quick-state user-cleared variant — issue #8394", () =
   it("keeps filtered-empty when facet filters are active alongside quick-state", () => {
     expect(source).toContain("showQuickStateEmptyState && hasFacetFiltersActive ?");
     expect(source).toContain('variant="filtered-empty"');
+  });
+});
+
+describe("SidebarContent disconnected project — issue #12576", () => {
+  let source: string;
+
+  beforeAll(async () => {
+    source = await fs.readFile(SIDEBAR_CONTENT_PATH, "utf-8");
+  });
+
+  function zeroWorktreeBranch(): string {
+    const branchStart = source.indexOf("if (worktrees.length === 0) {");
+    const branchEnd = source.indexOf("const hasNonMainWorktrees", branchStart);
+    expect(branchStart).toBeGreaterThan(0);
+    expect(branchEnd).toBeGreaterThan(branchStart);
+    return source.slice(branchStart, branchEnd);
+  }
+
+  it("treats an open project with no snapshot as disconnected", () => {
+    // `isInitialized` only flips when a snapshot applies, which needs a live
+    // worktree port — so an open project without it has no connection.
+    expect(source).toContain(
+      "const isProjectDisconnected = currentProject !== null && !isInitialized;"
+    );
+  });
+
+  it("never offers the Open a Git repository nudge to a disconnected project", () => {
+    // Retry used to clear the timeout banner over a sidebar with no port, and
+    // the zero-worktree branch then told a user with an open project to open one.
+    const branch = zeroWorktreeBranch();
+    const gateIdx = branch.indexOf("{!worktreeLoadError && !isProjectDisconnected && (");
+    const nudgeIdx = branch.indexOf('title="Open a Git repository"');
+    expect(gateIdx).toBeGreaterThan(0);
+    expect(nudgeIdx).toBeGreaterThan(gateIdx);
+  });
+
+  it("says the connection failed, with Retry, when nothing else explains the empty sidebar", () => {
+    // A reported load failure wins; a workspace-service error already has its
+    // own banner and Restart action, so the fallback stays out of its way.
+    const branch = zeroWorktreeBranch();
+    expect(branch).toMatch(
+      /\{worktreeLoadErrorBanner \?\?\s*\(isProjectDisconnected && error === null \? \(\s*<WorktreeLoadErrorBanner error=\{WORKTREE_DISCONNECTED_MESSAGE\} \/>/
+    );
+    expect(source).toContain("\"The workspace service isn't connected, so worktrees can't load.\"");
+  });
+
+  it("keeps the service error pinned while it is all that explains an empty, disconnected sidebar", () => {
+    // Dismissing it there used to leave a bare "Worktrees" header — no
+    // explanation and no Restart action — once the nudge stopped covering it.
+    expect(source).toContain(
+      "const canDismissErrorBanner = worktrees.length > 0 || !isProjectDisconnected;"
+    );
+    expect(source).toMatch(/error !== null && \(!bannerDismissed \|\| !canDismissErrorBanner\) \?/);
+  });
+
+  it("keeps the loading skeleton ahead of the disconnected fallback", () => {
+    // `isInitialized` is false for every cold start, so the fallback may only
+    // claim the state once loading has settled.
+    const skeletonIdx = source.indexOf("if (isLoading && worktrees.length === 0)");
+    const zeroIdx = source.indexOf("if (worktrees.length === 0) {");
+    expect(skeletonIdx).toBeGreaterThan(0);
+    expect(skeletonIdx).toBeLessThan(zeroIdx);
   });
 });

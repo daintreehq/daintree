@@ -434,6 +434,8 @@ describe("worktree IPC adversarial", () => {
       attachDirectPort: ReturnType<typeof vi.fn>;
       getHostForProject: ReturnType<typeof vi.fn>;
       brokerPort: ReturnType<typeof vi.fn>;
+      waitForConfirmation?: ReturnType<typeof vi.fn>;
+      noBroker?: boolean;
     }) {
       cleanup();
       ipcHandlers.clear();
@@ -444,24 +446,80 @@ describe("worktree IPC adversarial", () => {
           attachDirectPort: svc.attachDirectPort,
           getHostForProject: svc.getHostForProject,
         },
-        worktreePortBroker: { brokerPort: svc.brokerPort },
+        worktreePortBroker: svc.noBroker
+          ? undefined
+          : {
+              brokerPort: svc.brokerPort,
+              waitForConfirmation: svc.waitForConfirmation ?? vi.fn().mockResolvedValue(true),
+            },
       } as unknown as HandlerDependencies);
     }
 
-    it("brokers the worktree port after a successful reload", async () => {
+    it("forces a fresh worktree port after a successful reload and waits for the receipt", async () => {
       const loadProject = vi.fn().mockResolvedValue(undefined);
       const attachDirectPort = vi.fn();
       const host = { hostId: "h1" };
       const getHostForProject = vi.fn().mockReturnValue(host);
       const brokerPort = vi.fn().mockReturnValue(true);
-      registerRetryHandlers({ loadProject, attachDirectPort, getHostForProject, brokerPort });
+      const waitForConfirmation = vi.fn().mockResolvedValue(true);
+      registerRetryHandlers({
+        loadProject,
+        attachDirectPort,
+        getHostForProject,
+        brokerPort,
+        waitForConfirmation,
+      });
 
       const event = eventWithSender();
       await getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(event);
 
       expect(loadProject).toHaveBeenCalledWith("/repo", 7);
       expect(attachDirectPort).toHaveBeenCalledWith(7, event.sender);
-      expect(brokerPort).toHaveBeenCalledWith(host, event.sender);
+      // Forced: a channel main believes is live may be one the renderer never
+      // received, and the renderer needs its ready callbacks to refetch (#12576).
+      expect(brokerPort).toHaveBeenCalledWith(host, event.sender, { force: true });
+      expect(waitForConfirmation).toHaveBeenCalledWith(7, 10_000);
+    });
+
+    it("stays pending until the renderer confirms the fresh port", async () => {
+      let confirm: (confirmed: boolean) => void = () => {};
+      registerRetryHandlers({
+        loadProject: vi.fn().mockResolvedValue(undefined),
+        attachDirectPort: vi.fn(),
+        getHostForProject: vi.fn().mockReturnValue({ hostId: "h1" }),
+        brokerPort: vi.fn().mockReturnValue(true),
+        waitForConfirmation: vi.fn(
+          () =>
+            new Promise<boolean>((resolve) => {
+              confirm = resolve;
+            })
+        ),
+      });
+
+      let settled = false;
+      const retry = getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender()).then(() => {
+        settled = true;
+      });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(settled).toBe(false);
+
+      confirm(true);
+      await retry;
+      expect(settled).toBe(true);
+    });
+
+    it("rejects when the renderer never confirms the fresh port", async () => {
+      registerRetryHandlers({
+        loadProject: vi.fn().mockResolvedValue(undefined),
+        attachDirectPort: vi.fn(),
+        getHostForProject: vi.fn().mockReturnValue({ hostId: "h1" }),
+        brokerPort: vi.fn().mockReturnValue(true),
+        waitForConfirmation: vi.fn().mockResolvedValue(false),
+      });
+
+      await expect(
+        getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender())
+      ).rejects.toThrow(/couldn't connect to the worktree service/);
     });
 
     it("rejects when the reload succeeds but the worktree port can't be brokered", async () => {
@@ -477,21 +535,35 @@ describe("worktree IPC adversarial", () => {
       ).rejects.toThrow(/couldn't connect to the worktree service/);
     });
 
-    it("skips brokering when no workspace host is available, without throwing", async () => {
+    it("rejects when no workspace host is available, since no port can reach the renderer", async () => {
       const attachDirectPort = vi.fn();
       const brokerPort = vi.fn().mockReturnValue(true);
       registerRetryHandlers({
         loadProject: vi.fn().mockResolvedValue(undefined),
         attachDirectPort,
-        getHostForProject: vi.fn().mockReturnValue(null),
+        getHostForProject: vi.fn().mockReturnValue(undefined),
         brokerPort,
       });
 
       await expect(
         getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender())
-      ).resolves.toBeUndefined();
+      ).rejects.toThrow(/couldn't connect to the worktree service/);
       expect(attachDirectPort).toHaveBeenCalled();
       expect(brokerPort).not.toHaveBeenCalled();
+    });
+
+    it("rejects when there is no port broker", async () => {
+      registerRetryHandlers({
+        loadProject: vi.fn().mockResolvedValue(undefined),
+        attachDirectPort: vi.fn(),
+        getHostForProject: vi.fn().mockReturnValue({ hostId: "h1" }),
+        brokerPort: vi.fn(),
+        noBroker: true,
+      });
+
+      await expect(
+        getHandler(CHANNELS.WORKTREE_RETRY_PROJECT_LOAD)(eventWithSender())
+      ).rejects.toThrow(/couldn't connect to the worktree service/);
     });
 
     it("does not attach or broker when the reload itself fails", async () => {

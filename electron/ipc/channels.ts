@@ -18,6 +18,7 @@ export const CHANNELS = {
   WORKTREE_DETACH_ISSUE: "worktree:detach-issue",
   WORKTREE_GET_ALL_ISSUE_ASSOCIATIONS: "worktree:get-all-issue-associations",
   WORKTREE_HOST_DISCONNECTED: "worktree:host-disconnected",
+  WORKTREE_PORT_ACK: "worktree:port-ack",
   WORKTREE_RESTART_SERVICE: "worktree:restart-service",
   WORKTREE_RETRY_PROJECT_LOAD: "worktree:retry-project-load",
   WORKTREE_RETRY_AUTH_FETCH: "worktree:retry-auth-fetch",

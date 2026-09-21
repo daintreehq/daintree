@@ -161,6 +161,11 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // `IpcEventMap` entry; that lets this entry come out.
   "worktree:host-disconnected",
 
+  // fire-and-forget — renderer→main `ipcRenderer.send` receipt from the
+  // preload once it has attached a transferred worktree MessagePort. The
+  // broker only reuses a channel the renderer has confirmed (#12576).
+  "worktree:port-ack",
+
   // raw invoke — main-side handler uses raw `ipcMain.handle` instead of
   // `typedHandle` (see `RAW_HANDLE_ALLOWLIST` in ipcHandleCoverage.test.ts
   // and the corresponding `PRELOAD_INVOKE_WITHOUT_MAP_ALLOWLIST` below).
