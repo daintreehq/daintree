@@ -41,15 +41,6 @@
         "id": "daintree.sveltekit-builder.guest",
         "entry": "renderer/guest/entry.ts"
       }
-    ],
-    "toolbarButtons": [
-      {
-        "id": "toggle",
-        "label": "Toggle SvelteKit Tools",
-        "iconId": "monitor-play",
-        "actionId": "daintree.sveltekit-builder.toggle-builder",
-        "priority": 1
-      }
     ]
   }
 }
