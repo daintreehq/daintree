@@ -410,6 +410,10 @@ export class PtyClient extends EventEmitter {
   // so a restarted host would otherwise boot on balanced governor thresholds and
   // the ProcessTreeCache constructor default until the next profile change.
   private lastResourceProfile: ResourceProfile | null = null;
+  /** Last fallback-eligible project set pushed to the shards (#12557); replayed on shard boot. */
+  private fallbackEligibleProjects: string[] = [];
+  /** Per-connection holder identity, echoed to the host on every (re)connect (#12557). */
+  private windowPortHolders = new Map<number, number>();
   private lastProcessTreePollIntervalMs: number | null = null;
 
   /**
@@ -1124,6 +1128,16 @@ export class PtyClient extends EventEmitter {
         ms: this.lastProcessTreePollIntervalMs,
       });
     }
+
+    // A shard that booted without this set would suppress the IPC fallback for
+    // every project whose only remaining consumer holds no port — the #12557
+    // starvation, reintroduced for exactly as long as the shard stays unaware.
+    if (this.fallbackEligibleProjects.length > 0) {
+      shard.send({
+        type: "set-fallback-eligible-projects",
+        projectIds: this.fallbackEligibleProjects,
+      });
+    }
   }
 
   /**
@@ -1439,7 +1453,15 @@ export class PtyClient extends EventEmitter {
    * old shard gets an explicit disconnect so it can tear down its per-window
    * queue/batcher state.
    */
-  connectMessagePort(windowId: number, port: MessagePortMain): void {
+  connectMessagePort(windowId: number, port: MessagePortMain, holderWebContentsId?: number): void {
+    // Remembered per connection so the internal re-entries (shard reroute,
+    // restart replay, pending-port flush) carry the same identity as the
+    // original broker — they re-send the same port, so the recipient is
+    // unchanged and must keep being named (#12557).
+    if (holderWebContentsId !== undefined) {
+      this.windowPortHolders.set(windowId, holderWebContentsId);
+    }
+    const holderId = this.windowPortHolders.get(windowId);
     const targetKey = this.shardKeyForWindowContext(windowId);
     const target = this.ensureShard(targetKey);
 
@@ -1478,7 +1500,10 @@ export class PtyClient extends EventEmitter {
     }
 
     try {
-      target.lifecycle.child.postMessage({ type: "connect-port", windowId }, [port]);
+      target.lifecycle.child.postMessage(
+        { type: "connect-port", windowId, holderWebContentsId: holderId },
+        [port]
+      );
       if (process.env.DAINTREE_VERBOSE) {
         console.log(`[PtyClient] MessagePort forwarded to Pty Host for window ${windowId}`);
       }
@@ -1566,6 +1591,7 @@ export class PtyClient extends EventEmitter {
     this.windowPortShard.delete(windowId);
     this.windowProjectContexts.delete(windowId);
     this.windowFocusedTerminals.delete(windowId);
+    this.windowPortHolders.delete(windowId);
     (this.shards.get(portKey ?? DEFAULT_SHARD_KEY) ?? this.defaultShard).send({
       type: "disconnect-port",
       windowId,
@@ -1936,6 +1962,29 @@ export class PtyClient extends EventEmitter {
   setFocusedTerminal(windowId: number, id: string | null): void {
     this.windowFocusedTerminals.set(windowId, id);
     this.shardForWindow(windowId).send({ type: "set-focused-terminal", windowId, id });
+  }
+
+  /**
+   * Tell every shard which projects currently have a view holding no
+   * MessagePort (#12557) — a cached duplicate, or one mid-transport-handoff. A
+   * window's single connection follows whichever view is active, so the
+   * project-scoped IPC fallback is the only transport those views have, and the
+   * host suppresses that fallback the moment any window's batcher accepts the
+   * chunk. Only Main can see which views hold a port, so it pushes the set here
+   * whenever that changes.
+   *
+   * Sent to every shard, not the owning one: a project's terminals can be
+   * spread across shards, and a shard holding one of them must not suppress the
+   * fallback because it happens not to host that view's active project.
+   */
+  setFallbackEligibleProjects(projectIds: string[]): void {
+    this.fallbackEligibleProjects = [...projectIds];
+    for (const shard of this.shards.values()) {
+      shard.send({
+        type: "set-fallback-eligible-projects",
+        projectIds: this.fallbackEligibleProjects,
+      });
+    }
   }
 
   setResourceMonitoring(enabled: boolean): void {

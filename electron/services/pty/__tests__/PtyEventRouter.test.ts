@@ -162,6 +162,64 @@ describe("routeHostEvent", () => {
     expect(errorListener).toHaveBeenCalledWith("t1", "boom");
   });
 
+  it("forwards the host's delivered-view list on a data event (#12557)", () => {
+    // Main uses it to drop the views that already read the chunk off their
+    // MessagePort, so the cached duplicate the fallback exists for is the only
+    // one that parses it. Dropping the list here would double-deliver instead.
+    const { deps, emitter } = makeDeps();
+    const dataListener = vi.fn();
+    emitter.on("data", dataListener);
+
+    routeHostEvent({ type: "data", id: "t1", data: "x", portDeliveredWebContentsIds: [303] }, deps);
+
+    expect(dataListener).toHaveBeenCalledWith("t1", "x", {
+      portDeliveredWebContentsIds: [303],
+      portRecoveryWebContentsId: undefined,
+    });
+  });
+
+  it("forwards a port-flush recovery view on a data event (#12557)", () => {
+    const { deps, emitter } = makeDeps();
+    const dataListener = vi.fn();
+    emitter.on("data", dataListener);
+
+    routeHostEvent({ type: "data", id: "t1", data: "x", portRecoveryWebContentsId: 202 }, deps);
+
+    expect(dataListener).toHaveBeenCalledWith("t1", "x", {
+      portDeliveredWebContentsIds: undefined,
+      portRecoveryWebContentsId: 202,
+    });
+  });
+
+  it("forwards a port-disconnected notice so Main can drop its holder (#12557)", () => {
+    // Main uses it to stop treating that window's view as reachable by
+    // MessagePort; without it a failed port leaves the view ineligible for the
+    // IPC fallback it now depends on.
+    const { deps, emitter } = makeDeps();
+    const listener = vi.fn();
+    emitter.on("port-disconnected", listener);
+
+    routeHostEvent({ type: "port-disconnected", windowId: 4, reason: "postMessage-error" }, deps);
+
+    expect(listener).toHaveBeenCalledWith(4, "postMessage-error", undefined);
+  });
+
+  it("forwards the departing holder id so Main can identity-match the clear (#12557)", () => {
+    // A port-replace teardown reaches Main after the replacement holder is
+    // already registered; without the departing identity Main cannot tell the
+    // two apart and wipes the live record.
+    const { deps, emitter } = makeDeps();
+    const listener = vi.fn();
+    emitter.on("port-disconnected", listener);
+
+    routeHostEvent(
+      { type: "port-disconnected", windowId: 4, reason: "port-replace", holderWebContentsId: 101 },
+      deps
+    );
+
+    expect(listener).toHaveBeenCalledWith(4, "port-replace", 101);
+  });
+
   it("emits submit-status as a single typed payload, not an error string", () => {
     // #11875. The state has to survive the host->Main hop as a closed union the
     // renderer can switch on; folding it into the `error` string carrier is

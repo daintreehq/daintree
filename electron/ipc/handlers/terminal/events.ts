@@ -3,7 +3,12 @@
  */
 
 import { CHANNELS } from "../../channels.js";
-import { broadcastToProjectRenderers, broadcastToRenderer } from "../../utils.js";
+import {
+  broadcastToProjectRenderers,
+  broadcastToProjectRenderersExcept,
+  broadcastToRenderer,
+} from "../../utils.js";
+import { resolveLiveWebContents } from "../../../window/webContentsRegistry.js";
 import { logInfo, logWarn } from "../../../utils/logger.js";
 import { events, type DaintreeEventMap } from "../../../services/events.js";
 import { mcpPaneConfigService } from "../../../services/McpPaneConfigService.js";
@@ -19,6 +24,7 @@ import type {
   FdGrowthPayload,
   TerminalSubmitStatusPayload,
 } from "../../../../shared/types/pty-host.js";
+import type { PtyDataRouting } from "../../../services/pty/types.js";
 import type { HandlerDependencies } from "../../types.js";
 
 export function registerTerminalEventHandlers(deps: HandlerDependencies): () => void {
@@ -33,9 +39,34 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   // and JSON/base64 churn; see lessons #4899/#4862/#4639). Project-scoped: only
   // the owning project's views host a panel for the terminal, and its cached
   // views must still get every byte, since there is no resync on reactivation.
-  const handlePtyData = (id: string, data: string | Uint8Array) => {
-    broadcastToProjectRenderers(
+  const handlePtyData = (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => {
+    // Recovery for one view whose port threw mid-flush (#12557). Every other
+    // destination already has these bytes, so this goes to that view alone — a
+    // re-broadcast would double-deliver to the siblings that took it on their
+    // own ports and to the port-less views the supplementary fallback already
+    // fed. The host names the view by the identity Main gave it at connect
+    // time, so a project switch completing in between cannot redirect it.
+    if (routing?.portRecoveryWebContentsId !== undefined) {
+      const holder = resolveLiveWebContents(routing.portRecoveryWebContentsId);
+      if (!holder) return;
+      try {
+        holder.send(CHANNELS.TERMINAL_DATA, id, data);
+      } catch {
+        // Renderer disposed mid-send; the port teardown already ran.
+      }
+      return;
+    }
+
+    // The host only sends this list when it deliberately kept the fallback open
+    // for a view its MessagePort routing cannot reach (#12557). These views
+    // already have the chunk; every other view of the project — cached and
+    // mid-handoff ones included — still needs it. The ids are the recipients
+    // the host actually wrote to, so no re-derivation can go stale here.
+    const delivered = routing?.portDeliveredWebContentsIds;
+    const exclude = delivered && delivered.length > 0 ? new Set(delivered) : null;
+    broadcastToProjectRenderersExcept(
       ptyClient.getTerminalProjectId(id),
+      exclude,
       CHANNELS.TERMINAL_DATA,
       id,
       data

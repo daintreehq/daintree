@@ -1260,8 +1260,15 @@ export const IPC_FALLBACK_HOST_SEQUENCE: readonly string[] = [
 
 const PTY_HOST_SOURCE_URL = new URL("../../../electron/pty-host.ts", import.meta.url);
 
-/** The `if` that opens the IPC fallback block in `pty-host.ts`. */
-const IPC_FALLBACK_BLOCK_MARKER = "if (!visualWritten && !isBackgrounded && !isSuspended) {";
+/**
+ * The `if` that opens the IPC fallback block in `pty-host.ts`.
+ *
+ * A locator, not a copy of the gate: the condition itself moved into the
+ * `sendIpcFallback` const above the block in #12557, so a change to WHEN the
+ * fallback fires no longer shows up here. What this still pins is what the
+ * guard is for — the ordered `ipcQueueManager` calls inside the block.
+ */
+const IPC_FALLBACK_BLOCK_MARKER = "if (sendIpcFallback) {";
 
 /**
  * Whether the host sequence {@link runIpcFlood} mirrors is still the sequence

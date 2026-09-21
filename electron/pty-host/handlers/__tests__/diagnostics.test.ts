@@ -54,6 +54,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    fallbackEligibleProjects: new Set(),
     windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     visualBuffers: [],

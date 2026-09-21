@@ -28,6 +28,7 @@ function makeCtx(stateRef: {
     pauseCoordinators: new Map(),
     rendererConnections: new Map(),
     windowProjectMap: new Map(),
+    fallbackEligibleProjects: new Set(),
     windowFocusedTerminalMap: new Map(),
     ipcDataMirrorTerminals: new Set(),
     // Mirror the production wiring: getter/setter pairs read & write the
@@ -137,6 +138,65 @@ describe("init-buffers handler", () => {
     expect(ctx.windowProjectMap.get(1)).toBe("proj-a");
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledTimes(1);
     expect(ctx.recomputeActivityTiers).toHaveBeenCalledWith("proj-a");
+  });
+
+  it("set-fallback-eligible-projects replaces the set rather than merging (#12557)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+
+    handlers["set-fallback-eligible-projects"]({ projectIds: ["proj-a", "proj-b"] });
+    expect([...ctx.fallbackEligibleProjects]).toEqual(["proj-a", "proj-b"]);
+
+    // Main recomputes the whole set from its registry, so this is a replace:
+    // merging would keep the IPC fallback open for proj-b forever.
+    handlers["set-fallback-eligible-projects"]({ projectIds: ["proj-c"] });
+    expect([...ctx.fallbackEligibleProjects]).toEqual(["proj-c"]);
+
+    // An empty list is a legitimate "nothing is eligible any more".
+    handlers["set-fallback-eligible-projects"]({ projectIds: [] });
+    expect([...ctx.fallbackEligibleProjects]).toEqual([]);
+  });
+
+  it("set-fallback-eligible-projects rejects a malformed list outright (#12557)", () => {
+    // Filtering junk out of a partly-valid list would silently narrow the set
+    // and starve whatever it dropped. Reject the payload and keep the last
+    // known-good one instead.
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+    handlers["set-fallback-eligible-projects"]({ projectIds: ["proj-a", "proj-b"] });
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    handlers["set-fallback-eligible-projects"]({ projectIds: ["proj-a", "", 7, null] });
+    warn.mockRestore();
+
+    expect([...ctx.fallbackEligibleProjects]).toEqual(["proj-a", "proj-b"]);
+  });
+
+  it("set-fallback-eligible-projects leaves the set alone when projectIds is not an array (#12557)", () => {
+    const stateRef = {
+      visualBuffers: [] as SharedRingBuffer[],
+      visualSignalView: null as Int32Array | null,
+      analysisBuffer: null as SharedRingBuffer | null,
+    };
+    const ctx = makeCtx(stateRef);
+    const handlers = createConnectionHandlers(ctx);
+    ctx.fallbackEligibleProjects.add("proj-a");
+
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    handlers["set-fallback-eligible-projects"]({});
+    warn.mockRestore();
+
+    expect([...ctx.fallbackEligibleProjects]).toEqual(["proj-a"]);
   });
 
   it("project-switch handler updates the window→project map and recomputes activity tiers scoped to the new project (#10857)", () => {

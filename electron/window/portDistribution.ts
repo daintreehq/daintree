@@ -9,6 +9,10 @@
 
 import { BrowserWindow, MessageChannelMain } from "electron";
 import { randomBytes } from "crypto";
+import {
+  clearPortHolderWebContents,
+  registerPortHolderWebContents,
+} from "./webContentsRegistry.js";
 import type { WindowContext } from "./WindowRegistry.js";
 import type { PtyClient } from "../services/PtyClient.js";
 
@@ -51,14 +55,25 @@ export function distributePortsToView(
   ctx.services.activeRendererPort = port1;
   ctx.services.activePtyHostPort = port2;
 
+  // Cleared before the host-side connect, restored only once the renderer end
+  // is confirmed delivered below (#12557). Between those two points this
+  // window has no confirmed port holder, which is exactly right: the outgoing
+  // view may still be draining the old pair, the incoming one has nothing yet,
+  // and both must stay eligible for the project-scoped IPC fallback rather
+  // than be excluded from it on the strength of a port neither holds.
+  clearPortHolderWebContents(ctx.windowId);
+
   if (ptyClient) {
-    ptyClient.connectMessagePort(ctx.windowId, port2);
+    ptyClient.connectMessagePort(ctx.windowId, port2, targetWc.id);
   }
 
   if (win && !win.isDestroyed() && !targetWc.isDestroyed()) {
     try {
       targetWc.postMessage("terminal-port-token", { token: handshakeToken });
       targetWc.postMessage("terminal-port", { token: handshakeToken }, [port1]);
+      // Confirmed: this view owns the window's port, so Main may exclude it
+      // from an IPC fallback the host says its port already carried.
+      registerPortHolderWebContents(ctx.windowId, targetWc.id);
     } catch (error) {
       // A reloading frame can be disposed while its WebContents still reports
       // alive, so postMessage throws despite the isDestroyed() checks. Keep

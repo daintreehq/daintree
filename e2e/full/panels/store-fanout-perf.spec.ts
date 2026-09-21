@@ -1016,6 +1016,52 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
               .poll(() => readLastSteps(cachedMirror!), { timeout: T_LONG })
               .toEqual(expectedLastSteps);
             mirrorRevealMs = Date.now() - started;
+
+            // #12557 restored the cached duplicate by keeping the host's IPC
+            // fallback open for it while a sibling window's MessagePort took
+            // the same chunk. The hazard of that shape is the opposite of the
+            // original bug: a view fed on BOTH paths parses every line twice.
+            // Matching final step numbers cannot see that, so check the
+            // mirror's own buffer for repeated step lines.
+            const duplicateIds = cachedIds.filter((id) => id !== flipPanelId);
+            // At scale 1 the flip panel IS the only terminal, and an empty
+            // sample would make every assertion here vacuously true.
+            if (duplicateIds.length > 0) {
+              const dupeReport = await cachedMirror.evaluate(
+                (ids) =>
+                  ids.map((id) => {
+                    const terminal = (window as any).__daintreeGetTerminalForE2E(id);
+                    const buffer = terminal.buffer.active;
+                    // Rejoin wrapped rows first: at a narrow width "step 100"
+                    // and "step 101" share a first physical row, which would
+                    // read as a duplicate of a line that was never repeated.
+                    const logical: string[] = [];
+                    for (let i = 0; i < buffer.length; i++) {
+                      const line = buffer.getLine(i);
+                      if (!line) continue;
+                      const text = line.translateToString(true);
+                      if (line.isWrapped && logical.length > 0) logical[logical.length - 1] += text;
+                      else logical.push(text);
+                    }
+                    const seen = new Set<string>();
+                    let repeated = 0;
+                    let matched = 0;
+                    for (const text of logical) {
+                      const match = text.match(/^working\.\.\. step (\d+)$/);
+                      if (!match) continue;
+                      matched++;
+                      if (seen.has(match[1])) repeated++;
+                      else seen.add(match[1]);
+                    }
+                    return { matched, repeated };
+                  }),
+                duplicateIds
+              );
+              // Every terminal must actually hold step lines, or "no duplicates"
+              // would just be restating the starvation this fix removed.
+              expect(dupeReport.every((r) => r.matched > 0)).toBe(true);
+              expect(dupeReport.map((r) => r.repeated)).toEqual(dupeReport.map(() => 0));
+            }
           }
           console.log(
             "BACKGROUND_ENERGY " +

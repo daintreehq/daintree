@@ -32,8 +32,10 @@ vi.mock("../../../../services/events.js", () => ({
 import { CHANNELS } from "../../../channels.js";
 import { registerTerminalEventHandlers } from "../events.js";
 import {
+  clearPortHolderWebContents,
   registerAppView,
   registerCachedViewWebContents,
+  registerPortHolderWebContents,
   registerProjectView,
   unregisterAppView,
   unregisterProjectView,
@@ -73,6 +75,14 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
   let dispose: () => void;
   const windows: Array<ReturnType<typeof makeWindow>> = [];
   const projectViewIds: number[] = [];
+  const portHolderWindowIds: number[] = [];
+
+  // Drives the real registry rather than a stub: `distributePortsToView` records
+  // the holder there after a confirmed delivery, and this is the same call.
+  function holdPortIn(windowId: number, wc: FakeWebContents): void {
+    registerPortHolderWebContents(windowId, wc.id);
+    portHolderWindowIds.push(windowId);
+  }
 
   function showInWindow(win: ReturnType<typeof makeWindow>, wc: FakeWebContents): void {
     registerAppView(win as never, { webContents: wc } as never);
@@ -92,6 +102,7 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
 
   afterEach(() => {
     dispose();
+    for (const windowId of portHolderWindowIds.splice(0)) clearPortHolderWebContents(windowId);
     for (const id of projectViewIds.splice(0)) unregisterProjectView(id);
     for (const win of windows.splice(0)) unregisterAppView(win as never);
     liveWebContents.clear();
@@ -136,11 +147,97 @@ describe("terminal event handlers — terminal:data routing (#12514)", () => {
       expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", chunk]]);
     });
 
+    it("skips the port holder of a window the host already fed (#12557)", () => {
+      // Window 1's active project-A view read the chunk off its MessagePort, so
+      // the host named window 1 while keeping the fallback open for window 2's
+      // cached copy. Re-sending to that view would dispatch the same bytes
+      // into its xterm a second time — terminalClient.onData subscribes to
+      // both transports.
+
+      ptyClient.emit("data", "term-a", "working... step 1", {
+        portDeliveredWebContentsIds: [activeA.id],
+      });
+
+      expect(dataSends(activeA)).toHaveLength(0);
+      expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "working... step 1"]]);
+    });
+
+    it("delivers to every project view when the host fed nobody on a port", () => {
+      // No port acceptance anywhere: the list is absent and routing is exactly
+      // what it was before #12557.
+      ptyClient.emit("data", "term-a", "output");
+
+      expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
+      expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
+    });
+
+    it("ignores a delivered id that matches no view of the project", () => {
+      // A view torn down between the host writing to its port and Main routing
+      // the fallback. Excluding an id nobody matches is a no-op, so every live
+      // view still receives the chunk.
+      ptyClient.emit("data", "term-a", "output", { portDeliveredWebContentsIds: [999_999] });
+
+      expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
+      expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "output"]]);
+    });
+
+    it("excludes the recipient even after its window's holder moved on (#12557)", () => {
+      // The race the identity carriage exists for: the host wrote the chunk to
+      // window 1's project-A view, then window 1 switched to project B before
+      // Main routed the fallback. Resolving the recipient from the window would
+      // now exclude the B view and re-deliver into the A view that already
+      // parsed it; the echoed identity still names the A view.
+      holdPortIn(1, activeB);
+
+      ptyClient.emit("data", "term-a", "step", { portDeliveredWebContentsIds: [activeA.id] });
+
+      expect(dataSends(activeA)).toHaveLength(0);
+      expect(dataSends(cachedA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "step"]]);
+    });
+
+    it("routes a port-flush recovery batch to that window's holder alone (#12557)", () => {
+      // The view's port threw mid-flush. Everyone else already has these
+      // bytes — siblings from their own ports, port-less views from the
+      // supplementary fallback — so a re-broadcast would double-deliver.
+
+      ptyClient.emit("data", "term-a", "recovered", { portRecoveryWebContentsId: activeA.id });
+
+      expect(dataSends(activeA)).toEqual([[CHANNELS.TERMINAL_DATA, "term-a", "recovered"]]);
+      expect(dataSends(cachedA)).toHaveLength(0);
+      expect(dataSends(activeB)).toHaveLength(0);
+      expect(dataSends(cachedB)).toHaveLength(0);
+    });
+
+    it("drops a recovery batch whose view is already gone (#12557)", () => {
+      // Nothing can be addressed, and smearing it across the project would
+      // duplicate into every view that already has it.
+      ptyClient.emit("data", "term-a", "recovered", { portRecoveryWebContentsId: 999_999 });
+
+      for (const wc of [activeA, cachedA, activeB, cachedB]) {
+        expect(dataSends(wc)).toHaveLength(0);
+      }
+    });
+
     it("never reaches another project's views, visible or cached", () => {
       ptyClient.emit("data", "term-a", "hello");
 
       expect(dataSends(activeB)).toHaveLength(0);
       expect(dataSends(cachedB)).toHaveLength(0);
+    });
+
+    it("still excludes a fed port holder when the project is unknown (#12557)", () => {
+      // `getTerminalProjectId` starts returning null the moment
+      // `PtyClient.kill()` drops the spawn record, while chunks the host
+      // already emitted are still arriving. The unscoped fan-out must not
+      // hand one back to the view that read it off its port.
+      ptyClient.emit("data", "term-untracked", "late output", {
+        portDeliveredWebContentsIds: [activeA.id],
+      });
+
+      expect(dataSends(activeA)).toHaveLength(0);
+      expect(dataSends(cachedA)).toEqual([
+        [CHANNELS.TERMINAL_DATA, "term-untracked", "late output"],
+      ]);
     });
 
     it("falls back to every app view when the terminal's project is unknown", () => {

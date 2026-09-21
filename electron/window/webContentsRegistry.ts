@@ -52,6 +52,172 @@ const projectViewDestroyListeners = new Map<
 // reactivation (#9490).
 const cachedViewWebContents = new Set<number>();
 
+// windowId → the WebContents CONFIRMED to hold that window's renderer-side PTY
+// MessagePort. Recorded by `distributePortsToView` only once delivery
+// succeeded. Used solely to derive fallback eligibility below — chunk routing
+// names its recipients by identity on the wire instead, so it never depends on
+// this map being current at the moment a chunk is routed.
+const portHolderByWindow = new Map<number, number>();
+const portHolderWebContents = new Set<number>();
+
+// Last set published to `fallbackEligibleProjectsListener`, so redundant
+// mutations (the common case — most register/unregister calls don't change
+// which PROJECTS have a view off the port path) stay silent.
+let publishedFallbackEligibleProjects = "";
+let fallbackEligibleProjectsListener: ((projectIds: string[]) => void) | null = null;
+
+/**
+ * Projects with at least one view that is NOT its window's port holder, in any
+ * window. These are the views the pty-host's MessagePort routing cannot reach,
+ * so it must keep the project-scoped IPC fallback open for them even when a
+ * sibling window's port accepted the chunk (#12557).
+ *
+ * Deliberately keyed off "holds no port" rather than "is cached". The two
+ * differ exactly during a transport handoff, and each difference is a bug the
+ * cached-only version had:
+ *
+ * - A just-cached view still owns its window's port until the replacement is
+ *   brokered. Calling it eligible there would open the fallback while the old
+ *   port still delivers, and the view would parse the chunk twice.
+ * - A reactivating view stops being cached before its replacement port exists
+ *   (`activateView` clears the mark ahead of the paint gate). Calling it
+ *   ineligible there reopens the original starvation for the length of that
+ *   gate.
+ * - A view whose port delivery threw never received its end, so it is not a
+ *   confirmed holder and stays eligible — failing toward over-delivery.
+ *
+ * Before any port is brokered every view qualifies, which matches the
+ * pre-existing behaviour: with no connections the host's fallback was
+ * unconditional anyway.
+ */
+export function getFallbackEligibleProjectIds(): string[] {
+  const projectIds = new Set<string>();
+  for (const [wcId, projectId] of viewToProject) {
+    if (portHolderWebContents.has(wcId)) continue;
+    projectIds.add(projectId);
+  }
+  return Array.from(projectIds);
+}
+
+/**
+ * WebContents id confirmed to hold `windowId`'s PTY MessagePort, if any. The
+ * observable for the port-handoff bookkeeping that drives eligibility.
+ */
+export function getPortHolderWebContentsId(windowId: number): number | undefined {
+  return portHolderByWindow.get(windowId);
+}
+
+/**
+ * Resolve a WebContents id to a live instance. Lives here so the
+ * `webContents.fromId` dependency stays inside this module — every consumer
+ * already mocks electron for the registry.
+ */
+export function resolveLiveWebContents(webContentsId: number): WebContents | null {
+  const wc = webContentsModule.fromId(webContentsId);
+  return wc && !wc.isDestroyed() ? wc : null;
+}
+
+/**
+ * Record the view that successfully received `windowId`'s PTY MessagePort.
+ * Call only after delivery succeeded — an unconfirmed holder must stay
+ * eligible for the IPC fallback rather than be excluded from it.
+ */
+export function registerPortHolderWebContents(windowId: number, webContentsId: number): void {
+  const previous = portHolderByWindow.get(windowId);
+  if (previous === webContentsId) return;
+  if (previous !== undefined) portHolderWebContents.delete(previous);
+  portHolderByWindow.set(windowId, webContentsId);
+  portHolderWebContents.add(webContentsId);
+  notifyFallbackEligibleProjectsChanged();
+}
+
+/**
+ * Forget a project view whose WebContents is already gone. Reached from the
+ * read-path sweeps, which can be the first thing to notice a destroyed view —
+ * so they have to do the same cleanup and publication as an explicit
+ * unregister. Skipping the holder cleanup here would leave a project eligible
+ * for the IPC fallback with no port-less view left to receive it, and Main
+ * would keep charging the host's IPC ledger for copies it sends to nobody.
+ */
+function pruneDeadProjectView(webContentsId: number): void {
+  viewToProject.delete(webContentsId);
+  cachedViewWebContents.delete(webContentsId);
+  forgetPortHolderWebContents(webContentsId);
+  notifyFallbackEligibleProjectsChanged();
+}
+
+/** Drop a WebContents from the port-holder bookkeeping, whichever window held it. */
+function forgetPortHolderWebContents(webContentsId: number): void {
+  if (!portHolderWebContents.delete(webContentsId)) return;
+  for (const [windowId, holderId] of portHolderByWindow) {
+    if (holderId === webContentsId) portHolderByWindow.delete(windowId);
+  }
+}
+
+/**
+ * Forget `windowId`'s port holder only if it is still the view that `holder`
+ * names. The pty-host tears a replaced port down after Main has already
+ * brokered and registered its replacement (`distributePortsToView` runs
+ * clear -> connect -> deliver -> register synchronously, and the host processes
+ * the connect only afterwards), so the teardown notice for the departing port
+ * always arrives late. Clearing on it unconditionally would wipe the live
+ * record and leave the window with no holder for the rest of its life —
+ * `registerPortHolderWebContents` is only reached on a fresh handoff — which
+ * marks its project permanently fallback-eligible and sends every chunk down a
+ * supplementary IPC path no renderer acks (#12557).
+ *
+ * `undefined` means the notice carried no identity; the caller's only safe
+ * option is the unconditional clear.
+ */
+export function clearPortHolderWebContentsIfCurrent(
+  windowId: number,
+  holder: number | undefined
+): void {
+  if (holder !== undefined && portHolderByWindow.get(windowId) !== holder) return;
+  clearPortHolderWebContents(windowId);
+}
+
+/** Forget `windowId`'s port holder — delivery failed, or the window is gone. */
+export function clearPortHolderWebContents(windowId: number): void {
+  const previous = portHolderByWindow.get(windowId);
+  if (previous === undefined) return;
+  portHolderByWindow.delete(windowId);
+  portHolderWebContents.delete(previous);
+  notifyFallbackEligibleProjectsChanged();
+}
+
+/**
+ * Observe {@link getFallbackEligibleProjectIds} changes. Fires immediately with
+ * the current set so the consumer starts in sync, then on every real change.
+ * One listener — this is a process-wide registry with a single main-process
+ * consumer, and a set/replace is easier to reason about than a subscriber list
+ * nothing unsubscribes from.
+ */
+export function setFallbackEligibleProjectsListener(
+  listener: ((projectIds: string[]) => void) | null
+): void {
+  fallbackEligibleProjectsListener = listener;
+  if (!listener) return;
+  const projectIds = getFallbackEligibleProjectIds();
+  publishedFallbackEligibleProjects = JSON.stringify([...projectIds].sort());
+  listener(projectIds);
+}
+
+/**
+ * Publish the eligible-project set if it changed. Safe to over-call; the
+ * read-path prunes deliberately don't, because a project lingering in the set
+ * only costs a redundant fallback until the next real mutation, whereas a
+ * missed publish starves a live view.
+ */
+function notifyFallbackEligibleProjectsChanged(): void {
+  if (!fallbackEligibleProjectsListener) return;
+  const projectIds = getFallbackEligibleProjectIds();
+  const serialized = JSON.stringify([...projectIds].sort());
+  if (serialized === publishedFallbackEligibleProjects) return;
+  publishedFallbackEligibleProjects = serialized;
+  fallbackEligibleProjectsListener(projectIds);
+}
+
 // Memoized getAllAppWebContents() result. broadcastToRenderer() calls it on
 // every relayed event (terminal data/status/activity, events:push), but the
 // recipient set only changes on view register/unregister/destroy — every
@@ -239,8 +405,7 @@ export function getAllAppWebContents(): WebContents[] {
       seen.add(wcId);
       result.push(wc);
     } else {
-      viewToProject.delete(wcId);
-      cachedViewWebContents.delete(wcId);
+      pruneDeadProjectView(wcId);
     }
   }
 
@@ -270,13 +435,16 @@ export function registerProjectView(projectId: string, webContents: WebContents)
   const wcId = webContents.id;
   viewToProject.set(wcId, projectId);
   invalidateAllAppWebContentsCache();
+  notifyFallbackEligibleProjectsChanged();
 
   if (!projectViewDestroyListeners.has(wcId)) {
     const onDestroyed = () => {
       viewToProject.delete(wcId);
       cachedViewWebContents.delete(wcId);
+      forgetPortHolderWebContents(wcId);
       projectViewDestroyListeners.delete(wcId);
       invalidateAllAppWebContentsCache();
+      notifyFallbackEligibleProjectsChanged();
     };
     projectViewDestroyListeners.set(wcId, { webContents, listener: onDestroyed });
     webContents.once("destroyed", onDestroyed);
@@ -289,7 +457,9 @@ export function registerProjectView(projectId: string, webContents: WebContents)
 export function unregisterProjectView(webContentsId: number): void {
   viewToProject.delete(webContentsId);
   cachedViewWebContents.delete(webContentsId);
+  forgetPortHolderWebContents(webContentsId);
   invalidateAllAppWebContentsCache();
+  notifyFallbackEligibleProjectsChanged();
 
   const registration = projectViewDestroyListeners.get(webContentsId);
   if (registration) {
@@ -348,8 +518,7 @@ export function getWebContentsForProject(projectId: string): WebContents[] {
     if (wc && !wc.isDestroyed()) {
       result.push(wc);
     } else {
-      viewToProject.delete(wcId);
-      cachedViewWebContents.delete(wcId);
+      pruneDeadProjectView(wcId);
       invalidateAllAppWebContentsCache();
     }
   }

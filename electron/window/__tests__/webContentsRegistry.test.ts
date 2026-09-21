@@ -368,6 +368,187 @@ describe("webContentsRegistry", () => {
     expect(isCachedViewWebContents(wc.id)).toBe(false);
   });
 
+  describe("fallback-eligible project set (#12557)", () => {
+    it("reports projects whose views hold no port, and drops one once it does", async () => {
+      const { getFallbackEligibleProjectIds, registerProjectView, registerPortHolderWebContents } =
+        await loadRegistry();
+      const holder = createWebContents(201);
+      const cached = createWebContents(202);
+
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerProjectView("project-b", cached as unknown as WebContents);
+      expect(getFallbackEligibleProjectIds().sort()).toEqual(["project-a", "project-b"]);
+
+      // Window 1's active view takes the port; project-a now has a transport
+      // and no longer needs the fallback held open for it.
+      registerPortHolderWebContents(1, holder.id);
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-b"]);
+    });
+
+    it("keeps a project eligible while a second view of it holds no port", async () => {
+      // Window 1 shows A, window 2 has A cached. A must stay eligible.
+      const { getFallbackEligibleProjectIds, registerProjectView, registerPortHolderWebContents } =
+        await loadRegistry();
+      const active = createWebContents(211);
+      const duplicate = createWebContents(212);
+      registerProjectView("project-a", active as unknown as WebContents);
+      registerProjectView("project-a", duplicate as unknown as WebContents);
+
+      registerPortHolderWebContents(1, active.id);
+
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-a"]);
+    });
+
+    it("re-opens eligibility the moment a holder gives up its port", async () => {
+      // The reactivation gap: a view stops being cached before its replacement
+      // port exists. Eligibility keyed on "holds no port" covers that interval;
+      // keying it on "is cached" would starve the view for the paint gate.
+      const {
+        getFallbackEligibleProjectIds,
+        registerProjectView,
+        registerPortHolderWebContents,
+        clearPortHolderWebContents,
+      } = await loadRegistry();
+      const wc = createWebContents(221);
+      registerProjectView("project-a", wc as unknown as WebContents);
+      registerPortHolderWebContents(1, wc.id);
+      expect(getFallbackEligibleProjectIds()).toEqual([]);
+
+      clearPortHolderWebContents(1);
+
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-a"]);
+    });
+
+    it("moves eligibility with the port on a project switch", async () => {
+      const { getFallbackEligibleProjectIds, registerProjectView, registerPortHolderWebContents } =
+        await loadRegistry();
+      const viewA = createWebContents(231);
+      const viewB = createWebContents(232);
+      registerProjectView("project-a", viewA as unknown as WebContents);
+      registerProjectView("project-b", viewB as unknown as WebContents);
+      registerPortHolderWebContents(1, viewA.id);
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-b"]);
+
+      // Same window, port handed to B's view: A becomes the port-less duplicate.
+      registerPortHolderWebContents(1, viewB.id);
+
+      expect(getFallbackEligibleProjectIds()).toEqual(["project-a"]);
+    });
+
+    it("publishes the current set on subscribe, then only on real changes", async () => {
+      const {
+        setFallbackEligibleProjectsListener,
+        registerProjectView,
+        registerPortHolderWebContents,
+      } = await loadRegistry();
+      const wc = createWebContents(241);
+      registerProjectView("project-a", wc as unknown as WebContents);
+
+      const listener = vi.fn();
+      setFallbackEligibleProjectsListener(listener);
+      expect(listener.mock.calls).toEqual([[["project-a"]]]);
+
+      registerPortHolderWebContents(1, wc.id);
+      expect(listener.mock.calls).toEqual([[["project-a"]], [[]]]);
+
+      // Re-recording the same holder changes nothing — the host must not be
+      // re-told on every re-broker.
+      registerPortHolderWebContents(1, wc.id);
+      expect(listener).toHaveBeenCalledTimes(2);
+    });
+
+    it("drops a project when its port-less view is destroyed", async () => {
+      // Otherwise the host keeps the fallback open for a project with no
+      // port-less consumer left, paying a second main-process hop per chunk.
+      const {
+        setFallbackEligibleProjectsListener,
+        registerProjectView,
+        registerPortHolderWebContents,
+      } = await loadRegistry();
+      const holder = createWebContents(251);
+      const duplicate = createWebContents(252);
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerProjectView("project-a", duplicate as unknown as WebContents);
+      registerPortHolderWebContents(1, holder.id);
+
+      const listener = vi.fn();
+      setFallbackEligibleProjectsListener(listener);
+      expect(listener.mock.calls).toEqual([[["project-a"]]]);
+
+      duplicate.emitDestroyed();
+
+      expect(listener.mock.calls).toEqual([[["project-a"]], [[]]]);
+    });
+
+    it("forgets a destroyed holder so its window stops excluding it", async () => {
+      const { getPortHolderWebContentsId, registerProjectView, registerPortHolderWebContents } =
+        await loadRegistry();
+      const holder = createWebContents(261);
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerPortHolderWebContents(4, holder.id);
+      expect(getPortHolderWebContentsId(4)).toBe(holder.id);
+
+      holder.emitDestroyed();
+
+      expect(getPortHolderWebContentsId(4)).toBeUndefined();
+    });
+
+    it("ignores a late port-replace teardown that names the previous holder (#12557)", async () => {
+      // The host tears the replaced port down only after Main has brokered and
+      // registered the replacement, so the notice for the departing holder
+      // always lands last. Honouring it would leave the window holderless for
+      // good — nothing re-registers outside a fresh handoff.
+      const {
+        getPortHolderWebContentsId,
+        registerProjectView,
+        registerPortHolderWebContents,
+        clearPortHolderWebContentsIfCurrent,
+      } = await loadRegistry();
+      const outgoing = createWebContents(271);
+      const incoming = createWebContents(272);
+      registerProjectView("project-a", outgoing as unknown as WebContents);
+      registerProjectView("project-a", incoming as unknown as WebContents);
+      registerPortHolderWebContents(4, outgoing.id);
+      registerPortHolderWebContents(4, incoming.id);
+
+      clearPortHolderWebContentsIfCurrent(4, outgoing.id);
+
+      expect(getPortHolderWebContentsId(4)).toBe(incoming.id);
+    });
+
+    it("clears when the teardown names the current holder (#12557)", async () => {
+      const {
+        getPortHolderWebContentsId,
+        registerProjectView,
+        registerPortHolderWebContents,
+        clearPortHolderWebContentsIfCurrent,
+      } = await loadRegistry();
+      const holder = createWebContents(273);
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerPortHolderWebContents(4, holder.id);
+
+      clearPortHolderWebContentsIfCurrent(4, holder.id);
+
+      expect(getPortHolderWebContentsId(4)).toBeUndefined();
+    });
+
+    it("clears unconditionally when the teardown carries no identity (#12557)", async () => {
+      const {
+        getPortHolderWebContentsId,
+        registerProjectView,
+        registerPortHolderWebContents,
+        clearPortHolderWebContentsIfCurrent,
+      } = await loadRegistry();
+      const holder = createWebContents(274);
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerPortHolderWebContents(4, holder.id);
+
+      clearPortHolderWebContentsIfCurrent(4, undefined);
+
+      expect(getPortHolderWebContentsId(4)).toBeUndefined();
+    });
+  });
+
   it("allows unregister and later re-register without leaving stale listener state", async () => {
     const { registerWebContents, unregisterWebContents } = await loadRegistry();
     const firstWindow = createWindow(1);
