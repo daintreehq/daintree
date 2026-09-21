@@ -85,11 +85,38 @@ export const ACTIVE_WORKSPACE_POLLING_POLICY: WorkspacePollingPolicy = {
   attenuated: false,
 };
 
+/**
+ * Whether a Daintree window is on screen for someone to glance at, focused or
+ * not. The weaker test than `canObserve`, and the one that governs whether we
+ * keep *observing* rather than how hard we work on what we observe.
+ */
+export function isAnyWindowOnScreen(snapshot: PowerPolicySnapshot): boolean {
+  return snapshot.anyWindowVisible && !snapshot.screenLocked;
+}
+
+/**
+ * The level that paces agent-state observation in the pty host, which is a
+ * different question from how hard the machine should work generally.
+ *
+ * A window on screen keeps agent state at the foreground cadence whether or not
+ * it holds focus: the badge is read off a window the user can already see, and
+ * losing focus is not the same as looking away. Battery still backs off, unlike
+ * the workspace poller — these are per-terminal timers across a whole fleet,
+ * not one heartbeat behind a filesystem watcher, so the saving is real.
+ *
+ * Derived in main and sent whole rather than reconstructed per isolate, so the
+ * pty host and every analysis worker cannot drift from this definition.
+ */
+export function deriveAgentObservationLevel(snapshot: PowerPolicySnapshot): PowerPolicyLevel {
+  if (!isAnyWindowOnScreen(snapshot)) return "deep";
+  return snapshot.onBattery ? "saving" : "active";
+}
+
 export function deriveWorkspacePollingPolicy(
   snapshot: PowerPolicySnapshot
 ): WorkspacePollingPolicy {
   return {
-    statusAllowed: snapshot.anyWindowVisible && !snapshot.screenLocked,
+    statusAllowed: isAnyWindowOnScreen(snapshot),
     backgroundWorkAllowed: snapshot.canObserve,
     attenuated: !snapshot.canObserve,
   };

@@ -274,7 +274,7 @@ export class AnalysisWorkerRuntime {
         setPluginAgentRegistry(msg.registry);
         return;
       case "power-policy":
-        setPtyPowerLevel(msg.level);
+        setPtyPowerLevel(msg.level, msg.observationLevel);
         return;
       case "request": {
         const session = this.sessions.get(msg.terminalId);

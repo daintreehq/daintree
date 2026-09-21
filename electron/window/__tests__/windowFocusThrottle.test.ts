@@ -353,7 +353,7 @@ describe("WindowFocusThrottle", () => {
       WORKSPACE_POLICY.deep
     );
     expect(mockSetDiskSpaceInterval).toHaveBeenCalledWith(3_000_000);
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep", "deep");
     clearServiceMocks(mocks);
 
     // Restored but not yet focused: visible again, still nobody looking. The
@@ -367,14 +367,14 @@ describe("WindowFocusThrottle", () => {
       WORKSPACE_POLICY.unwatched
     );
     expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving", "active");
     clearServiceMocks(mocks);
 
     // Focus is what brings the user back: one refresh, foreground cadence.
     focus(main);
     expectWorkspacePolicy(mocks, { statusAllowed: true });
     expect(mocks.workspaceClient.refresh).toHaveBeenCalledTimes(1);
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active", "active");
   });
 
   it("treats a hidden window like a minimized one", () => {
@@ -481,13 +481,13 @@ describe("WindowFocusThrottle", () => {
     expect(mocks.workspaceClient.refresh).not.toHaveBeenCalled();
     expect(focusThrottleModule.isFocusThrottled()).toBe(false);
     expect(focusThrottleModule.getFocusThrottlePollMultiplier()).toBe(2);
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving", "saving");
     clearServiceMocks(mocks);
 
     powerHandlers.get("on-ac")!();
 
     expect(mocks.statsService.updatePollInterval).toHaveBeenCalledWith(5_000);
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("active", "active");
   });
 
   it("applies battery power reported at launch as soon as the throttle is set up", async () => {
@@ -502,7 +502,7 @@ describe("WindowFocusThrottle", () => {
 
     expect(mocks.statsService.updatePollInterval).toHaveBeenCalledWith(10_000);
     // The pty host and any loaded view booted assuming `active`.
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("saving", "saving");
     expect(mockViewSend).toHaveBeenCalledWith("events:push", {
       name: "system:power-policy-changed",
       payload: expect.objectContaining({ level: "saving" }),
@@ -662,7 +662,7 @@ describe("WindowFocusThrottle", () => {
     main.handlers.get("closed")!();
 
     expect(powerPolicyModule.getPowerPolicy().level).toBe("deep");
-    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep");
+    expect(mocks.ptyClient.setPowerPolicy).toHaveBeenCalledWith("deep", "deep");
   });
 
   it("broadcasts every policy change to the renderer views", () => {

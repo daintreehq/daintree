@@ -21,6 +21,7 @@ import { RESOURCE_PROFILE_CONFIGS } from "../../shared/types/resourceProfile.js"
 import { getResourceProfileService } from "./serviceRefs.js";
 import {
   ACTIVE_WORKSPACE_POLLING_POLICY,
+  deriveAgentObservationLevel,
   deriveWorkspacePollingPolicy,
   powerPolicyPollMultiplier,
   workspacePollingCadence,
@@ -483,8 +484,15 @@ export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {
   unsubscribePowerPolicy?.();
   unsubscribePowerPolicy = subscribePowerPolicy((next, previous) => {
     applyPollingPolicy(next);
-    if (next.level !== previous.level) {
-      focusThrottleDeps?.getPtyClient()?.setPowerPolicy(next.level);
+    // Both levels are compared: agent observation follows its own derivation,
+    // so a transition can move it while the raw level holds still.
+    if (
+      next.level !== previous.level ||
+      deriveAgentObservationLevel(next) !== deriveAgentObservationLevel(previous)
+    ) {
+      focusThrottleDeps
+        ?.getPtyClient()
+        ?.setPowerPolicy(next.level, deriveAgentObservationLevel(next));
     }
     publishPowerPolicy(next);
   });
@@ -494,7 +502,7 @@ export function setupWindowFocusThrottle(deps: WindowFocusThrottleDeps): void {
   const current = getPowerPolicy();
   applyPollingPolicy(current);
   if (current.level !== "active") {
-    deps.getPtyClient()?.setPowerPolicy(current.level);
+    deps.getPtyClient()?.setPowerPolicy(current.level, deriveAgentObservationLevel(current));
     publishPowerPolicy(current);
   }
 

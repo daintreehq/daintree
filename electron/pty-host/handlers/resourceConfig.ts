@@ -56,9 +56,9 @@ export function createResourceConfigHandlers(ctx: HostContext): HandlerMap {
       if (!isPowerPolicyLevel(msg.level)) return;
       // Host-thread monitors (in-thread analysis) and the governor read the
       // mirror; worker-hosted monitors get their own copy through the pool.
-      setPtyPowerLevel(msg.level);
+      setPtyPowerLevel(msg.level, msg.observationLevel);
       ctx.resourceGovernor.setPowerLevel(msg.level);
-      ctx.analysisWorkerPool?.setPowerLevel(msg.level);
+      ctx.analysisWorkerPool?.setPowerLevel(msg.level, msg.observationLevel);
     },
 
     "set-process-tree-poll-interval": (msg) => {

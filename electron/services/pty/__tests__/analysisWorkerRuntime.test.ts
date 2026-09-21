@@ -438,7 +438,11 @@ describe("AnalysisWorkerRuntime", () => {
           () => ({ heapUsed: 7, external: 3 })
         );
         const samples = () => timed.filter((m) => m.type === "memory-sample").length;
-        timedRuntime.handleMessage({ type: "power-policy", level: "saving" });
+        timedRuntime.handleMessage({
+          type: "power-policy",
+          level: "saving",
+          observationLevel: "saving",
+        });
         expect(getPtyPowerLevel()).toBe("saving");
 
         timedRuntime.startMemorySampling(2000);

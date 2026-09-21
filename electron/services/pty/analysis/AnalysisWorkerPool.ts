@@ -126,6 +126,7 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
   private nextRequestId = 1;
   private pluginAgentRegistry: Record<string, AgentConfig> | null = null;
   private powerLevel: PowerPolicyLevel = "active";
+  private powerObservationLevel: PowerPolicyLevel = "active";
   private disposed = false;
 
   constructor(
@@ -219,13 +220,14 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
     }
   }
 
-  setPowerLevel(level: PowerPolicyLevel): void {
-    if (level === this.powerLevel) return;
+  setPowerLevel(level: PowerPolicyLevel, observationLevel: PowerPolicyLevel): void {
+    if (level === this.powerLevel && observationLevel === this.powerObservationLevel) return;
     this.powerLevel = level;
+    this.powerObservationLevel = observationLevel;
     for (const slot of this.slots) {
       if (slot.alive && slot.worker) {
         try {
-          slot.worker.postMessage({ type: "power-policy", level });
+          slot.worker.postMessage({ type: "power-policy", level, observationLevel });
         } catch {
           // Slot exit handling covers a dying worker.
         }
@@ -384,11 +386,16 @@ export class AnalysisWorkerPool implements AnalysisPoolHost {
         // exit handler covers it
       }
     }
-    // A worker boots at `active`; a respawn under a saving policy must not
-    // poll its monitors at the foreground rate until the next transition.
-    if (this.powerLevel !== "active") {
+    // A worker boots at `active` on both counts; a respawn under any narrower
+    // policy must not poll its monitors at the foreground rate until the next
+    // transition.
+    if (this.powerLevel !== "active" || this.powerObservationLevel !== "active") {
       try {
-        worker.postMessage({ type: "power-policy", level: this.powerLevel });
+        worker.postMessage({
+          type: "power-policy",
+          level: this.powerLevel,
+          observationLevel: this.powerObservationLevel,
+        });
       } catch {
         // exit handler covers it
       }

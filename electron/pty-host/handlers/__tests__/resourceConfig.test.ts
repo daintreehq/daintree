@@ -27,11 +27,14 @@ describe("set-power-policy (#12515)", () => {
   it("reaches the host mirror, the governor, and every analysis worker", () => {
     const { ctx, resourceGovernor, analysisWorkerPool } = makeCtx();
 
-    createResourceConfigHandlers(ctx)["set-power-policy"]({ level: "deep" });
+    createResourceConfigHandlers(ctx)["set-power-policy"]({
+      level: "deep",
+      observationLevel: "deep",
+    });
 
     expect(getPtyPowerLevel()).toBe("deep");
     expect(resourceGovernor.setPowerLevel).toHaveBeenCalledWith("deep");
-    expect(analysisWorkerPool!.setPowerLevel).toHaveBeenCalledWith("deep");
+    expect(analysisWorkerPool!.setPowerLevel).toHaveBeenCalledWith("deep", "deep");
   });
 
   it("ignores a level it does not know", () => {
