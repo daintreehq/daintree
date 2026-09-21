@@ -14,6 +14,7 @@ const mockRequestAgentCompileCacheCleanup = vi.hoisted(() => vi.fn().mockResolve
 const mockPruneOldLogs = vi.hoisted(() => vi.fn());
 const mockPruneHeapSnapshotsAsync = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const mockPruneAuditByRetention = vi.hoisted(() => vi.fn());
+const mockRequestNativeCrashDumpPrune = vi.hoisted(() => vi.fn().mockResolvedValue(null));
 
 // store.get is key-aware: the log-prune routine reads "privacy", the audit-prune
 // routine reads "helpAssistant". A single flat return value would feed the wrong
@@ -39,6 +40,10 @@ vi.mock("../AssistantScratchService.js", () => ({
 
 vi.mock("../AgentCompileCacheCleanupService.js", () => ({
   requestAgentCompileCacheCleanup: mockRequestAgentCompileCacheCleanup,
+}));
+
+vi.mock("../CrashDumpRetentionService.js", () => ({
+  requestNativeCrashDumpPrune: mockRequestNativeCrashDumpPrune,
 }));
 
 vi.mock("../../utils/logger.js", () => ({
@@ -70,6 +75,7 @@ describe("PeriodicCleanupService", () => {
     mockRunAssistantScratchCleanup.mockResolvedValue(undefined);
     mockRequestAgentCompileCacheCleanup.mockResolvedValue(undefined);
     mockPruneHeapSnapshotsAsync.mockResolvedValue(undefined);
+    mockRequestNativeCrashDumpPrune.mockResolvedValue(null);
     mockStoreGet.mockImplementation(storeGetByKey);
   });
 
@@ -84,6 +90,7 @@ describe("PeriodicCleanupService", () => {
     expect(mockRequestAgentCompileCacheCleanup).not.toHaveBeenCalled();
     expect(mockPruneOldLogs).not.toHaveBeenCalled();
     expect(mockPruneHeapSnapshotsAsync).not.toHaveBeenCalled();
+    expect(mockRequestNativeCrashDumpPrune).not.toHaveBeenCalled();
   }
 
   function expectAllRoutinesRan() {
@@ -92,6 +99,7 @@ describe("PeriodicCleanupService", () => {
     expect(mockRequestAgentCompileCacheCleanup).toHaveBeenCalledTimes(1);
     expect(mockPruneOldLogs).toHaveBeenCalledTimes(1);
     expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledTimes(1);
+    expect(mockRequestNativeCrashDumpPrune).toHaveBeenCalledTimes(1);
   }
 
   it("runs all routines when the system is idle", async () => {
@@ -182,9 +190,21 @@ describe("PeriodicCleanupService", () => {
     const service = new PeriodicCleanupService();
     await service.tick();
 
-    // Heap snapshot pruning is count-based, not gated on log retention.
+    // Heap snapshot and native-dump pruning have their own budgets, not
+    // gated on log retention.
     expect(mockPruneOldLogs).not.toHaveBeenCalled();
     expect(mockPruneHeapSnapshotsAsync).toHaveBeenCalledWith("/fake/logs", 10);
+    expect(mockRequestNativeCrashDumpPrune).toHaveBeenCalledTimes(1);
+    service.dispose();
+  });
+
+  it("isolates a failing native crash-dump prune from the routines that follow it", async () => {
+    mockRequestNativeCrashDumpPrune.mockRejectedValue(new Error("EACCES"));
+    const service = new PeriodicCleanupService();
+    await service.tick();
+
+    expect(mockRequestNativeCrashDumpPrune).toHaveBeenCalledTimes(1);
+    expect(mockPruneAuditByRetention).toHaveBeenCalledWith(7);
     service.dispose();
   });
 

@@ -120,6 +120,46 @@ On launch, `consumeMarker()` runs before the new session's backup timer starts. 
 
 The watchdog kill flag, when fresh, overrides the classified `cause` to `"watchdog-deadlock"` and annotates the on-disk log too.
 
+### Native crash-dump retention
+
+Crashpad writes native minidumps (`.dmp`) under `app.getPath("crashDumps")` (`<userData>/Crashpad`). `main.ts` starts `crashReporter` with `uploadToServer: false` outside E2E, so nothing ever uploads them and no upload thread moves them out of `pending/`. Upstream Crashpad does prune its own database — `PruneCrashReportDatabase` with `PruneCondition::GetDefault()` (128 MiB or 365 days, across pending and completed reports) — but only from the handler's periodic-task thread when periodic tasks are enabled, first ten minutes after launch and daily after that. Sessions shorter than ten minutes never reach it, and its budget is sized for clients that upload. Those are upstream source defaults, not behaviour verified against the Crashpad revision Electron bundles. One macOS install had about 138 MiB in `pending/`; that measurement records no crash count, ages, signatures, or cause.
+
+Daintree therefore applies a tighter budget of its own on macOS and Linux (`electron/utils/crashDumpRetention.ts`, `NATIVE_CRASH_DUMP_RETENTION`). It bounds the finished dumps in `pending/` + `completed/`, not every byte under `Crashpad/`:
+
+| Rule | Value |
+| --- | --- |
+| Maximum age | 30 days |
+| Maximum count | 20 dumps |
+| Byte budget | 100 MiB |
+| Active-write grace | Dumps modified in the last 10 minutes (or with a future mtime) are never deleted |
+| Newest dump | Exempt from the count and byte budget, so it survives even when it alone exceeds 100 MiB. Exempt from the maximum age too while it was written during the running session |
+
+Recent and locked dumps are never deleted, and they claim budget before anything else. The remaining dumps are kept newest-first while they fit; once one misses, every older dump goes too. So the total can overshoot the budget only by protected dumps and the newest dump.
+
+Per-layout handling:
+
+- **macOS / Linux** — `new/` holds reports still being written and is never touched (only counted). Crashpad moves a report into `pending/` or `completed/` only once it is finished, and those two are pruned. On Linux, Crashpad holds a `<uuid>.lock` sidecar while it works on a report: a dump with one is skipped, an unreadable lock counts as held, and the lock is checked again immediately before unlinking. This is best-effort, not an atomic exclusion. macOS instead takes an advisory `flock` on the dump itself, which Node cannot observe; with uploads off nothing reopens a finished report, and the grace window covers the write. On Linux the report's `<uuid>.meta` is removed only after its `.dmp` is gone; macOS keeps report metadata as xattrs on the dump itself. `settings.dat`, `attachments/`, lock files, and anything that is not a regular `*.dmp` file (symlinks, directories) are left alone.
+- **Windows** — every report, including one still being written, lives in `reports/`, and report state lives in a shared `metadata` index that Daintree cannot update. `reports/` is counted and logged but **never deleted from**. Windows has no app-owned bound and relies on Crashpad's own prune.
+
+Ordering with recovery: `classifyCrashCause()` reads these same files to label the previous session `"native-crash"`, and it runs synchronously in `CrashRecoveryService.initialize()` from `main.ts` before any cleanup trigger exists. `initialize()` then calls `markCrashRecoveryInspectionComplete(sessionStartMs)`, and `requestNativeCrashDumpPrune()` refuses to run until it has. Deleting a dump afterwards cannot change the classification, which is cached in `PendingCrash` and persisted in the synthesized `crash-*.json`. For the _next_ launch, the running session's newest dump is its evidence: the newest-dump rule keeps it through every budget, and the recorded session start keeps it past the maximum age in sessions longer than 30 days. Only locked or recent dumps can displace it from "newest", and those are never deleted either.
+
+Triggers (`electron/services/CrashDumpRetentionService.ts`, which shares one in-flight pass between them):
+
+- the `prune-native-crash-dumps` deferred task, once the deferred queue drains after first interactive (or its 10-second fallback) — fire-and-forget, so a backlog never holds up the queue;
+- `PeriodicCleanupService`, every four hours while the system is idle;
+- the `DiskSpaceMonitor` critical edge.
+
+The prune uses async `fs/promises` only and never throws. Every scan, stat, lock-check, and unlink failure is counted by operation and errno code (`unlink:EBUSY`, `lock-stat:EACCES`), and a dump that disappears mid-sweep is not an error. Each pass logs aggregates only: dump count, bytes, oldest age, in-progress count, deleted count/bytes, protected count, and failures. It never logs file names or paths, and never opens, hashes, or uploads dump contents — minidumps can hold process memory. Nothing here enables uploads or touches telemetry consent (`TelemetryService` separately strips `SentryMinidump` integration).
+
+This is separate from the other retention policies:
+
+| Data | Location | Policy |
+| --- | --- | --- |
+| Native minidumps (`.dmp`) | `<userData>/Crashpad` | 30 days / 20 dumps / 100 MiB, above |
+| JSON crash reports (`crash-*.json`) | `<userData>/crashes` | Newest `MAX_CRASH_LOGS = 10`, pruned by `CrashRecoveryService.pruneOldLogs()` when a crash log is written |
+| Text logs | `<userData>/logs`, `<userData>/debug` | `privacy.logRetentionDays` (default 30; `0` keeps everything) |
+| V8 heap snapshots | `app.getPath("logs")` | Newest `MAX_HEAP_SNAPSHOTS = 10` |
+
 ### Restore-confirmation flow (renderer)
 
 `CrashRecoveryDialog` (`src/components/Recovery/CrashRecoveryDialog.tsx`) renders the pending crash. It is shown _before_ the main app tree — note the in-code caveat that `notify()` is dead here because the Toaster isn't mounted yet, so recovery failures surface inline via `InlineStatusBanner` with a "Send diagnostics" action (`CrashRecoveryDialog.tsx`).
@@ -246,6 +286,8 @@ It fires only when an agent has been `idle` longer than `maxWaitingSilenceMs` (a
 | `electron/watchdog-host.ts` | UtilityProcess entry: SIGKILL primitives, flag write |
 | `electron/services/MainProcessWatchdogClient.ts` | Main-side ping/backoff/`onDisabled` manager |
 | `electron/services/CrashRecoveryService.ts` | Marker, rolling backup, restore, crash classification |
+| `electron/utils/crashDumpRetention.ts` | Native Crashpad dump retention policy and pruning |
+| `electron/services/CrashDumpRetentionService.ts` | Shared prune trigger, recovery-inspection gate, aggregate logging |
 | `electron/services/CrashLoopGuardService.ts` | Consecutive-crash counter, safe mode, hard stop |
 | `electron/services/GpuCrashMonitorService.ts` | GPU-crash escalation (ANGLE fallback → disable) |
 | `electron/services/pty/PtyHealthWatchdog.ts` | PTY-host heartbeat + SIGKILL + RTT |
