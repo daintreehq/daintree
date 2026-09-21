@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from "react";
-import { EditorView, drawSelection } from "@codemirror/view";
+import { EditorView } from "@codemirror/view";
 import { EditorState } from "@codemirror/state";
 import type { Compartment } from "@codemirror/state";
 import type { Extension } from "@codemirror/state";
@@ -29,6 +29,7 @@ import {
   createCustomKeymap,
   chipPendingDeleteField,
   createChipBackspaceKeymap,
+  createCursorBlink,
   type AutoSizeConfig,
 } from "../inputEditorExtensions";
 import type { SlashCommand } from "@shared/types";
@@ -127,7 +128,7 @@ export function useEditorFactory({
         themeCompartmentRef.current.of(buildInputBarTheme(effectiveTheme)),
         chipEntranceTheme,
         EditorView.lineWrapping,
-        drawSelection(),
+        createCursorBlink(),
         createContentAttributes(),
         autoSizeCompartmentRef.current.of(createAutoSize()),
         placeholderCompartmentRef.current.of(createPlaceholder(placeholder)),

@@ -45,3 +45,4 @@ export {
   isChipSelected,
 } from "./chipBackspace";
 export type { ChipPendingDelete } from "./chipBackspace";
+export { createCursorBlink } from "./cursorBlink";
