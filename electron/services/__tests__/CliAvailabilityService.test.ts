@@ -2002,6 +2002,38 @@ describe("CliAvailabilityService", () => {
       expect(toastCalls).toHaveLength(0);
     });
 
+    it("warns once per agent even when the milestone never persists", async () => {
+      // The persisted milestone is read fresh at the top of every pass, so it
+      // only dedupes passes that are far enough apart for `store.set` to have
+      // landed. When it has not — an overlapping re-check, or a store write
+      // that fails — every pass saw an empty map and broadcast again, and the
+      // same warning appeared in the notification centre more than once.
+      //
+      // The invariant is "one warning per agent per process", not "the store
+      // was written", so this pins it with persistence removed entirely.
+      mockedExecFileSync.mockImplementation((_file, args) => {
+        const argv = args as string[] | undefined;
+        if (argv?.[1] === "claude") {
+          return Buffer.from("/opt/homebrew/bin/claude\n/Users/x/.local/bin/claude\n");
+        }
+        return Buffer.from("");
+      });
+
+      // Wiping the key after each pass is what a write that never landed looks
+      // like from the next pass's point of view.
+      storeBackingMap.delete("orchestrationMilestones");
+      await service.checkAvailability();
+      storeBackingMap.delete("orchestrationMilestones");
+      await service.refresh();
+      storeBackingMap.delete("orchestrationMilestones");
+      await service.refresh();
+
+      const toastCalls = mockedBroadcast.mock.calls.filter(
+        (call) => call[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+      expect(toastCalls).toHaveLength(1);
+    });
+
     it("does not emit a toast when only one PATH match is found", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from("/opt/homebrew/bin/claude\n"));
 

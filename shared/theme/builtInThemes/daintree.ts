@@ -124,6 +124,27 @@ export const theme: BuiltInThemeSource = {
     "search-selected-result-border": "rgba(54,206,148,0.30)",
     "search-selected-result-icon": "#36CE94",
     "surface-toolbar": "#151211",
+    // The engine derives this token as `text-primary` at 35% alpha, which
+    // measured 2.7–2.8:1 on every daintree surface. That is below even this
+    // repo's own placeholder floor — `MATRIX_CONTRAST_PAIRS` treats placeholder
+    // as a 3:1 graphical-tier de-emphasis, not 4.5:1 text — and nothing caught
+    // it because that pair is `appliesTo: "light"`, so no dark theme is audited
+    // against it at all.
+    //
+    // Solid rather than alpha-derived: an alpha text colour bakes into
+    // `color-mix()` and its contrast cannot be recovered downstream.
+    //
+    // Landed at 4.8:1 on the worst surface (panel-elevated) up to 6.5:1 on the
+    // grid. That clears the house's 3:1 tier with room and also the AA text
+    // floor, which these strings arguably owe — "Commit message…" and "Search
+    // agents & panels…" are informational, not decorative. It still sits a step
+    // below `text-secondary` (5.5 / 7.5) and lands about at `text-muted`, so a
+    // placeholder reads quieter than the value that replaces it.
+    // `npm run theme:text-contrast -- --theme daintree` reproduces the numbers.
+    //
+    // Set here rather than on the shared derivation: that fallback feeds all
+    // fifteen themes and this pass only measured daintree.
+    "text-placeholder": "#95959e",
     // ANSI 90 is the conventional dim slot for hints, timestamps and secondary
     // output — it is read as body text, so it owes AA. 4.55:1 on the terminal
     // background, and still 3.0x quieter than the foreground's 13.85:1, so it
