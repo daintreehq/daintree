@@ -15,16 +15,26 @@
  *
  * Env knobs:
  *   DAINTREE_SHOT_THEME  required — theme id to render (e.g. bondi, daintree)
+ *   DAINTREE_SHOT_DIR    optional absolute output dir (default artifacts/theme-shots/<theme>)
  *   DAINTREE_SHOT_TAG    optional suffix to keep multiple rounds side by side
- *   DAINTREE_SHOT_ONLY   comma-separated step filter (see step names below)
+ *   DAINTREE_SHOT_ONLY   comma-separated step filter (valid names: STEP_SLUGS keys)
+ *   DAINTREE_SHOT_ALLOW_MISSING  comma-separated states permitted to be absent
  *   DAINTREE_SCREENSHOT_SCALE  device scale factor (default 2)
  *
- * Output: artifacts/theme-shots/<theme>/<NN-slug>[-tag].png (gitignored).
+ * Output: <dir>/<NN-slug>[-tag].png plus a manifest recording every state's
+ * outcome. The run FAILS if any expected state is missing from disk — a capture
+ * harness that reports success without having written the files it promised is
+ * worse than one that fails, because the review downstream then scores a stale
+ * or partial set without anyone noticing.
+ *
+ * A full run writes manifest.json; a DAINTREE_SHOT_ONLY run writes
+ * manifest.partial.json, so re-shooting one step never destroys the record of
+ * the last complete sweep.
  */
 
 import { test, type Page } from "@playwright/test";
 import { execSync } from "child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync } from "fs";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, statSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
@@ -37,7 +47,76 @@ import { T_LONG } from "../helpers/timeouts";
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
 const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
-const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "theme-shots", THEME || "unset");
+const OUTPUT_DIR = process.env.DAINTREE_SHOT_DIR
+  ? path.resolve(process.env.DAINTREE_SHOT_DIR)
+  : path.resolve(process.cwd(), "artifacts", "theme-shots", THEME || "unset");
+
+/**
+ * Every state this harness promises to produce, in capture order. The run is
+ * verified against this list, so adding a `snap()` means adding its slug here.
+ */
+const EXPECTED_STATES = [
+  "10-workbench",
+  "11-tooltip-toolbar",
+  "12-sidebar-card-hover",
+  "13-context-menu",
+  "14-sidebar-search",
+  "24-filter-popover",
+  "25-project-switcher",
+  "17-action-palette",
+  "18-notifications",
+  "19-review-hub",
+  "20-diff-view",
+  "21-settings",
+  "26-settings-appearance",
+  "27-settings-search",
+  "22-terminal",
+  "28-terminal-search",
+  "23-dock",
+  "29-confirm-dialog",
+  "15-quick-create-palette",
+  "16-new-worktree-dialog",
+] as const;
+
+/**
+ * Which slugs each step owns. Derived from the `snap()` calls inside each
+ * `step("name", …)` below, and the only thing DAINTREE_SHOT_ONLY is verified
+ * against — slug-vs-step-name string matching guessed wrong (a filter on
+ * `terminal-and-dock,new-worktree-dialog` resolved to one slug instead of five).
+ * Adding a snap() means adding its slug here AND to EXPECTED_STATES; the two
+ * lists are cross-checked at verification time.
+ */
+const STEP_SLUGS: Record<string, readonly string[]> = {
+  workbench: ["10-workbench"],
+  tooltip: ["11-tooltip-toolbar"],
+  "card-hover": ["12-sidebar-card-hover"],
+  "context-menu": ["13-context-menu"],
+  "search-active": ["14-sidebar-search"],
+  "filter-popover": ["24-filter-popover"],
+  "project-switcher": ["25-project-switcher"],
+  "action-palette": ["17-action-palette"],
+  notifications: ["18-notifications"],
+  "review-hub": ["19-review-hub", "20-diff-view"],
+  settings: ["21-settings", "26-settings-appearance", "27-settings-search"],
+  "terminal-and-dock": ["22-terminal", "28-terminal-search", "23-dock"],
+  "confirm-dialog": ["29-confirm-dialog"],
+  "new-worktree-dialog": ["15-quick-create-palette", "16-new-worktree-dialog"],
+};
+
+/**
+ * Timeout for the waits that must not fail silently. The capture machine runs
+ * loaded and the app launches with --disable-gpu, so first paint of an overlay
+ * is routinely seconds slow; anything under ~15s here reports "flow changed"
+ * when the real answer is "not yet".
+ */
+const T_REQUIRED = Math.max(T_LONG, 15_000);
+
+const ALLOW_MISSING = new Set(
+  (process.env.DAINTREE_SHOT_ALLOW_MISSING ?? "").split(",").filter(Boolean)
+);
+
+/** Per-step outcomes, written to manifest.json and used for the final gate. */
+const stepFailures = new Map<string, string>();
 
 // Freeze animations and hide carets so captures are deterministic.
 const POLISH_CSS = `
@@ -70,6 +149,38 @@ function createRichRepo(): { dir: string; cleanup: () => void } {
     path.join(dir, "src", "index.ts"),
     'export function main(): number {\n  // entry point\n  const greeting = "hello";\n  console.log(greeting);\n  return 0;\n}\n'
   );
+  // In-repo recipes. The quick-create palette lists recipes plus a trailing
+  // "Customize…" row, and `useQuickCreatePalette` builds NO items at all when
+  // the project has zero recipes — an empty-state palette is both a worse
+  // capture and missing the row the dialog hangs off.
+  const recipesDir = path.join(dir, ".daintree", "recipes");
+  mkdirSync(recipesDir, { recursive: true });
+  const recipes = [
+    { name: "Ship a feature", type: "claude", title: "Implement" },
+    { name: "Review & polish", type: "codex", title: "Review" },
+    { name: "Chase a flake", type: "terminal", title: "Repro" },
+  ];
+  for (const r of recipes) {
+    const slug = r.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+    writeFileSync(
+      path.join(recipesDir, `${slug}.json`),
+      JSON.stringify(
+        {
+          id: `inrepo-${slug}`,
+          name: r.name,
+          terminals: [{ type: r.type, title: r.title, command: "", env: {} }],
+          createdAt: 1_700_000_000_000,
+          showInEmptyState: false,
+          autoAssign: "always",
+        },
+        null,
+        2
+      ) + "\n"
+    );
+  }
   git("add -A", dir);
   git('commit -m "initial commit"', dir);
   // Dirty main worktree: a modified file + a new file → diff view content.
@@ -127,6 +238,30 @@ async function snap(page: Page, slug: string, locator?: string): Promise<void> {
   }
 }
 
+/**
+ * Dispatch an action through the E2E bridge ActionService installs when the app
+ * was launched with DAINTREE_E2E_MODE. Used where a surface has no stable
+ * pointer path to it — the sidebar "+" opens the full dialog, so the quick
+ * create palette is only reachable via its own action.
+ */
+async function dispatchAction(page: Page, actionId: string): Promise<void> {
+  const result = (await page.evaluate(async (id) => {
+    const fn = (window as unknown as { __daintreeDispatchAction?: unknown })
+      .__daintreeDispatchAction as
+      | ((
+          actionId: string,
+          args?: unknown,
+          options?: { source?: string }
+        ) => Promise<{ ok?: boolean; error?: { message?: string } }>)
+      | undefined;
+    if (typeof fn !== "function") return { ok: false, error: { message: "no dispatch bridge" } };
+    return await fn(id, undefined, { source: "test" });
+  }, actionId)) as { ok?: boolean; error?: { message?: string } } | undefined;
+  if (result?.ok === false) {
+    throw new Error(`dispatch ${actionId} failed: ${result.error?.message ?? "unknown"}`);
+  }
+}
+
 /** Run a capture step; failures are logged, not fatal — later shots still run. */
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 async function step(name: string, fn: () => Promise<void>): Promise<void> {
@@ -134,8 +269,89 @@ async function step(name: string, fn: () => Promise<void>): Promise<void> {
   try {
     await fn();
   } catch (error) {
-    console.warn(`[theme-shots] step "${name}" skipped:`, String(error).slice(0, 200));
+    // Deliberately non-fatal: one bad step must not cost the other nineteen
+    // captures. The run is still failed at the end by verifyCaptures(), which
+    // checks the files on disk rather than trusting that we got this far.
+    const reason = String(error).slice(0, 200);
+    stepFailures.set(name, reason);
+    console.warn(`[theme-shots] step "${name}" failed:`, reason);
   }
+}
+
+/**
+ * The gate. Counts what actually landed on disk against EXPECTED_STATES, writes
+ * a manifest, and throws when anything promised is missing. Never infer success
+ * from the fact that the spec reached its end.
+ */
+function verifyCaptures(): void {
+  // Ownership is declared, not inferred: every expected slug must belong to
+  // exactly one step, or a filtered run silently verifies the wrong set.
+  const owned = new Set<string>(Object.values(STEP_SLUGS).flat());
+  const expectedSet = new Set<string>(EXPECTED_STATES);
+  const unowned = EXPECTED_STATES.filter((slug) => !owned.has(slug));
+  const orphaned = [...owned].filter((slug) => !expectedSet.has(slug));
+  if (unowned.length > 0 || orphaned.length > 0) {
+    throw new Error(
+      `[theme-shots] STEP_SLUGS is out of sync with EXPECTED_STATES: ` +
+        `unowned=${unowned.join(", ") || "none"} unknown=${orphaned.join(", ") || "none"}`
+    );
+  }
+
+  let wanted: string[];
+  if (ONLY.length === 0) {
+    wanted = [...EXPECTED_STATES];
+  } else {
+    const unknownSteps = ONLY.filter((name) => !STEP_SLUGS[name]);
+    if (unknownSteps.length > 0) {
+      throw new Error(
+        `[theme-shots] DAINTREE_SHOT_ONLY names unknown step(s): ${unknownSteps.join(", ")}. ` +
+          `Valid steps: ${Object.keys(STEP_SLUGS).join(", ")}`
+      );
+    }
+    const selected = new Set(ONLY.flatMap((name) => STEP_SLUGS[name] ?? []));
+    wanted = EXPECTED_STATES.filter((slug) => selected.has(slug));
+  }
+
+  const present: string[] = [];
+  const missing: string[] = [];
+  for (const slug of wanted) {
+    const file = path.join(OUTPUT_DIR, `${slug}${TAG}.png`);
+    const ok = existsSync(file) && statSync(file).size > 1024;
+    (ok ? present : missing).push(slug);
+  }
+
+  // A filtered run describes a fraction of the set, so it must never overwrite
+  // the record of the last complete sweep.
+  writeFileSync(
+    path.join(OUTPUT_DIR, ONLY.length > 0 ? "manifest.partial.json" : "manifest.json"),
+    JSON.stringify(
+      {
+        theme: THEME,
+        tag: TAG,
+        scale: SCALE,
+        only: ONLY.length > 0 ? ONLY : null,
+        capturedAt: new Date().toISOString(),
+        expected: wanted.length,
+        present,
+        missing,
+        stepFailures: Object.fromEntries(stepFailures),
+      },
+      null,
+      2
+    )
+  );
+
+  const fatal = missing.filter((slug) => !ALLOW_MISSING.has(slug));
+  if (fatal.length > 0) {
+    throw new Error(
+      `[theme-shots] ${fatal.length} of ${wanted.length} states missing for theme "${THEME}": ` +
+        `${fatal.join(", ")}. Step failures: ` +
+        `${[...stepFailures].map(([k, v]) => `${k}: ${v}`).join(" | ") || "none recorded"}`
+    );
+  }
+  console.log(
+    `[theme-shots] verified ${present.length}/${wanted.length} states for "${THEME}" → ${OUTPUT_DIR}`
+  );
 }
 
 test("theme review — chrome, overlays, states", async () => {
@@ -355,22 +571,47 @@ test("theme review — chrome, overlays, states", async () => {
         // plain prompt is still a usable capture
       }
       await snap(page, "22-terminal");
-      // Terminal search bar (find-in-terminal chrome).
-      await page.keyboard.press(process.platform === "darwin" ? "Meta+F" : "Control+F");
-      const termSearch = page.locator(SEL.terminal.searchInput);
-      if (await termSearch.isVisible({ timeout: 2500 }).catch(() => false)) {
-        await termSearch.fill("hello");
+
+      // Both of the remaining shots are required, and the dock one is reached
+      // through the search one — so collect failures instead of returning on
+      // the first, or a slow search bar silently costs the dock capture too.
+      const failures: string[] = [];
+
+      // Terminal search bar (find-in-terminal chrome). `find.inFocusedPanel`
+      // (Cmd+F) only dispatches a `daintree:find-in-panel` event, and
+      // TerminalPane ignores it unless that pane is the focused one
+      // (TerminalPane.tsx:782) — so focus the xterm screen itself, then fire
+      // the event directly rather than trusting the accelerator to survive
+      // xterm's key handling.
+      try {
+        await page.locator(SEL.terminal.xtermRows).first().click();
+        await settle(page, 500);
+        await page.evaluate(() => window.dispatchEvent(new CustomEvent("daintree:find-in-panel")));
+        const termSearch = page.locator(SEL.terminal.searchInput);
+        await termSearch.waitFor({ state: "visible", timeout: T_REQUIRED });
+        // "green" is in the ANSI line seeded above, so the bar renders its
+        // match state rather than the "no results" one — the colours that
+        // carry theme weight are on the match chrome.
+        await termSearch.fill("green");
         await settle(page, 500);
         await snap(page, "28-terminal-search");
         await page.keyboard.press("Escape");
         await settle(page, 300);
+      } catch (error) {
+        failures.push(`terminal-search: ${String(error).slice(0, 160)}`);
       }
-      const minimize = page.locator(SEL.panel.minimize).first();
-      if (await minimize.isVisible({ timeout: 2500 }).catch(() => false)) {
+
+      try {
+        const minimize = page.locator(SEL.panel.minimize).first();
+        await minimize.waitFor({ state: "visible", timeout: T_REQUIRED });
         await minimize.click();
         await settle(page, 1000);
         await snap(page, "23-dock");
+      } catch (error) {
+        failures.push(`dock: ${String(error).slice(0, 160)}`);
       }
+
+      if (failures.length > 0) throw new Error(failures.join(" | "));
     });
 
     // 10b. Confirm dialog (destructive-tier chrome) — open via the worktree
@@ -395,32 +636,62 @@ test("theme review — chrome, overlays, states", async () => {
       await settle(page, 400);
     });
 
-    // 11. New worktree dialog — LAST: this flow has crashed the renderer in
-    // local capture runs, so nothing important may run after it.
+    // 11. New worktree dialog + quick create palette — LAST: this flow has
+    // crashed the renderer in local capture runs, so nothing important may run
+    // after it. The sidebar "+" dispatches `worktree.createDialog.open`
+    // (SidebarContent.tsx:1851), which opens the FULL dialog — it does not go
+    // through the quick create palette, which has its own action. Two
+    // independent openers, so two independently-recorded failures.
     await step("new-worktree-dialog", async () => {
-      await page.locator(SEL.worktree.newWorktreeButton).click();
-      const palette = page.locator(SEL.worktree.quickCreatePalette);
-      if (await palette.isVisible({ timeout: 3000 }).catch(() => false)) {
-        await snap(page, "15-quick-create-palette");
-        const customize = page.locator(SEL.worktree.quickCreateCustomize);
-        if (await customize.isVisible({ timeout: 1500 }).catch(() => false)) {
-          await customize.click();
-          await page
-            .locator(SEL.worktree.newDialog)
-            .waitFor({ state: "visible", timeout: 4000 })
-            .catch(() => {});
-          await settle(page, 500);
-          await snap(page, "16-new-worktree-dialog");
-        }
+      const failures: string[] = [];
+
+      try {
+        await page.locator(SEL.worktree.newWorktreeButton).click();
+        const dialog = page.locator(SEL.worktree.newDialog);
+        await dialog.waitFor({ state: "visible", timeout: T_REQUIRED });
+        await settle(page, 800);
+        await snap(page, "16-new-worktree-dialog");
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "hidden", timeout: T_REQUIRED }).catch(() => {});
+        await settle(page, 400);
+      } catch (error) {
+        failures.push(`new-worktree-dialog: ${String(error).slice(0, 160)}`);
+        await page.keyboard.press("Escape").catch(() => {});
+        await settle(page, 300);
       }
-      await page.keyboard.press("Escape");
+
+      // Order is load-bearing: hydration only calls `loadRecipes` when a
+      // project is already current at boot, which it is not here (the project
+      // is opened after launch). Mounting the dialog above runs
+      // `useNewWorktreeProjectSettings`, which loads the in-repo recipes — so
+      // the palette below has rows and a "Customize…" option to show.
+      try {
+        await dispatchAction(page, "worktree.quickCreate");
+        const palette = page.locator(SEL.worktree.quickCreatePalette);
+        await palette.waitFor({ state: "visible", timeout: T_REQUIRED });
+        // The "Customize…" row only exists once the project has recipes — the
+        // fixture seeds three, so its absence means the list never loaded.
+        await page
+          .locator(SEL.worktree.quickCreateCustomize)
+          .waitFor({ state: "visible", timeout: T_REQUIRED });
+        await settle(page, 500);
+        await snap(page, "15-quick-create-palette");
+      } catch (error) {
+        failures.push(`quick-create-palette: ${String(error).slice(0, 160)}`);
+      }
+
+      await page.keyboard.press("Escape").catch(() => {});
       await settle(page, 300);
       await page.keyboard.press("Escape").catch(() => {});
       await settle(page, 200);
+
+      if (failures.length > 0) throw new Error(failures.join(" | "));
     });
   } finally {
     if (ctx?.app) await closeApp(ctx.app);
     repo.cleanup();
     rmSync(userDataDir, { recursive: true, force: true });
   }
+
+  verifyCaptures();
 });
