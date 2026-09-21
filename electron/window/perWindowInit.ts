@@ -2,7 +2,7 @@ import { session, type BrowserWindow } from "electron";
 import type { HandlerDependencies } from "../ipc/types.js";
 import { sendToRenderer } from "../ipc/handlers.js";
 import {
-  clearPortHolderWebContents,
+  clearPortHolderWebContentsIfCurrent,
   getAppWebContents,
   setFallbackEligibleProjectsListener,
 } from "./webContentsRegistry.js";
@@ -160,12 +160,14 @@ export async function initPerWindowServices(
       ptyClient?.setFallbackEligibleProjects(projectIds);
     });
 
-    // A window whose port the host tore down has no reachable view any more.
-    // Clearing the record re-opens the IPC fallback for it; a redundant notice
-    // (the holder was already replaced) only costs an extra fallback event,
-    // because chunk routing excludes recipients by identity, not by this map.
-    ptyClient.on("port-disconnected", (windowId) => {
-      clearPortHolderWebContents(windowId);
+    // A window whose port the host tore down has no reachable view any more,
+    // so the record is cleared to re-open the IPC fallback for it. Identity-
+    // guarded: a "port-replace" teardown is processed by the host only after
+    // Main has already registered the replacement holder, so clearing blindly
+    // would wipe the live record and leave the window permanently holderless —
+    // every chunk of its project then taking a fallback nobody acks.
+    ptyClient.on("port-disconnected", (windowId, _reason, holderWebContentsId) => {
+      clearPortHolderWebContentsIfCurrent(windowId, holderWebContentsId);
     });
 
     const versionSvc = new AgentVersionService(cliAvailabilityService);

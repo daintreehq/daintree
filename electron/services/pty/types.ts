@@ -269,7 +269,7 @@ export interface PtyManagerEvents {
    */
   data: (id: string, data: string | Uint8Array, routing?: PtyDataRouting) => void;
   /** A window's renderer MessagePort connection was torn down in the host (#12557). */
-  "port-disconnected": (windowId: number, reason: string) => void;
+  "port-disconnected": (windowId: number, reason: string, holderWebContentsId?: number) => void;
   exit: (id: string, exitCode: number, signal?: number, launchGeneration?: number) => void;
   error: (id: string, error: string) => void;
   "resize-result": (id: string, result: TerminalResizeResult) => void;

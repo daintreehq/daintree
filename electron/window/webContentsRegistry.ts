@@ -154,6 +154,29 @@ function forgetPortHolderWebContents(webContentsId: number): void {
   }
 }
 
+/**
+ * Forget `windowId`'s port holder only if it is still the view that `holder`
+ * names. The pty-host tears a replaced port down after Main has already
+ * brokered and registered its replacement (`distributePortsToView` runs
+ * clear -> connect -> deliver -> register synchronously, and the host processes
+ * the connect only afterwards), so the teardown notice for the departing port
+ * always arrives late. Clearing on it unconditionally would wipe the live
+ * record and leave the window with no holder for the rest of its life —
+ * `registerPortHolderWebContents` is only reached on a fresh handoff — which
+ * marks its project permanently fallback-eligible and sends every chunk down a
+ * supplementary IPC path no renderer acks (#12557).
+ *
+ * `undefined` means the notice carried no identity; the caller's only safe
+ * option is the unconditional clear.
+ */
+export function clearPortHolderWebContentsIfCurrent(
+  windowId: number,
+  holder: number | undefined
+): void {
+  if (holder !== undefined && portHolderByWindow.get(windowId) !== holder) return;
+  clearPortHolderWebContents(windowId);
+}
+
 /** Forget `windowId`'s port holder — delivery failed, or the window is gone. */
 export function clearPortHolderWebContents(windowId: number): void {
   const previous = portHolderByWindow.get(windowId);

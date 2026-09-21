@@ -729,7 +729,12 @@ function disconnectWindow(windowId: number, reason: string): void {
   // it a window whose port failed keeps counting as reachable, and a sibling
   // window accepting the chunk suppresses the fallback its view now depends
   // on — the same starvation this issue fixed, narrowed to a failed port.
-  sendEvent({ type: "port-disconnected", windowId, reason });
+  sendEvent({
+    type: "port-disconnected",
+    windowId,
+    reason,
+    holderWebContentsId: conn.holderWebContentsId,
+  });
   // Keep the active project mapping across transient renderer-port failures.
   // Without it, a multi-view window whose MessagePort just failed falls back
   // to the single-consumer SAB path and another cached view can consume/drop

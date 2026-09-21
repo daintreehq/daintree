@@ -1667,13 +1667,53 @@ describe("pty-host adversarial", () => {
     const notices = parentPort.postMessage.mock.calls
       .map((c: unknown[]) => c[0])
       .filter(
-        (m: unknown): m is { type: string; windowId: number } =>
+        (m: unknown): m is { type: string; windowId: number; holderWebContentsId?: number } =>
           typeof m === "object" &&
           m !== null &&
           (m as { type?: string }).type === "port-disconnected"
       );
     expect(notices).toHaveLength(1);
     expect(notices[0].windowId).toBe(1);
+    expect(notices[0].holderWebContentsId).toBe(101);
+  });
+
+  it("PORT_REPLACE_NOTICE_NAMES_THE_DEPARTING_HOLDER (#12557)", async () => {
+    // Main brokers a replacement pair synchronously — clear holder, connect,
+    // postMessage, register the NEW holder — and the host only processes
+    // connect-port afterwards. Its port-replace notice therefore always lands
+    // after Main has recorded the replacement, so it must name the holder that
+    // left; a notice Main cannot identity-match wipes the live record and the
+    // window spends the rest of its life with no port holder, running (and
+    // never draining) the IPC fallback for every chunk of its project.
+    const parentPort = await loadHost();
+    hostState.terminals.set("t1", createTerminal("t1", "project-1"));
+
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 101 },
+      ports: [createRendererPort()],
+    });
+    await flushMicrotasks();
+    parentPort.postMessage.mockClear();
+
+    parentPort.emit("message", {
+      data: { type: "connect-port", windowId: 1, holderWebContentsId: 102 },
+      ports: [createRendererPort()],
+    });
+    await flushMicrotasks();
+
+    const notices = parentPort.postMessage.mock.calls
+      .map((c: unknown[]) => c[0])
+      .filter(
+        (m: unknown): m is { type: string; reason: string; holderWebContentsId?: number } =>
+          typeof m === "object" &&
+          m !== null &&
+          (m as { type?: string }).type === "port-disconnected"
+      );
+    expect(notices).toHaveLength(1);
+    expect(notices[0].reason).toBe("port-replace");
+    expect(notices[0].holderWebContentsId).toBe(101);
+    // Main's side of the contract — the notice being ignored against a record
+    // that already names 102 — is covered in webContentsRegistry.test.ts.
   });
 
   it("TIER_CHANGED_BROADCAST_RESPECTS_PROJECT_FILTER", async () => {

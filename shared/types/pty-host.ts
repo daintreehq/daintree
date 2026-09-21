@@ -603,7 +603,18 @@ export type PtyHostEvent =
   // eligibility is always safe here: chunk routing excludes recipients by the
   // identity the host echoes, never by this record, so a late or redundant
   // notice costs one extra fallback event and can never double-deliver.
-  | { type: "port-disconnected"; windowId: number; reason: string }
+  | {
+      type: "port-disconnected";
+      windowId: number;
+      reason: string;
+      // The view that held the departing port, echoed back from its
+      // `connect-port`. A "port-replace" teardown is processed by the host
+      // AFTER Main has already registered the replacement holder, so Main
+      // matches on this before clearing — otherwise the replacement's record
+      // is wiped and the window is left with no holder for the rest of its
+      // life.
+      holderWebContentsId?: number;
+    }
   // Main-process-only copy of a chunk the renderer already received on its
   // visual path (MessagePort) or that the background gate suppressed. Consumed
   // by Main-side monitors (DevPreviewSessionService/UrlDetector) and NEVER

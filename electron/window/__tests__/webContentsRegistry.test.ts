@@ -492,6 +492,61 @@ describe("webContentsRegistry", () => {
 
       expect(getPortHolderWebContentsId(4)).toBeUndefined();
     });
+
+    it("ignores a late port-replace teardown that names the previous holder (#12557)", async () => {
+      // The host tears the replaced port down only after Main has brokered and
+      // registered the replacement, so the notice for the departing holder
+      // always lands last. Honouring it would leave the window holderless for
+      // good — nothing re-registers outside a fresh handoff.
+      const {
+        getPortHolderWebContentsId,
+        registerProjectView,
+        registerPortHolderWebContents,
+        clearPortHolderWebContentsIfCurrent,
+      } = await loadRegistry();
+      const outgoing = createWebContents(271);
+      const incoming = createWebContents(272);
+      registerProjectView("project-a", outgoing as unknown as WebContents);
+      registerProjectView("project-a", incoming as unknown as WebContents);
+      registerPortHolderWebContents(4, outgoing.id);
+      registerPortHolderWebContents(4, incoming.id);
+
+      clearPortHolderWebContentsIfCurrent(4, outgoing.id);
+
+      expect(getPortHolderWebContentsId(4)).toBe(incoming.id);
+    });
+
+    it("clears when the teardown names the current holder (#12557)", async () => {
+      const {
+        getPortHolderWebContentsId,
+        registerProjectView,
+        registerPortHolderWebContents,
+        clearPortHolderWebContentsIfCurrent,
+      } = await loadRegistry();
+      const holder = createWebContents(273);
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerPortHolderWebContents(4, holder.id);
+
+      clearPortHolderWebContentsIfCurrent(4, holder.id);
+
+      expect(getPortHolderWebContentsId(4)).toBeUndefined();
+    });
+
+    it("clears unconditionally when the teardown carries no identity (#12557)", async () => {
+      const {
+        getPortHolderWebContentsId,
+        registerProjectView,
+        registerPortHolderWebContents,
+        clearPortHolderWebContentsIfCurrent,
+      } = await loadRegistry();
+      const holder = createWebContents(274);
+      registerProjectView("project-a", holder as unknown as WebContents);
+      registerPortHolderWebContents(4, holder.id);
+
+      clearPortHolderWebContentsIfCurrent(4, undefined);
+
+      expect(getPortHolderWebContentsId(4)).toBeUndefined();
+    });
   });
 
   it("allows unregister and later re-register without leaving stale listener state", async () => {

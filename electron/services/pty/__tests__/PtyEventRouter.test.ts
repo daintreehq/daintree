@@ -201,7 +201,23 @@ describe("routeHostEvent", () => {
 
     routeHostEvent({ type: "port-disconnected", windowId: 4, reason: "postMessage-error" }, deps);
 
-    expect(listener).toHaveBeenCalledWith(4, "postMessage-error");
+    expect(listener).toHaveBeenCalledWith(4, "postMessage-error", undefined);
+  });
+
+  it("forwards the departing holder id so Main can identity-match the clear (#12557)", () => {
+    // A port-replace teardown reaches Main after the replacement holder is
+    // already registered; without the departing identity Main cannot tell the
+    // two apart and wipes the live record.
+    const { deps, emitter } = makeDeps();
+    const listener = vi.fn();
+    emitter.on("port-disconnected", listener);
+
+    routeHostEvent(
+      { type: "port-disconnected", windowId: 4, reason: "port-replace", holderWebContentsId: 101 },
+      deps
+    );
+
+    expect(listener).toHaveBeenCalledWith(4, "port-replace", 101);
   });
 
   it("emits submit-status as a single typed payload, not an error string", () => {

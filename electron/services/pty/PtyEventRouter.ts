@@ -170,7 +170,7 @@ export function routeHostEvent(event: PtyHostEvent, deps: PtyEventRouterDeps): b
     // A window's renderer connection is gone — Main drops its port-holder
     // record so that view is treated as fallback-eligible again (#12557).
     case "port-disconnected":
-      emitter.emit("port-disconnected", event.windowId, event.reason);
+      emitter.emit("port-disconnected", event.windowId, event.reason, event.holderWebContentsId);
       return true;
 
     // Main-process-only mirror copy (the renderer already received this chunk
