@@ -87,7 +87,7 @@ export function dispatchRecoveryNotifications(hydrateResult: HydrateResult): voi
       notify({
         type: "warning",
         title: "Database reset",
-        message: `Daintree's database was corrupted and no usable backup was available, so it started fresh. Re-add your projects to continue — your repositories and worktrees on disk are untouched.${pathNote}`,
+        message: `Daintree's database was corrupted and no usable backup was available, so it started fresh. Reopen your projects to continue — your repositories and worktrees on disk are untouched.${pathNote}`,
         priority: "high",
         duration: 0,
         context: { eventKind: "recovery" },

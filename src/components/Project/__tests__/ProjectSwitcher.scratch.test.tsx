@@ -199,8 +199,8 @@ describe("ProjectSwitcher with an active scratch", () => {
     render(<ProjectSwitcher />);
 
     expect(screen.getByText(name)).toBeTruthy();
-    expect(screen.queryByText("Select Project...")).toBeNull();
-    expect(screen.queryByText("Open Project...")).toBeNull();
+    expect(screen.queryByText("Select project")).toBeNull();
+    expect(screen.queryByText("Open project…")).toBeNull();
   });
 
   it("labels the trigger as a scratch, not a project", () => {
@@ -221,7 +221,7 @@ describe("ProjectSwitcher with an active scratch", () => {
     render(<ProjectSwitcher />);
 
     // The "projects exist, none open" fallback must not win over an active scratch.
-    expect(screen.queryByText("Select Project...")).toBeNull();
+    expect(screen.queryByText("Select project")).toBeNull();
     expect(screen.getByText(name)).toBeTruthy();
   });
 
@@ -237,7 +237,7 @@ describe("ProjectSwitcher with an active scratch", () => {
   it("keeps the empty state when no workspace is active at all", () => {
     render(<ProjectSwitcher />);
 
-    expect(screen.getByText("Open Project...")).toBeTruthy();
+    expect(screen.getByText("Open project…")).toBeTruthy();
   });
 
   it("keeps the palette and its pending confirm mounted through a bulk scratch delete", () => {

@@ -319,7 +319,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `pilot.openProject` | View this project's agents | safe | — |
 | `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
-| `project.add` | Add project | safe | `path?` |
+| `project.add` | Open project | safe | `path?` |
 | `project.cloneRepo` | Clone repository | safe | — |
 | `project.close` | Close project | safe | `projectId` |
 | `project.closeActive` | Close project | safe | — |

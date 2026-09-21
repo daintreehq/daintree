@@ -259,7 +259,7 @@ export const SEL = {
     cancel: '[data-confirm-role="cancel"]',
   },
   welcome: {
-    openFolder: 'button:has-text("Open folder")',
+    openFolder: '[data-testid="quick-actions"] button:has-text("Open project")',
   },
   firstRun: {
     welcomeTitle: 'h1:has-text("Welcome to Daintree")',

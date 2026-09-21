@@ -781,7 +781,7 @@ describe("WelcomeScreen", () => {
   it("renders quick action cards with sentence-case labels and descriptions", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    expect(screen.getByText("Open folder")).toBeTruthy();
+    expect(screen.getByText("Open project")).toBeTruthy();
     expect(screen.getByText("Create project")).toBeTruthy();
     expect(screen.getByText("Clone repository")).toBeTruthy();
     expect(screen.getByText("Launch agent")).toBeTruthy();
@@ -799,7 +799,7 @@ describe("WelcomeScreen", () => {
     const group = screen.getByTestId("quick-actions");
     expect(group.getAttribute("role")).toBe("group");
 
-    const openFolder = screen.getByText("Open folder").closest("button")!;
+    const openFolder = screen.getByText("Open project").closest("button")!;
     const describedBy = openFolder.getAttribute("aria-describedby");
     expect(describedBy).toBe("qa-desc-open-folder");
     expect(document.getElementById(describedBy!)?.textContent).toBe(
@@ -807,10 +807,10 @@ describe("WelcomeScreen", () => {
     );
   });
 
-  it("calls addProject when Open folder is clicked", () => {
+  it("calls addProject when Open project is clicked", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    fireEvent.click(screen.getByText("Open folder"));
+    fireEvent.click(screen.getByText("Open project"));
     expect(addProjectMock).toHaveBeenCalledTimes(1);
   });
 
@@ -832,7 +832,7 @@ describe("WelcomeScreen", () => {
     storeState = { ...storeState, isLoading: true };
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
-    const openFolder = screen.getByText("Open folder").closest("button")!;
+    const openFolder = screen.getByText("Open project").closest("button")!;
     const createProject = screen.getByText("Create project").closest("button")!;
     const cloneRepository = screen.getByText("Clone repository").closest("button")!;
     const launchAgent = screen.getByText("Launch agent").closest("button")!;
@@ -850,7 +850,7 @@ describe("WelcomeScreen", () => {
     expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
   });
 
-  it("lifts the Open folder card and hides the heading for first-time users", () => {
+  it("lifts the Open project card and hides the heading for first-time users", () => {
     storeState = { ...storeState, projects: [] };
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
@@ -860,7 +860,7 @@ describe("WelcomeScreen", () => {
     const group = screen.getByTestId("quick-actions");
     expect(group.getAttribute("aria-label")).toBe("Quick actions");
 
-    const openFolder = screen.getByText("Open folder").closest("button")!;
+    const openFolder = screen.getByText("Open project").closest("button")!;
     expect(openFolder.className).toContain("bg-surface-panel-elevated/95");
 
     // Only the primary card is lifted — the three secondary cards are not.
@@ -870,7 +870,7 @@ describe("WelcomeScreen", () => {
     }
   });
 
-  it("adds a muted heading and demotes the Open folder card for returning users", () => {
+  it("adds a muted heading and demotes the Open project card for returning users", () => {
     render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
 
     expect(screen.getByText("Quick actions")).toBeTruthy();
@@ -879,7 +879,7 @@ describe("WelcomeScreen", () => {
     expect(group.getAttribute("aria-labelledby")).toBe("quick-actions-heading");
 
     // With recents present the list owns the primary path — no card lift.
-    const openFolder = screen.getByText("Open folder").closest("button")!;
+    const openFolder = screen.getByText("Open project").closest("button")!;
     expect(openFolder.className).not.toContain("bg-surface-panel-elevated/95");
   });
 
