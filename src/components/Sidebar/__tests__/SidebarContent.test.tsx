@@ -43,6 +43,22 @@ describe("SidebarContent filter scope and sort status — issue #8391", () => {
     expect(source).toMatch(/totalCount \+ \(mainWorktree \? 1 : 0\)/);
   });
 
+  it("says the state tabs ignore the query, but only while one is running", () => {
+    // The tabs count a different set on purpose — non-main, and not narrowed by
+    // the query — so a search puts "1 of 5 worktrees" directly under a tab
+    // reading "All 4". Both are right; the line has to say which is which or
+    // the sidebar reads as self-contradictory.
+    //
+    // Gated on hasQuery: with no query the two scopes differ by the main
+    // worktree alone, and the pinned card already accounts for that. Explaining
+    // it unconditionally would put standing noise under every facet filter.
+    const start = source.indexOf("const scopeText =");
+    expect(start).toBeGreaterThan(-1);
+    const region = source.slice(start, start + 320);
+    expect(region).toContain("hasQuery");
+    expect(region).toContain("state tabs ignore search");
+  });
+
   it("renders drag-disabled reason for search", () => {
     expect(source).toContain("Drag to reorder is off while searching");
   });
