@@ -73,6 +73,15 @@ export interface ViewportAnchorDeps {
   holdUnseen(): number;
   /** The redraw is over: lower the count back to `count` and publish once. */
   releaseUnseen(count: number): void;
+  /**
+   * Hold the pane's own scroll bookkeeping off while the redraw drives the
+   * viewport. Since #6081 the replay rides the bottom, and the pane's scroll
+   * listener reads that as the reader having caught up: it drops
+   * `isUserScrolledBack` and clears the unseen count, which the release
+   * cannot put back (the tracker only ever lowers). Released the moment the
+   * reader takes over, so a real gesture still tracks.
+   */
+  setScrollTrackingSuppressed(suppressed: boolean): void;
 }
 
 export type ViewportAnchorPhase = "idle" | "armed" | "restoring";
@@ -115,8 +124,12 @@ interface PendingAnchor extends Anchor {
    * comes back down — the batches still arriving are not new output.
    */
   restoreCancelled: boolean;
-  /** Where the buffer sits unless the reader moves it; anything else is a cancel. */
-  expectedViewportY: number;
+  /**
+   * Where our own scroll parked the buffer, once one has run. Unset until
+   * then: before the first attempt there is no position we put it in, so
+   * anything off the bottom is the reader.
+   */
+  expectedViewportY?: number;
   target?: number;
   attempts: number;
   unseenHeld: boolean;
@@ -142,6 +155,7 @@ export function installViewportAnchorController(
 ): ViewportAnchorController {
   let pending: PendingAnchor | undefined;
   let selfScrolling = false;
+  let scrollTrackingSuppressed = false;
 
   const clearTimers = (p: PendingAnchor): void => {
     if (p.quietTimer !== undefined) clearTimeout(p.quietTimer);
@@ -156,12 +170,19 @@ export function installViewportAnchorController(
     deps.releaseUnseen(p.unseen);
   };
 
+  const setScrollTrackingSuppressed = (suppressed: boolean): void => {
+    if (scrollTrackingSuppressed === suppressed) return;
+    scrollTrackingSuppressed = suppressed;
+    deps.setScrollTrackingSuppressed(suppressed);
+  };
+
   const release = (): void => {
     if (!pending) return;
     clearTimers(pending);
     pending.cancelRender?.();
     releaseUnseen(pending);
     pending = undefined;
+    setScrollTrackingSuppressed(false);
   };
 
   const captureAnchorLines = (): string[] => {
@@ -213,12 +234,12 @@ export function installViewportAnchorController(
       unseenHeld: true,
       phase: "armed",
       restoreCancelled: false,
-      // ED3 leaves ydisp at 0, and until the first line lands that is also the
-      // bottom; from there the redraw carries it down (see onScroll).
-      expectedViewportY: 0,
       attempts: 0,
       deadlineTimer,
     };
+    // The replay is about to drive the viewport; that is not the reader
+    // catching up, so keep the pane's scroll bookkeeping out of it.
+    setScrollTrackingSuppressed(true);
     restartQuietTimer();
   };
 
@@ -230,6 +251,8 @@ export function installViewportAnchorController(
       return;
     }
     pending.restoreCancelled = true;
+    // The reader is driving from here; their scrolling is theirs to track.
+    setScrollTrackingSuppressed(false);
   };
 
   const onQuiet = (): void => {
@@ -376,19 +399,21 @@ export function installViewportAnchorController(
     terminal.onWriteParsed(restartQuietTimer),
     // Since #6081 the erase drops isUserScrolling, so the re-inserted lines
     // drag the viewport along at the bottom: a report from there is the redraw
-    // moving it, not the reader. Off the bottom — and off where we parked it —
-    // is a scrollbar drag or scroll key. A reader who deliberately scrolls to
-    // the bottom mid-redraw is indistinguishable from the redraw itself and
-    // gets restored anyway; one gesture during a few frames, against losing
-    // the restore entirely, is the better side to err on.
+    // moving it, not the reader. A reader who deliberately scrolls to the
+    // bottom mid-redraw is indistinguishable from the redraw itself and gets
+    // restored anyway; one gesture during a few frames, against losing the
+    // restore entirely, is the better side to err on.
+    //
+    // Anywhere else is the reader, line 0 included: a search hit near the top
+    // scrolls there without touching the wheel, key or scrollbar hooks, and
+    // until our own scroll has run there is no parked position to excuse it.
     terminal.onScroll(() => {
       if (!pending || selfScrolling) return;
       const buffer = terminal.buffer.active;
       const viewportY = buffer.viewportY;
       if (viewportY === buffer.baseY) return;
-      if (viewportY !== pending.expectedViewportY && viewportY !== pending.target) {
-        cancelRestore();
-      }
+      if (viewportY === pending.expectedViewportY || viewportY === pending.target) return;
+      cancelRestore();
     }),
   ];
 

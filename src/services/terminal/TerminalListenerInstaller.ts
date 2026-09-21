@@ -655,6 +655,9 @@ export function installTerminalBoundListeners(
     syncViewport: () => invalidateXtermViewportScrollCache(terminal),
     holdUnseen: () => deps.holdUnseen(id),
     releaseUnseen: (count) => deps.releaseUnseen(id, count),
+    setScrollTrackingSuppressed: (suppressed) => {
+      managed._suppressScrollTracking = suppressed;
+    },
   });
   managed.listeners.push(() => viewportAnchor.dispose());
 

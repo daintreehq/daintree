@@ -133,6 +133,7 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
     syncViewport: ReturnType<typeof vi.fn<() => void>>;
     holdUnseen: ReturnType<typeof vi.fn<() => number>>;
     releaseUnseen: ReturnType<typeof vi.fn<(count: number) => void>>;
+    setScrollTrackingSuppressed: ReturnType<typeof vi.fn<(suppressed: boolean) => void>>;
   };
   let controller: ViewportAnchorController;
 
@@ -163,6 +164,7 @@ describe("TerminalViewportAnchorController (scripted terminal)", () => {
       syncViewport: vi.fn<() => void>(),
       holdUnseen: vi.fn<() => number>(() => 3),
       releaseUnseen: vi.fn<(count: number) => void>(),
+      setScrollTrackingSuppressed: vi.fn<(suppressed: boolean) => void>(),
     };
   });
 

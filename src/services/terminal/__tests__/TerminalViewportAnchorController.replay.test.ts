@@ -68,6 +68,7 @@ interface Harness {
     syncViewport: ReturnType<typeof vi.fn<() => void>>;
     holdUnseen: ReturnType<typeof vi.fn<() => number>>;
     releaseUnseen: ReturnType<typeof vi.fn<(count: number) => void>>;
+    setScrollTrackingSuppressed: ReturnType<typeof vi.fn<(suppressed: boolean) => void>>;
   };
   /** Run every render callback the controller is waiting on, once. */
   flushRender: () => void;
@@ -81,6 +82,7 @@ function install(terminal: Terminal, overrides: Partial<ViewportAnchorDeps> = {}
     syncViewport: vi.fn<() => void>(),
     holdUnseen: vi.fn<() => number>(() => 0),
     releaseUnseen: vi.fn<(count: number) => void>(),
+    setScrollTrackingSuppressed: vi.fn<(suppressed: boolean) => void>(),
   };
   const controller = installViewportAnchorController(terminal, {
     ...deps,
@@ -198,6 +200,57 @@ describe("TerminalViewportAnchorController (real xterm)", () => {
       expect(topLine(terminal)).toBe(anchorLine);
     }
   );
+
+  it("holds the pane's scroll tracking off while the replay rides the bottom", async () => {
+    const { terminal } = await scrolledBackTerminal();
+    const harness = install(terminal);
+    track(terminal, harness);
+
+    await writeAndFlush(terminal, `${ESU}${CODEX_CLEAR}`);
+    expect(harness.deps.setScrollTrackingSuppressed).toHaveBeenLastCalledWith(true);
+
+    // Without the hold, every re-inserted line reports the bottom and the
+    // pane reads it as the reader catching up: it drops isUserScrolledBack
+    // and clears the unseen count, which the release can never put back.
+    await writeAndFlush(terminal, codexReplay(transcript()));
+    expect(harness.deps.setScrollTrackingSuppressed).toHaveBeenLastCalledWith(true);
+
+    harness.flushRender();
+    harness.flushRender();
+    expect(harness.controller.phase).toBe("idle");
+    expect(harness.deps.setScrollTrackingSuppressed).toHaveBeenLastCalledWith(false);
+  });
+
+  it("hands scroll tracking straight back when the reader takes over", async () => {
+    const { terminal } = await scrolledBackTerminal();
+    const harness = install(terminal);
+    track(terminal, harness);
+
+    await writeAndFlush(terminal, `${ESU}${CODEX_CLEAR}${BSU}`);
+    expect(harness.deps.setScrollTrackingSuppressed).toHaveBeenLastCalledWith(true);
+
+    harness.controller.cancel();
+    // Their own scrolling from here is theirs to track, even though the
+    // unseen hold stays until the redraw finishes landing.
+    expect(harness.deps.setScrollTrackingSuppressed).toHaveBeenLastCalledWith(false);
+  });
+
+  it("a jump to the top during the replay cancels the restore", async () => {
+    const { terminal } = await scrolledBackTerminal();
+    const harness = install(terminal);
+    track(terminal, harness);
+
+    await writeAndFlush(terminal, codexReplayBurst(transcript()));
+    expect(harness.controller.phase).toBe("restoring");
+
+    // A search hit near the start scrolls there on its own, without the
+    // wheel, key or scrollbar hooks firing.
+    terminal.scrollToLine(0);
+    expect(harness.controller.phase).toBe("idle");
+
+    harness.flushRender();
+    expect(terminal.buffer.active.viewportY).toBe(0);
+  });
 
   it("leaves a bottom-pinned reader following the rebuilt transcript", async () => {
     const terminal = makeTerminal();

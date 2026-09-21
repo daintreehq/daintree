@@ -39,6 +39,7 @@ interface BufferLineLike {
   _combined: SparseMap;
   _extendedAttrs: SparseMap;
   _cacheValid: boolean;
+  _cache: string;
   _copySparseMapsFrom(src: BufferLineLike): void;
   setCell(index: number, cell: unknown): void;
   setCellFromCodepoint(index: number, codePoint: number, width: number, attrs: unknown): void;
@@ -54,7 +55,7 @@ interface BufferLineLike {
   replaceCells(start: number, end: number, fillCellData: unknown, respectProtect?: boolean): void;
   getTrimmedLength(): number;
   cleanupMemory(): number;
-  copyFrom(line: BufferLineLike): void;
+  copyFrom(line: BufferLineLike, blank?: boolean): void;
 }
 
 interface FillCellLike {
@@ -230,12 +231,15 @@ function makeCleanupMemory(original: BufferLineLike["cleanupMemory"]) {
 }
 
 function makeCopyFrom(original: BufferLineLike["copyFrom"]) {
-  return function copyFromFast(this: BufferLineLike, line: BufferLineLike): void {
+  return function copyFromFast(this: BufferLineLike, line: BufferLineLike, blank?: boolean): void {
     const src = line?._data;
     if (!(src instanceof Uint32Array) || !(this._data instanceof Uint32Array)) {
-      original.call(this, line);
+      original.call(this, line, blank);
       return;
     }
+    // Upstream drops the text with the cells; holding it would pin a whole
+    // recycled line's string for as long as the object lives.
+    this._cache = "";
     this._cacheValid = false;
     const needed = line.length * CELL_SIZE;
     if (this._data.length === src.length) {
@@ -246,9 +250,10 @@ function makeCopyFrom(original: BufferLineLike["copyFrom"]) {
       this._data = new Uint32Array(src);
     }
     this.length = line.length;
-    if (isEmptySparse(line._combined) && isEmptySparse(line._extendedAttrs)) {
+    if (blank || (isEmptySparse(line._combined) && isEmptySparse(line._extendedAttrs))) {
       // _copySparseMapsFrom resets both maps then scans every cell's flags;
-      // with empty source maps the scan can never transfer anything.
+      // with empty source maps the scan can never transfer anything, and a
+      // blank source is upstream's own reason for skipping it.
       this._combined = {};
       this._extendedAttrs = {};
     } else {
@@ -1076,10 +1081,11 @@ function patchLinePrototype(line: BufferLineLike): boolean {
   }
   if (typeof line._combined !== "object" || line._combined === null) return false;
   if (typeof line._extendedAttrs !== "object" || line._extendedAttrs === null) return false;
-  // Upstream #6114 replaced `_invalidateStringCache()` with this flag; the
-  // fast paths write it directly, so its absence is shape drift like any
-  // missing method.
+  // Upstream #6114 replaced `_invalidateStringCache()` with these two fields;
+  // the fast paths write them directly, so their absence is shape drift like
+  // any missing method.
   if (typeof line._cacheValid !== "boolean") return false;
+  if (typeof line._cache !== "string") return false;
   for (const method of REQUIRED_METHODS) {
     if (typeof proto[method] !== "function") return false;
   }
