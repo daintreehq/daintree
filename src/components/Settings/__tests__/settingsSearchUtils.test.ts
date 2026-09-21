@@ -71,6 +71,36 @@ describe("filterSettings", () => {
     }
   });
 
+  it("decides on literal matches only among rows that are eligible to be shown", () => {
+    // A literal hit that a hard filter is about to remove must not evict the
+    // eligible fuzzy rows first — that returned an empty list.
+    const base = {
+      scope: "global" as const,
+      kind: "section" as const,
+      section: "S",
+      description: "",
+    };
+    const index = [
+      { ...base, id: "g", tab: "general" as const, tabLabel: "General", title: "Theme" },
+      {
+        ...base,
+        id: "p",
+        scope: "project" as const,
+        tab: "project:general" as const,
+        tabLabel: "Project",
+        title: "Themes",
+      },
+    ] as unknown as Parameters<typeof filterSettings>[0];
+
+    const noProject = filterSettings(index, "themes", { hasProject: false });
+    expect(noProject.map((r) => r.id)).toEqual(["g"]);
+
+    const modifiedOnly = filterSettings(index, "themes @modified", {
+      modifiedTabs: new Set(["general"]) as never,
+    });
+    expect(modifiedOnly.map((r) => r.id)).toEqual(["g"]);
+  });
+
   it("still answers a misspelling, where fuzzy matching is the whole point", () => {
     // The gate only fires when a literal match exists, so typo tolerance has
     // to survive it untouched.

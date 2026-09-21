@@ -1564,9 +1564,14 @@ export function SearchResults({
             id={searchResultOptionId(result.id)}
             // The button IS the option — a role="option" wrapper around a button
             // would nest interactive roles. Overriding the implicit button role
-            // keeps the click and the tab stop while giving the listbox the
-            // child it requires and the input something to point at.
+            // keeps the click while giving the listbox the child it requires and
+            // the input something to point at.
+            //
+            // Out of the Tab sequence: focus is virtual and owned by the input.
+            // Left tabbable, a Tab into a row moved DOM focus without moving the
+            // highlight, and the arrow keys — handled on the input — went dead.
             role="option"
+            tabIndex={-1}
             aria-selected={index === activeIndex}
             ref={index === activeIndex ? activeRef : undefined}
             onClick={() =>

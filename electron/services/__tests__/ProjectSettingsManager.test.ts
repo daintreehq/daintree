@@ -25,9 +25,9 @@ vi.mock("../ProjectEnvSecureStorage.js", () => ({
 
 const broadcastSpy = vi.fn();
 vi.mock("../../ipc/utils.js", () => ({
-  sendToPrimaryRenderer: (...args: unknown[]) => broadcastSpy(...args),
+  broadcastToRenderer: (...args: unknown[]) => broadcastSpy(...args),
   // Re-export the other surface members that production callers might pull
-  // in transitively; tests only exercise sendToPrimaryRenderer here.
+  // in transitively; tests only exercise broadcastToRenderer here.
   typedHandle: vi.fn(),
   typedHandleValidated: vi.fn(),
   typedHandleWithContext: vi.fn(),
@@ -474,7 +474,7 @@ describe("ProjectSettingsManager caching", () => {
     expect(result).toEqual({ runCommands: [] });
 
     // `broadcastCorruption` is fire-and-forget via `void` and lazy-imports
-    // `sendToPrimaryRenderer` on first hit, so the spy resolves on the next
+    // `broadcastToRenderer` on first hit, so the spy resolves on the next
     // microtask after `getProjectSettings` returns.
     await vi.waitFor(() => expect(broadcastSpy).toHaveBeenCalledTimes(1));
     const [channel, payload] = broadcastSpy.mock.calls[0];

@@ -3,7 +3,7 @@
 Daintree's theming system is a three-layer pipeline shared between the renderer and main process:
 
 1. `ThemePalette` Theme authors define the visual foundation in `shared/theme/palette.ts`: surfaces, text, accent, status, activity, terminal colors, syntax colors, and a small `strategy` object.
-2. Semantic tokens `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createDaintreeTokens()` in `shared/theme/themes.ts` which derives ~155 tokens (the full `APP_THEME_TOKEN_KEYS` contract) from ~40 required palette inputs.
+2. Semantic tokens `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createDaintreeTokens()` in `shared/theme/themes.ts` which derives ~156 tokens (the full `APP_THEME_TOKEN_KEYS` contract) from ~40 required palette inputs.
 3. Component public vars Individual UI areas expose their own override surface through CSS variables such as `--toolbar-bg`, `--toolbar-project-bg`, `--settings-dialog-bg`, `--pulse-card-bg`, and `--panel-grid-bg`.
 
 ## Core Model

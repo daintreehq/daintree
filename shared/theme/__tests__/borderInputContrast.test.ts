@@ -55,3 +55,30 @@ describe("border-input", () => {
     }
   });
 });
+
+describe("border-input on a partial import", () => {
+  it("follows the resolved border-strong when the import names neither token", async () => {
+    // Normalisation seeds a partial theme from a fallback scheme, and that
+    // scheme can carry an explicit `border-input` of its own. An import that
+    // never mentioned input borders must not inherit another theme's.
+    const { normalizeAppColorScheme } = await import("../themes.js");
+    const scheme = normalizeAppColorScheme({
+      id: "partial-import",
+      name: "Partial import",
+      type: "dark",
+      tokens: { "surface-canvas": "#101010" },
+    } as never);
+    expect(scheme.tokens["border-input"]).toBe(scheme.tokens["border-strong"]);
+  });
+
+  it("keeps an input border the import sets itself", async () => {
+    const { normalizeAppColorScheme } = await import("../themes.js");
+    const scheme = normalizeAppColorScheme({
+      id: "explicit-import",
+      name: "Explicit import",
+      type: "dark",
+      tokens: { "surface-canvas": "#101010", "border-input": "#abcdef" },
+    } as never);
+    expect(scheme.tokens["border-input"]).toBe("#abcdef");
+  });
+});

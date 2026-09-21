@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../../../ipc/utils.js", () => ({ sendToPrimaryRenderer: vi.fn() }));
+vi.mock("../../../ipc/utils.js", () => ({ broadcastToRenderer: vi.fn() }));
 
 import {
   getServiceConnectivityRegistry,
   wireMcpServerToConnectivityRegistry,
   _resetServiceConnectivityRegistryForTests,
 } from "../index.js";
-import { sendToPrimaryRenderer } from "../../../ipc/utils.js";
+import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { CHANNELS } from "../../../ipc/channels.js";
 
 interface FakeMcpServer {
@@ -138,7 +138,7 @@ describe("connectivity lazy MCP proxy", () => {
 
 describe("connectivity recovery toast", () => {
   beforeEach(() => {
-    vi.mocked(sendToPrimaryRenderer).mockClear();
+    vi.mocked(broadcastToRenderer).mockClear();
   });
 
   afterEach(() => {
@@ -157,16 +157,16 @@ describe("connectivity recovery toast", () => {
 
     // unknown → reachable: normal launch, must stay silent.
     fake.setRunning(true);
-    expect(sendToPrimaryRenderer).not.toHaveBeenCalled();
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
 
     // reachable → unreachable: the crash itself carries no toast.
     fake.setRunning(false);
-    expect(sendToPrimaryRenderer).not.toHaveBeenCalled();
+    expect(broadcastToRenderer).not.toHaveBeenCalled();
 
     // unreachable → reachable: the recovery users actually need to know about.
     fake.setRunning(true);
-    expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(1);
-    expect(sendToPrimaryRenderer).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+    expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+    expect(broadcastToRenderer).toHaveBeenCalledWith(CHANNELS.NOTIFICATION_SHOW_TOAST, {
       type: "info",
       title: "Connection restored",
       message: "Reconnected to MCP server.",

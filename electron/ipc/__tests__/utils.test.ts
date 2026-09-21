@@ -7,7 +7,6 @@ const ipcMainMock = vi.hoisted(() => ({
 
 const browserWindowFromWebContentsMock = vi.hoisted(() => vi.fn());
 const browserWindowGetAllWindowsMock = vi.hoisted(() => vi.fn(() => [] as unknown[]));
-const browserWindowGetFocusedWindowMock = vi.hoisted(() => vi.fn<() => unknown>(() => null));
 const isCachedViewWebContentsMock = vi.hoisted(() => vi.fn((_id: number) => false));
 const getWebContentsForProjectMock = vi.hoisted(() => vi.fn((_projectId: string) => [] as never[]));
 const hasRegisteredProjectViewsMock = vi.hoisted(() => vi.fn(() => false));
@@ -22,7 +21,6 @@ vi.mock("electron", () => ({
   BrowserWindow: Object.assign(class {}, {
     fromWebContents: browserWindowFromWebContentsMock,
     getAllWindows: browserWindowGetAllWindowsMock,
-    getFocusedWindow: browserWindowGetFocusedWindowMock,
   }),
   webContents: {
     fromId: vi.fn(() => null),
@@ -1198,69 +1196,5 @@ describe("typedHandleWithContext multi-window project resolution", () => {
     // handlers that fail closed on it break these windows.
     const UNBOUND_SENDER = 303;
     await expect(invokeFrom(registered, UNBOUND_SENDER)).resolves.toEqual({ projectId: null });
-  });
-});
-
-describe("sendToPrimaryRenderer", () => {
-  function makeWindow() {
-    const send = vi.fn();
-    return {
-      win: { isDestroyed: () => false, webContents: { isDestroyed: () => false, send } },
-      send,
-    };
-  }
-
-  beforeEach(() => {
-    browserWindowGetFocusedWindowMock.mockReset();
-    browserWindowGetAllWindowsMock.mockReset();
-  });
-
-  it("delivers exactly once when several renderers are open", async () => {
-    // The defect this guards: every view mounts the toast listener and they
-    // share a persisted notification history, so a broadcast produced one
-    // inbox row per open project view for a single event.
-    const a = makeWindow();
-    const b = makeWindow();
-    const c = makeWindow();
-    browserWindowGetFocusedWindowMock.mockReturnValue(b.win);
-    browserWindowGetAllWindowsMock.mockReturnValue([a.win, b.win, c.win]);
-
-    const { sendToPrimaryRenderer } = await import("../utils.js");
-    sendToPrimaryRenderer("some:channel", { hello: "world" });
-
-    const total = a.send.mock.calls.length + b.send.mock.calls.length + c.send.mock.calls.length;
-    expect(total).toBe(1);
-  });
-
-  it("prefers the focused window, so the notice lands where the user is looking", async () => {
-    const a = makeWindow();
-    const b = makeWindow();
-    browserWindowGetFocusedWindowMock.mockReturnValue(b.win);
-    browserWindowGetAllWindowsMock.mockReturnValue([a.win, b.win]);
-
-    const { sendToPrimaryRenderer } = await import("../utils.js");
-    sendToPrimaryRenderer("some:channel");
-
-    expect(b.send).toHaveBeenCalledTimes(1);
-    expect(a.send).not.toHaveBeenCalled();
-  });
-
-  it("falls back to a live window when nothing holds focus", async () => {
-    const a = makeWindow();
-    browserWindowGetFocusedWindowMock.mockReturnValue(null);
-    browserWindowGetAllWindowsMock.mockReturnValue([a.win]);
-
-    const { sendToPrimaryRenderer } = await import("../utils.js");
-    sendToPrimaryRenderer("some:channel");
-
-    expect(a.send).toHaveBeenCalledTimes(1);
-  });
-
-  it("is a no-op with no windows rather than throwing", async () => {
-    browserWindowGetFocusedWindowMock.mockReturnValue(null);
-    browserWindowGetAllWindowsMock.mockReturnValue([]);
-
-    const { sendToPrimaryRenderer } = await import("../utils.js");
-    expect(() => sendToPrimaryRenderer("some:channel")).not.toThrow();
   });
 });

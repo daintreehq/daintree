@@ -479,7 +479,7 @@ Import and add to `shared/theme/builtInThemes/index.ts`.
 | UI Utility | 15 (4 scrollbar + 3 panel-state + 2 state-chip + 2 label-pill + 2 grain + focus-ring-offset + chrome-noise-texture) |
 | Form | 2 (`knob-base` + `state-modified`) |
 | Diff | 8 |
-| **Total** | **155** |
+| **Total** | **156** |
 
 This must equal `APP_THEME_TOKEN_KEYS.length` in `shared/theme/types.ts`, which is the contract — if the two disagree, the array wins and this table is stale.
 

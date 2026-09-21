@@ -23,7 +23,7 @@ const deepLinkMock = vi.hoisted(() => {
   };
 });
 
-const utilsMock = vi.hoisted(() => ({ sendToPrimaryRenderer: vi.fn() }));
+const utilsMock = vi.hoisted(() => ({ broadcastToRenderer: vi.fn() }));
 const pendingErrorsMock = vi.hoisted(() => ({ appendPendingError: vi.fn() }));
 const registryMock = vi.hoisted(() => ({
   getAllAppWebContents: vi.fn<() => { isDestroyed: () => boolean }[]>(() => [
@@ -241,7 +241,7 @@ describe("archiveInstallIntent", () => {
     await enqueueArchiveInstallIntent(P("bad.dntr"));
 
     expect(painted.sent).toHaveLength(0);
-    expect(utilsMock.sendToPrimaryRenderer).toHaveBeenCalledWith(
+    expect(utilsMock.broadcastToRenderer).toHaveBeenCalledWith(
       "notification:show-toast",
       expect.objectContaining({
         type: "error",
@@ -274,7 +274,7 @@ describe("archiveInstallIntent", () => {
     const { enqueueArchiveInstallIntent } = await importFresh();
     await enqueueArchiveInstallIntent(P("bad.dntr"));
 
-    expect(utilsMock.sendToPrimaryRenderer).not.toHaveBeenCalled();
+    expect(utilsMock.broadcastToRenderer).not.toHaveBeenCalled();
     expect(pendingErrorsMock.appendPendingError).toHaveBeenCalledWith(
       expect.objectContaining({ source: "main-process", message: expect.stringContaining("boom") })
     );

@@ -6,7 +6,7 @@ import electronUpdater from "electron-updater";
 import type { UpdateInfo, ProgressInfo } from "electron-updater";
 import * as semver from "semver";
 import { CHANNELS } from "../ipc/channels.js";
-import { broadcastToRenderer, sendToPrimaryRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { requestGracefulShutdownForUpdate } from "../lifecycle/shutdownCoordinator.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { trackEvent } from "./TelemetryService.js";
@@ -417,12 +417,10 @@ class AutoUpdaterService {
     // wrong recovery. Markers are still consumed above, unconditionally.
     if (isWindowsStoreBuild()) return;
 
-    // App-global, so it goes to one renderer: broadcasting would file an inbox
-    // row in every open project view. Same for the two toasts below.
     // Deliberately does not name a cause. The updater surfaces no way to tell a
     // Squirrel requirement mismatch from a permissions failure or a package
     // manager refusing the install, and every platform reaches this line.
-    sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+    broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
       type: "error",
       title: "Update didn't install",
       message: `${PRODUCT_NAME} ${expected} was downloaded but couldn't be installed, so you're still on ${actual}. Reinstalling from a fresh download will get you onto the latest version.`,
@@ -926,7 +924,7 @@ class AutoUpdaterService {
         }
         if (this.isManualCheck) {
           this.isManualCheck = false;
-          sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "info",
             title: "No updates available",
             message: `${PRODUCT_NAME} ${app.getVersion()} is the latest version.`,
@@ -959,7 +957,7 @@ class AutoUpdaterService {
           // action — don't shadow that with background backoff, the user is
           // already deciding when to retry.
           this.resetRetryState();
-          sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+          broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
             type: "error",
             title: "Update failed",
             message: err.message,

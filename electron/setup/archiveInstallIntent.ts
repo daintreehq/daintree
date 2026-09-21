@@ -1,6 +1,6 @@
 import path from "path";
 import { randomUUID } from "node:crypto";
-import { sendToPrimaryRenderer } from "../ipc/utils.js";
+import { broadcastToRenderer } from "../ipc/utils.js";
 import { CHANNELS } from "../ipc/channels.js";
 import { appendPendingError } from "../ipc/pendingErrorsStore.js";
 import { getAllAppWebContents } from "../window/webContentsRegistry.js";
@@ -52,15 +52,14 @@ function hasLiveRenderer(): boolean {
   return getAllAppWebContents().some((wc) => !wc.isDestroyed());
 }
 
-// Install provenance is app-global: one toast, not one per open project view.
 function showToast(payload: MainProcessToastPayload): void {
-  sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, payload);
+  broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, payload);
 }
 
 /**
  * Surface a preview failure. On a cold launch the drain can finish before the
  * first window paints, and on macOS the app stays alive with no windows — in
- * both cases `sendToPrimaryRenderer` has no target and the toast is dropped. So
+ * both cases `broadcastToRenderer` has no targets and the toast is dropped. So
  * when no renderer is live, persist via `appendPendingError` (the durable inbox
  * `globalErrorHandlers` uses for pre-ready fatals) so it surfaces on the next
  * renderer mount instead of vanishing.

@@ -180,11 +180,14 @@ html[data-dragging="true"]
    Skipped on the active row: it already carries the accent right edge, so it is
    never the ambiguous one, and painting both would put two edges on one card.
    The grid selector covers grid-mode navigation, where focus stays on the
-   container and `:focus-visible` never matches a row. */
+   container and `:focus-visible` never matches a row. `:focus-visible` on the
+   grid rather than `:focus-within`: clicking a control inside the grid keeps
+   focus within it, and the cursor row kept an edge that is meant to exist only
+   while the keyboard is driving. */
 [data-worktree-row]:focus-visible
   .sidebar-worktree-card:not([data-active="true"]):not([data-drop-target="true"]),
 .sidebar-root
-  [role="grid"]:focus-within
+  [role="grid"]:focus-visible
   [data-worktree-row][data-keyboard-cursor="true"]
   .sidebar-worktree-card:not([data-active="true"]):not([data-drop-target="true"]) {
   --card-edge: inset 2px 0 0 var(--theme-border-strong);

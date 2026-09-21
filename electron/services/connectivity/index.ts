@@ -1,5 +1,5 @@
 import { CHANNELS } from "../../ipc/channels.js";
-import { sendToPrimaryRenderer } from "../../ipc/utils.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
 import { getForgeProviderImpl, onForgeProviderRegistryChanged } from "../forgeProviderRegistry.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../shared/utils/forgeProviderIds.js";
 import type { ForgeTokenHealthState, HealthEventsCapability } from "../../../shared/types/forge.js";
@@ -136,8 +136,7 @@ export function getServiceConnectivityRegistry(): ServiceConnectivityRegistry {
           title: "Connection restored",
           message: `Reconnected to ${label}.`,
         };
-        // Reachability is app-wide — one toast, not one per open project view.
-        sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, payload);
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, payload);
       },
     });
   }

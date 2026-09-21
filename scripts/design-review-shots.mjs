@@ -131,15 +131,18 @@ for (const theme of args.themes) {
 
   // Trust the files, not the exit code — count them here as well as in the spec.
   const pngs = existsSync(dir) ? readdirSync(dir).filter((f) => f.endsWith(".png")) : [];
+  // Which manifest this run wrote follows the env Playwright actually saw, not
+  // the flag: an inherited DAINTREE_SHOT_ONLY makes the spec write the partial
+  // one, and reading manifest.json then reported the PREVIOUS full sweep's
+  // counts for a run that captured a single step.
+  const filtered = Boolean(env.DAINTREE_SHOT_ONLY);
+  const manifestPath = path.join(dir, filtered ? "manifest.partial.json" : "manifest.json");
   let manifest = null;
-  // A filtered run writes manifest.partial.json so it cannot clobber the record
-  // of the last full sweep — read whichever one this run produced.
-  const manifestPath = path.join(dir, args.only ? "manifest.partial.json" : "manifest.json");
   if (existsSync(manifestPath)) {
     try {
       manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     } catch {
-      // A corrupt manifest is itself a failure signal; the png count still rules.
+      // Treated as absent below — a manifest that cannot be read proves nothing.
     }
   }
 
@@ -156,7 +159,10 @@ for (const theme of args.themes) {
 console.log("\n=== summary ===");
 let failed = 0;
 for (const r of results) {
-  const ok = r.status === 0 && r.pngs > 0 && (r.missing === null || r.missing.length === 0);
+  // No manifest is a failure, not a shrug: the spec clears the old one before it
+  // starts and writes a new one only after verifying, so its absence means the
+  // run never reached verification.
+  const ok = r.status === 0 && r.pngs > 0 && r.missing !== null && r.missing.length === 0;
   if (!ok) failed++;
   const detail =
     r.expected === null

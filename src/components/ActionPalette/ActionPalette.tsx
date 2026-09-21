@@ -59,12 +59,16 @@ const HIDE_CHORD_KEYS = parseChord(HIDE_SHORTCUT, isMac())[0] ?? [];
 /**
  * Which row command an Alt chord names, or null.
  *
- * macOS composes Option+letter into a symbol (⌥P arrives as "π"), so `code` is
- * the layout-independent read; `key` is the fallback for platforms and tests
- * that don't populate it.
+ * The typed character wins when there is one. On Windows and Linux Alt does not
+ * compose, so `key` is the letter the user's layout actually produces — reading
+ * `code` first made a Dvorak user's P do nothing while the key printed L pinned.
+ * macOS composes Option+letter into a symbol (⌥P arrives as "π"), so there `key`
+ * is never a plain letter and `code`, the physical position, is all there is.
  */
 function altCommandLetter(e: React.KeyboardEvent): "pin" | "hide" | null {
-  const token = (e.code || e.key).toLowerCase();
+  const key = e.key ?? "";
+  const typed = key.length === 1 && /[a-z]/i.test(key) ? key.toLowerCase() : null;
+  const token = typed ?? (e.code ?? "").toLowerCase();
   if (token === "keyp" || token === "p") return "pin";
   if (token === "keyh" || token === "h") return "hide";
   return null;

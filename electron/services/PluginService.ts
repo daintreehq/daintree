@@ -232,11 +232,7 @@ import {
   unregisterPluginRecipes,
 } from "./plugin/PluginRecipeRegistry.js";
 import { PluginRecipeMetadataStore } from "./plugin/PluginRecipeMetadataStore.js";
-import {
-  broadcastToRenderer,
-  broadcastToProjectRenderers,
-  sendToPrimaryRenderer,
-} from "../ipc/utils.js";
+import { broadcastToRenderer, broadcastToProjectRenderers } from "../ipc/utils.js";
 import { deepFreeze } from "../utils/deepFreeze.js";
 import { CHANNELS } from "../ipc/channels.js";
 import type { LoadedPluginInfo } from "../../shared/types/plugin.js";
@@ -1566,9 +1562,7 @@ export class PluginService {
       );
       if (namespaceIssue) {
         const inferredName = (json as Record<string, unknown>)?.name;
-        // Plugin loading is app-global, so these three load-failure toasts go to
-        // a single renderer — a broadcast would duplicate them per project view.
-        sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "error",
           title: "Plugin uses a reserved namespace",
           message: `Plugin "${String(inferredName ?? dirName)}" uses the reserved "daintree.*" namespace, which is restricted to first-party plugins.`,
@@ -1670,7 +1664,7 @@ export class PluginService {
           isBuiltin: opts.isBuiltin,
           reason: blockMatch.message,
         });
-        sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "warning",
           priority: "low",
           title: "Plugin blocked",
@@ -1724,7 +1718,7 @@ export class PluginService {
         console.error(
           `[PluginService] Plugin "${manifest.name}" requires Daintree ${requiredRange} but current version is ${this.appVersion} — skipping`
         );
-        sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
           type: "error",
           title: "Plugin incompatible",
           message: `Plugin "${manifest.displayName ?? manifest.name}" requires Daintree ${requiredRange} but current version is ${this.appVersion}.`,

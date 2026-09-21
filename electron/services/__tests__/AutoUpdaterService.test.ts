@@ -23,7 +23,6 @@ const windowMock = vi.hoisted(() => ({
 }));
 
 const broadcastMock = vi.hoisted(() => vi.fn());
-const primarySendMock = vi.hoisted(() => vi.fn());
 
 const downloadedUpdateHelperMock = vi.hoisted(() => ({
   clear: vi.fn().mockResolvedValue(undefined),
@@ -123,7 +122,6 @@ vi.mock("electron", () => ({
 
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastMock,
-  sendToPrimaryRenderer: primarySendMock,
 }));
 
 vi.mock("electron-updater", () => ({
@@ -310,7 +308,7 @@ describe("AutoUpdaterService", () => {
       autoUpdaterService.checkForUpdatesManually();
       notAvailableHandler({});
 
-      expect(primarySendMock).toHaveBeenCalledWith(
+      expect(broadcastMock).toHaveBeenCalledWith(
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "info",
@@ -322,7 +320,7 @@ describe("AutoUpdaterService", () => {
     it("does not send toast on update-not-available for automatic checks", () => {
       notAvailableHandler({});
 
-      expect(primarySendMock).not.toHaveBeenCalledWith(
+      expect(broadcastMock).not.toHaveBeenCalledWith(
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.anything()
       );
@@ -332,7 +330,7 @@ describe("AutoUpdaterService", () => {
       autoUpdaterService.checkForUpdatesManually();
       errorHandler(new Error("network error"));
 
-      expect(primarySendMock).toHaveBeenCalledWith(
+      expect(broadcastMock).toHaveBeenCalledWith(
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "error",
@@ -348,7 +346,7 @@ describe("AutoUpdaterService", () => {
     it("does not send error toast for automatic check errors", () => {
       errorHandler(new Error("network error"));
 
-      expect(primarySendMock).not.toHaveBeenCalledWith(
+      expect(broadcastMock).not.toHaveBeenCalledWith(
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.anything()
       );
@@ -376,7 +374,7 @@ describe("AutoUpdaterService", () => {
       availableHandler({ version: "2.0.0" });
       notAvailableHandler({});
 
-      expect(primarySendMock).not.toHaveBeenCalledWith(
+      expect(broadcastMock).not.toHaveBeenCalledWith(
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.anything()
       );
@@ -2982,7 +2980,7 @@ describe("AutoUpdaterService", () => {
           return undefined;
         });
         autoUpdaterService.initialize();
-        return (primarySendMock as Mock).mock.calls.filter(
+        return (broadcastMock as Mock).mock.calls.filter(
           (args) => args[0] === CHANNELS.NOTIFICATION_SHOW_TOAST
         );
       }
@@ -3021,7 +3019,7 @@ describe("AutoUpdaterService", () => {
 
         // Second boot reads what a real store would now return.
         autoUpdaterService.dispose();
-        primarySendMock.mockClear();
+        broadcastMock.mockClear();
         expect(bootWith({ pending: undefined, stage: undefined })).toHaveLength(0);
       });
 

@@ -32,7 +32,6 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn(() => null),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
-const sendToPrimaryRendererMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
@@ -60,7 +59,6 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
-  sendToPrimaryRenderer: sendToPrimaryRendererMock,
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -821,7 +819,7 @@ describe("PluginService built-in plugin loading", () => {
   });
 
   it("emits toast when a user plugin uses the daintree.* namespace", async () => {
-    const { sendToPrimaryRenderer } = await import("../../ipc/utils.js");
+    const { broadcastToRenderer } = await import("../../ipc/utils.js");
     const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       await writePlugin("daintree.pirate", {
@@ -837,7 +835,7 @@ describe("PluginService built-in plugin loading", () => {
         expect.stringContaining("Invalid manifest in daintree.pirate"),
         expect.anything()
       );
-      expect(sendToPrimaryRenderer).toHaveBeenCalledWith(
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
         CHANNELS.NOTIFICATION_SHOW_TOAST,
         expect.objectContaining({
           type: "error",

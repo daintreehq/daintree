@@ -613,7 +613,12 @@ function followBorderStrongForInput(
   overrides: Record<string, unknown> | undefined
 ): void {
   if (typeof overrides?.["border-input"] === "string") return;
-  if (typeof overrides?.["border-strong"] !== "string") return;
+  // Not gated on the theme having moved `border-strong`. A partial import that
+  // names neither token is normalised over a fallback scheme, and that scheme
+  // may carry its own explicit `border-input` (daintree does) — so the import
+  // would pick up another theme's field edge without asking for it. Whatever
+  // `border-strong` resolved to, from the theme or from the fallback, is what
+  // an unnamed `border-input` follows.
   if (typeof tokens["border-strong"] === "string") {
     tokens["border-input"] = tokens["border-strong"];
   }

@@ -11,7 +11,6 @@ import type { WorkspaceHostProcess } from "../../WorkspaceHostProcess.js";
 
 vi.mock("../../../ipc/utils.js", () => ({
   broadcastToRenderer: vi.fn(),
-  sendToPrimaryRenderer: vi.fn(),
 }));
 
 vi.mock("../../events.js", () => ({
@@ -39,7 +38,7 @@ vi.mock("../../ProjectSwitchStatusTiming.js", () => ({
   projectSwitchStatusTiming: statusTimingMock,
 }));
 
-import { broadcastToRenderer, sendToPrimaryRenderer } from "../../../ipc/utils.js";
+import { broadcastToRenderer } from "../../../ipc/utils.js";
 import { events } from "../../events.js";
 import { gitServiceCache } from "../../GitServiceCache.js";
 import { BUILTIN_GITHUB_PROVIDER_ID } from "../../../../shared/utils/forgeProviderIds.js";
@@ -169,8 +168,8 @@ describe("WorkspaceHostEventRouter", () => {
       const entry = makeEntry();
       router.routeHostEvent(entry, { type: "inotify-limit-reached" });
 
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(1);
-      expect(sendToPrimaryRenderer).toHaveBeenCalledWith(
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ type: "warning" })
       );
@@ -183,7 +182,7 @@ describe("WorkspaceHostEventRouter", () => {
       router.routeHostEvent(entryA, { type: "inotify-limit-reached" });
       router.routeHostEvent(entryB, { type: "inotify-limit-reached" });
 
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
     });
 
     it("suppresses duplicate toasts from the same host", () => {
@@ -192,7 +191,7 @@ describe("WorkspaceHostEventRouter", () => {
       router.routeHostEvent(entry, { type: "inotify-limit-reached" });
       router.routeHostEvent(entry, { type: "inotify-limit-reached" });
 
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -201,8 +200,8 @@ describe("WorkspaceHostEventRouter", () => {
       const entry = makeEntry();
       router.routeHostEvent(entry, { type: "emfile-limit-reached" });
 
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(1);
-      expect(sendToPrimaryRenderer).toHaveBeenCalledWith(
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledWith(
         expect.any(String),
         expect.objectContaining({ type: "warning" })
       );
@@ -215,7 +214,7 @@ describe("WorkspaceHostEventRouter", () => {
       router.routeHostEvent(entryA, { type: "emfile-limit-reached" });
       router.routeHostEvent(entryB, { type: "emfile-limit-reached" });
 
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
     });
   });
 
@@ -244,7 +243,6 @@ describe("WorkspaceHostEventRouter", () => {
       localRouter.routeHostEvent(entry, event);
 
       expect(statusTimingMock.complete).toHaveBeenCalledWith(event);
-      expect(sendToPrimaryRenderer).not.toHaveBeenCalled();
       expect(broadcastToRenderer).not.toHaveBeenCalled();
       expect(emit).not.toHaveBeenCalled();
     });
@@ -255,7 +253,7 @@ describe("WorkspaceHostEventRouter", () => {
       const entry = makeEntry();
       router.routeHostEvent(entry, { type: "watcher-recovered" });
 
-      expect(sendToPrimaryRenderer).not.toHaveBeenCalled();
+      expect(broadcastToRenderer).not.toHaveBeenCalled();
     });
 
     it("re-arms the inotify toast so a relapse re-notifies", () => {
@@ -263,22 +261,22 @@ describe("WorkspaceHostEventRouter", () => {
 
       router.routeHostEvent(entry, { type: "inotify-limit-reached" });
       router.routeHostEvent(entry, { type: "inotify-limit-reached" });
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
 
       router.routeHostEvent(entry, { type: "watcher-recovered" });
       router.routeHostEvent(entry, { type: "inotify-limit-reached" });
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(2);
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
     });
 
     it("re-arms the emfile toast so a relapse re-notifies", () => {
       const entry = makeEntry();
 
       router.routeHostEvent(entry, { type: "emfile-limit-reached" });
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(1);
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(1);
 
       router.routeHostEvent(entry, { type: "watcher-recovered" });
       router.routeHostEvent(entry, { type: "emfile-limit-reached" });
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(2);
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -289,7 +287,7 @@ describe("WorkspaceHostEventRouter", () => {
       router.routeHostEvent(entry, { type: "inotify-limit-reached" });
       router.routeHostEvent(entry, { type: "emfile-limit-reached" });
 
-      expect(sendToPrimaryRenderer).toHaveBeenCalledTimes(2);
+      expect(broadcastToRenderer).toHaveBeenCalledTimes(2);
     });
   });
 

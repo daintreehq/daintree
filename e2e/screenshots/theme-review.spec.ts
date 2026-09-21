@@ -279,6 +279,46 @@ async function step(name: string, fn: () => Promise<void>): Promise<void> {
 }
 
 /**
+ * The slugs this invocation owes. Validated up front, before the app launches:
+ * a typo in DAINTREE_SHOT_ONLY should cost a second, not a five-minute sweep.
+ *
+ * `Object.hasOwn`, not a truthiness read — `STEP_SLUGS["toString"]` resolves
+ * through the prototype, so a name like that passed validation and then
+ * selected nothing.
+ */
+function resolveWanted(): string[] {
+  if (ONLY.length === 0) return [...EXPECTED_STATES];
+  const unknownSteps = ONLY.filter((name) => !Object.hasOwn(STEP_SLUGS, name));
+  if (unknownSteps.length > 0) {
+    throw new Error(
+      `[theme-shots] DAINTREE_SHOT_ONLY names unknown step(s): ${unknownSteps.join(", ")}. ` +
+        `Valid steps: ${Object.keys(STEP_SLUGS).join(", ")}`
+    );
+  }
+  const selected = new Set(ONLY.flatMap((name) => STEP_SLUGS[name] ?? []));
+  const wanted = EXPECTED_STATES.filter((slug) => selected.has(slug));
+  if (wanted.length === 0) {
+    throw new Error("[theme-shots] DAINTREE_SHOT_ONLY selected no states");
+  }
+  return wanted;
+}
+
+/**
+ * Remove what this run is about to produce. Verification checks the files on
+ * disk, so a PNG left by an earlier sweep into the same directory would satisfy
+ * it on behalf of a step that failed this time — the manifest would then claim
+ * a current capture that is days old.
+ */
+function clearStaleCaptures(wanted: readonly string[]): void {
+  for (const slug of wanted) {
+    rmSync(path.join(OUTPUT_DIR, `${slug}${TAG}.png`), { force: true });
+  }
+  rmSync(path.join(OUTPUT_DIR, ONLY.length > 0 ? "manifest.partial.json" : "manifest.json"), {
+    force: true,
+  });
+}
+
+/**
  * The gate. Counts what actually landed on disk against EXPECTED_STATES, writes
  * a manifest, and throws when anything promised is missing. Never infer success
  * from the fact that the spec reached its end.
@@ -297,20 +337,7 @@ function verifyCaptures(): void {
     );
   }
 
-  let wanted: string[];
-  if (ONLY.length === 0) {
-    wanted = [...EXPECTED_STATES];
-  } else {
-    const unknownSteps = ONLY.filter((name) => !STEP_SLUGS[name]);
-    if (unknownSteps.length > 0) {
-      throw new Error(
-        `[theme-shots] DAINTREE_SHOT_ONLY names unknown step(s): ${unknownSteps.join(", ")}. ` +
-          `Valid steps: ${Object.keys(STEP_SLUGS).join(", ")}`
-      );
-    }
-    const selected = new Set(ONLY.flatMap((name) => STEP_SLUGS[name] ?? []));
-    wanted = EXPECTED_STATES.filter((slug) => selected.has(slug));
-  }
+  const wanted = resolveWanted();
 
   const present: string[] = [];
   const missing: string[] = [];
@@ -362,6 +389,7 @@ test("theme review — chrome, overlays, states", async () => {
   test.skip(!THEME, "Set DAINTREE_SHOT_THEME to run the theme-review capture");
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
+  clearStaleCaptures(resolveWanted());
   const repo = createRichRepo();
   // Own userData dir with a prefix that does NOT contain "daintree-e2e":
   // launchApp's pre-launch hygiene pkills `node_modules/electron.*daintree-e2e`,

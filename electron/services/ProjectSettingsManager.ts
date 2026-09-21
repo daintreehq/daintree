@@ -196,12 +196,11 @@ export class ProjectSettingsManager {
       // → ProjectStore → ProjectSettingsManager`; from there, settings
       // corruption silently no-ops (the failed import is caught below), and
       // the main process surfaces the toast on its next read.
-      const { sendToPrimaryRenderer } = await import("../ipc/utils.js");
+      const { broadcastToRenderer } = await import("../ipc/utils.js");
       const message = quarantinedPath
         ? `Project settings couldn't be read and have been preserved at ${quarantinedPath}. Defaults are in effect until you reload the project.`
         : "Project settings couldn't be read. Defaults are in effect until you reload the project.";
-      // One toast per corrupt file, not one per open project view.
-      sendToPrimaryRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
+      broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
         type: "error",
         title: kind === "future-version" ? "Settings file too new" : "Project settings corrupted",
         message:

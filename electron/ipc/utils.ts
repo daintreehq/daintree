@@ -368,30 +368,6 @@ export function sendToRenderer(
   }
 }
 
-/**
- * Deliver an app-global notice to exactly ONE renderer.
- *
- * `broadcastToRenderer` reaches every app WebContents, and each project gets
- * its own view. For a stream that every renderer needs (a project list change,
- * say) that is correct. For a user-facing *notice* it is not: every renderer
- * mounts `useMainProcessToastListener`, each one calls `notify()`, and the
- * notification history persists to a storage area they share — so one
- * broadcast becomes N identical rows in the inbox, and the unread count is
- * wrong by the same factor.
- *
- * Targets the focused window so the notice lands where the user is looking,
- * falling back to the first live window when nothing holds focus (startup).
- */
-export function sendToPrimaryRenderer(channel: string, ...args: unknown[]): void {
-  const focused = BrowserWindow.getFocusedWindow();
-  const target =
-    focused && !focused.isDestroyed()
-      ? focused
-      : BrowserWindow.getAllWindows().find((w) => !w.isDestroyed());
-  if (!target) return;
-  sendToRenderer(target, channel, ...args);
-}
-
 export function broadcastToRenderer(channel: string, ...args: unknown[]): void {
   for (const wc of getAllAppWebContents()) {
     if (!wc.isDestroyed()) {

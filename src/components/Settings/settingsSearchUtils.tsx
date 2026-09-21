@@ -172,7 +172,26 @@ export function filterSettings(
 
   let results = scored.map((r) => r.entry);
 
-  // Relevance gate. Fuse's fuzziness is what lets a typo still find a setting,
+  // Apply @modified filter if active
+  if (filterModified) {
+    const modifiedTabs = options?.modifiedTabs;
+    if (!modifiedTabs || modifiedTabs.size === 0) return [];
+    results = results.filter((entry) => modifiedTabs.has(entry.tab));
+  }
+
+  // Hide project-scope entries when no project is open — they'd lead to an
+  // empty project form. Same guard the nav sidebar already applies.
+  if (options?.hasProject === false) {
+    results = results.filter((entry) => entry.scope !== "project");
+  }
+
+  // Relevance gate — LAST, after the hard eligibility filters above. Run
+  // earlier, a literal hit that was about to be filtered out (a project-scope
+  // row with no project open, an unmodified tab under `@modified`) still
+  // counted as "a literal match exists", evicted the eligible fuzzy rows, and
+  // was then removed itself, leaving nothing.
+  //
+  // Fuse's fuzziness is what lets a typo still find a setting,
   // but with a well-spelled query it also returns rows that contain the term
   // nowhere at all — searching "theme" surfaced the MCP server port, with
   // nothing on the row to explain why it was there. A result the user has to
@@ -198,19 +217,6 @@ export function filterSettings(
 
   const literal = results.filter(containsEveryToken);
   if (literal.length > 0) results = literal;
-
-  // Apply @modified filter if active
-  if (filterModified) {
-    const modifiedTabs = options?.modifiedTabs;
-    if (!modifiedTabs || modifiedTabs.size === 0) return [];
-    results = results.filter((entry) => modifiedTabs.has(entry.tab));
-  }
-
-  // Hide project-scope entries when no project is open — they'd lead to an
-  // empty project form. Same guard the nav sidebar already applies.
-  if (options?.hasProject === false) {
-    results = results.filter((entry) => entry.scope !== "project");
-  }
 
   return results;
 }
