@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useEffect } from "react";
 import { WorktreeStoreContext } from "@/contexts/WorktreeStoreContext";
 import { createWorktreeStore } from "@/store/createWorktreeStore";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useProjectStore } from "@/store/projectStore";
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { AssistantPanelView } from "../AssistantPanelView";
@@ -50,14 +51,16 @@ afterEach(() => {
 function panel(state = emptyState, onRetractedDraftConsumed = vi.fn()) {
   return (
     <WorktreeStoreContext.Provider value={createWorktreeStore()}>
-      <AssistantPanelView
-        state={state}
-        composerId={composerId}
-        onSubmit={() => true}
-        onInterrupt={() => {}}
-        onDecideApproval={() => {}}
-        onRetractedDraftConsumed={onRetractedDraftConsumed}
-      />
+      <TooltipProvider>
+        <AssistantPanelView
+          state={state}
+          composerId={composerId}
+          onSubmit={() => true}
+          onInterrupt={() => {}}
+          onDecideApproval={() => {}}
+          onRetractedDraftConsumed={onRetractedDraftConsumed}
+        />
+      </TooltipProvider>
     </WorktreeStoreContext.Provider>
   );
 }
