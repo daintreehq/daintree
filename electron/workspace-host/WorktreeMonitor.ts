@@ -1637,12 +1637,27 @@ export class WorktreeMonitor {
     this.fetchScheduler.reschedule(initial);
   }
 
-  async refresh(): Promise<void> {
+  /**
+   * Force a status pass.
+   *
+   * `automatic` marks a pass nobody asked for by hand: the focus revalidation
+   * and the post-wake sweep. Those fan out across every monitor and are
+   * awaited one at a time, so a request can easily still be queued when its
+   * project is backgrounded or the app stops being observable — and would then
+   * run a full pass in a host that is supposed to be quiescent, against a
+   * worktree whose watcher was released on pause. Checked at run time, like
+   * the poll and queued catch-up paths, not when the fan-out was decided.
+   *
+   * A user-initiated refresh is never skipped. It is the escape hatch, and the
+   * whole point of it is to run when the automatic machinery has not.
+   */
+  async refresh(options?: { automatic?: boolean }): Promise<void> {
     // A stopped monitor has nothing to refresh. This also makes the ENOENT
     // preflight below idempotent: the first removal detection calls stop(),
     // so a concurrent refresh() (background poll racing a topology reconcile)
     // returns here instead of emitting a duplicate worktree-removed (#8510).
     if (!this._isRunning) return;
+    if (options?.automatic && !this.statusWorkAllowed) return;
     // Path-existence preflight (#8510): without this, a removed worktree is
     // only self-detected once the poll reaches the fs.access deep inside
     // getWorktreeChangesWithStats. Catching it here means every refresh path —

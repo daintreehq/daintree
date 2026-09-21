@@ -3,6 +3,7 @@ import { EventEmitter } from "events";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorktreeMonitor } from "../WorktreeMonitor.js";
 import type { Worktree } from "../../../shared/types/worktree.js";
+import { getWorktreeChangesWithStats } from "../../utils/git.js";
 
 const mockSimpleGit = {
   raw: vi.fn().mockResolvedValue(undefined),
@@ -254,5 +255,62 @@ describe("WorkspaceService refresh resilience (escape hatch)", () => {
     vi.setSystemTime(Date.now() + 5_001);
     await service.refresh("focus-4", undefined, "focus");
     expect(r1).toHaveBeenCalledTimes(3);
+  });
+
+  const gitStatusCalls = () =>
+    vi
+      .mocked(getWorktreeChangesWithStats)
+      .mock.calls.filter(([path]) => String(path).startsWith("/test/wt-")).length;
+
+  it("declines a focus revalidation outright when nothing can be observed", async () => {
+    const m1 = registerMonitor("/test/wt-1");
+    const discover = vi
+      .spyOn(service as any, "discoverAndSyncWorktrees")
+      .mockResolvedValue(undefined);
+    const r1 = vi.spyOn(m1, "refresh");
+
+    // Nothing on screen: the monitors hold no permission to run status work.
+    service.setPollingEnabled(false);
+    await service.refresh("focus-1", undefined, "focus");
+
+    // Declined before the fan-out, so the topology enumeration and the PR
+    // refresh that ride alongside it are spared too — neither has a guard of
+    // its own.
+    expect(r1).not.toHaveBeenCalled();
+    expect(discover).not.toHaveBeenCalled();
+    expect(mockPullRequestService.refresh).not.toHaveBeenCalled();
+    expect(gitStatusCalls()).toBe(0);
+  });
+
+  it("declines an automatic pass per worktree at run time, not when it was queued", async () => {
+    const m1 = registerMonitor("/test/wt-1");
+    const m2 = registerMonitor("/test/wt-2");
+    const r1 = vi.spyOn(m1, "refresh");
+    const r2 = vi.spyOn(m2, "refresh");
+
+    // The fan-out cannot know what will still be true by the time each slot
+    // runs, so the check belongs at run time. Requests are issued and then
+    // decline individually: what matters is that no status ran, not that no
+    // message was sent.
+    service.setPollingEnabled(false);
+    await (service as any).refreshAll(true);
+
+    expect(r1).toHaveBeenCalledWith({ automatic: true });
+    expect(r2).toHaveBeenCalledWith({ automatic: true });
+    expect(gitStatusCalls()).toBe(0);
+  });
+
+  it("runs a user-initiated refresh even with status work withdrawn", async () => {
+    const m1 = registerMonitor("/test/wt-1");
+    vi.spyOn(service as any, "discoverAndSyncWorktrees").mockResolvedValue(undefined);
+    const r1 = vi.spyOn(m1, "refresh");
+
+    service.setPollingEnabled(false);
+    await service.refresh("manual-1");
+
+    // The escape hatch. Its whole point is running when the automatic
+    // machinery has not.
+    expect(r1).toHaveBeenCalledWith({ automatic: false });
+    expect(gitStatusCalls()).toBeGreaterThan(0);
   });
 });
