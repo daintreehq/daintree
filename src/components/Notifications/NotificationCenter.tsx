@@ -1270,6 +1270,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                     onRowFocus={setFocusedIndex}
                     onDropdownOpenChange={handleDropdownOpenChange}
                     groupByContext={groupByContext}
+                    hasPinnedAbove={needsAttentionGroups.length > 0}
                     dividerGroupId={dividerGroupId}
                     dividerRef={setDividerEl}
                     lastClosedAt={lastClosedAt}
@@ -1486,6 +1487,7 @@ function ChronoSection({
   onConsumeSnoozePending,
   onSnoozeRow,
   onUnsnoozeRow,
+  hasPinnedAbove,
 }: {
   section: ContextSection;
   groupByContext: boolean;
@@ -1501,6 +1503,14 @@ function ChronoSection({
   onConsumeSnoozePending: () => void;
   onSnoozeRow: (row: FlatRow, option: SnoozeDurationOption) => void;
   onUnsnoozeRow: (row: FlatRow) => void;
+  /**
+   * Whether the "Needs attention" rail is rendering above this list. That rail
+   * is a preview, not a filter — a pinned entry still appears here — so with
+   * one notification in the app the same row was drawn twice with nothing
+   * between the two but a divider, and it read as a duplicate rather than as a
+   * summary of a list. The header is what tells them apart.
+   */
+  hasPinnedAbove?: boolean;
 } & RovingSectionProps) {
   const sectionUnreadIds = section.groups.flatMap((g) =>
     g.entries.filter((e) => !e.seenAsToast).map((e) => e.id)
@@ -1511,6 +1521,11 @@ function ChronoSection({
   const sectionLabel = groupByContext ? "Notifications for this context" : "All notifications";
   return (
     <div data-testid="chrono-section">
+      {!groupByContext && hasPinnedAbove && (
+        <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
+          {sectionLabel}
+        </div>
+      )}
       {groupByContext && (
         <ContextSectionHeader
           worktreeId={section.worktreeId}
