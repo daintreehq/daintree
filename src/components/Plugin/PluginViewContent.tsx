@@ -691,8 +691,10 @@ export function makePluginViewContent(
         // attempt stale.
         attemptRef.current += 1;
         // The attempt being built is new, so whatever the last one threw is no
-        // longer on screen once it commits.
+        // longer on screen once it commits, and whatever focus the last one held
+        // went with its DOM.
         boundaryShowingError.current = false;
+        focusWasInsideContent.current = false;
         // Abort the outgoing view's signal before swapping in a fresh controller
         // — the prior view instance is being discarded, so any fetches or
         // subscriptions it tied to `disposeSignal` must cancel now rather than
@@ -926,8 +928,13 @@ export function makePluginViewContent(
       if (!contentUnavailable) return;
       const content = contentNodeRef.current;
       const active = document.activeElement;
+      // The flag can outlive the node it describes, since removing a focused
+      // element fires no blur. Trust it only while focus is still stranded on
+      // the body: focus the user has since put elsewhere is theirs to keep.
+      const stranded = !active || active === document.body;
       const hadFocus =
-        focusWasInsideContent.current || (!!content && !!active && content.contains(active));
+        (!!content && !!active && content.contains(active)) ||
+        (focusWasInsideContent.current && stranded);
       if (!hadFocus) return;
       focusWasInsideContent.current = false;
       statusRef.current?.focus({ preventScroll: true });

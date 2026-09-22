@@ -9,6 +9,8 @@ import { PluginViewRuntimeStatus } from "../PluginViewRuntimeStatus";
  * decides whether a panel has anything to report is only exercised here.
  */
 
+const CHUNK_TIMEOUT_MS = 5000;
+
 const common = {
   panelDisplayName: "Dashboard",
   onRestartPlugin: () => {},
@@ -34,7 +36,11 @@ describe("PluginViewRuntimeStatus", () => {
       />
     );
 
-    fireEvent.click(await screen.findByRole("button", { name: "Reload panel" }));
+    // The banner is a real lazy chunk, so a cold import gets more than the
+    // default second.
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Reload panel" }, { timeout: CHUNK_TIMEOUT_MS })
+    );
 
     expect(onReloadPanel).toHaveBeenCalledTimes(1);
   });
@@ -53,7 +59,7 @@ describe("PluginViewRuntimeStatus", () => {
       />
     );
 
-    await screen.findByRole("button", { name: "Restart plugin" });
+    await screen.findByRole("button", { name: "Restart plugin" }, { timeout: CHUNK_TIMEOUT_MS });
     expect(screen.queryByRole("button", { name: "Reload panel" })).toBeNull();
   });
 });

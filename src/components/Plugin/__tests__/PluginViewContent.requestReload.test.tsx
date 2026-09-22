@@ -500,6 +500,30 @@ describe("requestReload (#12609)", () => {
     }
   });
 
+  it("does not take back focus the user moved elsewhere after an earlier reload", async () => {
+    const { lifecycle } = await mountContent();
+    // Focus inside the view, then let a reload remove the node that held it —
+    // which delivers no blur, so nothing tells the content focus left.
+    act(() => {
+      screen.getByRole("button", { name: "Inside the view" }).focus();
+    });
+    for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await requestReload();
+    }
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    try {
+      elsewhere.focus();
+
+      await requestReload();
+
+      expect(blockedBanner()).not.toBeNull();
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+
   it("refuses a request from a view that has failed, leaving recovery to the user", async () => {
     const { lifecycle } = await mountContent();
     const failed = latest();
