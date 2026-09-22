@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { isMac, isWindows } from "@/lib/platform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
@@ -17,7 +17,19 @@ import {
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { isValidBrowserUrl } from "@/components/Browser/browserUtils";
 import { actionService } from "@/services/ActionService";
-import { panelKindHasPty, panelKindIsDockable } from "@shared/config/panelKindRegistry";
+import {
+  getPanelKindRegistrySnapshot,
+  panelKindHasPty,
+  subscribeToPanelKindRegistry,
+} from "@shared/config/panelKindRegistry";
+import type { ActionId } from "@shared/types/actions";
+import { useKeybindingDisplay } from "@/hooks/useKeybinding";
+import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
+import {
+  consultPanelCloseGuards,
+  hasPanelCloseGuard,
+  isPanelClosePending,
+} from "@/services/panelCloseGuard";
 import {
   isBrowserPanel,
   isDevPreviewPanel,
@@ -90,12 +102,23 @@ import { MenuActionSourceContext, type MenuActionSourceValue } from "@/component
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { PopoverAnchor } from "@/components/ui/popover";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
+import {
+  getGenericPanelMenuGroups,
+  hasGenericPanelMenu,
+  readPanelKindMenuCapabilities,
+} from "@/components/Panel/genericPanelMenu";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
 // Main, the pins and the most recent few: what a hover submenu is good for.
 // Anything past that is found by searching the picker.
 const MOVE_TO_WORKTREE_SUBMENU_LIMIT = 10;
+
+/** A menu item's shortcut: the action's live keybinding, or nothing. */
+function ContextMenuKeybinding({ actionId }: { actionId: ActionId }) {
+  const combo = useKeybindingDisplay(actionId);
+  return combo ? <ContextMenuShortcut>{combo}</ContextMenuShortcut> : null;
+}
 
 /** A pending hand-over consent (#12490): which terminal, to which pane. */
 interface HandOverRequest {
@@ -140,6 +163,13 @@ export function TerminalContextMenu({
   }, [maximizeTarget, terminalId, getPanelGroup]);
 
   const worktrees = useSidebarWorktreeOrder();
+  // Subscribed so a plugin registering or dropping its kind reaches the menu;
+  // the generic panel menu reads its capabilities from this snapshot.
+  const panelKindRegistry = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
 
   // Which panel the picker was opened for, not a bare flag: the dock's tab
   // group hands this menu a new terminal when its active tab changes, and the
@@ -641,6 +671,18 @@ export function TerminalContextMenu({
             setDestructiveConfirm({ kind: "kill", ...KILL_RUNNING_AGENT_DIALOG_COPY });
             return;
           }
+          if (hasPanelCloseGuard(terminalId)) {
+            // Removing skips the trash, not the unsaved-work prompt (#12323). A
+            // second pick while that prompt is up waits on it; it must not
+            // queue a second removal behind the same answer.
+            if (isPanelClosePending(terminalId)) return;
+            const source = sourceRef.current;
+            void consultPanelCloseGuards([terminalId]).then((proceed) => {
+              if (!proceed) return;
+              void actionService.dispatch("terminal.kill", { terminalId }, { source });
+            });
+            return;
+          }
           void actionService.dispatch(
             "terminal.kill",
             { terminalId },
@@ -745,57 +787,63 @@ export function TerminalContextMenu({
   const isFile = isFilePanel(terminal);
   const isFileBrowser = isFileBrowserPanel(terminal);
   const isDiff = isDiffPanel(terminal);
-  const hasPty = terminal.kind ? panelKindHasPty(terminal.kind) : true;
+  const kind = terminal.kind ?? "terminal";
+  const kindCapabilities = readPanelKindMenuCapabilities(panelKindRegistry, kind);
+  const hasPty = terminal.kind ? kindCapabilities.hasPty : true;
   // A non-PTY plugin kind matches none of the built-in guards, so without this
   // it falls through to the terminal menu and is offered "Duplicate terminal",
-  // "Kill terminal", and friends — none of which apply (#11228). `pluginId` is
-  // stamped at creation and survives the plugin going missing, which is why it
-  // beats a registry lookup here. The `!hasPty` half is load-bearing: plugins
-  // may also contribute PTY-backed kinds that render through TerminalPane and
-  // are stamped with pluginId too (addPanel.ts) — those are genuine terminals
-  // and must keep copy/paste, redraw, restart, and the rest of the PTY menu.
-  const isPlugin = Boolean(terminal.pluginId) && !hasPty;
+  // "Kill terminal", and friends — none of which apply (#11228). The header's
+  // overflow menu decides with the same predicate, so the two menus always
+  // agree on which panels get the generic list (#12606). PTY-backed plugin
+  // kinds stay out: they render through TerminalPane and are genuine
+  // terminals, so they keep copy/paste, redraw, restart and the rest.
+  const hasGenericMenu = hasGenericPanelMenu(kind, hasPty);
 
   const submenuWorktrees = worktrees.slice(0, MOVE_TO_WORKTREE_SUBMENU_LIMIT);
   const hasMoreWorktrees = worktrees.length > submenuWorktrees.length;
 
+  // Somewhere other than the panel's own worktree, which may already be gone —
+  // the header's overflow menu counts it the same way.
+  const canMoveToWorktree = worktrees.some((wt) => wt.id !== terminal.worktreeId);
+  const renderMoveToWorktreeSubmenu = (label: string) => (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger>
+        <FolderGit2 className={ICON_CLASS} />
+        {label}
+      </ContextMenuSubTrigger>
+      {/* No search field in here: Radix's typeahead claims printable keys
+          inside a submenu, so finding a worktree past the cap is the
+          picker's job. */}
+      <ContextMenuSubContent>
+        {submenuWorktrees.map((wt) => {
+          const isCurrent = wt.id === terminal.worktreeId;
+          return (
+            <ContextMenuItem
+              key={wt.id}
+              disabled={isCurrent}
+              onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
+            >
+              <FolderGit2 className={ICON_CLASS} />
+              {getWorktreeHeadline(wt).label}
+            </ContextMenuItem>
+          );
+        })}
+        {hasMoreWorktrees && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem aria-haspopup="dialog" onSelect={handleMoveToWorktreeMore}>
+              <FolderGit2 className={ICON_CLASS} />
+              More worktrees…
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuSubContent>
+    </ContextMenuSub>
+  );
+
   const layoutSection = (
     <>
-      {worktrees.length > 1 && (
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>
-            <FolderGit2 className={ICON_CLASS} />
-            Move to worktree
-          </ContextMenuSubTrigger>
-          {/* No search field in here: Radix's typeahead claims printable keys
-              inside a submenu, so finding a worktree past the cap is the
-              picker's job. */}
-          <ContextMenuSubContent>
-            {submenuWorktrees.map((wt) => {
-              const isCurrent = wt.id === terminal.worktreeId;
-              return (
-                <ContextMenuItem
-                  key={wt.id}
-                  disabled={isCurrent}
-                  onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
-                >
-                  <FolderGit2 className={ICON_CLASS} />
-                  {getWorktreeHeadline(wt).label}
-                </ContextMenuItem>
-              );
-            })}
-            {hasMoreWorktrees && (
-              <>
-                <ContextMenuSeparator />
-                <ContextMenuItem aria-haspopup="dialog" onSelect={handleMoveToWorktreeMore}>
-                  <FolderGit2 className={ICON_CLASS} />
-                  More worktrees…
-                </ContextMenuItem>
-              </>
-            )}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-      )}
+      {canMoveToWorktree && renderMoveToWorktreeSubmenu("Move to worktree")}
       {terminalPty?.launchAgentId && (
         <ContextMenuItem
           onSelect={() =>
@@ -813,7 +861,7 @@ export function TerminalContextMenu({
       <ContextMenuItem
         // Move-to-grid is always safe; move-to-dock only for kinds the dock
         // renders (PTY + dockable non-PTY like file panels).
-        disabled={currentLocation === "grid" && !panelKindIsDockable(terminal.kind ?? "terminal")}
+        disabled={currentLocation === "grid" && !kindCapabilities.isDockable}
         onSelect={() => handleAction(currentLocation === "grid" ? "move-to-dock" : "move-to-grid")}
       >
         {currentLocation === "grid" ? (
@@ -1039,7 +1087,7 @@ export function TerminalContextMenu({
   // Diff joins the file/plugin branch: all three are non-PTY reading surfaces
   // whose menu is the generic panel one. Without an early return here the PTY
   // menu below would narrow against DiffPanelData and lose `isInputLocked`.
-  if (isFile || isFileBrowser || isDiff || isPlugin) {
+  if (isFile || isFileBrowser || isDiff || hasGenericMenu) {
     return (
       <ContextMenu onOpenChange={handleMenuOpenChange}>
         <MenuActionSourceContext.Consumer>
@@ -1059,25 +1107,35 @@ export function TerminalContextMenu({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          {layoutSection}
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("rename")}>
-            <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename panel
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("background")}>
-            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to background
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("trash")}>
-            <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Trash panel
-          </ContextMenuItem>
-          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Remove panel
-          </ContextMenuItem>
+          {/* The header's overflow menu renders this same list (#12606). */}
+          {getGenericPanelMenuGroups({
+            location: currentLocation === "grid" ? "grid" : "dock",
+            isMaximized,
+            isDockable: kindCapabilities.isDockable,
+            canMoveToWorktree,
+          }).map((group, groupIndex) => (
+            <Fragment key={group[0]?.id ?? groupIndex}>
+              {groupIndex > 0 && <ContextMenuSeparator />}
+              {group.map((command) =>
+                command.id === "move-to-worktree" ? (
+                  <Fragment key={command.id}>{renderMoveToWorktreeSubmenu(command.label)}</Fragment>
+                ) : (
+                  <ContextMenuItem
+                    key={command.id}
+                    disabled={command.disabled}
+                    destructive={command.destructive}
+                    onSelect={() => handleAction(command.id)}
+                  >
+                    <command.icon className={ICON_CLASS} aria-hidden="true" />
+                    {command.label}
+                    {command.shortcutActionId && (
+                      <ContextMenuKeybinding actionId={command.shortcutActionId} />
+                    )}
+                  </ContextMenuItem>
+                )
+              )}
+            </Fragment>
+          ))}
         </ContextMenuContent>
         {movePicker}
       </ContextMenu>
@@ -1338,10 +1396,13 @@ export function TerminalContextMenu({
             />
           )}
           <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("duplicate")}>
-            <CopyPlus className={ICON_CLASS} aria-hidden="true" />
-            Duplicate terminal
-          </ContextMenuItem>
+          {/* A PTY-backed plugin kind has no duplicate recipe. */}
+          {canDuplicatePanelKind(kind) && (
+            <ContextMenuItem onSelect={() => handleAction("duplicate")}>
+              <CopyPlus className={ICON_CLASS} aria-hidden="true" />
+              Duplicate terminal
+            </ContextMenuItem>
+          )}
           <ContextMenuItem onSelect={() => handleAction("rename")}>
             <Pencil className={ICON_CLASS} aria-hidden="true" />
             Rename terminal

@@ -86,7 +86,9 @@ vi.mock("@/store/panelStore", () => {
   return { usePanelStore };
 });
 
-vi.mock("@shared/config/panelKindRegistry", () => ({
+vi.mock("@shared/config/panelKindRegistry", async (importOriginal) => ({
+  // The real module underneath: `isBuiltInPanelKind` reads its kind list.
+  ...(await importOriginal<typeof import("@shared/config/panelKindRegistry")>()),
   panelKindCanRestart: () => false,
   panelKindHasPty: () => false,
   panelKindIsDockable: () => true,
