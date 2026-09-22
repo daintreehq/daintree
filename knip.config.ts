@@ -203,7 +203,6 @@ const config: KnipConfig = {
     // The samples are not npm workspaces and therefore cannot declare these
     // host-repository development dependencies themselves.
     "@daintreehq/plugin-sdk",
-    "@daintreehq/plugin-testing",
     "@daintreehq/plugin-vite",
     // scripts/ci/electron-builder-config.test.mjs reads the installed
     // electron-builder schema from node_modules/app-builder-lib/scheme.json.

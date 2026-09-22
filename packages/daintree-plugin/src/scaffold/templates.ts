@@ -104,7 +104,10 @@ function packageJson(ctx: ScaffoldContext, needsReact: boolean, needsServer = fa
   const devDeps: Record<string, string> = {
     "@daintreehq/plugin-sdk": "^0.1.0",
     "@daintreehq/plugin-vite": "^0.1.0",
-    typescript: "^5.6.0",
+    // The generated `validate`/`package` scripts call this CLI, so a fresh
+    // clone's `npm install` must bring it in rather than rely on a global.
+    "daintree-plugin": "^0.1.0",
+    typescript: "^6.0.0",
     vite: "^8.0.0",
   };
   if (needsReact) {

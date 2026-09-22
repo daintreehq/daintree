@@ -3,6 +3,21 @@
   "version": "0.1.0",
   "description": "CLI for building, validating, packaging, and installing Daintree plugins.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daintreehq/daintree.git",
+    "directory": "packages/daintree-plugin"
+  },
+  "homepage": "https://github.com/daintreehq/daintree/tree/develop/docs/plugins",
+  "bugs": {
+    "url": "https://github.com/daintreehq/daintree/issues"
+  },
+  "keywords": [
+    "daintree",
+    "daintree-plugin",
+    "cli",
+    "scaffold"
+  ],
   "type": "module",
   "bin": {
     "daintree-plugin": "./dist/cli.js"

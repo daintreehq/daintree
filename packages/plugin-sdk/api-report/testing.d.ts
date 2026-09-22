@@ -4,6 +4,125 @@
 
 import { z } from 'zod';
 
+declare const BUILT_IN_AGENT_IDS: readonly ["claude", "opencode", "aider", "gemini", "antigravity", "codex", "grok", "cursor", "copilot", "goose", "amp", "crush", "qwen", "kimi", "interpreter", "mistral", "kiro", "daintree-assistant"];
+type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
+type AgentKeyAction = `agent.${BuiltInAgentId}`;
+
+/**
+ * Keymap types for configurable keyboard shortcuts
+ *
+ * These types define the keyboard shortcut system used throughout the application.
+ */
+
+/**
+ * Semantic actions that can be triggered by keyboard shortcuts.
+ * Actions are namespaced by category for organization.
+ */
+type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
+type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "project.switcherPalette" | "project.mruCycleOlder" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
+
+declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.registerWatch", "terminal.listWatches", "terminal.getWatchEvents", "terminal.cancelWatch", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadWindow", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
+type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
+
+type ActionKind = "command" | "query";
+type ActionDanger = "safe" | "confirm" | "restricted";
+type BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId;
+type ActionId = BuiltInActionId | (string & {});
+interface ActionExample {
+    args: Record<string, unknown>;
+    description: string;
+}
+interface ActionDispatchSuccess<Result = unknown> {
+    ok: true;
+    result: Result;
+}
+interface ActionDispatchError {
+    ok: false;
+    error: ActionError;
+}
+type ActionDispatchResult<Result = unknown> = ActionDispatchSuccess<Result> | ActionDispatchError;
+type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
+/**
+ * `run()` completed but its return value did not satisfy the action's own
+ * `resultSchema`. Distinct from `EXECUTION_ERROR` (which means `run()` threw)
+ * because the action's side effects DID happen — only the payload is
+ * unusable. Signals a bug in the action itself, not in the caller's request.
+ */
+ | "RESULT_VALIDATION_ERROR" | "DISABLED" | "RESTRICTED" | "CONFIRMATION_REQUIRED" | "EXECUTION_ERROR" | "USER_REJECTED" | "CONFIRMATION_TIMEOUT" | "ELICITATION_FAILED" | "BINDING_STALE" | "PLUGIN_UNLOADED" | "TIER_NOT_PERMITTED"
+/**
+ * An `*Owned` MCP cleanup tool was called with a resource the calling session
+ * did not create (#11909). Distinct from `NOT_FOUND`, which would answer a
+ * question the caller is not entitled to ask: whether the id exists at all.
+ * See `RESOURCE_NOT_OWNED_CODE` in the MCP server's `shared.ts`.
+ */
+ | "RESOURCE_NOT_OWNED"
+/**
+ * `run()` threw a `PartialSuccessError`: a composite created something real
+ * — a worktree — and then failed on a later step, so the failure carries what
+ * already exists in its `PARTIAL_SUCCESS:` payload.
+ *
+ * Distinct from `EXECUTION_ERROR` because it is a provenance claim, not just
+ * a classification: only in-repo code can construct that error class, so this
+ * code is what lets the MCP ownership ledger trust the payload. An upstream
+ * forge or git failure that merely *looks* like one arrives as
+ * `EXECUTION_ERROR` and is refused (#11909).
+ */
+ | "PARTIAL_SUCCESS" | "INVALID_URL";
+interface ActionError {
+    code: ActionErrorCode;
+    message: string;
+    details?: unknown;
+}
+/**
+ * Slim, IPC-safe projection of {@link ActionManifestEntry} exposed to plugins
+ * via `host.actions.list()` / `host.actions.get()` (#10561). Deliberately drops
+ * the fields that have no meaning across the plugin boundary: palette state
+ * (`paletteHidden`/`paletteRedirectTo`/…), live renderer-context state
+ * (`enabled`/`disabledReason`), the MCP-internal classification (`name`,
+ * `mcpVisibility`, `mcpAnnotations`, `band`), and `pluginId`. Every field is a
+ * plain JSON value so the entry survives Electron's structured-clone IPC
+ * boundary unchanged.
+ */
+interface PluginActionManifestEntry {
+    /** The action id to pass to `host.dispatch()`. */
+    id: ActionId;
+    title: string;
+    description: string;
+    category: string;
+    kind: ActionKind;
+    /**
+     * Base danger classification. `host.dispatch()` rejects `"confirm"` actions
+     * with `CONFIRMATION_REQUIRED` (plugins cannot bypass the prompt) and never
+     * exposes `"restricted"` actions in the catalog — so a listed entry is always
+     * `"safe"` or `"confirm"`. Use `host.actions.canDispatch(id)` for a pre-flight
+     * check before triggering.
+     */
+    danger: ActionDanger;
+    /** JSON Schema for the action's args, or undefined when it takes none. */
+    inputSchema?: Record<string, unknown>;
+    /** True when the action's schema rejects an empty args object. */
+    requiresArgs: boolean;
+    /** Synonyms / alternative mental-model terms, when the action declares them. */
+    keywords?: string[];
+    /** Concrete usage examples pairing args with a short description. */
+    examples?: readonly ActionExample[];
+    /** Human-readable rationale for a non-`safe` danger rating. */
+    dangerRationale?: string;
+}
+/**
+ * Pre-flight verdict from `host.actions.canDispatch(id)` (#10561), letting a
+ * plugin detect a confirm-gated or unavailable action before calling
+ * `host.dispatch()`:
+ * - `"ok"` — a `danger:"safe"` action; `dispatch()` proceeds without a prompt.
+ * - `"confirm"` — a `danger:"confirm"` action; `dispatch()` returns
+ *   `CONFIRMATION_REQUIRED` (plugins cannot pre-confirm). The plugin should warn
+ *   the user or route through an interactive sibling action.
+ * - `"restricted"` — the action is `danger:"restricted"`, unknown, or otherwise
+ *   not exposed to plugins; `dispatch()` would return `RESTRICTED` / `NOT_FOUND`.
+ */
+type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
+
 /**
  * Forge provider abstraction — foundation types.
  *
@@ -1321,106 +1440,11 @@ interface ForgeProviderImpl {
  */
 type ForgeCapabilityHint = "issues" | "pulls" | "reviews" | "approvals" | "merge-trains" | "required-checks" | "draft-prs" | "assignees" | "releases" | "project-boards" | "milestones" | "batch-branch-prs" | "identity" | "pr-files" | "clone" | (string & {});
 /**
- * Input type for a declared credential field. The open union keeps the two
- * built-in types autocompleting while letting a provider name a custom
- * renderer hint without failing TypeScript (precedent: PR #4489). The host
- * only distinguishes `"password"` (masked input) from everything else (plain
- * text); unknown values fall back to text.
- */
-type CredentialFieldType = "password" | "text" | (string & {});
-/**
- * One credential input a forge provider declares in its manifest so the host
- * can render a real settings form for it instead of a "no configuration"
- * stub. A provider may declare several fields for the form, but the contract
- * (frozen at 1.0) passes only the PRIMARY field's value to
- * {@link ForgeProviderImpl.validateToken} and `setCredentials` — the primary
- * being the first `"password"`-typed field, or the first field when none is
- * `"password"`. Every entered value is persisted in the credential record, but
- * the host never inspects any of them beyond the primary; storage stays
- * opaque. Providers needing more than the primary at auth time read the rest
- * from their own settings and use {@link ForgeProviderImpl.validateCredentials}.
- */
-interface CredentialField {
-    /** Stable key the entered value is stored under in the credential record. */
-    id: string;
-    /** Field label shown in Preferences → Code Forge. */
-    label: string;
-    /** Renderer hint; `"password"` masks input, anything else renders text. */
-    type: CredentialFieldType;
-    placeholder?: string;
-    /** Optional one-line hint rendered under the input. */
-    helpText?: string;
-}
-/**
  * Whether a forge provider reaches a remote forge over the network or serves a
  * local/offline data source. Display-only signal; see
  * {@link ForgeProviderContribution.kind}.
  */
 type ForgeProviderKind = "local" | "network";
-/**
- * `forgeProviders` manifest entry. Eager (manifest-driven) registration
- * populates the Preferences UI and remote-routing table before any plugin
- * code runs; the implementation handler binds lazily on first use.
- */
-interface ForgeProviderContribution {
-    /** Namespaced at runtime as `{pluginId}.{id}`; the built-in GitHub plugin uses bare `github`. */
-    id: string;
-    /** Display label in Preferences → Forge Integrations. */
-    name: string;
-    /**
-     * Whether the provider talks to a remote forge over the network (`"network"`,
-     * the default when omitted) or serves a local/offline data source backed by
-     * files or a CLI (`"local"`). Display-only and frozen at 1.0: the host never
-     * gates auth or routing on it — a `"local"` provider still owns its auth
-     * methods (use {@link localAuthStubs} to satisfy them). Preferences uses it
-     * only to label a provider that declares no {@link credentialFields} as
-     * deliberately authless rather than unconfigured.
-     */
-    kind?: ForgeProviderKind;
-    /**
-     * Exact hostnames for git remote URLs; first matching provider wins.
-     *
-     * Matching is case-insensitive and strips a leading `www.` from both the
-     * remote URL hostname and each pattern. Glob, wildcard, suffix, and
-     * regular-expression patterns are not supported — list every distinct
-     * hostname your forge serves as a separate entry.
-     */
-    matches: string[];
-    /**
-     * Informational capability hints; the host never interprets these and no
-     * behavior is derived from them (display only). See {@link ForgeCapabilityHint}.
-     */
-    capabilities?: ForgeCapabilityHint[];
-    /**
-     * Credential inputs the host renders a real settings form from. Absent or
-     * empty means the provider needs no host-side credential entry (the host
-     * shows "No configuration needed"). The first `"password"`-typed field —
-     * or the first field when none is `"password"` — is the primary credential,
-     * the single value passed to {@link ForgeProviderImpl.validateToken} and
-     * `setCredentials`. See {@link CredentialField} for the full single-primary
-     * contract and the multi-field auth path.
-     */
-    credentialFields?: CredentialField[];
-    /** ID prefix in this plugin's `settings` contributions, used to group provider settings. */
-    settingsScopeRef?: string;
-    /** IDs of `views` contributions shown under this provider's panel section. */
-    viewRefs?: string[];
-    /**
-     * Named renderer view-slot refs for provider-owned UI. Each value is a
-     * builtin-view id the plugin's renderer registers via
-     * `registerBuiltinView`; the host resolves the ACTIVE provider's ref for
-     * each seam instead of hardcoding any one plugin's view ids. All optional.
-     *
-     * Slot refs are validated for FORMAT only (non-empty string) at manifest
-     * parse time — the host cannot check a ref against the renderer's view
-     * registry from the main process, and a ref legitimately resolves to nothing
-     * while its plugin is disabled. Resolving an unregistered or disabled ref to
-     * a neutral fallback (or a hidden seam) is the defined 1.0 behavior, not an
-     * error. In dev builds the renderer logs a one-line warning when a non-empty
-     * ref was never registered at all, to flag plugin-author typos.
-     */
-    slots?: ForgeProviderSlots;
-}
 /** Named view-slot refs a forge provider can fill. See {@link ForgeProviderContribution.slots}. */
 interface ForgeProviderSlots {
     /** Provider settings panel (Settings → Code forge). */
@@ -1495,22 +1519,6 @@ interface FileDecorationProviderImpl {
     provideDecorations(scope: string, paths: string[]): Promise<Record<string, FileDecoration>>;
 }
 /**
- * `fileDecorationProviders` manifest entry. Eager (manifest-driven)
- * registration lets the host know which plugin owns which scopes before any
- * plugin code runs; the implementation handler binds lazily during
- * `activate()` via `host.registerFileDecorationProvider`.
- *
- * `scopes` are exact strings or `prefix:*` wildcards (e.g. `worktree-diff:*`)
- * — the host matches a runtime scope against these to decide which providers
- * to invoke. At least one scope pattern is required.
- */
-interface FileDecorationContribution {
-    /** Namespaced at runtime as `{pluginId}.{id}`; must match the descriptor passed to `registerFileDecorationProvider`. */
-    id: string;
-    /** Exact scope strings or `prefix:*` wildcards this provider handles. */
-    scopes: string[];
-}
-/**
  * Passed to `host.registerFileDecorationProvider` alongside the impl. Mirrors
  * the manifest entry; only `id` is required since `scopes` are already
  * declared statically in `plugin.json`.
@@ -1519,127 +1527,6 @@ interface FileDecorationProviderDescriptor {
     id: string;
     scopes?: string[];
 }
-
-declare const BUILT_IN_AGENT_IDS: readonly ["claude", "opencode", "aider", "gemini", "antigravity", "codex", "grok", "cursor", "copilot", "goose", "amp", "crush", "qwen", "kimi", "interpreter", "mistral", "kiro", "daintree-assistant"];
-type BuiltInAgentId = (typeof BUILT_IN_AGENT_IDS)[number];
-type AgentKeyAction = `agent.${BuiltInAgentId}`;
-
-/**
- * Keymap types for configurable keyboard shortcuts
- *
- * These types define the keyboard shortcut system used throughout the application.
- */
-
-/**
- * Semantic actions that can be triggered by keyboard shortcuts.
- * Actions are namespaced by category for organization.
- */
-type WorktreeSwitchIndex = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
-type WorktreeSwitchAction = `worktree.switch${WorktreeSwitchIndex}`;
-type BuiltInKeyAction = "nav.up" | "nav.down" | "nav.left" | "nav.right" | "nav.pageUp" | "nav.pageDown" | "nav.home" | "nav.end" | "nav.expand" | "nav.collapse" | "nav.primary" | "nav.toggleSidebar" | "nav.toggleFocusMode" | "nav.quickSwitcher" | "nav.focusRegion.next" | "nav.focusRegion.prev" | "file.open" | "file.copyPath" | "file.copyTree" | "ui.refresh" | "ui.escape" | "git.commit" | "git.push" | "git.stageAll" | "git.toggle" | "worktree.next" | "worktree.previous" | "worktree.panel" | WorktreeSwitchAction | "worktree.up" | "worktree.down" | "worktree.upVim" | "worktree.downVim" | "worktree.home" | "worktree.end" | "worktree.select" | "worktree.selectSpace" | "worktree.copyTree" | "worktree.openChanges" | "worktree.openEditor" | "worktree.openFileBrowser" | "worktree.openFileBrowserPanel" | "worktree.openPalette" | "worktree.createDialog.open" | "worktree.overview" | "worktree.sessions.minimizeAll" | "worktree.sessions.maximizeAll" | "worktree.sessions.restartAll" | "worktree.sessions.endAll" | "worktree.sessions.closeCompleted" | "worktree.sessions.trashAll" | "worktree.sessions.resetRenderers" | "tab.next" | "tab.previous" | "terminal.close" | "terminal.closeAll" | "terminal.killAll" | "terminal.restartAll" | "terminal.toggleDock" | "terminal.toggleDockAll" | "terminal.new" | "terminal.reopenLast" | "terminal.resumeSessions" | "terminal.maximize" | "terminal.inject" | "terminal.focusNext" | "terminal.focusPrevious" | "terminal.focusAlternate" | "terminal.focusUp" | "terminal.focusDown" | "terminal.focusLeft" | "terminal.focusRight" | "terminal.focusDock" | "terminal.focusIndex1" | "terminal.focusIndex2" | "terminal.focusIndex3" | "terminal.focusIndex4" | "terminal.focusIndex5" | "terminal.focusIndex6" | "terminal.focusIndex7" | "terminal.focusIndex8" | "terminal.focusIndex9" | "terminal.moveLeft" | "terminal.moveRight" | "terminal.moveUp" | "terminal.moveDown" | "terminal.moveToDock" | "terminal.moveToGrid" | "terminal.watch" | "terminal.duplicate" | "terminal.background" | "terminal.contextMenu" | "terminal.stashInput" | "terminal.popStash" | "terminal.scrollToLastActivity" | "terminal.sendToAgent" | "terminal.bulkCommand" | "terminal.armDefault" | "terminal.disarmAll" | "terminal.kill" | "terminal.restart" | "terminal.forceResume" | "terminal.redraw" | "terminal.rename" | "fleet.accept" | "fleet.reject" | "fleet.interrupt" | "fleet.restart" | "fleet.kill" | "fleet.trash" | "fleet.armFocused" | "fleet.armAll" | "agent.palette" | AgentKeyAction | "agent.terminal" | "agent.browser" | "agent.focusNextWaiting" | "agent.focusNextWaitingGlobal" | "agent.focusNextWorking" | "agent.focusNextAgent" | "agent.focusPreviousAgent" | "dock.focusNextWaiting" | "find.inFocusedPanel" | "window.zoomIn" | "window.zoomOut" | "window.zoomReset" | "panel.palette" | "panel.toggleDiagnostics" | "panel.togglePortal" | "panel.diagnosticsLogs" | "panel.diagnosticsEvents" | "panel.diagnosticsMessages" | "notifications.toggle" | "portal.newTab" | "portal.closeTab" | "portal.nextTab" | "portal.prevTab" | "devPreview.reloadPreview" | "action.palette" | "action.palette.open" | "action.repeatLast" | "pilot.toggle" | "pilot.openProject" | "project.switcherPalette" | "project.mruCycleOlder" | "help.shortcuts" | "help.shortcutsAlt" | "help.launchAgent" | "help.togglePanel" | "app.settings" | "app.theme.toggle" | "app.theme.pick" | "voiceInput.toggle" | "voiceInput.toggleAssistant" | "voiceInput.togglePause" | "voiceInput.lockTarget" | "voiceInput.unlockTarget" | "voiceInput.recallRecentTarget" | "layout.undo" | "layout.redo" | "app.newWindow" | "app.quit" | "app.forceQuit" | "modal.close";
-
-declare const BUILT_IN_ACTION_IDS: readonly ["terminal.list", "terminal.getOutput", "terminal.getStatus", "terminal.sendCommand", "terminal.sendCommandOwned", "terminal.waitUntilIdle", "terminal.waitUntilIdleBatch", "terminal.readLastMessageOwned", "terminal.resumeSessions", "terminal.registerWatch", "terminal.listWatches", "terminal.getWatchEvents", "terminal.cancelWatch", "terminal.setClientMetadata", "panel.list", "panel.focus", "panel.focusIndex", "panel.openPluginPanel", "panel.palette", "panel.gridLayout.setStrategy", "panel.gridLayout.setValue", "worktree.list", "worktree.getCurrent", "worktree.refresh", "worktree.reconcileTopology", "worktree.refreshPullRequests", "worktree.restartService", "worktree.retryProjectLoad", "worktree.setActive", "worktree.create", "worktree.delete", "worktree.deleteOwned", "worktree.listBranches", "worktree.getDefaultPath", "worktree.reveal", "worktree.openIssue", "worktree.openPR", "worktree.copyContext", "worktree.inject", "worktree.getAvailableBranch", "worktree.waitUntilReady", "worktree.createWithRecipe", "worktree.compareDiff", "worktree.reviewReadiness", "worktree.switchIndex", "worktree.quickCreate", "worktree.createDialog.open", "worktree.select", "worktree.copyTree", "worktree.openEditor", "worktree.openReviewHub", "worktree.openFileBrowser", "worktree.openFileBrowserPanel", "worktree.openChanges", "worktree.overview.open", "worktree.overview.close", "worktree.resource.provision", "worktree.resource.teardown", "worktree.resource.resume", "worktree.resource.pause", "worktree.resource.status", "worktree.resource.connect", "worktree.resource.config.get", "worktree.resource.config.set", "worktree.lifecycle.retrySetup", "worktree.sessions.minimizeAll", "worktree.sessions.maximizeAll", "worktree.sessions.restartAll", "worktree.sessions.resetRenderers", "worktree.sessions.closeCompleted", "worktree.sessions.trashAll", "worktree.sessions.endAll", "worktree.sessions.clearHistory", "worktree.bulk.closeSessions", "worktree.bulk.remove", "workflow.startWorkOnIssue", "workflow.prepBranchForReview", "workflow.focusNextAttention", "system.openExternal", "system.openPath", "system.checkCommand", "system.checkDirectory", "system.getHomeDir", "system.getResourceProfileSnapshot", "cliAvailability.get", "cliAvailability.refresh", "sessionRestore.getConfig", "sessionRestore.updateConfig", "hibernation.getConfig", "hibernation.updateConfig", "idleTerminalNotify.getConfig", "idleTerminalNotify.updateConfig", "idleTerminalNotify.closeProject", "idleTerminalNotify.muteProject", "idleBackgroundAutoClose.getConfig", "idleBackgroundAutoClose.updateConfig", "agentSettings.get", "agentSettings.set", "agentSettings.reset", "keybinding.getOverrides", "keybinding.setOverride", "keybinding.removeOverride", "keybinding.resetAll", "terminalConfig.get", "terminalConfig.setScrollback", "terminalConfig.setPerformanceMode", "terminalConfig.setFontSize", "terminalConfig.setFontFamily", "terminalConfig.setHybridInputEnabled", "terminalConfig.setHybridInputAutoFocus", "terminalConfig.setScreenReaderMode", "terminalConfig.setCachedProjectViews", "worktreeConfig.get", "worktreeConfig.setPattern", "files.search", "file.view", "file.read", "file.openDiff", "file.openInEditor", "file.openInBrowser", "file.openImageViewer", "file.showItemInFolder", "file.openPanel", "slashCommands.list", "skills.search", "skills.load", "artifact.saveToFile", "artifact.applyPatch", "copyTree.generate", "copyTree.generateAndCopyFile", "copyTree.injectToTerminal", "copyTree.isAvailable", "copyTree.cancel", "copyTree.getFileTree", "git.getProjectPulse", "git.getFileDiff", "git.listCommits", "git.stageFile", "git.unstageFile", "git.stageAll", "git.unstageAll", "git.commit", "git.push", "git.pullRebase", "git.fetch", "git.rebaseOntoBase", "git.mergeBaseIntoBranch", "git.abortRepositoryOperation", "git.continueRepositoryOperation", "git.forcePushWithLease", "git.markSafeDirectory", "git.getStagingStatus", "preferences.showProjectPulse.set", "preferences.showDeveloperTools.set", "preferences.showGridAgentHighlights.set", "preferences.showDockAgentHighlights.set", "preferences.showAgentTaskTitles.set", "preferences.reduceAnimations.set", "window.toggleFullscreen", "window.reload", "window.forceReload", "window.toggleDevTools", "window.zoomIn", "window.zoomOut", "window.zoomReset", "window.close", "forge.openIssues", "forge.openPRs", "forge.openCommits", "forge.openRepo", "forge.openIssue", "forge.openPR", "forge.assignIssue", "forge.unassignIssue", "forge.approvePR", "forge.requestChanges", "forge.dismissReview", "forge.requestReviewers", "forge.createIssue", "forge.closeIssue", "forge.reopenIssue", "forge.editIssue", "forge.addIssueComment", "forge.addIssueLabel", "forge.removeIssueLabel", "forge.validateToken", "forge.getRepoStats", "forge.listIssues", "forge.listPRs", "forge.getIssue", "forge.listIssueComments", "forge.getChecks", "forge.getPR", "forge.getPRs", "forge.getCIStatus", "forge.createPR", "forge.closePR", "forge.reopenPR", "forge.mergePR", "forge.convertPRToDraft", "forge.markPRReadyForReview", "forge.commentOnPR", "forge.editPR", "pilot.toggle", "pilot.openProject", "pilot.openRun", "project.getAll", "project.getCurrent", "project.add", "project.switch", "project.update", "project.remove", "project.close", "project.closeActive", "project.openDialog", "project.getSettings", "project.saveSettings", "project.muteNotifications", "project.silenceNotificationKind", "project.detectRunners", "project.runCheck", "workspace.list", "plugin.validate", "plugin.diagnostics", "plugin.reloadProject", "plugin.reloadWindow", "project.getStats", "project.settings.open", "project.cloneRepo", "app.pluginManager", "app.reloadConfig", "app.exportConfig", "app.importConfig", "app.developerMode.set", "app.theme.pick", "app.theme.toggle", "app.theme.browser.open", "logs.openFile", "logs.clear", "logs.setVerbose", "logs.getVerbose", "logs.getAll", "logs.getSources", "logs.setLogLevel", "logs.getLevelOverrides", "logs.setLevelOverrides", "logs.clearLevelOverrides", "logs.getRegistry", "diagnostics.openReview", "diagnostics.openWhySlow", "errors.clearAll", "errors.openLogs", "errors.recent", "notifications.recent", "notifications.toggle", "eventInspector.getEvents", "eventInspector.getFiltered", "eventInspector.subscribe", "eventInspector.unsubscribe", "eventInspector.clear", "telemetry.togglePreview", "telemetry.clearPreview", "recipe.run", "recipe.list", "recipe.editor.open", "recipe.editor.openFromLayout", "recipe.manager.open", "recipe.saveToRepo", "recipe.delete", "agent.launch", "agent.terminal", "agent.focusNextWaiting", "agent.focusNextWorking", "agent.focusNextAgent", "agent.focusPreviousAgent", "agent.getState", "agent.listToolbar", "agent.listAvailable", "agent.listPresets", "agentSessionHistory.list", "agentSessionHistory.resume", "session.bookmarkAndClose", "session.bookmark.promote", "session.bookmark.rename", "session.bookmark.delete", "session.bookmarks.list", "app.settings.openTab", "action.palette.open", "action.repeatLast", "actions.list", "actions.getContext", "actions.persistedStores", "actions.search", "actions.getSchema", "mcp.surface", "terminal.restart", "terminal.redraw", "terminal.forceResume", "terminal.toggleInputLock", "terminal.viewInfo", "terminal.restartService", "watchdog.restart", "terminal.new", "terminal.moveToDock", "terminal.moveToGrid", "terminal.toggleDock", "terminal.toggleDockAll", "terminal.toggleMaximize", "terminal.duplicate", "terminal.rename", "terminal.close", "terminal.closeOwned", "terminal.revealOwned", "terminal.trash", "terminal.kill", "terminal.killBatch", "terminal.closeAll", "terminal.killAll", "terminal.moveToWorktree", "terminal.moveToNewWorktree", "terminal.watch", "terminal.gridLayout.setStrategy", "terminal.gridLayout.setValue", "terminal.copy", "terminal.paste", "terminal.copyLink", "terminal.contextMenu", "terminal.sendToAgent", "terminal.inject", "terminal.injectOwned", "terminal.bulkCommand", "terminal.interrupt", "terminal.interruptOwned", "terminal.stashInput", "terminal.popStash", "terminal.arm", "terminal.disarm", "terminal.disarmAll", "terminal.armByState", "terminal.armAll", "terminal.armDefault", "terminal.openWorktreeEditor", "terminal.openWorktreeIssue", "terminal.openWorktreePR", "terminal.info.open", "terminal.info.get", "browser.reload", "browser.navigate", "browser.openUrl", "browser.back", "browser.forward", "browser.openExternal", "browser.copyUrl", "browser.setZoomLevel", "browser.captureScreenshot", "browser.toggleConsole", "browser.clearConsole", "browser.getConsoleMessages", "browser.toggleDevTools", "browser.hardReload", "nav.toggleFocusMode", "nav.quickSwitcher", "find.inFocusedPanel", "portal.toggle", "portal.closeTab", "portal.nextTab", "portal.prevTab", "portal.newTab", "portal.closeAllTabs", "portal.activateTab", "portal.openLaunchpad", "portal.openUrl", "portal.goBack", "portal.goForward", "portal.reload", "portal.copyUrl", "portal.openExternal", "portal.duplicateTab", "portal.reloadTab", "portal.copyTabUrl", "portal.openTabExternal", "portal.closeOthers", "portal.closeToRight", "portal.resetWidth", "portal.width.set", "portal.setDefaultNewTab", "portal.links.add", "portal.links.remove", "portal.links.update", "portal.links.toggle", "portal.links.reorder", "portal.tabs.reorder", "portal.listTabs", "portal.toggleDevDashboard", "help.gettingStarted.show", "help.displayImage", "help.openCommandsFolder", "ui.sidebar.resetWidth", "devServer.start", "devPreview.stop", "devPreview.toggleTool", "devPreview.reloadPreview", "devPreview.restart", "devPreview.restartAndClearCache", "devPreview.reinstallAndRestart", "devPreview.promoteToPortal", "env.global.get", "env.global.set", "env.project.get", "env.project.set", "fleet.accept", "fleet.reject", "fleet.interrupt", "fleet.restart", "fleet.kill", "fleet.trash", "fleet.armAll", "fleet.armFocused", "fleet.scope.enter", "fleet.scope.exit", "fleet.armMatchingFilter", "fleet.retryFailures", "fleet.saveNamedFleet", "fleet.recallNamedFleet", "fleet.deleteNamedFleet", "fleet.getRunStatus"];
-type BuiltInRuntimeActionId = (typeof BUILT_IN_ACTION_IDS)[number];
-
-type ActionKind = "command" | "query";
-type ActionDanger = "safe" | "confirm" | "restricted";
-type BuiltInActionId = BuiltInKeyAction | BuiltInRuntimeActionId;
-type ActionId = BuiltInActionId | (string & {});
-interface ActionExample {
-    args: Record<string, unknown>;
-    description: string;
-}
-interface ActionDispatchSuccess<Result = unknown> {
-    ok: true;
-    result: Result;
-}
-interface ActionDispatchError {
-    ok: false;
-    error: ActionError;
-}
-type ActionDispatchResult<Result = unknown> = ActionDispatchSuccess<Result> | ActionDispatchError;
-type ActionErrorCode = "NOT_FOUND" | "VALIDATION_ERROR"
-/**
- * `run()` completed but its return value did not satisfy the action's own
- * `resultSchema`. Distinct from `EXECUTION_ERROR` (which means `run()` threw)
- * because the action's side effects DID happen — only the payload is
- * unusable. Signals a bug in the action itself, not in the caller's request.
- */
- | "RESULT_VALIDATION_ERROR" | "DISABLED" | "RESTRICTED" | "CONFIRMATION_REQUIRED" | "EXECUTION_ERROR" | "USER_REJECTED" | "CONFIRMATION_TIMEOUT" | "ELICITATION_FAILED" | "BINDING_STALE" | "PLUGIN_UNLOADED" | "TIER_NOT_PERMITTED"
-/**
- * An `*Owned` MCP cleanup tool was called with a resource the calling session
- * did not create (#11909). Distinct from `NOT_FOUND`, which would answer a
- * question the caller is not entitled to ask: whether the id exists at all.
- * See `RESOURCE_NOT_OWNED_CODE` in the MCP server's `shared.ts`.
- */
- | "RESOURCE_NOT_OWNED"
-/**
- * `run()` threw a `PartialSuccessError`: a composite created something real
- * — a worktree — and then failed on a later step, so the failure carries what
- * already exists in its `PARTIAL_SUCCESS:` payload.
- *
- * Distinct from `EXECUTION_ERROR` because it is a provenance claim, not just
- * a classification: only in-repo code can construct that error class, so this
- * code is what lets the MCP ownership ledger trust the payload. An upstream
- * forge or git failure that merely *looks* like one arrives as
- * `EXECUTION_ERROR` and is refused (#11909).
- */
- | "PARTIAL_SUCCESS" | "INVALID_URL";
-interface ActionError {
-    code: ActionErrorCode;
-    message: string;
-    details?: unknown;
-}
-/**
- * Slim, IPC-safe projection of {@link ActionManifestEntry} exposed to plugins
- * via `host.actions.list()` / `host.actions.get()` (#10561). Deliberately drops
- * the fields that have no meaning across the plugin boundary: palette state
- * (`paletteHidden`/`paletteRedirectTo`/…), live renderer-context state
- * (`enabled`/`disabledReason`), the MCP-internal classification (`name`,
- * `mcpVisibility`, `mcpAnnotations`, `band`), and `pluginId`. Every field is a
- * plain JSON value so the entry survives Electron's structured-clone IPC
- * boundary unchanged.
- */
-interface PluginActionManifestEntry {
-    /** The action id to pass to `host.dispatch()`. */
-    id: ActionId;
-    title: string;
-    description: string;
-    category: string;
-    kind: ActionKind;
-    /**
-     * Base danger classification. `host.dispatch()` rejects `"confirm"` actions
-     * with `CONFIRMATION_REQUIRED` (plugins cannot bypass the prompt) and never
-     * exposes `"restricted"` actions in the catalog — so a listed entry is always
-     * `"safe"` or `"confirm"`. Use `host.actions.canDispatch(id)` for a pre-flight
-     * check before triggering.
-     */
-    danger: ActionDanger;
-    /** JSON Schema for the action's args, or undefined when it takes none. */
-    inputSchema?: Record<string, unknown>;
-    /** True when the action's schema rejects an empty args object. */
-    requiresArgs: boolean;
-    /** Synonyms / alternative mental-model terms, when the action declares them. */
-    keywords?: string[];
-    /** Concrete usage examples pairing args with a short description. */
-    examples?: readonly ActionExample[];
-    /** Human-readable rationale for a non-`safe` danger rating. */
-    dangerRationale?: string;
-}
-/**
- * Pre-flight verdict from `host.actions.canDispatch(id)` (#10561), letting a
- * plugin detect a confirm-gated or unavailable action before calling
- * `host.dispatch()`:
- * - `"ok"` — a `danger:"safe"` action; `dispatch()` proceeds without a prompt.
- * - `"confirm"` — a `danger:"confirm"` action; `dispatch()` returns
- *   `CONFIRMATION_REQUIRED` (plugins cannot pre-confirm). The plugin should warn
- *   the user or route through an interactive sibling action.
- * - `"restricted"` — the action is `danger:"restricted"`, unknown, or otherwise
- *   not exposed to plugins; `dispatch()` would return `RESTRICTED` / `NOT_FOUND`.
- */
-type PluginCanDispatchResult = "ok" | "confirm" | "restricted";
-
-type KeyScope = "global" | "portal" | "worktreeGrid" | "dev-preview";
 
 /** Notification type */
 type NotificationType = "info" | "success" | "error" | "warning";
@@ -1658,174 +1545,6 @@ type AgentState = "idle" | "working" | "waiting" | "directing" | "completed" | "
  */
 type WaitingReason = "prompt" | "question" | "approval" | "error";
 
-/**
- * Configuration for pattern-based working state detection.
- * Patterns are matched against terminal output to detect when an agent is actively working.
- */
-interface AgentDetectionConfig {
-    /**
-     * Primary patterns that indicate working state (high confidence).
-     * Patterns are matched against the last N lines of terminal output.
-     * Use strings that will be converted to RegExp with case-insensitive flag.
-     */
-    primaryPatterns: string[];
-    /**
-     * Fallback patterns for early-stage output (medium confidence).
-     * Checked when primary patterns don't match.
-     */
-    fallbackPatterns?: string[];
-    /**
-     * Patterns that indicate the agent has completed boot and is ready.
-     * Use strings that will be converted to RegExp with case-insensitive flag.
-     */
-    bootCompletePatterns?: string[];
-    /**
-     * Patterns that indicate the agent is waiting for user input (prompt visible).
-     * Use strings that will be converted to RegExp with case-insensitive flag.
-     */
-    promptPatterns?: string[];
-    /**
-     * Patterns that indicate an empty input prompt is visible.
-     * Safe to scan from visible lines even when the cursor line is active output.
-     */
-    promptHintPatterns?: string[];
-    /**
-     * Number of lines from end of output to scan (default: 10).
-     */
-    scanLineCount?: number;
-    /**
-     * Number of lines from end of output to scan for prompt detection (default: 6).
-     */
-    promptScanLineCount?: number;
-    /**
-     * Activity debounce period in ms — time to wait after last activity before
-     * transitioning to idle. `buildActivityMonitorOptions` floors this to
-     * AGENT_WAITING_QUIET_MS (8000) to prevent working↔waiting jitter during
-     * silent inter-tool-call gaps (#3606); sub-floor values are not honored.
-     * Omit to accept the 8000ms default.
-     */
-    debounceMs?: number;
-    /**
-     * Minimum quiet-output ms before the prompt fast-path can fire.
-     * `buildActivityMonitorOptions` floors this to the effective idle debounce
-     * (>= AGENT_WAITING_QUIET_MS, 8000) for the same #3606 jitter guard —
-     * sub-floor values are not honored. Omit to accept the default.
-     */
-    promptFastPathMinQuietMs?: number;
-    /**
-     * Confidence level when primary pattern matches (default: 0.95).
-     */
-    primaryConfidence?: number;
-    /**
-     * Confidence level when fallback pattern matches (default: 0.75).
-     */
-    fallbackConfidence?: number;
-    /**
-     * Confidence level when prompt pattern matches (default: 0.85).
-     */
-    promptConfidence?: number;
-    /**
-     * Patterns that indicate the agent successfully completed a task.
-     * When detected, briefly transition to "completed" state before settling to "waiting".
-     * Use strings that will be converted to RegExp with case-insensitive flag.
-     */
-    completionPatterns?: string[];
-    /**
-     * Confidence level when completion pattern matches (default: 0.90).
-     */
-    completionConfidence?: number;
-    /**
-     * Patterns matched against terminal window title (OSC 0/2) for state detection.
-     * Substrings checked via includes() against the title string.
-     */
-    titleStatePatterns?: {
-        working: string[];
-        waiting: string[];
-    };
-}
-
-/**
- * One `contributes.fileEditors` entry (#12323). Declares that the plugin's
- * renderer registers an editor view for files with the listed extensions,
- * offered by the host file panel as its writable **Edit** mode.
- *
- * `slot` names a builtin view id the plugin's renderer entry registers with
- * `registerBuiltinView`; the host resolves it enable-aware, so disabling the
- * plugin removes the mode live. Built-in plugins only in v1: the builtin view
- * registry is compiled into the host bundle, which an installed plugin's
- * renderer cannot reach, so the host refuses the contribution from any other
- * origin at load.
- */
-interface FileEditorContribution {
-    /** Namespaced at runtime as `{pluginId}.{id}`. */
-    id: string;
-    /** Builtin view id the plugin's renderer registers for the editor surface. */
-    slot: string;
-    /** Lower-case extensions without the dot (`["md", "markdown"]`), matched case-insensitively. */
-    extensions: string[];
-    /** Largest file the editor accepts, in bytes. Absent means the host's default cap. */
-    maxBytes?: number;
-}
-/**
- * One `contributes.previewTools` entry: a tool the dev-preview panel offers in
- * its toolbar, with the host owning the chrome and the session lifecycle.
- *
- * The components stay a renderer-side registration (`registerDevPreviewTool`) —
- * they are host-bundled, so nothing else can supply them. This declaration is
- * what makes the tool admissible: `src/registry/devPreviewToolRegistry.ts`
- * hides a registered tool whose plugin's manifest does not name its id, so a
- * module side effect alone can no longer put a tool in the toolbar. Built-in
- * plugins only.
- */
-interface PreviewToolContribution {
-    /** Fully qualified and prefixed with the plugin name — the host does not namespace it. */
-    id: string;
-    /** User-facing name for the tool. */
-    title: string;
-    /** Lucide icon id for the toolbar toggle. */
-    iconId?: string;
-    /** A {@link PluginGuestAdapterContribution} id this same manifest declares. */
-    guestAdapter?: string;
-}
-/**
- * One `contributes.guestAdapters` entry: a browser bundle the host reads back as
- * text and installs into a previewed page through the site-preview bridge.
- *
- * `entry` is the plugin-relative source; the built asset's path is derived from
- * the id rather than declared, so the build and the startup registration cannot
- * disagree about where the bundle landed. Built-in plugins only — the body runs
- * with full DOM access inside the previewed site.
- */
-interface PluginGuestAdapterContribution {
-    /** Fully qualified and prefixed with the plugin name; the renderer binds by this literal. */
-    id: string;
-    /** Plugin-relative POSIX path to the bundle's source entry. */
-    entry: string;
-}
-interface PanelContribution {
-    id: string;
-    name: string;
-    iconId: string;
-    color: string;
-    hasPty: boolean;
-    canRestart: boolean;
-    canConvert: boolean;
-    showInPalette: boolean;
-    /**
-     * Whether this panel kind can live in the dock. Dockable by default; set
-     * `false` to opt out (for a kind with no meaningful compact chip-row form).
-     */
-    dockable?: boolean;
-    /** Schema version stamped on every persisted panel-state write; bump only for an incompatible shape change. */
-    stateVersion?: number;
-}
-interface ToolbarButtonContribution {
-    id: string;
-    label: string;
-    iconId: string;
-    actionId: ActionId;
-    priority?: 1 | 2 | 3 | 4 | 5;
-}
 /**
  * Semantic color for a {@link PluginPanelBadge}. Plugins pick intent, not a raw
  * hex value, so badges stay theme-consistent. `"warning"` and `"error"` map to
@@ -1854,215 +1573,8 @@ type PluginPanelBadge = {
     color?: PluginPanelBadgeColor;
     tooltip?: string;
 };
-type MenuItemLocation = "terminal" | "file" | "view" | "help";
-type ContextMenuLocation = "worktree" | "terminal" | "file";
 declare const BUILT_IN_PLUGIN_CAPABILITIES: readonly ["fs:project-read", "fs:project-write", "fs:user-data-read", "fs:user-data-write", "network:fetch", "agent:invoke", "agent:read", "agent:register", "agent:input", "git:read", "git:write", "clipboard:read", "clipboard:write", "shell:exec", "socket:connect", "mcp:expose"];
 type BuiltInPluginCapability = (typeof BUILT_IN_PLUGIN_CAPABILITIES)[number];
-type PluginCapability = BuiltInPluginCapability;
-interface MenuItemContribution {
-    label: string;
-    actionId: ActionId;
-    location: MenuItemLocation;
-    accelerator?: string;
-    when?: string;
-}
-interface KeybindingContribution {
-    actionId: ActionId;
-    combo: string;
-    scope?: KeyScope;
-    description?: string;
-    when?: string;
-}
-interface ContextMenuContribution {
-    actionId: ActionId;
-    location: ContextMenuLocation;
-    label: string;
-    when?: string;
-}
-/**
- * View contribution location. Only `panel` is supported — it registers a panel
- * kind at plugin load with `showInPalette: true` so the view is spawnable from
- * the panel palette. It is wired today by the inline renderer host (#9229); see
- * `docs/plugins/architecture.md` for the renderer host design. `sidebar` is
- * rejected at the manifest gate (`ViewContributionSchema`) because the sidebar
- * host does not exist yet — accepting it would validate a contribution the
- * runtime cannot honor. The `experimental_` prefix on the contribution point
- * signals that the shape may still change before the feature exits experiment
- * status.
- */
-type ViewLocation = "panel";
-interface ViewContribution {
-    id: string;
-    componentPath: string;
-    location: ViewLocation;
-    iconId?: string;
-}
-/** A surface slot claim naming one of the plugin's own `contributes.views`. */
-interface SurfaceViewSlot {
-    viewId: string;
-}
-/** The `contributes.surfaces` block of a project plugin's manifest. */
-interface SurfaceContributions {
-    emptyCanvas?: SurfaceViewSlot;
-}
-/**
- * The attribute the host stamps on the element a plugin view renders into, and
- * the only DOM attribute this styling contract adds.
- *
- * Daintree compiles the Tailwind classes a plugin uses at runtime and emits them
- * inside `@scope ([data-daintree-plugin-style-root])`, so the generated rules
- * apply within a plugin's own subtree and can never reach host chrome. The host
- * marks the view wrapper itself; the only place an author needs this is a
- * container rendered through `createPortal`, which escapes that subtree. See
- * {@link PanelViewProps.styleRootAttributes} for the spreadable form.
- */
-declare const PLUGIN_STYLE_ROOT_ATTRIBUTE = "data-daintree-plugin-style-root";
-/**
- * Props every plugin-contributed panel view receives from the renderer host.
- * Intentionally narrower than the host-internal `PanelComponentProps` so the
- * SDK surface stays stable across a future `plugin://` → trusted-iframe
- * cutover (#9229).
- *
- * - `panelId` is the runtime panel instance id (the same value the host uses
- *   in `addPanelOptions` / IPC). Plugins should treat it as opaque.
- * - `pluginId` is the plugin's RUNTIME id, sourced from
- *   `PanelKindConfig.extensionId` — the bare manifest `name` for an installed
- *   or builtin plugin, but the instance key `project__{projectId}__{manifestId}`
- *   for a project plugin. Pass it back verbatim to `window.electron.plugin.*`;
- *   a view that writes its own manifest name down instead addresses nothing.
- * - `disposeSignal` aborts on unmount AND when the host receives a
- *   `plugin:panel-kinds-changed` push that no longer contains this kind. The
- *   broadcast fires before the main process tears down plugin IPC handlers,
- *   so signal-driven cleanup (fetch aborts, subscription teardown) runs
- *   while the plugin host APIs are still live.
- * - `panelRemovedSignal` aborts ONLY when the panel is permanently gone.
- */
-interface PanelViewProps {
-    readonly panelId: string;
-    readonly pluginId: string;
-    /**
-     * Lifetime of THIS mounted view attempt — not of the panel (#11301).
-     *
-     * Aborts on React unmount, on "Try again", and when a
-     * `plugin:panel-kinds-changed` push drops this kind. Crucially, a temporary
-     * unmount aborts it too: maximizing a sibling pane, switching away from a
-     * dock tab, or caching a background project view all tear the subtree down
-     * while the panel itself lives on. Tie only view-scoped work to it — in-flight
-     * `fetch`es, DOM observers, `postToPanel` subscriptions.
-     *
-     * NEVER tie a durable resource (a spawned process, a long-lived session) to
-     * this signal: it will be killed the first time the user maximizes another
-     * pane. Durable resources belong in the plugin's worker, which observes the
-     * panel across every remount via `host.onDidChangePanelLifecycle`.
-     */
-    readonly disposeSignal: AbortSignal;
-    /**
-     * Lifetime of the PANEL RECORD (#11301). The same `AbortSignal` object is
-     * handed to every mount of a given `panelId`, so it survives remounts,
-     * retries, trash-then-restore, and plugin view upgrades.
-     *
-     * Aborts exactly once, when the panel is permanently removed from the panel
-     * store — never for a temporary unmount and never while a trashed panel is
-     * still restorable. This is the signal to use for cleanup that must happen
-     * once and only when the user is genuinely done with the panel.
-     */
-    readonly panelRemovedSignal: AbortSignal;
-    /**
-     * Opaque argument bag handed to the view when the panel is spawned with one
-     * — e.g. `{ path }` from a "open file in plugin panel" intent. Sourced from
-     * the panel's `extensionState` (the same bag that survives the save/restore
-     * round-trip), so a restored panel sees the args it was originally spawned
-     * with. Empty (no key) for panels opened without an initial argument.
-     *
-     * This is a snapshot taken at mount, not a live value: it does not update
-     * while the view is mounted, including in response to your own
-     * {@link persistState} calls. Treat the contents as read-only and hold your
-     * working copy in React state seeded from here.
-     */
-    readonly initialArgs?: Record<string, unknown>;
-    /**
-     * Which version of your `stateVersion` schema {@link initialArgs} was written
-     * against — the other half of declaring one in `contributes.panels` (#12280).
-     *
-     * `0` means the bag predates versioning: it was persisted before the host
-     * stamped anything, so its shape is whatever you were writing at the time.
-     * Absent means you declared no `stateVersion`, so nothing was tracked and
-     * nothing is promised.
-     *
-     * Migrate forward from whatever this says and persist the result; your next
-     * {@link persistState} call re-stamps the bag at your current version. You
-     * never have to handle a value ABOVE the version you declare — the host
-     * refuses that bag rather than hand you state a newer build of your plugin
-     * wrote, and shows the user an error naming both versions. The state is kept
-     * on disk, so reinstalling the newer build brings it back intact.
-     */
-    readonly stateVersion?: number;
-    /**
-     * Persist view state onto the panel record, so the next mount of this panel
-     * sees it in {@link initialArgs}.
-     *
-     * The two are one bag: spawn seeds it, this updates it, `initialArgs` reads
-     * it back. That round trip is what lets a view survive the teardowns a panel
-     * routinely outlives — maximizing a sibling pane, leaving a dock tab, a
-     * cached project view, an app restart — without forgetting where the user
-     * was. A file browser's expanded paths, selection, root and sort are exactly
-     * this kind of state.
-     *
-     * The patch is **merged**, so two independent parts of a view can each
-     * persist their own key without reading and rewriting the whole bag; setting
-     * a key to `undefined` removes it. Writing state identical to what is already
-     * stored is free — it neither churns the store nor schedules a save — so
-     * calling this from a render-derived effect is fine.
-     *
-     * **Stored as JSON, canonically.** The host round-trips what you pass through
-     * `JSON.stringify`/`parse` and keeps that, so the value is detached from any
-     * object you still hold — mutating a patch afterwards changes nothing — and
-     * what you read back on the next mount is exactly what you would read back
-     * after a restart. A `NaN` becomes `null` and a `Date` becomes its ISO string
-     * at the moment you persist, not silently at the next launch.
-     *
-     * Keep it small. The bag rides the panel record into the layout save, and the
-     * host refuses an update whose serialized form exceeds 64KB. Anything larger,
-     * anything not JSON round-trippable, and anything that should outlive the
-     * panel belongs in `host.storage` instead. State here rides the panel
-     * snapshot into the project's `state.json` as plaintext JSON, so it is not a
-     * place for secrets.
-     *
-     * Returns whether the stored state is now what you asked for: `false` when
-     * the host rejected the update (over the cap, or not serializable), `true`
-     * when it was applied or already matched. Best-effort in the sense that
-     * `true` means "accepted and scheduled" — the layout save is debounced, so it
-     * is not a promise that bytes have reached disk.
-     *
-     * Absent when the host does not support persistence for this panel; call it
-     * optionally.
-     */
-    readonly persistState?: (patch: Record<string, unknown>) => boolean;
-    /**
-     * The worktree the panel instance belongs to, as recorded on the panel at
-     * spawn time. Lets a view reconstruct its own context without dispatching
-     * `worktree.getCurrent` — which resolves the *visible* worktree, not the
-     * one that owns the panel, and so returns the wrong answer for a background
-     * or restored panel. `undefined` for a panel spawned without a worktree.
-     */
-    readonly worktreeId?: string;
-    /**
-     * Spread onto any container you render through `createPortal`, so the
-     * portalled subtree stays inside Daintree's styling contract.
-     *
-     * Tailwind classes in a plugin view are compiled at runtime and scoped to the
-     * element the host marks as the view's style root. A portal renders outside
-     * that element — into `document.body`, or a container of your own — so
-     * without this its classes generate CSS that never matches, and the subtree
-     * paints unstyled. Everything rendered normally is already inside the root
-     * and needs nothing.
-     *
-     * ```tsx
-     * createPortal(<div {...styleRootAttributes}>…</div>, document.body)
-     * ```
-     */
-    readonly styleRootAttributes: Readonly<Record<string, string>>;
-}
 /**
  * What just happened to one plugin panel instance (#11301). The renderer owns
  * the transitions; the worker observes them through
@@ -2128,43 +1640,6 @@ interface PluginSystemWakeEvent {
     readonly timestamp: number;
 }
 /**
- * Lazily-spawned MCP server contribution (#9235). The declared `command` is
- * launched as a real subprocess the first time its tools are enumerated (not at
- * load time), inheriting `args` and `env`. `${settings:*}` templates inside
- * `args` are resolved from user-scope settings at spawn and on restart, so a
- * contributed command does run with the plugin author's wiring — treat it as
- * trust-gated, not inert. Shape intentionally mirrors the Claude Desktop /
- * Cursor MCP server config format (stdio only; remote servers via `url` are out
- * of scope and deliberately excluded). The `experimental_` prefix on the
- * contributes field signals the shape may still change.
- */
-interface McpServerContribution {
-    id: string;
-    name: string;
-    command: string;
-    args?: string[];
-    env?: Record<string, string>;
-}
-/**
- * One `contributes.agentMcp` entry: an MCP tools endpoint the plugin serves to
- * agents running in Daintree's terminals — the inbound direction, unlike
- * {@link McpServerContribution}, where Daintree is the client.
- *
- * The host owns everything but the tools: the transport (a plugin-only path on
- * the existing loopback listener), the per-terminal credential, the project
- * binding and revocation. The plugin supplies the tool roster at activation via
- * {@link PluginMcpApi.registerTools}. Requires the `mcp:expose` capability, and
- * an endpoint reaches no agent until the user enables it for a project.
- */
-interface PluginAgentMcpContribution {
-    id: string;
-    /** Shown in the per-project enablement UI. Agents never see it; their server key derives from the ids. */
-    name: string;
-    description?: string;
-    /** Host-managed tools. The only mode today; kept explicit so a later mode is additive. */
-    mode: "tools";
-}
-/**
  * Who a tool call came from, as far as the host can say. Provenance, not
  * identity: the grant was issued for a launch in this terminal and project, but
  * any process that read the credential can present it. `launchAgentIdHint` is
@@ -2206,386 +1681,6 @@ interface PluginMcpApi {
      * dropped when the plugin unloads. Must be called during `activate()`.
      */
     registerTools(endpointId: string, tools: Record<string, PluginMcpToolDefinition>): Promise<() => void>;
-}
-/**
- * One `contributes.skills` entry (#10892). A skill is a markdown file the plugin
- * ships — instructions/knowledge (not executable code) that Daintree's built-in
- * MCP server surfaces to agents through the `skills.search` / `skills.load`
- * tools. `id` is namespaced at runtime as `{pluginId}.{id}`. `path` is a
- * plugin-relative markdown file, validated with the same traversal guard as a
- * view's `componentPath` and realpath-contained to the plugin dir when read.
- * Skills carry no capability requirement — they are inert declarative content.
- */
-interface SkillContribution {
-    id: string;
-    name: string;
-    /** Plugin-relative path to the skill's markdown file (e.g. `./skills/tdd.md`). */
-    path: string;
-    /** Optional phrase fragments that help agents discover the skill via `skills.search`. */
-    triggers?: string[];
-}
-/**
- * One terminal in a `contributes.recipes` entry (#11860). The authorable subset
- * of {@link RecipeTerminal}: the transient per-launch fields (`agentModelId`,
- * `agentLaunchFlags`, `location`) are session state the recipe editor already
- * strips on persist, so a manifest may not declare them. `type` accepts the
- * built-in terminal kinds plus an agent id the SAME plugin contributes — a
- * foreign plugin's agent id is dropped by the sanitizer at registration.
- */
-interface RecipeContributionTerminal {
-    type: string;
-    title?: string;
-    command?: string;
-    env?: Record<string, string>;
-    initialPrompt?: string;
-    args?: string;
-    devCommand?: string;
-    exitBehavior?: "keep" | "trash" | "remove";
-}
-/**
- * One `contributes.recipes` entry (#11860). A recipe is a named multi-terminal
- * launch layout the plugin ships; the host registers it under the qualified id
- * `{pluginId}.{id}` and merges it into the recipe list as a plugin-owned tier
- * available in every project.
- *
- * Terminals are declared inline rather than pointing at a shipped JSON file so
- * the install-time confirmation can show what a recipe actually runs:
- * `readArchiveManifest` reads only the manifest, never extracting the archive.
- *
- * Contributed content is immutable — the user customises by duplicating into a
- * user-owned tier. `showInEmptyState` and `autoAssign` are DEFAULTS: a user
- * override for either lives in the sidecar
- * ({@link PluginRecipeMetadata}) and wins. Recipes carry no capability
- * requirement, matching {@link SkillContribution} — the terminals they declare
- * still pass the same content sanitizer every other recipe tier does, and a
- * capability in an unsandboxed runtime would be a label rather than a gate.
- */
-interface RecipeContribution {
-    id: string;
-    name: string;
-    terminals: RecipeContributionTerminal[];
-    /** Default for the empty-state pin; a user pin/unpin overrides it. */
-    showInEmptyState?: boolean;
-    /**
-     * Default issue auto-assign behaviour; a user choice overrides it.
-     *
-     * Spelled out rather than importing `RecipeAutoAssign` from `./project.js`.
-     * This module is an entry point of the plugin SDK's bundled declarations, and
-     * a type-only import still widens that rollup's graph: pulling in `project.ts`
-     * drags `panel.ts` → `panelKindRegistry.ts` → `theme/terminal.ts` behind it,
-     * and the DTS build then fails on an `@xterm/xterm` type that module imports.
-     * The two stay in step because the registry assigns this straight onto
-     * `TerminalRecipe.autoAssign`, so any drift is a compile error there.
-     */
-    autoAssign?: "always" | "never" | "prompt";
-}
-/**
- * Per-capability scope binding that attenuates the compound-capability lattice
- * elevation in `PluginService.validateAndBuildActionDescriptor`. The lattice
- * elevates `effectiveDanger` to `"confirm"` when a plugin pairs a sensitive
- * source (sensitive reads, or `network:fetch` as a remote control channel)
- * with a sink (`network:fetch`, local writes, `shell:exec`). Tightly-bound
- * sinks skip elevation — a plugin that proves its `network:fetch` only talks
- * to one explicit HTTPS API is not a generic exfiltration channel.
- *
- * Wildcards (`*`, `**`) are rejected at schema parse time so a tightly-bound
- * declaration cannot smuggle a permissive value past the manifest gate.
- * SSRF targets (loopback, link-local, RFC1918) and embedded credentials are
- * also rejected at parse time. See `electron/schemas/plugin.ts` for the
- * canonical validation rules.
- */
-interface PluginNetworkScope {
-    /**
-     * Allowlist of HTTPS URLs the plugin's `network:fetch` capability may talk
-     * to. Each entry must parse as a `https:` URL with a multi-segment hostname,
-     * no embedded credentials, no wildcards, and no private/loopback target.
-     */
-    allowedUrls: string[];
-}
-interface PluginFsScope {
-    /**
-     * Allowlist of absolute filesystem paths the plugin's `fs:*` capabilities may
-     * touch. Each entry is schema-validated at parse time (must be an absolute
-     * path containing no `..` segment and no `*`/`**` glob — literal-path
-     * allowlist only).
-     *
-     * Enforced at runtime by the host-mediated {@link PluginFsApi} ({@link
-     * PluginHostApi.fs}): every path argument is realpath-resolved and contained
-     * to one of these roots (traversal and symlink-escape rejected), mirroring the
-     * `plugin://` protocol handler's containment discipline. It does NOT gate the
-     * compound-capability lattice — `scopes.network` is the only bucket the lattice
-     * consults today.
-     *
-     * Honest scope note: this gates `host.fs`/`host.git` only. A plugin's `main`
-     * still runs in-process and can call raw `node:fs` directly, which the host
-     * cannot intercept until the sandbox/trust model changes (D3). `host.fs` gives
-     * a sanctioned, contained, audited path; it does not seal the in-process one.
-     */
-    allowedPaths: string[];
-}
-/**
- * Optional path intent for the `socket:connect` capability (#11299). Purely
- * declarative: unlike {@link PluginFsScope}, nothing enforces it, because a
- * plugin's `main` reaches `node:net` directly and the host has no interception
- * point. Its job is disclosure — the Permissions tab renders these entries so
- * "connects to local sockets" reads as "connects to `/var/run/docker.sock`".
- *
- * Entries are validated for shape only (a Unix-domain path or a Windows
- * `\\.\pipe\…` name, no globs), and validated identically on every platform so
- * a cross-platform manifest parses on all of them.
- */
-interface PluginLocalSocketScope {
-    /**
-     * Declared local endpoints the plugin intends to connect to — Unix-domain
-     * socket paths and/or Windows named pipes. Advisory, not enforced.
-     */
-    allowedPaths: string[];
-}
-interface PluginManifestScopes {
-    network?: PluginNetworkScope;
-    fs?: PluginFsScope;
-    socket?: PluginLocalSocketScope;
-}
-/**
- * A plugin-contributed agent entry (#9560). Lets a plugin teach Daintree about
- * a launchable agent CLI it doesn't ship, so the CLI shows up as a named,
- * selectable agent rather than a generic shell. Requires the `agent:register`
- * capability (enforced at the manifest gate). Plugin agent IDs are additive for
- * new IDs only — a contribution whose `id` collides with a built-in is rejected
- * at parse time, and built-in entries always shadow plugin entries in
- * `getEffectiveRegistry`. Cross-plugin ID conflicts resolve first-registered-wins.
- *
- * Plugin agents launch as named, untracked terminals: the schema surfaces
- * `id`, `name`, `command`, `args`, `color`, `iconId`,
- * `supportsContextInjection`, and an optional `detection` block. The
- * `detection` field (#10587) lets a contributed agent describe its
- * working/waiting/completed output patterns so it participates in the
- * agent-state UI like a built-in — output-volume state already works from the
- * launch hint, and declared patterns add the richer prompt/completion cues.
- * Threaded onto the resolved {@link AgentConfig} by `contributionToAgentConfig`
- * and consumed by the pty-host activity monitor.
- */
-interface PluginAgentContribution {
-    id: string;
-    name: string;
-    command: string;
-    args?: string[];
-    color: string;
-    iconId: string;
-    supportsContextInjection?: boolean;
-    /**
-     * Optional output-pattern detection config (#10587). Passive observation
-     * only — patterns are matched against terminal output to drive the
-     * working/waiting/completed state machine, consistent with the agent-config
-     * boundary (Daintree never modifies the agent's own config).
-     */
-    detection?: AgentDetectionConfig;
-}
-/**
- * A plugin-contributed terminal process detection (#11613). Maps one command
- * name to the icon a terminal tab shows while that command runs, so a plugin
- * that ships or wraps a CLI can make it identifiable in a pane instead of
- * falling back to the generic terminal glyph.
- *
- * `command` is the bare executable name the detector matches — the same key
- * space as the built-in `PROCESS_TOOL_REGISTRY` commands (`vite`, `pytest`,
- * `redis-cli`). Lowercase only: `ProcessDetector` lower-cases every candidate
- * before lookup, so a mixed-case key could never match. A tool with aliases
- * declares one entry per alias.
- *
- * `iconId` uses the generic plugin icon namespace ({@link PLUGIN_ICON_IDS} in
- * `shared/config/pluginIconIds.ts`), the same one `contributes.panels[].iconId`
- * and `contributes.toolbarButtons[].iconId` use — plugins cannot ship bundled
- * brand marks. Advisory, like those siblings: an unrecognized id renders a
- * fallback glyph rather than failing the load.
- *
- * Inert declarative data, so no capability is required. A command that collides
- * with a built-in tool or agent is rejected at parse time; a cross-plugin
- * collision resolves first-registered-wins with a warning.
- *
- * Deliberately no `label`: the renderer resolves a detected process's display
- * label from its icon id (`deriveTerminalChrome`), and generic plugin icon ids
- * are shared across plugins, so a plugin-supplied label could not be resolved
- * unambiguously. A plugin-detected process labels itself with its icon id until
- * the identity model carries a distinct process label through panel state.
- *
- * Registered into `shared/config/pluginProcessToolRegistry.ts` at load time and
- * mirrored into the pty-host, where detection runs.
- */
-interface PluginProcessToolContribution {
-    command: string;
-    iconId: string;
-}
-/**
- * Closed set of catalog categories a plugin can declare via
- * `manifest.category`. The plugin manager groups its list by these (#9554
- * successor) — a closed enum rather than free-form tags so the catalog can't
- * fragment into orphan one-off groups. Display labels, ordering, and the
- * contributes-based fallback derivation live in
- * `shared/config/pluginCategoryRegistry.ts`.
- */
-declare const PLUGIN_CATEGORY_IDS: readonly ["forge", "ai", "workspace", "other"];
-type PluginCategoryId = (typeof PLUGIN_CATEGORY_IDS)[number];
-/**
- * A single attribution entry in {@link PluginManifest.authors}. `name` is
- * required; the rest are optional. `url` (when present) is validated to the
- * same https-only, no-credentials, no-private-host discipline as network
- * scopes — see `PluginAuthorUrlSchema` in `electron/schemas/plugin.ts` — since
- * it surfaces as a user-clickable link in the detail pane.
- */
-interface PluginAuthor {
-    name: string;
-    url?: string;
-    email?: string;
-    role?: string;
-}
-interface PluginManifest {
-    /** JSON Schema URL for editor completion; accepted by the validator, never read by the host. */
-    $schema?: string;
-    name: string;
-    version: string;
-    displayName?: string;
-    description?: string;
-    /**
-     * One-line value proposition shown in catalog rows and cards. `description`
-     * stays the long-form copy for the detail pane.
-     */
-    tagline?: string;
-    /**
-     * Optional attribution credits shown in the detail pane's "Contributors"
-     * block. Each entry credits a person who worked on the plugin.
-     */
-    authors?: PluginAuthor[];
-    /**
-     * Declared catalog category. Optional — when absent the manager derives one
-     * from `contributes` (see `resolvePluginCategory`).
-     */
-    category?: PluginCategoryId;
-    main?: string;
-    engines?: {
-        daintree?: string;
-    };
-    /**
-     * Declares the plugin is only ever loaded project-locally. REQUIRED when the
-     * manifest is discovered under a project's own plugins directory, REJECTED
-     * under the user or builtin roots. The manifest gate enforces both directions,
-     * so a project plugin cannot be dropped into the user directory (or a user
-     * plugin into a project) and quietly keep working under assumptions its author
-     * never made.
-     *
-     * A guardrail against accidental promotion, not a security control: the trust
-     * decision is the project folder, not this field.
-     */
-    scope?: "project";
-    capabilities?: PluginCapability[];
-    /**
-     * Per-capability scope bindings that attenuate the compound-capability
-     * lattice. See {@link PluginManifestScopes}. Absent on most plugins —
-     * the lattice still elevates compound pairs without scopes, so this field
-     * is opt-in only for plugins that need to skip elevation.
-     */
-    scopes?: PluginManifestScopes;
-    activationEvents?: "onStartupFinished"[];
-    contributes: {
-        panels: PanelContribution[];
-        toolbarButtons: ToolbarButtonContribution[];
-        menuItems: MenuItemContribution[];
-        keybindings: KeybindingContribution[];
-        contextMenus: ContextMenuContribution[];
-        /**
-         * Manifest-declared commands. Each entry registers a {@link PluginActionDescriptor}
-         * at load time (so the command appears in the palette before the plugin
-         * activates) and is lazily bound to `src/{id}.{ts,tsx,js,mjs}` on first
-         * dispatch. `id` is the bare command id — the host namespaces it as
-         * `{pluginId}.{id}` to match the {@link PluginActionDescriptor.id} convention.
-         */
-        commands: PluginActionContribution[];
-        views: ViewContribution[];
-        mcpServers: McpServerContribution[];
-        /**
-         * MCP tools endpoints this plugin serves to terminal agents. Requires the
-         * `mcp:expose` capability. Optional in the type but always materialized by
-         * the manifest schema's `.default([])`, for the same reason as `surfaces`.
-         */
-        agentMcp?: PluginAgentMcpContribution[];
-        /**
-         * Plugin-contributed skills (#10892) — markdown knowledge/instruction files
-         * surfaced to agents via the built-in MCP server's `skills.search` /
-         * `skills.load` tools. Inert declarative content; no capability required.
-         * Empty unless the plugin ships skills.
-         */
-        skills: SkillContribution[];
-        forgeProviders: ForgeProviderContribution[];
-        fileDecorationProviders: FileDecorationContribution[];
-        /**
-         * Plugin-contributed file editors (#12323): an extra, writable mode on the
-         * host's file panel for the declared extensions. Built-in plugins only in
-         * v1 — the slot resolves through the host-bundled builtin view registry,
-         * which an installed plugin's renderer cannot reach. Empty unless the
-         * plugin ships an editor.
-         */
-        fileEditors: FileEditorContribution[];
-        /**
-         * Dev-preview tools this plugin offers (built-in only). The renderer
-         * registry admits a registered tool only when its plugin's manifest names
-         * the tool id here, so the manifest — not a module side effect — is what
-         * puts a tool in the preview toolbar.
-         *
-         * Optional in the type but always materialized by the manifest schema's
-         * `.default([])`, for the same reason as `agentMcp` — the hand-built
-         * manifest literals in tests and tooling predate the field.
-         */
-        previewTools?: PreviewToolContribution[];
-        /**
-         * Guest runtimes this plugin ships as standalone browser assets (built-in
-         * only). Main registers one site-preview guest adapter per entry at
-         * startup; the build derives the bundle's entry and output from the same
-         * declaration. Optional in the type for the same reason as
-         * `previewTools`.
-         */
-        guestAdapters?: PluginGuestAdapterContribution[];
-        /**
-         * Plugin-contributed launchable agents (#9560). Each entry registers an
-         * {@link PluginAgentContribution} into the effective agent registry at load
-         * time so the CLI is selectable as a named agent. Requires the
-         * `agent:register` capability. Empty unless the plugin opts in.
-         */
-        agents: PluginAgentContribution[];
-        /**
-         * Plugin-contributed terminal process detections (#11613). Each entry maps
-         * a command name to the icon a terminal tab shows while that command runs.
-         * Inert declarative data; no capability required. Empty unless the plugin
-         * ships or wraps a CLI it wants recognized.
-         */
-        processTools: PluginProcessToolContribution[];
-        /**
-         * Declared plugin settings. When absent or empty, `host.settings.set()`
-         * accepts any key (permissive for plugins that declare none). When non-empty,
-         * `set()` (and the settings-UI write/reset paths) reject keys not declared
-         * here and enforce each setting's declared scope — see `assertSettingDeclared`
-         * in `electron/services/plugin/PluginSettingsManager.ts`.
-         */
-        settings?: SettingDefinition[];
-        /**
-         * Plugin-contributed recipes (#11860) — named multi-terminal launch layouts
-         * merged into the recipe list as a plugin-owned, globally-available tier.
-         * Inert declarative content; no capability required. Content is immutable;
-         * user-owned frecency and preferences live in a sidecar keyed by the
-         * qualified id. Empty unless the plugin ships recipes.
-         */
-        recipes: RecipeContribution[];
-        /**
-         * Project surfaces this plugin claims (§7.8). Optional in the type but
-         * always materialized by the manifest schema's `.default({})`, so a
-         * consumer reading it off a parsed manifest never sees `undefined` — the
-         * optionality is for the hand-built manifest literals in tests and tooling
-         * that predate the field.
-         *
-         * Only meaningful for a `scope: "project"` plugin; the manifest schema
-         * rejects the key outright for any other origin.
-         */
-        surfaces?: SurfaceContributions;
-    };
 }
 /**
  * Field control kind for a {@link SettingDefinition}. Drives which input the
@@ -3098,24 +2193,6 @@ interface PluginConfirmOptions {
  * crosses the IPC boundary.
  */
 type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
-/**
- * Execution backend for a managed process (#11300, #11871).
- *
- * - `pipe` (the default): a plain child process with stdin closed and
- *   stdout/stderr piped. Output arrives split by stream.
- * - `duplex`: as `pipe`, but stdin is piped too, so the child can be driven via
- *   {@link PluginDuplexProcessHandle.write}. stdout and stderr stay separate.
- *   This is the mode for a child speaking a protocol over stdio — MCP, LSP and
- *   ACP servers all carry JSON-RPC on stdout while using stderr for
- *   diagnostics, so they need a writable input AND an output stream the
- *   diagnostics are not mixed into. The host stays framing-agnostic: MCP and
- *   ACP delimit messages with newlines, LSP with `Content-Length` headers, and
- *   the plugin implements whichever its child speaks.
- * - `pty`: the command runs under a real pseudo-terminal, so it sees a TTY,
- *   accepts input via {@link PluginPtyProcessHandle.write}, and can be resized.
- *   A PTY merges stdout and stderr into one stream by construction.
- */
-type PluginProcessMode = "pipe" | "duplex" | "pty";
 /**
  * One chunk of output from a managed process, delivered to
  * {@link PluginProcessHandle.onData}.
@@ -4367,7 +3444,6 @@ interface PluginLogger {
     warn(message: string, fields?: Record<string, unknown>): void;
     error(message: string, fields?: Record<string, unknown>): void;
 }
-type PluginActivate = (host: PluginHostApi) => void | (() => void) | Promise<void | (() => void)>;
 /**
  * Serializable shape a plugin uses to register an action at runtime via the
  * host API. The renderer converts this into a synthetic ActionDefinition
@@ -4412,80 +3488,272 @@ interface PluginActionContribution {
 }
 
 /**
- * Authoring helpers for forge providers.
+ * In-memory `PluginHostApi` implementation for unit tests. Records every host
+ * call into a recording array so a plugin's `activate()` can be exercised
+ * without booting Electron, the renderer, or the real contribution registries.
  *
- * Lives in `shared/` so the main process, the workspace-host UtilityProcess,
- * and a third-party plugin (via the SDK) can all import the same runtime
- * binding without dragging any electron-only code across the process boundary.
+ * Why the intersection return type — `PluginHostApi & MockHostState` makes the
+ * recording arrays and `simulate*` helpers visible to callers while still
+ * giving TypeScript a compile error the moment `PluginHostApi` gains a new
+ * method this mock doesn't implement.
  */
 
-/**
- * Ready-made auth methods for a local/offline forge provider that has no
- * credentials to manage. The base {@link ForgeProviderImpl} contract requires
- * `getCredentials` / `validateCredentials` / `validateToken` even for a
- * token-less, network-free provider; spreading `localAuthStubs` into the impl
- * satisfies all three with the obvious no-op answers:
- *
- * ```ts
- * const provider: ForgeProviderImpl = {
- *   ...localAuthStubs,
- *   parseRemote,
- *   listIssues,
- *   // …the methods that actually do work
- * };
- * ```
- *
- * `getCredentials` resolves `null` (no stored credentials), and both validation
- * methods resolve `{ valid: true }` (nothing to reject). Pair it with
- * `kind: "local"` on the manifest contribution so Preferences labels the
- * provider as deliberately authless. The host never inspects these results
- * for a `"local"` provider, but implementing them keeps the impl a valid
- * structural {@link ForgeProviderImpl}.
- */
-declare const localAuthStubs: Pick<ForgeProviderImpl, "getCredentials" | "validateCredentials" | "validateToken">;
-
-/**
- * Channel name (under the plugin's `postToPanel` namespace) carrying process
- * stream events. `as const` pins the literal `"process"` type through
- * declaration emit — without it, the re-exported constant widens to `string`
- * in the composite build's emitted `.d.ts`, which plugin authors depend on for
- * `plugin.on(pluginId, PLUGIN_PROCESS_STREAM_CHANNEL)` channel-key narrowing.
- */
-declare const PLUGIN_PROCESS_STREAM_CHANNEL: "process";
-/**
- * Event payloads streamed to a plugin's panels over
- * `postToPanel(PLUGIN_PROCESS_STREAM_CHANNEL, …)`. The renderer subscribes via
- * `plugin.on(pluginId, "process")` and discriminates on `kind`.
- */
-type PluginProcessStreamEvent = {
-    kind: "stdout";
-    id: string;
-    chunk: string;
-} | {
-    kind: "stderr";
-    id: string;
-    chunk: string;
+interface RegisteredActionRecord {
+    descriptor: PluginActionContribution;
+    handler: ActionHandler;
+}
+interface RegisteredHandlerRecord {
+    channel: string;
+    handler: PluginIpcHandler;
+}
+interface BroadcastRecord {
+    channel: string;
+    payload: unknown;
+}
+/** Captured `host.postToPanel(channel, payload, panelId?)` calls — the post-activation push path. */
+interface PostToPanelRecord {
+    channel: string;
+    payload: unknown;
+    /** Per-instance target (#10618): a panel id, or `null` for a broadcast. */
+    panelId: string | null;
+}
+interface ShownToastRecord {
+    message: string;
+    type: NotificationType | undefined;
+    durationMs: number | undefined;
+}
+/** Captured `host.process.spawn(command, options)` calls. */
+interface SpawnRecord {
+    command: string;
+    options: PluginProcessSpawnOptions | PluginDuplexProcessSpawnOptions | PluginPtyProcessSpawnOptions | undefined;
+}
+interface DispatchedActionRecord {
+    actionId: ActionId;
+    args: unknown;
+}
+/** Captured `host.sendToActiveAgent(text, options)` calls. */
+interface SentToActiveAgentRecord {
+    text: string;
+    submit: boolean;
+}
+interface RegisteredForgeProviderRecord {
+    descriptor: ForgeProviderDescriptor;
+    impl: ForgeProviderImpl;
+}
+interface RegisteredFileDecorationProviderRecord {
+    descriptor: FileDecorationProviderDescriptor;
+    impl: FileDecorationProviderImpl;
 }
 /**
- * PTY-mode output (#11300). A pseudo-terminal merges stdout and stderr into a
- * single stream, so an interactive process emits `data` instead of the
- * `stdout`/`stderr` pair — a panel rendering process output should handle all
- * three. Pipe-mode processes never emit this kind.
+ * A roster bound through `host.mcp.registerTools`. `tools` is the plugin's own
+ * roster, `execute` functions included, so a test can call a tool directly with
+ * a caller and signal of its choosing.
  */
- | {
-    kind: "data";
-    id: string;
-    chunk: string;
-} | {
-    kind: "exit";
-    id: string;
-    exitCode: number | null;
-    signal: string | null;
-} | {
-    kind: "crash";
-    id: string;
-    exitCode: number | null;
-    signal: string | null;
-};
+interface RegisteredMcpToolsRecord {
+    endpointId: string;
+    tools: Record<string, PluginMcpToolDefinition>;
+}
+interface InvalidationRecord {
+    scope: string;
+    paths: string[] | undefined;
+}
+/** Captured `host.setPanelBadge(panelId, badge)` calls. `null` clears. */
+interface SetPanelBadgeRecord {
+    panelId: string;
+    badge: PluginPanelBadge | null;
+}
+/** Captured `host.showQuickPick(items, options)` calls. */
+interface ShowQuickPickRecord {
+    items: PluginQuickPickItem[];
+    options: PluginQuickPickOptions | undefined;
+}
+/** Captured `host.showInputBox(options)` calls. */
+interface ShowInputBoxRecord {
+    options: PluginInputBoxOptions | undefined;
+}
+/** Captured `host.showConfirm(options)` calls. */
+interface ShowConfirmRecord {
+    options: PluginConfirmOptions;
+}
+/** Captured `host.fs.writeFile(path, contents)` calls. */
+interface FsWriteRecord {
+    path: string;
+    contents: string;
+}
+/** Captured `host.git.commit(worktreePath, options)` calls. */
+interface GitCommitRecord {
+    worktreePath: string;
+    message: string;
+}
+interface MockHostState {
+    readonly registeredActions: ReadonlyArray<RegisteredActionRecord>;
+    readonly registeredHandlers: ReadonlyArray<RegisteredHandlerRecord>;
+    readonly broadcastCalls: ReadonlyArray<BroadcastRecord>;
+    readonly postToPanelCalls: ReadonlyArray<PostToPanelRecord>;
+    readonly shownToasts: ReadonlyArray<ShownToastRecord>;
+    readonly dispatchedActions: ReadonlyArray<DispatchedActionRecord>;
+    readonly sentToActiveAgentCalls: ReadonlyArray<SentToActiveAgentRecord>;
+    readonly registeredForgeProviders: ReadonlyArray<RegisteredForgeProviderRecord>;
+    readonly registeredFileDecorationProviders: ReadonlyArray<RegisteredFileDecorationProviderRecord>;
+    /** Live `host.mcp.registerTools` rosters, one per endpoint id. */
+    readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
+    readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
+    readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
+    readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
+    readonly showInputBoxCalls: ReadonlyArray<ShowInputBoxRecord>;
+    readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
+    readonly spawnCalls: ReadonlyArray<SpawnRecord>;
+    readonly fsWriteCalls: ReadonlyArray<FsWriteRecord>;
+    readonly gitCommitCalls: ReadonlyArray<GitCommitRecord>;
+    /** Captured `host.clipboard.writeText(text)` calls, in order. */
+    readonly clipboardWriteCalls: ReadonlyArray<string>;
+    /**
+     * Captured `host.clipboard.writeImage(pngData)` calls, in order. Records the
+     * byte length rather than the bytes: a test asserts that an image of the
+     * right size was written, and holding multi-MiB buffers alive for the
+     * lifetime of the mock is a memory trap in a suite that builds many hosts.
+     */
+    readonly clipboardWriteImageCalls: ReadonlyArray<number>;
+    /** Captured `host.system.openPath(path)` calls, in order. */
+    readonly systemOpenPathCalls: ReadonlyArray<string>;
+    /** Captured `host.system.showItemInFolder(path)` calls, in order. */
+    readonly systemShowItemCalls: ReadonlyArray<string>;
+    /**
+     * Replace the active worktree and notify every `onDidChangeActiveWorktree`
+     * subscriber. Helpers are top-level on the {@link MockHostState} side of the
+     * intersection so they cannot drift into the production `PluginHostApi`.
+     */
+    simulateActiveWorktreeChange(snapshot: PluginWorktreeSnapshot | null): void;
+    simulateWorktreesChange(snapshots: PluginWorktreeSnapshot[]): void;
+    /**
+     * Push an agent-state snapshot to every `onDidChangeAgentState` subscriber and
+     * update the value `getAgentState()` returns. Mirrors the production host's
+     * cache-then-notify behaviour.
+     */
+    simulateAgentStateChange(snapshot: PluginAgentSnapshot): void;
+    /**
+     * Push a panel lifecycle transition to every `onDidChangePanelLifecycle`
+     * subscriber. Use it to prove a plugin releases durable resources on
+     * `"removed"` and survives `"hidden"` — the distinction the single
+     * `disposeSignal` could not express (#11301).
+     */
+    simulatePanelLifecycleChange(event: PluginPanelLifecycleEvent): void;
+    /**
+     * Push a machine wake to every `onDidWake` subscriber (#12175). Use it to
+     * prove a plugin re-validates state it cached before a sleep, rather than
+     * waiting for a window to regain focus.
+     */
+    simulateSystemWake(event: PluginSystemWakeEvent): void;
+    /**
+     * Pre-seed a deterministic `dispatch()` result for one action id. Overrides
+     * the default in-memory routing (which resolves the registered handler).
+     */
+    setDispatchResult(actionId: ActionId, result: ActionDispatchResult): void;
+    /**
+     * Replace the action catalog that backs `host.actions.list/get/canDispatch`.
+     * Mirrors a snapshot of `ActionService.list()`: pass the slim
+     * {@link PluginActionManifestEntry} entries a plugin would discover, then
+     * assert how the plugin reacts. Replaces (does not merge) any prior seed;
+     * call with `[]` to reset. `canDispatch` derives its verdict from each
+     * entry's `danger` the same way production does — `"safe"` → `"ok"`,
+     * `"confirm"` → `"confirm"`, unknown id → `"restricted"`.
+     */
+    seedActionCatalog(entries: PluginActionManifestEntry[]): void;
+    /**
+     * Fire every active `host.fs.watch` callback with `changedPath`, simulating a
+     * filesystem change the watcher would observe. Like the other `simulate*`
+     * helpers it notifies every registered watcher without path filtering
+     * (containment is a production concern, not modeled here) and lets callback
+     * errors propagate so a test sees them.
+     */
+    simulateFsWatch(changedPath: string): void;
+    /**
+     * Configure what `showQuickPick` resolves to. Default is `undefined` (the
+     * dismiss value a user-cancel produces). Pass a single item or an array for a
+     * `canSelectMany` pick. Lets a test drive a plugin's handling of a real
+     * selection without wrapping the host.
+     */
+    simulateQuickPickResponse(result: PluginQuickPickItem | PluginQuickPickItem[] | undefined): void;
+    /** Configure what `showInputBox` resolves to (default `undefined` = dismissed). */
+    simulateInputBoxResponse(result: string | undefined): void;
+    /**
+     * Force what `getWorktreesResult()` answers, or pass `null` to go back to the
+     * `ok` result derived from the mock's current worktrees.
+     */
+    simulateWorktreesResult(result: PluginWorktreesResult | null): void;
+    /** Configure what `showConfirm` resolves to (default `false` = cancelled). */
+    simulateConfirmResponse(result: boolean): void;
+}
+interface CreateMockHostOptions {
+    pluginId?: string;
+    /**
+     * Project root for a project-owned `pluginId` (one shaped
+     * `project__{projectId}__{manifestId}`). Defaults to a synthetic path; ignored
+     * for an app-global plugin, which has no project.
+     */
+    projectRoot?: string;
+    activeWorktree?: PluginWorktreeSnapshot | null;
+    worktrees?: PluginWorktreeSnapshot[];
+    /**
+     * Seed `getWorktreesResult()` with a specific outcome (#12174) — an
+     * `unavailable` reason, or an `ok` result naming a particular project. Omit
+     * it and the mock derives `{ status: "ok", projectId: "test-project" }` from
+     * `worktrees`, so an author who only cares about the happy path gets the
+     * authoritative answer for free. Override it with
+     * {@link MockHostState.simulateWorktreesResult} to exercise the guards a
+     * plugin should have around an unavailable read.
+     *
+     * While an override is set the legacy `getWorktrees()` / `getActiveWorktree()`
+     * project from it too — the real host derives all three from one read, so a
+     * mock that answered `unavailable` here while still handing back a populated
+     * list there would let a plugin's fallback pass a test it cannot pass in
+     * production.
+     */
+    worktreesResult?: PluginWorktreesResult;
+    settings?: {
+        user?: Record<string, unknown>;
+        project?: Record<string, unknown>;
+        /** Per-project, per-machine scope — a flat map here, like the other two. */
+        local?: Record<string, unknown>;
+    };
+    /**
+     * Opt-in `contributes.settings` declarations (`id` + `scope` are what matter)
+     * so the mock's `settings.get` resolves a key's declared scope the way the real
+     * host does (#10586): a `scope: "project"` key reads from the project store when
+     * no scope arg is given, and an explicit conflicting scope throws. Omitted by
+     * default — the mock has no manifest model (#9878), so loose mode keeps the
+     * `scope ?? "user"` default and existing manifest-free tests are unaffected.
+     */
+    manifestSettings?: SettingDefinition[];
+    /** Pre-seed private `host.storage` values per scope. */
+    storage?: {
+        user?: Record<string, unknown>;
+        project?: Record<string, unknown>;
+        worktree?: Record<string, unknown>;
+    };
+    /**
+     * Custom resolver for `host.dispatch`. The default routes the call to a
+     * matching `registerAction` handler, returning `NOT_FOUND` otherwise — which
+     * mirrors `ActionService.dispatch` closely enough for activation-time tests.
+     */
+    dispatch?: (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>;
+    /**
+     * Declared plugin capabilities (`manifest.capabilities`), gating the agent
+     * APIs the way production does (#10617). `getAgentState` requires `agent:read`
+     * and `sendToActiveAgent` requires `agent:input`; without the capability the
+     * call rejects with `PERMISSION_REQUIRED`, exactly as the real host. Defaults
+     * to a permissive set (`agent:read` + `agent:input`) so existing manifest-free
+     * tests keep working — pass a restricted list (or `[]`) to assert the
+     * rejection a plugin missing the capability would hit.
+     */
+    capabilities?: readonly string[];
+    /**
+     * Whether an agent terminal is currently active. When `false`,
+     * `sendToActiveAgent` rejects `NO_ACTIVE_AGENT`, mirroring production's "no
+     * resolvable active agent" path. Defaults to `true`.
+     */
+    hasActiveAgent?: boolean;
+}
+declare function createMockHost(options?: CreateMockHostOptions): PluginHostApi & MockHostState;
 
-export { type ActionDanger, type ActionDispatchError, type ActionDispatchResult, type ActionDispatchSuccess, type ActionError, type ActionErrorCode, type ActionExample, type ActionHandler, type ActionId, type ActionKind, type AgentState, type AuthValidation, type BuiltInActionId, type BuiltInPluginCapability, type CIStatus, type CheckRun, type CheckRunConclusion, type CheckRunStatus, type ChecksCapability, type ContextMenuContribution, type ContextMenuLocation, type CreateIssueInput, type CredentialImportCandidate, type CredentialImportCapability, type CredentialImportExpected, type CredentialImportFailureReason, type CredentialImportPreview, type CredentialImportUnavailable, type Credentials, type FetchOptions, type FileDecoration, type FileDecorationContribution, type FileDecorationProviderDescriptor, type FileDecorationProviderImpl, type FileEditorContribution, type ForgeLabel, type ForgeProviderContribution, type ForgeProviderDescriptor, type ForgeProviderImpl, type ForgeProviderKind, type ForgeUser, type Issue, type KeybindingContribution, type ListOptions, type McpServerContribution, type MenuItemContribution, type MenuItemLocation, type NormalizedIssueState, type NormalizedPRState, PLUGIN_PROCESS_STREAM_CHANNEL, PLUGIN_STYLE_ROOT_ATTRIBUTE, type PR, type Page, type PanelContribution, type PanelViewProps, type PluginActionContribution, type PluginActionManifestEntry, type PluginActivate, type PluginActivationApi, type PluginAgentMcpContribution, type PluginAgentSnapshot, type PluginAuthor, type PluginCanDispatchResult, type PluginCapability, type PluginChannelSchema, type PluginClipboardApi, type PluginConfirmOptions, type PluginDuplexProcessHandle, type PluginDuplexProcessSpawnOptions, type PluginFsApi, type PluginFsDirEntry, type PluginFsScope, type PluginFsStat, type PluginGitApi, type PluginGitCommitOptions, type PluginGitCommitResult, type PluginGitStatus, type PluginGitStatusFile, type PluginHostActionsApi, type PluginHostApi, type PluginHostCallOptions, type PluginHostSubscriptionOptions, type PluginIdentity, type PluginInputBoxOptions, type PluginIpcContext, type PluginIpcHandler, type PluginLocalSocketScope, type PluginLogger, type PluginManifest, type PluginManifestScopes, type PluginMcpApi, type PluginMcpCaller, type PluginMcpJsonSchema, type PluginMcpToolDefinition, type PluginNetworkScope, type PluginPanelBadge, type PluginPanelBadgeColor, type PluginPanelLifecycleEvent, type PluginPanelLifecyclePhase, type PluginProcessApi, type PluginProcessDataChunk, type PluginProcessHandle, type PluginProcessMode, type PluginProcessSpawnOptions, type PluginProcessStreamEvent, type PluginPtyProcessHandle, type PluginPtyProcessSpawnOptions, type PluginQuickPickItem, type PluginQuickPickOptions, type PluginSettingsScope, type PluginStorageScope, type PluginSystemApi, type PluginSystemWakeEvent, type PluginToastOptions, type PluginTypedIpcHandler, type PluginWorktreeFileState, type PluginWorktreeLinked, type PluginWorktreeLinkedIssue, type PluginWorktreeLinkedPR, type PluginWorktreeSnapshot, type PluginWorktreeStatus, type PluginWorktreeStatusFile, type PluginWorktreesResult, type PluginWorktreesUnavailableReason, type RateLimitInfo, type RepoMetadata, type RepoRef, type ResourceRef, type SettingDefinition, type SettingFieldType, type SettingsApi, type StorageApi, type ToolbarButtonContribution, type ViewContribution, type ViewLocation, type WaitingReason, localAuthStubs };
+export { type BroadcastRecord, type CreateMockHostOptions, type DispatchedActionRecord, type InvalidationRecord, type MockHostState, type PluginActionManifestEntry, type PluginCanDispatchResult, type RegisteredActionRecord, type RegisteredFileDecorationProviderRecord, type RegisteredForgeProviderRecord, type RegisteredHandlerRecord, type RegisteredMcpToolsRecord, type ShowConfirmRecord, type ShowInputBoxRecord, type ShowQuickPickRecord, type ShownToastRecord, createMockHost };

@@ -56,7 +56,7 @@ The `engines.daintree` semver range is validated and compared against the runnin
 
 ### Registration
 
-The manifest `contributes` object has 17 contribution points (`electron/schemas/plugin.ts`): sixteen arrays — `panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes` — each with a per-array cap in `MANIFEST_CONTRIBUTION_CAPS`, plus the non-array `surfaces` object. Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
+The manifest `contributes` object has 20 contribution points (`electron/schemas/plugin.ts`): nineteen arrays — `panels`, `toolbarButtons`, `menuItems`, `keybindings`, `contextMenus`, `commands`, `views`, `mcpServers`, `agentMcp`, `skills`, `forgeProviders`, `fileDecorationProviders`, `agents`, `processTools`, `settings`, `recipes`, plus the built-in-only `fileEditors`, `previewTools` and `guestAdapters` — each with a per-array cap in `MANIFEST_CONTRIBUTION_CAPS`, plus the non-array `surfaces` object. Most register eagerly at plugin-load time so the UI reflects them immediately — the command palette, toolbars, menus, keybindings, and context menus populate before any plugin code runs:
 
 - `panels` → `registerPanelKind()` in `shared/config/panelKindRegistry.ts`
 - `toolbarButtons` → `registerToolbarButton()` in `shared/config/toolbarButtonRegistry.ts`
@@ -221,9 +221,9 @@ Plugin views render inside Daintree's existing panel system. They must share Dai
 
 **Import maps + Vite externals.**
 
-- Plugin bundles externalize React via the `@daintreehq/plugin-vite` preset, which sets `build.rollupOptions.external` to `[/^react($|\/)/, /^react-dom($|\/)/]`. The regex form covers every subpath; `external: ["react"]` matches only the literal string `"react"` and silently bundles `react/jsx-runtime` into plugin output.
-- Daintree's `index.html` injects a `<script type="importmap">` at build time, mapping `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, and `react-dom/client` to the host's `vendor-react` chunk.
-- When the plugin bundle executes in Daintree's renderer, those imports resolve to the host's single React instance.
+- Plugin bundles externalize React via the `@daintreehq/plugin-vite` preset, which sets `build.rollupOptions.external` to a function matching `/^react($|\/)/` and `/^react-dom($|\/)/` (and rejecting any React subpath the host import map does not serve). The pattern form covers every subpath; `external: ["react"]` matches only the literal string `"react"` and silently bundles `react/jsx-runtime` into plugin output.
+- Daintree's `index.html` injects a `<script type="importmap">` at build time, mapping each of `react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, and `react-dom/client` to its own facade module — a small chunk that re-exports only that specifier's public surface. Every facade is backed by the host's single `vendor-react` chunk.
+- When the plugin bundle executes in Daintree's renderer, those imports resolve through the facades to the host's single React instance.
 
 Chromium (Electron 42) supports import maps natively — no polyfill required.
 

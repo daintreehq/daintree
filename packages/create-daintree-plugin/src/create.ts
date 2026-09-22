@@ -1,18 +1,18 @@
 #!/usr/bin/env node
-import { runNew } from "daintree-plugin";
+import { runNewFromArgv } from "daintree-plugin";
 
 /**
- * `npm create daintree-plugin <name>` / `npx create-daintree-plugin <name>`.
- * A thin shim that forwards the positional name to `daintree-plugin new`.
+ * `npm create daintree-plugin <name> [options]` / `npx create-daintree-plugin
+ * <name> [options]`. A thin shim over `daintree-plugin new` that forwards the
+ * whole argument list, so `--publisher`, `--template`, `--project` and `--yes`
+ * behave exactly as they do there.
  */
 function messageOf(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
 }
 
-const name = process.argv[2];
-
-runNew(name).catch((err: unknown) => {
+runNewFromArgv(process.argv.slice(2)).catch((err: unknown) => {
   console.error(messageOf(err));
   process.exit(1);
 });

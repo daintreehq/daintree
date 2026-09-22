@@ -1100,12 +1100,12 @@ See [Architecture → Lifecycle](./architecture.md#lifecycle) for how disposal w
 
 ## Testing against a mock host
 
-`createMockHost` returns a `PluginHostApi` that mirrors production validation and capability gating, so a unit test can run your `activate()` (and your handlers) against a faithful host and assert what it called. It validates the same things the real host does — `showToast` message/type/`durationMs` bounds, `setPanelBadge` shape, `postToPanel`/`broadcastToRenderer` channel format, and `showQuickPick` item arrays — so a malformed call fails the test the way it would fail in the app.
+`createMockHost` returns a `PluginHostApi` backed by in-memory state, so a unit test can run your `activate()` (and your handlers) without Electron and assert what it called. It validates argument shapes the way the real host does — `registerAction` descriptors (id grammar, kind, danger, required strings), `showToast` message/type/`durationMs` bounds, `setPanelBadge` shape, `postToPanel`/`broadcastToRenderer` channel format, `showQuickPick` item arrays, `fs.watch` arguments, and `git.commit`'s non-empty message — so a malformed call fails the test the way it would fail in the app. `fs.writeFile` honours the checked-write contract (`expectedRevision`, `TARGET_EXISTS`, `REVISION_MISMATCH`), `fs.readdir` lists what earlier writes created, and `storage`'s `worktree` scope is isolated per active worktree.
 
-It ships as `@daintreehq/plugin-testing` (`packages/plugin-testing`), which re-exports the implementation from `shared/testing/createMockHost.ts` along with its record types. The package is not on npm yet, so import it by relative path (or through the workspace link) until it publishes.
+It ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK, which re-exports the implementation from `shared/testing/createMockHost.ts` along with its record types. The SDK is not on npm yet, so import it by relative path (or through the workspace link) until it publishes.
 
 ```ts
-import { createMockHost } from "@daintreehq/plugin-testing"; // workspace-linked; not yet on npm
+import { createMockHost } from "@daintreehq/plugin-sdk/testing"; // workspace-linked; not yet on npm
 
 const host = createMockHost({ capabilities: ["agent:read"], hasActiveAgent: false });
 await activate(host);
@@ -1119,7 +1119,19 @@ expect(host.postToPanelCalls[0]).toMatchObject({ channel: "build-status" });
 await expect(host.sendToActiveAgent("hi")).rejects.toThrow(/PERMISSION_REQUIRED/);
 ```
 
-Pass `capabilities` to restrict the declared capability set (the default is permissive — `agent:read` + `agent:input`) and assert the `PERMISSION_REQUIRED` rejection a plugin missing one would hit; pass `hasActiveAgent: false` to assert the `NO_ACTIVE_AGENT` rejection from `sendToActiveAgent`. The recording arrays (`registeredActions`, `registeredHandlers`, `postToPanelCalls`, `shownToasts`, `setPanelBadgeCalls`, `showQuickPickCalls`, and the rest) capture every host call in order.
+Pass `capabilities` to restrict the declared capability set (the default is permissive — `agent:read` + `agent:input`) and assert the `PERMISSION_REQUIRED` rejection a plugin missing one would hit; pass `hasActiveAgent: false` to assert the `NO_ACTIVE_AGENT` rejection from `sendToActiveAgent`. The recording arrays come in two shapes. `registeredActions`, `registeredForgeProviders`, `registeredFileDecorationProviders` and `registeredMcpTools` hold the **current** registrations, not a history: re-registering the same id replaces the earlier entry in place, and disposing a provider or MCP roster removes it. The call records — `registeredHandlers`, `postToPanelCalls`, `shownToasts`, `dispatchedActions`, `setPanelBadgeCalls`, `showQuickPickCalls`, `spawnCalls`, `fsWriteCalls`, `gitCommitCalls`, and the rest — are append-only, in call order. `simulate*` helpers drive worktree, agent-state, panel-lifecycle, wake and `fs.watch` events into your subscribers.
+
+**What the mock does not do.** It has no manifest model and no processes behind it, so a test that passes against it is not proof the real host will accept the plugin. The gaps, from `shared/testing/createMockHost.ts`:
+
+- `process.spawn` records the call and returns an inert handle: `kill`, `restart`, `write` and `resize` are no-ops, and `onData` / `onExit` / `onCrash` never fire.
+- `fs` is an in-memory map of text. No path containment, no symlink modelling, `stat` never reports a directory, and `simulateFsWatch` notifies every watcher regardless of the paths it registered.
+- `git.status` returns no files, `git.diff` returns `""`, `git.add` does nothing, and `git.commit` records the call and answers a synthetic `mock-N` hash.
+- The typed `registerHandler(channel, schema, handler)` overload discards the schema — nothing validates a payload against it.
+- `registerForgeProvider`, `registerFileDecorationProvider` and `mcp.registerTools` skip the manifest-declaration gates (`contributes.forgeProviders` / `fileDecorationProviders` / `agentMcp` and `mcp:expose`), `mcp.registerTools` does not enforce the roster budget, and `invalidateFileDecorations` accepts any non-empty scope, declared or not.
+- Only `getAgentState` and `sendToActiveAgent` are capability-gated. `onDidChangeAgentState` subscribes without `agent:read`, and `fs`, `git`, `process`, `clipboard` and `system` run without `shell:exec`, `fs:*`, `git:write` or any just-in-time consent.
+- `settings` only knows declared scopes when you pass `manifestSettings`, and even then only `get` honours them — `set` writes to whatever scope you name. `onDidChangeWorktrees` ignores `debounceMs`.
+- `logger.info` / `warn` / `error` are no-ops: nothing is printed and nothing is recorded.
+- There is no activation lifecycle: registrations made before a throwing `activate()` are not rolled back, and no `revoke` ever runs, so a handle keeps working after the point at which the real host would have cut it off.
 
 ## What's not exposed
 

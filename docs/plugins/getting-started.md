@@ -93,14 +93,15 @@ export async function activate(host: PluginHostApi): Promise<() => void> {
 
 ## Run it
 
-Build, package, and install the plugin into your running Daintree:
+Install the dev dependencies, then build, package, and install the plugin into your running Daintree:
 
 ```bash
+npm install
 npm run package
 npx daintree-plugin install ./acme.my-first-plugin-0.1.0.dntr
 ```
 
-`npm run package` produces `acme.my-first-plugin-0.1.0.dntr` in the project root — a zip file containing the manifest and compiled bundle. `daintree-plugin install` loads it into the running app.
+The generated `package.json` lists `daintree-plugin` as a devDependency alongside the SDK and the Vite preset, so `npm install` brings the CLI in and the `package` and `validate` scripts run it from `node_modules` — nothing to install globally. `npm run package` produces `acme.my-first-plugin-0.1.0.dntr` in the project root — a zip file containing the manifest and compiled bundle. `daintree-plugin install` loads it into the running app.
 
 In Daintree, open the command palette and run **My First Plugin: Say Hello**. A toast appears.
 
