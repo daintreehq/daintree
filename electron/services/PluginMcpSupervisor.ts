@@ -1165,10 +1165,11 @@ const defaultSpawner: SubprocessSpawner = async (config) => {
   const { execa } = await import("execa");
   const subprocess = execa(config.command, config.args, {
     cwd: config.cwd,
-    // The server sees only the shared allowlist (with proxy/CA settings, since
-    // these servers make outbound HTTPS) plus what its manifest `env` forwards
-    // — never the host's tokens (#12616). `extendEnv: false` is load-bearing:
-    // execa otherwise merges `env` back onto the full `process.env`.
+    // The server gets the shared allowlist (with proxy/CA settings, since these
+    // servers make outbound HTTPS) plus what its manifest `env` forwards — not
+    // the rest of the host environment, where API tokens and NODE_OPTIONS live
+    // (#12616). `extendEnv: false` is load-bearing: execa otherwise merges
+    // `env` back onto the full `process.env`.
     env: minimalWorkerEnv(config.env),
     extendEnv: false,
     stdio: ["pipe", "pipe", "pipe"],

@@ -92,8 +92,8 @@ const NETWORK_ENV_KEYS = [
  * MCP servers — {@link SAFE_ENV_KEYS} plus {@link NETWORK_ENV_KEYS}.
  *
  * Wider than the children a plugin spawns, deliberately and only by that set.
- * The worker hosts network-capable plugins in-process (the built-in GitHub forge
- * provider calls `https://api.github.com` from inside it), and `env` REPLACES
+ * The worker hosts network-capable plugins in-process (a third-party forge
+ * provider calling its host's REST API, say), and `env` REPLACES
  * `process.env` in a utility process — so a user behind a TLS-inspecting proxy
  * would see every plugin's HTTPS call fail with no compile-time signal that
  * anything was dropped. MCP servers are the same case: they exist to call remote
@@ -110,8 +110,17 @@ function buildEnv(
   keys: readonly string[],
   extra: Readonly<Record<string, string>>
 ): NodeJS.ProcessEnv {
+  // Windows env names are case-insensitive, but the child's environment block
+  // is not deduplicated: an `extra` spelled `Path` beside the allowlisted `PATH`
+  // would put both in it, and `PATH` sorts first and wins — silently discarding
+  // the override. Drop the allowlisted spelling whenever `extra` names the key.
+  const overridden =
+    process.platform === "win32"
+      ? new Set(Object.keys(extra).map((key) => key.toUpperCase()))
+      : null;
   const base: NodeJS.ProcessEnv = {};
   for (const key of keys) {
+    if (overridden?.has(key.toUpperCase())) continue;
     const value = process.env[key];
     if (typeof value === "string") base[key] = value;
   }

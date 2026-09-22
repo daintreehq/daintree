@@ -1257,6 +1257,7 @@ describe("PluginMcpSupervisor default spawner environment (issue #12616)", () =>
   ].join("\n");
 
   let restoreEnv: () => void = () => {};
+  let supervisor: PluginMcpSupervisor | null = null;
 
   beforeEach(() => {
     vi.useRealTimers();
@@ -1273,30 +1274,48 @@ describe("PluginMcpSupervisor default spawner environment (issue #12616)", () =>
       if (process.env[key] === undefined) seeded[key] = `seeded-${key}`;
     }
     const saved = new Map<string, string | undefined>();
-    for (const [key, value] of Object.entries(seeded)) {
-      saved.set(key, process.env[key]);
-      process.env[key] = value;
-    }
+    // Registered before the first write, so a throw mid-seed still restores.
     restoreEnv = () => {
       for (const [key, value] of saved) {
         if (value === undefined) delete process.env[key];
         else process.env[key] = value;
       }
     };
+    for (const [key, value] of Object.entries(seeded)) {
+      saved.set(key, process.env[key]);
+      process.env[key] = value;
+    }
   });
 
-  afterEach(() => {
-    restoreEnv();
+  // Teardown lives here, not in a `finally` inside the test: a child that hangs
+  // mid-request holds the test body past its deadline, and vitest does not
+  // unwind it — this hook is what runs next. Shutting down rejects any
+  // in-flight call, and the child is gone before its seeded env is restored.
+  afterEach(async () => {
+    try {
+      const running = supervisor;
+      supervisor = null;
+      if (running) {
+        const pid = running.list()[0]?.pid ?? null;
+        await running.shutdownAll();
+        if (pid !== null) await waitForExit(pid);
+      }
+    } finally {
+      restoreEnv();
+      restoreEnv = () => {};
+    }
   });
 
   async function waitForExit(pid: number): Promise<void> {
     const deadline = Date.now() + 5_000;
-    while (Date.now() < deadline) {
+    for (;;) {
       try {
         process.kill(pid, 0);
-      } catch {
-        return;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "ESRCH") return;
+        throw err;
       }
+      if (Date.now() > deadline) throw new Error(`MCP probe child ${pid} outlived shutdown`);
       await new Promise((r) => setTimeout(r, 20));
     }
   }
@@ -1306,39 +1325,31 @@ describe("PluginMcpSupervisor default spawner environment (issue #12616)", () =>
     resolveSettings: (settingId: string) => Promise<string> = async () => ""
   ): Promise<Record<string, string>> {
     // No `spawner` override — this is the production defaultSpawner.
-    const supervisor = new PluginMcpSupervisor({ killTree: () => {} });
-    let pid: number | null = null;
-    try {
-      await supervisor.start({
-        pluginId: "acme.env",
-        contributions: [
-          {
-            id: "probe",
-            name: "Env probe",
-            command: process.execPath,
-            args: ["-e", SERVER_SCRIPT],
-            ...(manifestEnv ? { env: manifestEnv } : {}),
-          },
-        ],
-        resolveSettings,
-      });
-      const [info] = supervisor.list();
-      pid = info?.pid ?? null;
-      // `start()` resolves on failure too, so readiness must be checked.
-      expect(info?.status, info?.lastError ?? undefined).toBe("ready");
-      const result = (await supervisor.callTool({
-        pluginId: "acme.env",
-        serverId: "probe",
-        tool: "env",
-        args: { keys: PROBED_KEYS },
-      })) as { content: Array<{ text: string }> };
-      return JSON.parse(result.content[0]!.text) as Record<string, string>;
-    } finally {
-      // Runs even when an assertion above throws, so no real child outlives
-      // the test and the env restore in afterEach sees a quiet process.
-      await supervisor.shutdownAll();
-      if (pid !== null) await waitForExit(pid);
-    }
+    const probe = new PluginMcpSupervisor({ killTree: () => {} });
+    supervisor = probe;
+    await probe.start({
+      pluginId: "acme.env",
+      contributions: [
+        {
+          id: "probe",
+          name: "Env probe",
+          command: process.execPath,
+          args: ["-e", SERVER_SCRIPT],
+          ...(manifestEnv ? { env: manifestEnv } : {}),
+        },
+      ],
+      resolveSettings,
+    });
+    const [info] = probe.list();
+    // `start()` resolves on failure too, so readiness must be checked.
+    expect(info?.status, info?.lastError ?? undefined).toBe("ready");
+    const result = (await probe.callTool({
+      pluginId: "acme.env",
+      serverId: "probe",
+      tool: "env",
+      args: { keys: PROBED_KEYS },
+    })) as { content: Array<{ text: string }> };
+    return JSON.parse(result.content[0]!.text) as Record<string, string>;
   }
 
   it("gives a server the shared allowlist and network settings, never the host's other variables", async () => {
