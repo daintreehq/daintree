@@ -30,7 +30,21 @@ const BOX_DRAWING = /[─-╿]/g;
 export type ClaudeTrustPrompt = {
   rejectionSelected: boolean;
   acceptanceSelected: boolean;
+  /**
+   * Which arrow key moves the cursor toward the affirmative option, read from
+   * the rendered order; null when either row can't be located.
+   */
+  acceptanceDirection: "up" | "down" | null;
 };
+
+const SELECTED_ROW = /^\s*[>❯›]/;
+const AFFIRMATIVE_ROW = /^\s*(?:[^\w\s]\s*)?(?:\d+\.\s*)?yes\b/i;
+
+// Rows the current dialog prints between its question and its options, with
+// headroom for wrapping in a narrow pane. A question followed by more than this
+// and no options is an orphan in scrollback (the rest of its dialog was
+// erased), not a dialog that is still rendering.
+const MAX_TRUST_BODY_ROWS = 8;
 
 /**
  * The Claude folder-trust dialog, if it is still live — the last content in
@@ -53,40 +67,84 @@ export function findLiveClaudeTrustPrompt(text: string): ClaudeTrustPrompt | nul
   if (questionIndex === -1) return null;
 
   const after = lines.slice(questionIndex + 1);
-  const firstDialogLine = after.findIndex((line) => TRUST_DIALOG_LINE.test(line));
-  if (firstDialogLine === -1) return { rejectionSelected: false, acceptanceSelected: false };
+  let firstDialogLine = -1;
+  let bodyRows = 0;
+  for (let i = 0; i < after.length; i++) {
+    const line = after[i] ?? "";
+    if (TRUST_DIALOG_LINE.test(line)) {
+      firstDialogLine = i;
+      break;
+    }
+    if (line.trim() !== "" && ++bodyRows > MAX_TRUST_BODY_ROWS) return null;
+  }
+  if (firstDialogLine === -1) {
+    return { rejectionSelected: false, acceptanceSelected: false, acceptanceDirection: null };
+  }
 
   // Explanatory text sits between the question and the options; from the first
   // option on, only options and the footer belong to the dialog. Checking the
   // whole run — not just what follows the last dialog-shaped line — matters
   // because the next startup dialog (the API-key prompt) has the same option
   // and footer shapes, and must not be read as more of this one.
+  const dialog = after.slice(firstDialogLine);
   const isDialogOrBlank = (line: string) => line.trim() === "" || TRUST_DIALOG_LINE.test(line);
-  if (!after.slice(firstDialogLine).every(isDialogOrBlank)) return null;
+  if (!dialog.every(isDialogOrBlank)) return null;
 
+  const selectedRow = dialog.findIndex((line) => SELECTED_ROW.test(line));
+  const affirmativeRow = dialog.findIndex((line) => AFFIRMATIVE_ROW.test(line));
   const block = [lines[questionIndex], ...after].join("\n");
   return {
     rejectionSelected: isClaudeTrustRejectionSelected(block),
     acceptanceSelected: SELECTED_AFFIRMATIVE.test(block),
+    acceptanceDirection: directionToward(selectedRow, affirmativeRow),
   };
+}
+
+function directionToward(from: number, to: number): "up" | "down" | null {
+  if (from === -1 || to === -1 || from === to) return null;
+  return to < from ? "up" : "down";
 }
 
 /**
  * One read of the backend terminal record: the record itself, `"missing"` when
- * the backend no longer knows the terminal, or null when the read failed.
+ * the backend reported it not found, or null when the read failed outright.
  */
 export type AgentStartupInfo = { hasPty?: boolean; agentState?: string } | "missing" | null;
 
+export type AgentPresence = { seen: boolean; missingStreak: number };
+
+// "Not found" is also what a timed-out backend read looks like — the PTY
+// client maps any RPC rejection to null, which the IPC handler reports as not
+// found — so one missing read proves nothing. A PTY that really died stays
+// missing on every read after it.
+export const MISSING_READS_BEFORE_EXIT = 3;
+
+export function initialAgentPresence(): AgentPresence {
+  return { seen: false, missingStreak: 0 };
+}
+
 /**
- * Whether the agent process is gone. `hasPty` alone is not enough: an agent
- * launched into a shell leaves that shell running after it quits, so the
- * backend's `exited` agent state is the signal for that case. A PTY that dies
- * abnormally is dropped from the backend registry instead, so a terminal that
- * goes missing after it was seen has exited too — before it was ever seen, a
- * missing record only means it has not registered yet.
+ * Fold one terminal-record read into the exit decision. `hasPty` alone is not
+ * enough: an agent launched into a shell leaves that shell running after it
+ * quits, so the backend's `exited` agent state is the signal for that case. A
+ * PTY that dies abnormally is dropped from the backend registry instead, which
+ * only counts once the terminal was seen and has stayed missing for a streak —
+ * before it was ever seen, missing just means it has not registered yet.
  */
-export function isAgentStartupExited(info: AgentStartupInfo, seenBefore: boolean): boolean {
-  if (info === "missing") return seenBefore;
-  if (!info) return false;
-  return info.hasPty === false || info.agentState === "exited";
+export function observeAgentStartupInfo(
+  presence: AgentPresence,
+  info: AgentStartupInfo
+): { presence: AgentPresence; exited: boolean } {
+  if (info === "missing") {
+    const missingStreak = presence.seen ? presence.missingStreak + 1 : 0;
+    return {
+      presence: { seen: presence.seen, missingStreak },
+      exited: missingStreak >= MISSING_READS_BEFORE_EXIT,
+    };
+  }
+  if (!info) return { presence, exited: false };
+  return {
+    presence: { seen: true, missingStreak: 0 },
+    exited: info.hasPty === false || info.agentState === "exited",
+  };
 }

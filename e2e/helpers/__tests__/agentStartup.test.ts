@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { findLiveClaudeTrustPrompt, isAgentStartupExited } from "../agentStartup";
+import {
+  MISSING_READS_BEFORE_EXIT,
+  findLiveClaudeTrustPrompt,
+  initialAgentPresence,
+  observeAgentStartupInfo,
+  type AgentPresence,
+  type AgentStartupInfo,
+} from "../agentStartup";
 
 // Covers #12588. The screenshot pipeline answered this dialog with a bare Enter
 // after the CLI started pre-selecting "No, exit", and then kept typing into the
@@ -28,6 +35,7 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(REJECTION_SELECTED)).toEqual({
       rejectionSelected: true,
       acceptanceSelected: false,
+      acceptanceDirection: "down",
     });
   });
 
@@ -35,6 +43,7 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(ACCEPTANCE_SELECTED)).toEqual({
       rejectionSelected: false,
       acceptanceSelected: true,
+      acceptanceDirection: null,
     });
   });
 
@@ -46,6 +55,16 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(trustDialog(options))).toEqual({
       rejectionSelected: false,
       acceptanceSelected: true,
+      acceptanceDirection: null,
+    });
+  });
+
+  it("points up when the affirmative option renders above the selected rejection", () => {
+    const text = trustDialog(["  1. Yes, I trust this folder", "❯ 2. No, exit"]);
+    expect(findLiveClaudeTrustPrompt(text)).toEqual({
+      rejectionSelected: true,
+      acceptanceSelected: false,
+      acceptanceDirection: "up",
     });
   });
 
@@ -69,6 +88,7 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(text)).toEqual({
       rejectionSelected: false,
       acceptanceSelected: true,
+      acceptanceDirection: null,
     });
   });
 
@@ -114,6 +134,7 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(text)).toEqual({
       rejectionSelected: false,
       acceptanceSelected: true,
+      acceptanceDirection: null,
     });
   });
 
@@ -130,6 +151,7 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(text)).toEqual({
       rejectionSelected: true,
       acceptanceSelected: false,
+      acceptanceDirection: "down",
     });
   });
 
@@ -140,6 +162,7 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(text)).toEqual({
       rejectionSelected: false,
       acceptanceSelected: false,
+      acceptanceDirection: null,
     });
   });
 
@@ -158,6 +181,7 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(text)).toEqual({
       rejectionSelected: false,
       acceptanceSelected: true,
+      acceptanceDirection: null,
     });
   });
 
@@ -168,7 +192,31 @@ describe("findLiveClaudeTrustPrompt", () => {
     expect(findLiveClaudeTrustPrompt(text)).toEqual({
       rejectionSelected: false,
       acceptanceSelected: false,
+      acceptanceDirection: null,
     });
+  });
+
+  it("treats a question orphaned above the welcome screen as gone", () => {
+    // The rest of the dialog was erased after it was answered; only its
+    // question row survived in scrollback.
+    const welcome = [
+      "✻ Welcome to Claude Code!",
+      "",
+      "  /help for help, /status for your current setup",
+      "",
+      "  cwd: /tmp/surge-checkout",
+      "",
+      "Tips for getting started:",
+      "",
+      " 1. Ask Claude to create a new app or clone a repository",
+      " 2. Use Claude to help with file analysis, editing, bash commands and git",
+      " 3. Be as specific as you would with another engineer for the best results",
+      " 4. ✔ Run /init to create a CLAUDE.md file with instructions for Claude",
+      "",
+      "> ",
+      "  ? for shortcuts",
+    ];
+    expect(findLiveClaudeTrustPrompt([QUESTION, "", ...welcome].join("\n"))).toBeNull();
   });
 
   it("ignores unrelated mentions of trust", () => {
@@ -183,24 +231,45 @@ describe("findLiveClaudeTrustPrompt", () => {
   });
 });
 
-describe("isAgentStartupExited", () => {
+function observeAll(infos: AgentStartupInfo[]): { presence: AgentPresence; exited: boolean } {
+  let result = { presence: initialAgentPresence(), exited: false };
+  for (const info of infos) result = observeAgentStartupInfo(result.presence, info);
+  return result;
+}
+
+const LIVE = { hasPty: true, agentState: "working" };
+
+describe("observeAgentStartupInfo", () => {
   it("treats the agent as exited while its parent shell survives", () => {
-    expect(isAgentStartupExited({ hasPty: true, agentState: "exited" }, true)).toBe(true);
+    expect(observeAll([LIVE, { hasPty: true, agentState: "exited" }]).exited).toBe(true);
   });
 
   it("treats a dead PTY as exited whatever the agent state says", () => {
-    expect(isAgentStartupExited({ hasPty: false, agentState: "working" }, true)).toBe(true);
+    expect(observeAll([{ hasPty: false, agentState: "working" }]).exited).toBe(true);
   });
 
-  it("treats a terminal that disappeared after it was seen as exited", () => {
-    expect(isAgentStartupExited("missing", true)).toBe(true);
+  it("treats a terminal that stays missing after it was seen as exited", () => {
+    const missing: AgentStartupInfo[] = Array(MISSING_READS_BEFORE_EXIT).fill("missing");
+    expect(observeAll([LIVE, ...missing.slice(1)]).exited).toBe(false);
+    expect(observeAll([LIVE, ...missing]).exited).toBe(true);
+  });
+
+  it("rides out a transient missing read once the terminal answers again", () => {
+    const almost: AgentStartupInfo[] = Array(MISSING_READS_BEFORE_EXIT - 1).fill("missing");
+    expect(observeAll([LIVE, ...almost, LIVE, ...almost]).exited).toBe(false);
+  });
+
+  it("does not let a failed read reset a missing streak", () => {
+    const almost: AgentStartupInfo[] = Array(MISSING_READS_BEFORE_EXIT - 1).fill("missing");
+    expect(observeAll([LIVE, ...almost, null, "missing"]).exited).toBe(true);
   });
 
   it("does not treat a terminal that has not registered yet as exited", () => {
-    expect(isAgentStartupExited("missing", false)).toBe(false);
+    const missing: AgentStartupInfo[] = Array(MISSING_READS_BEFORE_EXIT + 2).fill("missing");
+    expect(observeAll(missing).exited).toBe(false);
   });
 
-  it.each([
+  it.each<[string, AgentStartupInfo]>([
     ["a failed read", null],
     ["an empty record", {}],
     ["a record with no PTY field", { agentState: "idle" }],
@@ -208,6 +277,6 @@ describe("isAgentStartupExited", () => {
     ["a working agent", { hasPty: true, agentState: "working" }],
     ["an idle agent", { hasPty: true, agentState: "idle" }],
   ])("does not treat %s as exited", (_label, info) => {
-    expect(isAgentStartupExited(info, true)).toBe(false);
+    expect(observeAll([LIVE, info]).exited).toBe(false);
   });
 });

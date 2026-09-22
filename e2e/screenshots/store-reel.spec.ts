@@ -38,7 +38,8 @@ import { SEL } from "../helpers/selectors";
 import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
 import {
   findLiveClaudeTrustPrompt,
-  isAgentStartupExited,
+  initialAgentPresence,
+  observeAgentStartupInfo,
   type AgentStartupInfo,
   type ClaudeTrustPrompt,
 } from "../helpers/agentStartup";
@@ -241,10 +242,11 @@ async function readTrustPrompt(panel: Locator): Promise<ClaudeTrustPrompt | null
   return findLiveClaudeTrustPrompt(await getTerminalText(panel).catch(() => ""));
 }
 
-// ArrowUp first; ArrowDown only once ArrowUp visibly did nothing, which is the
-// first option of a list that doesn't wrap. The repeats cover a keystroke the
-// CLI dropped while it was still attaching its input reader.
-const TRUST_NAVIGATION_KEYS = ["\x1b[A", "\x1b[B", "\x1b[A", "\x1b[B"];
+const ARROW_KEYS = { up: "\x1b[A", down: "\x1b[B" } as const;
+// A key is re-sent only when the previous one visibly did nothing within the
+// redraw window, which covers a keystroke the CLI dropped while it was still
+// attaching its input reader.
+const TRUST_NAVIGATION_ATTEMPTS = 3;
 const TRUST_KEY_REDRAW_TIMEOUT_MS = 3_000;
 
 /**
@@ -266,35 +268,41 @@ async function waitForTrustSelectionChange(
 /**
  * Move Claude's trust dialog off "No, exit" and confirm, but only once an
  * affirmative option is visibly selected — the CLI is installed unpinned, so
- * neither the default nor the option order is assumed.
+ * neither the default nor the option order is assumed. "pending" means nothing
+ * was confirmed this time: the dialog redrew mid-answer or shows no readable
+ * selection.
  */
 async function answerClaudeTrustPrompt(
   page: Page,
   panel: Locator,
   prompt: ClaudeTrustPrompt
-): Promise<"answered" | "redrawn" | "unreadable" | "stuck"> {
+): Promise<"answered" | "pending" | "stuck"> {
   let current: ClaudeTrustPrompt | null = prompt;
-  for (const key of TRUST_NAVIGATION_KEYS) {
-    if (!current?.rejectionSelected) break;
-    await writeTerminalInput(page, panel, key);
+  for (
+    let attempt = 0;
+    attempt < TRUST_NAVIGATION_ATTEMPTS && current?.rejectionSelected;
+    attempt++
+  ) {
+    // Step toward the affirmative option as rendered. ArrowUp is the fallback
+    // when the order can't be read: the CLI's select list wraps.
+    await writeTerminalInput(page, panel, ARROW_KEYS[current.acceptanceDirection ?? "up"]);
     current = await waitForTrustSelectionChange(page, panel);
   }
-  if (!current) return "redrawn";
-  if (current.rejectionSelected) return "stuck";
-  if (!current.acceptanceSelected) return "unreadable";
+  if (current?.rejectionSelected) return "stuck";
+  if (!current?.acceptanceSelected) return "pending";
   // Confirm against a settled frame: if a redraw from an earlier key is still
   // in flight, the affirmative frame just read can already be stale.
   await page.waitForTimeout(500);
   const settled = await readTrustPrompt(panel);
-  if (!settled?.acceptanceSelected || settled.rejectionSelected) return "redrawn";
+  if (!settled?.acceptanceSelected || settled.rejectionSelected) return "pending";
   await writeTerminalInput(page, panel, "\r");
   return "answered";
 }
 
-// A dialog with no readable selection is either mid-render or a prompt format
-// this driver does not know. Give the former a few polls, then fail with the
-// screen attached instead of burning the rest of the budget.
-const UNREADABLE_TRUST_PROMPT_POLLS = 5;
+// An answered dialog is gone by the next poll or the one after. A longer run of
+// polls with the dialog still up means input isn't landing or the prompt can't
+// be read, so fail with the screen attached rather than burn the budget.
+const MAX_LIVE_TRUST_PROMPT_POLLS = 8;
 
 /**
  * Wait for the agent panel to reach a ready/welcome state.
@@ -318,8 +326,8 @@ async function waitForAgentReady(
   // The last snapshot that read successfully, kept for the failure report only;
   // decisions use the current read so a failed one never replays a stale screen.
   let lastText = "";
-  let terminalSeen = false;
-  let unreadableTrustPolls = 0;
+  let presence = initialAgentPresence();
+  let liveTrustPromptPolls = 0;
 
   function fail(reason: string): never {
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
@@ -334,9 +342,9 @@ async function waitForAgentReady(
     if (snapshot !== null) lastText = snapshot;
     const text = snapshot ?? "";
 
-    const info = await readAgentStartupInfo(page, panel);
-    if (isAgentStartupExited(info, terminalSeen)) fail("exited before reaching its ready screen");
-    if (info && info !== "missing") terminalSeen = true;
+    const observed = observeAgentStartupInfo(presence, await readAgentStartupInfo(page, panel));
+    presence = observed.presence;
+    if (observed.exited) fail("exited before reaching its ready screen");
 
     // A live dialog outranks ready text: the scrollback can hold a banner
     // drawn before the dialog appeared.
@@ -350,17 +358,17 @@ async function waitForAgentReady(
         lastText = (await getTerminalText(panel).catch(() => null)) ?? lastText;
         fail("trust prompt did not move off the rejection option");
       }
-      if (outcome === "unreadable") {
-        if (++unreadableTrustPolls >= UNREADABLE_TRUST_PROMPT_POLLS) {
-          fail("showed a trust prompt with no recognizable selection");
-        }
-      } else if (outcome === "answered") {
-        unreadableTrustPolls = 0;
+      if (++liveTrustPromptPolls >= MAX_LIVE_TRUST_PROMPT_POLLS) {
+        fail(
+          outcome === "answered"
+            ? "trust prompt stayed up after being confirmed"
+            : "showed a trust prompt with no recognizable selection"
+        );
       }
       await page.waitForTimeout(outcome === "answered" ? 2000 : 1000);
       continue;
     }
-    unreadableTrustPolls = 0;
+    liveTrustPromptPolls = 0;
 
     if (matches.some((re) => re.test(text))) return;
     const lower = text.toLowerCase();
