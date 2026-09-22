@@ -41,6 +41,10 @@ export function markWindowReadyForOpens(win: BrowserWindow): void {
   readyWindows.add(win);
 }
 
+export function isWindowReadyForOpens(win: BrowserWindow): boolean {
+  return readyWindows.has(win);
+}
+
 /**
  * Claim `windowId` for an open that is about to start. Must be taken
  * synchronously with the decision that chose the window, before any await.

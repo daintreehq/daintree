@@ -372,18 +372,31 @@ describe("routeExternalOpen — owners and the picker", () => {
 
   it("waits for a window still behind its paint gate to show before focusing it", async () => {
     const world = makeWorld();
-    const booting = world.add({ active: idFor("/work/known"), visible: false });
+    const booting = world.add({ active: idFor("/work/known"), visible: false, ready: false });
     const deps = makeDeps(world);
 
     const outcome = await routeExternalOpen("/work/known", deps);
+    await routeExternalOpen("/work/known", deps);
 
     expect(outcome).toEqual({ kind: "focused", windowId: booting.id });
     expect(booting.win.show).not.toHaveBeenCalled();
     expect(booting.win.focus).not.toHaveBeenCalled();
 
     booting.paint();
+    // Two opens, one focus: the second didn't stack another listener.
     expect(booting.win.focus).toHaveBeenCalledOnce();
     expect(booting.win.show).not.toHaveBeenCalled();
+  });
+
+  it("brings back a set-up window that is hidden with the app", async () => {
+    const world = makeWorld();
+    const hidden = world.add({ active: idFor("/work/known"), visible: false });
+    const deps = makeDeps(world);
+
+    await routeExternalOpen("/work/known", deps);
+
+    expect(hidden.win.show).toHaveBeenCalledOnce();
+    expect(hidden.win.focus).toHaveBeenCalledOnce();
   });
 
   it("focuses a restoring window claimed for the project instead of making a second view", async () => {

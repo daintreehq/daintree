@@ -10,6 +10,7 @@ import { decideProjectOpenTarget } from "./windowOpenPolicy.js";
 import {
   holdWindowForOpen,
   isWindowBound,
+  isWindowReadyForOpens,
   markWindowReadyForOpens,
   snapshotOpenWorld,
   type IsClosedWorkspace,
@@ -59,12 +60,20 @@ function enqueueOpen(task: () => Promise<unknown>): void {
   );
 }
 
+// Windows already waiting to take focus on their first show, so repeated opens
+// don't stack listeners.
+const pendingFirstShowFocus = new WeakSet<BrowserWindow>();
+
 function revealWindow(win: BrowserWindow): void {
-  // Never shown yet: the window is still behind createWindow's paint gate, and
-  // showing it now would map it blank. Take focus once the gate shows it. (A
-  // hidden app reads the same way; a Dock drop unhides it on its own.)
-  if (!win.isVisible() && !win.isMinimized()) {
+  // A window still setting up can be behind createWindow's paint gate, and
+  // showing it now would map it blank: take focus once the gate shows it. One
+  // that has finished setting up and still reads invisible is hidden with the
+  // app (Cmd+H), which show() brings back.
+  if (!win.isVisible() && !win.isMinimized() && !isWindowReadyForOpens(win)) {
+    if (pendingFirstShowFocus.has(win)) return;
+    pendingFirstShowFocus.add(win);
     win.once("show", () => {
+      pendingFirstShowFocus.delete(win);
       if (!win.isDestroyed()) win.focus();
     });
     return;

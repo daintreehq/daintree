@@ -8,6 +8,7 @@ vi.mock("../../utils/logger.js", () => ({ logError: logErrorMock }));
 import {
   holdWindowForOpen,
   isWindowBound,
+  isWindowReadyForOpens,
   markWindowReadyForOpens,
   reserveWindowForOpen,
   snapshotOpenWorld,
@@ -99,6 +100,13 @@ describe("snapshotOpenWorld", () => {
     expect(
       snapshotOpenWorld(registryOf([w]), "default", (id) => closed.has(id)).windows[0]
     ).toMatchObject({ activeProjectId: null, bridgeProjectId: null, viewProjectIds: ["closed-p"] });
+  });
+
+  it("reports readiness only once a window has been marked", () => {
+    const w = ctx(1, pvm(null));
+    expect(isWindowReadyForOpens(w.browserWindow)).toBe(false);
+    markWindowReadyForOpens(w.browserWindow);
+    expect(isWindowReadyForOpens(w.browserWindow)).toBe(true);
   });
 
   it("never reports a window without a view manager as ready", () => {
