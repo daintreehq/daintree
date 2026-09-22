@@ -5912,7 +5912,7 @@ export class PluginService {
         console.error(`[PluginService] Re-load of "${pluginId}" threw:`, err);
       }
       if (!loaded) {
-        // Engine gate, manifest error, or a throw: restore the reservation. The
+        // Manifest error or a throw: restore the reservation. The
         // disabledPlugins entry was never removed, so the row stays visible.
         // Persisted intent stays "enabled" → pendingRestart:true.
         this.reservedNames.add(pluginId);

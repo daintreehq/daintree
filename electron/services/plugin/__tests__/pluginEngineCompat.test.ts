@@ -41,7 +41,14 @@ describe("checkPluginEngineRange", () => {
     expect(checkPluginEngineRange("0.37.0", "0.36.0 || 0.38.0")).toBe("outside-range");
   });
 
-  it("reports outside-range rather than throwing on an unparseable app version", () => {
+  it("reports outside-range for a range no version can satisfy", () => {
+    expect(checkPluginEngineRange("0.39.0", ">=0.38.0 <0.38.0")).toBe("outside-range");
+    expect(checkPluginEngineRange("0.37.0", "<0.38.0 >=0.38.0")).toBe("outside-range");
+  });
+
+  it("reports outside-range for a malformed app version, even one coerce would accept", () => {
     expect(checkPluginEngineRange("not-a-version", ">=0.37.0")).toBe("outside-range");
+    expect(checkPluginEngineRange("0.37", ">=0.37.0")).toBe("outside-range");
+    expect(checkPluginEngineRange("release-0.37.0", ">=0.37.0")).toBe("outside-range");
   });
 });

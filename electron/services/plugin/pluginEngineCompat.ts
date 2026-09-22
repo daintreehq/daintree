@@ -21,12 +21,16 @@ export function checkPluginEngineRange(
   appVersion: string,
   range: string
 ): PluginEngineMismatch | null {
+  // Checked first so `coerce` can't pass off a malformed version as a release,
+  // and because `ltr`/`gtr` throw on one.
+  if (!semver.valid(appVersion)) return "outside-range";
   const options = { includePrerelease: true };
   if (semver.satisfies(appVersion, range, options)) return null;
   const release = semver.coerce(appVersion);
   if (release && semver.satisfies(release, range)) return null;
-  // `ltr`/`gtr` throw on a version they can't parse.
-  if (!semver.valid(appVersion)) return "outside-range";
+  // No version satisfies an impossible range like `>=0.38.0 <0.38.0`, so which
+  // side the app falls on only reflects comparator order.
+  if (!semver.minVersion(range)) return "outside-range";
   if (semver.ltr(appVersion, range, options)) return "app-too-old";
   if (semver.gtr(appVersion, range, options)) return "app-too-new";
   return "outside-range";

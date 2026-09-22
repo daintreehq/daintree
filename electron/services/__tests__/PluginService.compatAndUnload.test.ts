@@ -398,13 +398,15 @@ describe("engines.daintree compatibility gate", () => {
       version: "1.0.0",
       engines: { daintree: ">=0.8.0" },
     });
+    const previous = Object.getOwnPropertyDescriptor(process, "windowsStore");
     Object.defineProperty(process, "windowsStore", { value: true, configurable: true });
 
     try {
       const service = new PluginService(tmpDir, "0.7.1");
       await service.initialize();
     } finally {
-      Reflect.deleteProperty(process, "windowsStore");
+      if (previous) Object.defineProperty(process, "windowsStore", previous);
+      else Reflect.deleteProperty(process, "windowsStore");
     }
 
     expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
@@ -467,13 +469,18 @@ describe("engines.daintree compatibility gate", () => {
         }
       ): Promise<unknown>;
     };
-    const loaded = await seam.loadPlugin(pluginsParent, "acme.project-future", {
-      isBuiltin: false,
-      disabled: new Set(),
-      origin: "project",
-      instanceKey: "project__proj-a__acme.project-future",
-      binding: { projectId: "proj-a", projectRoot },
-    });
+    let loaded: unknown;
+    try {
+      loaded = await seam.loadPlugin(pluginsParent, "acme.project-future", {
+        isBuiltin: false,
+        disabled: new Set(),
+        origin: "project",
+        instanceKey: "project__proj-a__acme.project-future",
+        binding: { projectId: "proj-a", projectRoot },
+      });
+    } finally {
+      service.dispose();
+    }
 
     expect(loaded).not.toBeNull();
     expect(broadcastToProjectRenderersMock).toHaveBeenCalledWith(
@@ -589,6 +596,25 @@ describe("engines.daintree compatibility gate", () => {
 
     expect(service.listPlugins()).toHaveLength(1);
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
+  });
+
+  it("warns without a directional remedy when the app sits in a gap of the range", async () => {
+    await writePlugin("gap", {
+      name: "acme.gap",
+      version: "1.0.0",
+      engines: { daintree: "0.7.0 || 0.9.0" },
+    });
+
+    const service = new PluginService(tmpDir, "0.8.0");
+    await service.initialize();
+
+    expect(service.hasPlugin("acme.gap")).toBe(true);
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    const payload = broadcastToRendererMock.mock.calls[0][1];
+    expect(payload.message).toContain('"acme.gap" targets Daintree 0.7.0 || 0.9.0');
+    expect(payload.message).not.toContain("Update Daintree");
+    expect(payload.message).not.toContain("newer version of the plugin");
+    expect(payload).not.toHaveProperty("action");
   });
 
   it("loads an exact-version range the app does not match, with a warning", async () => {

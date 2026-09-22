@@ -52,7 +52,7 @@ The schema is built per origin — `getPluginManifestSchema(origin)` — so a ha
 
 Agent `command`/`args` are the one exception to the token check: the schema does **not** validate their `${settings:*}` tokens at parse time even though the runtime resolves them at spawn (see [Environment variable substitution](#environment-variable-substitution)).
 
-The `engines.daintree` semver range is validated and compared against the running Daintree version. A mismatch still loads the plugin and shows a warning toast that it may not work on this version. Local dev builds (`0.37.0-dev.<stamp>`) are compared as the release they precede.
+The `engines.daintree` semver range is validated and compared against the running Daintree version. A mismatch still loads the plugin and shows a warning toast that it may not work on this version. A local dev build (`0.37.0-dev.<stamp>`) that misses the range is also checked against the release it precedes.
 
 ### Registration
 
