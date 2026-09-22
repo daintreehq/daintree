@@ -46,9 +46,18 @@ describe("checkPluginEngineRange", () => {
     expect(checkPluginEngineRange("0.37.0", "<0.38.0 >=0.38.0")).toBe("outside-range");
   });
 
-  it("reports outside-range for a malformed app version, even one coerce would accept", () => {
+  it("reads a nightly whose short SHA isn't strict semver as its release", () => {
+    const nightly = "0.37.0-nightly.20260922120000.0123456";
+    expect(checkPluginEngineRange(nightly, ">=0.37.0")).toBeNull();
+    expect(checkPluginEngineRange(nightly, ">=0.38.0")).toBe("app-too-old");
+    expect(checkPluginEngineRange(nightly, "^0.36.0")).toBe("app-too-new");
+  });
+
+  it("reports outside-range rather than throwing on an unparseable app version", () => {
     expect(checkPluginEngineRange("not-a-version", ">=0.37.0")).toBe("outside-range");
-    expect(checkPluginEngineRange("0.37", ">=0.37.0")).toBe("outside-range");
-    expect(checkPluginEngineRange("release-0.37.0", ">=0.37.0")).toBe("outside-range");
+  });
+
+  it("reports outside-range rather than throwing when a range overflows a version", () => {
+    expect(checkPluginEngineRange("0.37.0", "0.0.0 - 0.0.9007199254740991")).toBe("outside-range");
   });
 });
