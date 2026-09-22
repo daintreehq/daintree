@@ -14,6 +14,10 @@ export interface PanelLifecycleSourceHandle {
   removeListener(event: "destroyed", listener: () => void): unknown;
 }
 
+/** Bounds on a renderer-supplied non-plugin inventory, which main holds in memory. */
+const MAX_INVENTORY_PANELS = 10_000;
+const MAX_PANEL_ID_LENGTH = 512;
+
 /** Resolves a panel kind id to its owning plugin, or `undefined` if unknown. */
 export type PanelKindOwnerResolver = (panelKindId: string) => string | undefined;
 
@@ -158,8 +162,8 @@ export class PluginPanelLifecycleBroker {
   setNonPluginPanels(sourceId: number, panelIds: readonly unknown[]): void {
     if (!Array.isArray(panelIds)) return;
     const ids = new Set<string>();
-    for (const id of panelIds) {
-      if (typeof id === "string" && id.length > 0) ids.add(id);
+    for (const id of panelIds.slice(0, MAX_INVENTORY_PANELS)) {
+      if (typeof id === "string" && id.length > 0 && id.length <= MAX_PANEL_ID_LENGTH) ids.add(id);
     }
     if (ids.size === 0) this.nonPluginBySource.delete(sourceId);
     else this.nonPluginBySource.set(sourceId, ids);

@@ -178,4 +178,27 @@ describe("non-plugin panel inventory (#12610)", () => {
     expect(reportPanelInventory).toHaveBeenCalledTimes(2);
     expect(reportPanelInventory).toHaveBeenLastCalledWith(["t1"]);
   });
+
+  it("resends an unchanged inventory after a failed report", async () => {
+    const reportPanelInventory = vi
+      .fn<(ids: string[]) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("ipc down"))
+      .mockResolvedValue(undefined);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { plugin: { onPanelKindsChanged, reportPanelInventory } },
+    });
+    kinds.set("terminal", "");
+    store.state.panelsById = { t1: { kind: "terminal", location: "grid" } };
+
+    renderHook(() => usePluginPanelLifecycle());
+    expect(reportPanelInventory).toHaveBeenCalledTimes(1);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    store.set({ t1: { kind: "terminal", location: "dock" } });
+    expect(reportPanelInventory).toHaveBeenCalledTimes(2);
+    expect(reportPanelInventory).toHaveBeenLastCalledWith(["t1"]);
+  });
 });

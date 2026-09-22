@@ -996,6 +996,19 @@ describe("PluginDevWorkerHostProxy reloadPanel (#12610)", () => {
     await expect(promise).resolves.toBe("scheduled");
   });
 
+  it("passes a host rejection through, so a foreign target still fails", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.reloadPanel("theirs");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "reloadPanel");
+    proxy.handleMessage({
+      type: "host-result",
+      requestId: call.requestId,
+      ok: false,
+      error: 'Plugin "acme" reloadPanel: panel "theirs" belongs to another plugin',
+    });
+    await expect(promise).rejects.toThrow(/belongs to another plugin/);
+  });
+
   it("rejects an empty panel id without crossing the port", async () => {
     const { proxy, sent } = makeProxy();
     await expect(proxy.host.reloadPanel("  ")).rejects.toThrow(

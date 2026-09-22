@@ -702,12 +702,40 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
   });
 
   it("answers unavailable mid-restart without charging the budget", async () => {
-    await mountContent();
+    const { lifecycle } = await mountContent();
     await pushStatus(worker({ generation: 1 }));
     await pushStatus(worker({ generation: 2, state: "starting" }));
 
     await expect(hostReload()).resolves.toBe("unavailable");
     expect(attempts()).toHaveLength(1);
+
+    // The restart's own rebind replaces the view, uncharged.
+    await pushStatus(worker({ generation: 2 }));
+    await waitFor(() => expect(attempts()).toHaveLength(2));
+    for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await expect(hostReload()).resolves.toBe("scheduled");
+    }
+    expect(blockedBanner()).toBeNull();
+  });
+
+  it("folds a request landing while the replacement loads into it, uncharged", async () => {
+    const { lifecycle } = await mountContent();
+    const { reloadRegisteredPanel } = await import("@/services/plugin/pluginPanelReload");
+    let results: string[] = [];
+    await act(async () => {
+      // The second request lands after the first was admitted but before its
+      // replacement committed.
+      const first = await reloadRegisteredPanel("panel-1");
+      const second = await reloadRegisteredPanel("panel-1");
+      results = [first, second];
+    });
+    expect(results).toEqual(["scheduled", "scheduled"]);
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+
+    for (let i = 1; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await expect(hostReload()).resolves.toBe("scheduled");
+    }
+    expect(blockedBanner()).toBeNull();
   });
 
   it("merges requests landing together into one charged reload", async () => {

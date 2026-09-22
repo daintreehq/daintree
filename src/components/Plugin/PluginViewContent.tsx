@@ -462,12 +462,23 @@ export function makePluginViewContent(
    * throws during render React unwinds the whole subtree and this effect never
    * runs — which is what keeps `mounted` honest rather than optimistic.
    */
-  function PluginViewMountReporter({ panelId }: { panelId: string }) {
+  function PluginViewMountReporter({
+    panelId,
+    attempt,
+    onCommit,
+  }: {
+    panelId: string;
+    attempt: number;
+    onCommit: (attempt: number) => void;
+  }) {
     useEffect(
       () => reportViewMounted(panelId, { kindId, pluginId }),
       // `kindId`/`pluginId` are factory-scope constants, not reactive values.
       [panelId]
     );
+    useEffect(() => {
+      onCommit(attempt);
+    }, [attempt, onCommit]);
     return null;
   }
 
@@ -538,6 +549,15 @@ export function makePluginViewContent(
      * before the replacement commits (#12609).
      */
     const attemptRef = useRef(0);
+    /**
+     * The last attempt whose view actually committed. Behind `attemptRef` while
+     * a replacement is still loading, which is how a backend reload landing in
+     * that window learns a fresh view is already on its way (#12610).
+     */
+    const committedAttemptRef = useRef(-1);
+    const markAttemptCommitted = useCallback((attempt: number) => {
+      committedAttemptRef.current = attempt;
+    }, []);
     // Read once per mount from the lifecycle service, which is where the block
     // lives: a panel stopped for reloading too often stays stopped across a
     // sibling maximize or a dock-tab switch.
@@ -902,6 +922,13 @@ export function makePluginViewContent(
             settle?.("unavailable");
             return;
           }
+          // A backend request while this attempt is still loading: the view it
+          // wants gone never mounted, and the one loading is already fresh.
+          // Charging for it would spend the budget on nothing.
+          if (settle && committedAttemptRef.current !== attempt) {
+            settle(isViewReloadBlocked(panelId) ? "rate-limited" : "scheduled");
+            return;
+          }
           const admission = admitViewReload(panelId);
           if (admission === "refused") {
             settle?.("unavailable");
@@ -1123,7 +1150,11 @@ export function makePluginViewContent(
                   worktreeId={worktreeId}
                   styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
                 />
-                <PluginViewMountReporter panelId={panelId} />
+                <PluginViewMountReporter
+                  panelId={panelId}
+                  attempt={retryCount}
+                  onCommit={markAttemptCommitted}
+                />
               </ContentFadeIn>
             </Suspense>
           </ErrorBoundary>

@@ -7,6 +7,7 @@ import type {
 } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { handlePanelReloadRequest } from "@/services/plugin/pluginPanelReload";
+import type { PluginPanelReloadResponse } from "@shared/types/pluginPanelReload";
 
 /**
  * Project an internal {@link ActionManifestEntry} onto the slim, IPC-safe
@@ -115,10 +116,19 @@ export function usePluginBridge(): void {
     );
 
     const cleanupPanelReload = window.electron.pluginBridge.onPanelReloadRequest?.((request) => {
-      void handlePanelReloadRequest(request).then((response) => {
+      const send = (response: PluginPanelReloadResponse): void => {
         if (disposed) return;
-        window.electron.pluginBridge.sendPanelReloadResponse(response);
-      });
+        try {
+          window.electron.pluginBridge.sendPanelReloadResponse(response);
+        } catch {
+          // Main settles the request as "unavailable" on its own timeout.
+        }
+      };
+      // Always answer: an unanswered request holds the plugin's call open until
+      // main's timeout.
+      void handlePanelReloadRequest(request).then(send, () =>
+        send({ requestId: request.requestId, result: "unavailable" })
+      );
     });
 
     return () => {
