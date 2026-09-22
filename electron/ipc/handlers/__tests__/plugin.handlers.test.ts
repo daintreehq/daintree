@@ -660,6 +660,12 @@ describe("registerPluginHandlers", () => {
     ["a non-object", "acme.my-plugin"],
     ["a missing hash", { pluginId: "acme.my-plugin" }],
     ["an empty hash", { pluginId: "acme.my-plugin", archiveHash: "" }],
+    ["a non-string hash", { pluginId: "acme.my-plugin", archiveHash: 42 }],
+    ["a short hash", { pluginId: "acme.my-plugin", archiveHash: "a".repeat(63) }],
+    ["a non-string plugin id", { pluginId: 7, archiveHash: "a".repeat(64) }],
+    ["a missing plugin id", { archiveHash: "a".repeat(64) }],
+    ["an empty object", {}],
+    ["an array", ["acme.my-plugin", "a".repeat(64)]],
     ["an uppercase hash", { pluginId: "acme.my-plugin", archiveHash: "A".repeat(64) }],
     ["an unscoped plugin id", { pluginId: "../victim", archiveHash: "a".repeat(64) }],
   ])(
