@@ -110,7 +110,7 @@ export default async function planFromIssue(args) {
 
 _Imperative registration (escape hatch for dynamic commands — and the only way to reach host APIs from a command handler):_
 
-> `@daintreehq/plugin-sdk` is the forward-looking published name for the SDK types/runtime (reserved in `shared/types/plugin-sdk.ts`, scaffolded as a dependency by the `daintree-plugin` CLI). It's distinct from the in-repo `daintree-plugin` CLI package — don't conflate the two.
+> `@daintreehq/plugin-sdk` is the published SDK package (its types re-exported from `shared/types/plugin-sdk.ts`, scaffolded as a dependency by the `daintree-plugin` CLI). It's distinct from the `daintree-plugin` CLI package — don't conflate the two.
 
 ```ts
 // src/index.ts

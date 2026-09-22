@@ -2,9 +2,7 @@
 
 The host API is the runtime surface a plugin's `activate` function receives. It exposes Daintree's state and lets plugins register dynamic behavior beyond what's declared in the manifest.
 
-The canonical import source is `@daintreehq/plugin-sdk`. Types referenced here live in that package.
-
-> `@daintreehq/plugin-sdk` is not yet published on npm, so the imports shown below won't resolve from the registry today. The package exists in-repo at `packages/plugin-sdk` (workspace-linked, so these imports build inside the Daintree repo) and re-exports the types from `shared/types/plugin-sdk.ts`. Outside the workspace, point your `tsconfig.json` `paths` at that directory, or import the types by relative path.
+The canonical import source is `@daintreehq/plugin-sdk` (`npm install --save-dev @daintreehq/plugin-sdk`). Types referenced here live in that package, which re-exports them from `shared/types/plugin-sdk.ts`; inside the Daintree repo the workspace link resolves the same imports to the local build.
 
 ## Calling conventions
 
@@ -1102,10 +1100,10 @@ See [Architecture → Lifecycle](./architecture.md#lifecycle) for how disposal w
 
 `createMockHost` returns a `PluginHostApi` backed by in-memory state, so a unit test can run your `activate()` (and your handlers) without Electron and assert what it called. It validates argument shapes the way the real host does — `registerAction` descriptors (id grammar, kind, danger, required strings), `showToast` message/type/`durationMs` bounds, `setPanelBadge` shape, `postToPanel`/`broadcastToRenderer` channel format, `showQuickPick` item arrays, `fs.watch` arguments, and `git.commit`'s non-empty message — so a malformed call fails the test the way it would fail in the app. `fs.writeFile` honours the checked-write contract (`expectedRevision`, `TARGET_EXISTS`, `REVISION_MISMATCH`), `fs.readdir` lists what earlier writes created, and `storage`'s `worktree` scope is isolated per active worktree.
 
-It ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK, which re-exports the implementation from `shared/testing/createMockHost.ts` along with its record types. The SDK is not on npm yet, so import it by relative path (or through the workspace link) until it publishes.
+It ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK, which re-exports the implementation from `shared/testing/createMockHost.ts` along with its record types, and installs from npm with the rest of the package.
 
 ```ts
-import { createMockHost } from "@daintreehq/plugin-sdk/testing"; // workspace-linked; not yet on npm
+import { createMockHost } from "@daintreehq/plugin-sdk/testing";
 
 const host = createMockHost({ capabilities: ["agent:read"], hasActiveAgent: false });
 await activate(host);

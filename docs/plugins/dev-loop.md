@@ -2,9 +2,9 @@
 
 The `daintree-plugin` CLI provides the plugin author's tooling. Install it as a dev dependency or use `npx`.
 
-> `daintree-plugin` is not yet published on npm — the `npm install --save-dev daintree-plugin` and `npx daintree-plugin` commands below return E404 today. The CLI lives in-repo at `packages/daintree-plugin` and the publish pipeline exists (`.github/workflows/release-packages.yml`, fired by a `daintree-plugin-v*` tag), so this is waiting on a release rather than on the tooling. Until it ships: build the workspace packages once from a Daintree checkout (`npm run packages:build`) and run the built binary directly — `node packages/daintree-plugin/dist/cli.js <command>` — or build plugins by hand (see [Getting started](./getting-started.md)) and sideload them manually (see [Distribution → Sideload](./distribution.md#sideload)). Every `npx daintree-plugin …` on this page reads as that `node …/dist/cli.js …` form until the package is published.
+> Working inside the Daintree repo itself? The CLI is the workspace package at `packages/daintree-plugin`; after `npm run packages:build` you can run that local build directly with `node packages/daintree-plugin/dist/cli.js <command>` instead of the published one.
 
-> **Maintainers.** All four packages (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin`, `create-daintree-plugin`) are published from `main` by `.github/workflows/release-packages.yml`, which fires on the per-package tags `sdk-v*`, `plugin-vite-v*`, `daintree-plugin-v*` and `create-daintree-plugin-v*` and authenticates with npm Trusted Publishing (OIDC, no stored token). npm only lets a trusted publisher be registered for a package that already exists, so the very first version of each package has to be published by hand from a logged-in `main` checkout, in dependency order — plugin-sdk, plugin-vite, daintree-plugin, create-daintree-plugin — before the workflow can take over. The "not yet published" wording lives in `README.md` (status banner and versioning section), `getting-started.md` (banner), this page (this banner, the scaffold `package.json` note, the "build by hand" aside, the `createMockHost` note and the CI example), `host-api.md` (banner and the testing section), and `agent-brief.md` (the CLI note and the toolchain aside); clean them up together at publish time.
+> **Maintainers.** All four packages (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin`, `create-daintree-plugin`) are on npm at 0.1.0, and every release follows the same procedure: the version bump rides a normal PR to `develop`, reaches `main` with the next app release, and the per-package tag (`sdk-v*`, `plugin-vite-v*`, `daintree-plugin-v*`, `create-daintree-plugin-v*`) is cut from `main`. `.github/workflows/release-packages.yml` fires on those tags and publishes every package whose version is not yet on the registry, authenticating with npm Trusted Publishing (OIDC, no stored token). The `release-packages` skill in `.claude/skills/release-packages/` drives it end to end — which packages changed, the pre-1.0 version cascade through dependents and the scaffold's pinned ranges, the bump PR and the tags. The one case the workflow cannot cover is a package that has never been published, since npm registers a trusted publisher only against an existing package: a new package's first version goes up by hand, then the workflow takes over.
 
 ```bash
 npm install --save-dev daintree-plugin
@@ -27,7 +27,7 @@ npx daintree-plugin new my-plugin [--publisher acme] [--template command|view|mc
 Creates `./my-plugin/` with:
 
 - `plugin.json` — starter manifest
-- `package.json` — npm dev deps (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, Vite, TypeScript). Note: `@daintreehq/plugin-sdk` and `@daintreehq/plugin-vite` are not yet published, so `npm install` against this generated `package.json` will fail today — see the caveat at the top of this page.
+- `package.json` — npm dev deps (`@daintreehq/plugin-sdk`, `@daintreehq/plugin-vite`, `daintree-plugin`, Vite, TypeScript), each pinned to a caret range of the version the CLI was released with
 - `vite.config.ts` — pre-configured for plugin builds
 - `tsconfig.json`
 - `src/` — starter code based on template choice
@@ -61,7 +61,7 @@ The one case the generated file cannot fix is a project that ignores `.daintree/
 
 ### The edit loop
 
-For a live hot-reload loop, use [`daintree-plugin dev`](#daintree-plugin-dev) below. The manual package-and-install loop is still available — it's the right choice when you want to exercise the exact production load path, or whenever the CLI isn't on hand (it's unpublished today; see the caveat at the top of this page — package and install by hand following [Distribution → Sideload](./distribution.md#sideload)). The manual loop:
+For a live hot-reload loop, use [`daintree-plugin dev`](#daintree-plugin-dev) below. The manual package-and-install loop is still available — it's the right choice when you want to exercise the exact production load path, and it is also what you fall back on when the CLI isn't on hand (package and install by hand following [Distribution → Sideload](./distribution.md#sideload)). The manual loop:
 
 ```bash
 cd my-plugin
@@ -248,12 +248,12 @@ If neither explains it:
 
 ## Testing
 
-> `createMockHost` ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK, which is workspace-linked but not yet published to npm (see [Status](./README.md)) — import it by relative path from `shared/testing/createMockHost.ts` outside the workspace. The entry re-exports the mock and its record types. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
+> `createMockHost` ships as the `@daintreehq/plugin-sdk/testing` entry of the SDK and installs from npm with the rest of it (`npm install --save-dev @daintreehq/plugin-sdk`); inside the Daintree repo the workspace link resolves the same import to the local build. The entry re-exports the mock and its record types. The example below mirrors `plugins/sample/hello-daintree/__tests__/activate.test.ts`.
 
 ```ts
 // src/plan-from-issue.test.ts
 import { describe, it, expect } from "vitest";
-import { createMockHost } from "@daintreehq/plugin-sdk/testing"; // workspace-linked; not yet on npm
+import { createMockHost } from "@daintreehq/plugin-sdk/testing";
 import planFromIssue from "./plan-from-issue";
 
 describe("plan-from-issue", () => {
@@ -271,14 +271,13 @@ describe("plan-from-issue", () => {
 
 ### Testing a raw-ESM project plugin
 
-A hand-written project plugin has no build and no SDK import, and the same mock host tests it. Import `createMockHost` by relative path from a Daintree checkout, import your worker entry by file URL, and drive the handlers exactly the way `PluginService` does: context first, payload second. That last part is the point of the test, because it is the convention a first plugin gets wrong.
+A hand-written project plugin has no build and no SDK import at runtime, and the same mock host tests it. Add `@daintreehq/plugin-sdk` and `vitest` as devDependencies — a `package.json` beside the plugin is test tooling only; the host loads `plugin.json` and `dist/` and never reads it — then import `createMockHost` from the SDK's `testing` entry, import your worker entry by file URL, and drive the handlers exactly the way `PluginService` does: context first, payload second. That last part is the point of the test, because it is the convention a first plugin gets wrong.
 
 ```ts
-// test/worker.test.ts — run from inside the Daintree checkout, or point the
-// relative import at yours.
+// test/worker.test.ts
 import { pathToFileURL } from "node:url";
 import { describe, it, expect } from "vitest";
-import { createMockHost } from "../../../shared/testing/createMockHost";
+import { createMockHost } from "@daintreehq/plugin-sdk/testing";
 
 const ctx = { projectId: "p1", worktreeId: "w1", webContentsId: 1, pluginId: "acme.dashboard" };
 
@@ -299,7 +298,7 @@ describe("worker", () => {
 });
 ```
 
-The view mounts under jsdom with the bridge stubbed. `dist/panel.js` bare-imports `react`, which the app resolves through its import map; under vitest it resolves from `node_modules`, so run the test where `react` is installed (the Daintree checkout, or add it as a devDependency of the plugin).
+The view mounts under jsdom with the bridge stubbed. `dist/panel.js` bare-imports `react`, which the app resolves through its import map; under vitest it resolves from `node_modules`, so add `react` and `react-dom` as devDependencies of the plugin (or run the test inside the Daintree checkout, where they are already installed).
 
 ```ts
 // test/panel.test.tsx
@@ -342,9 +341,7 @@ If you publish `@daintreehq/plugin-sdk`-dependent utilities or shared code as np
 
 Recommended CI setup for plugins published to GitHub Releases:
 
-> The `daintree-plugin` commands in this workflow are not yet published on npm and will return E404 today. This YAML shows the intended setup once the CLI ships.
->
-> (This is a workflow for **your** plugin's repository. Daintree's own package-publishing workflow is `.github/workflows/release-packages.yml`, which is a different thing.)
+> This is a workflow for **your** plugin's repository. Daintree's own package-publishing workflow is `.github/workflows/release-packages.yml`, which is a different thing.
 
 ```yaml
 # .github/workflows/release.yml

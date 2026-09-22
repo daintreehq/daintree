@@ -89,7 +89,7 @@ Two more things that are not failures, and get misread as one. A new manifest id
 
 ## The zero-build skeleton
 
-The `daintree-plugin` CLI is not on npm yet, so `npx daintree-plugin new --project` returns E404 outside this repository. That is survivable, because neither half of a plugin has to be compiled: the **view** is imported by the renderer as browser ESM, where a bare `react` specifier resolves through the host's import map, and the **worker entry** is imported by Node in a utility process. Hand-write both and you need no toolchain at all.
+`npx daintree-plugin new --project` scaffolds a project plugin with a Vite build, but neither half of a plugin has to be compiled: the **view** is imported by the renderer as browser ESM, where a bare `react` specifier resolves through the host's import map, and the **worker entry** is imported by Node in a utility process. Hand-write both and you need no toolchain at all.
 
 Treat this as a load probe — the smallest thing that provably activates and renders. Grow it once it works.
 
@@ -210,7 +210,7 @@ export default function Panel({ panelId, pluginId }) {
 
 Use the `pluginId` prop rather than hardcoding your manifest name — for a project plugin the runtime id is an instance key, not the manifest id.
 
-What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS files. If you need those, build inside a Daintree checkout where the workspace packages resolve — outside one there is no published toolchain yet. [dev-loop.md](./dev-loop.md) covers the watcher.
+What the no-build path costs: the React hooks in `@daintreehq/plugin-sdk/react` resolve only in a bundle built with `@daintreehq/plugin-vite`, so a raw view uses the `window.electron.plugin` bridge directly as above; and the view can import `react` plus its own relative modules, but not arbitrary bare npm specifiers, TypeScript, JSX, or CSS files. If you need those, add the toolchain — `npm install --save-dev @daintreehq/plugin-sdk @daintreehq/plugin-vite daintree-plugin`, or scaffold with `npx daintree-plugin new --project` — and build with Vite. [dev-loop.md](./dev-loop.md) covers the watcher.
 
 ## Styling: use Tailwind
 
