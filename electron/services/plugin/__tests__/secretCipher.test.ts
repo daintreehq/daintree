@@ -74,9 +74,12 @@ describe("safeStorageCipher tier", () => {
 
     it("skips the backend lookup when encryption is unavailable", () => {
       safeStorageMock.isEncryptionAvailable.mockReturnValue(false);
+      safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
 
       expect(safeStorageCipher.tier()).toBe("plaintext");
+      expect(safeStorageCipher.encrypt("hunter2")).toBeNull();
       expect(safeStorageMock.getSelectedStorageBackend).not.toHaveBeenCalled();
+      expect(safeStorageMock.encryptString).not.toHaveBeenCalled();
     });
   });
 
