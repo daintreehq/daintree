@@ -129,6 +129,7 @@ function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
 export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialogProps) {
   const folderNameErrorId = useId();
   const shallowHintId = useId();
+  const urlProblemId = useId();
   const [url, setUrl] = useState("");
   const [parentPath, setParentPath] = useState("");
   const [folderName, setFolderName] = useState("");
@@ -453,6 +454,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter acts as Retry too — startClone resets `error` internally, so this
     // matches the on-screen Retry button instead of going dead after a failure.
+    // Enter that confirms an IME candidate is composition, not submission.
+    if (e.nativeEvent.isComposing) return;
     if (e.key === "Enter" && canClone && !isCloning && !isComplete) {
       e.preventDefault();
       void startClone();
@@ -492,21 +495,34 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
   // What pressing Clone will do, said once — or, until it can, what is still
   // missing. Replaces the path caption that used to hang under the name field.
+  const urlProblem =
+    url.trim() === ""
+      ? "Paste a repository URL to continue"
+      : !isValidCloneUrl(url, shorthandHost)
+        ? shorthandHost
+          ? "Use a repository URL or owner/repo"
+          : "Use a full repository URL"
+        : null;
+  const urlIsInvalid = urlProblem !== null && url.trim() !== "";
+
+  // What pressing Clone will do, said once — or, until it can, the first thing
+  // still in the way. Blockers are checked before the summary so a path from an
+  // earlier valid state never stands in for why Clone went dark.
   const outcomeHint =
-    destinationPath !== null && folderNameError === null ? (
+    urlProblem !== null ? (
+      <span id={urlProblemId} className="truncate">
+        {urlProblem}
+      </span>
+    ) : parentPath.trim() === "" ? (
+      <span className="truncate">Choose a location to continue</span>
+    ) : folderNameError !== null ? (
+      <span className="truncate">Fix the folder name to continue</span>
+    ) : destinationPath === null ? (
+      <span className="truncate">Name the folder to continue</span>
+    ) : (
       <span className="flex min-w-0 items-center gap-1.5">
         <span className="shrink-0">Clones into</span>
         <PathCaption path={destinationPath} className="min-w-0 text-text-primary" />
-      </span>
-    ) : (
-      <span className="truncate">
-        {!isValidCloneUrl(url, shorthandHost)
-          ? "Paste a repository URL to continue"
-          : parentPath.trim() === ""
-            ? "Choose a location to continue"
-            : folderNameError !== null
-              ? "Fix the folder name to continue"
-              : "Name the folder to continue"}
       </span>
     );
 
@@ -756,6 +772,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                     onKeyDown={handleKeyDown}
                     placeholder="owner/repo or repository URL"
                     disabled={isCloning}
+                    aria-invalid={urlIsInvalid || undefined}
+                    aria-describedby={urlIsInvalid ? urlProblemId : undefined}
                     spellCheck={false}
                     autoComplete="off"
                     className={FIELD_INPUT}

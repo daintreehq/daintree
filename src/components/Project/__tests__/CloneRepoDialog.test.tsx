@@ -113,7 +113,16 @@ vi.mock("@/components/ui/AppDialog", () => {
   AppDialog.Title = ({ children }: AppDialogSectionProps) => <h2>{children}</h2>;
   AppDialog.CloseButton = () => <button type="button">close</button>;
   AppDialog.Body = ({ children, className: _ }: AppDialogSectionProps) => <div>{children}</div>;
-  AppDialog.Footer = ({ children, className: _ }: AppDialogSectionProps) => <div>{children}</div>;
+  AppDialog.Footer = ({
+    children,
+    hint,
+    className: _,
+  }: AppDialogSectionProps & { hint?: ReactNode }) => (
+    <div>
+      {hint !== undefined && <div data-testid="footer-hint">{hint}</div>}
+      {children}
+    </div>
+  );
 
   return { AppDialog };
 });
@@ -484,6 +493,52 @@ describe("CloneRepoDialog", () => {
     await act(async () => {
       fireEvent.click(retry);
       fireEvent.keyDown(screen.getByLabelText(/^name$/i), { key: "Enter" });
+    });
+    expect(cloneRepoMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("names the URL as the blocker once it stops being clonable, even with a destination set", async () => {
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByLabelText(/^url$/i);
+    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+    });
+    expect(screen.getByTestId("footer-hint").textContent).toContain("repo");
+    expect(urlInput.getAttribute("aria-invalid")).toBeNull();
+
+    // A manual folder name keeps the destination alive while the URL breaks.
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "repo" } });
+    fireEvent.change(urlInput, { target: { value: "not a url" } });
+
+    const hint = screen.getByTestId("footer-hint");
+    expect(hint.textContent).not.toContain("Clones into");
+    expect(urlInput.getAttribute("aria-invalid")).toBe("true");
+    const describedBy = urlInput.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    const description = document.getElementById(describedBy!);
+    expect(description).not.toBeNull();
+    expect(hint.contains(description)).toBe(true);
+  });
+
+  it("doesn't submit on the Enter that confirms an IME composition", async () => {
+    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByLabelText(/^url$/i);
+    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+    });
+
+    await act(async () => {
+      fireEvent.keyDown(urlInput, { key: "Enter", isComposing: true });
+    });
+    expect(cloneRepoMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      fireEvent.keyDown(urlInput, { key: "Enter" });
     });
     expect(cloneRepoMock).toHaveBeenCalledTimes(1);
   });

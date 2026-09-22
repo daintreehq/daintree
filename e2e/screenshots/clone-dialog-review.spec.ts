@@ -320,7 +320,7 @@ async function closeDialog(page: Page): Promise<void> {
 /** Fill the form to a clonable state. `parentPath` is picker-only by design. */
 async function fillForm(page: Page, url = CLONE_URL): Promise<void> {
   await dialog(page).locator("#clone-repo-url").fill(url);
-  await dialog(page).getByRole("button", { name: "Browse" }).click();
+  await dialog(page).getByRole("button", { name: "Browse for a location" }).click();
   await settle(page, 400);
 }
 
