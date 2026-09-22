@@ -67,12 +67,14 @@ vi.mock("@/components/FileViewer/ImageDiffViewer", () => ({
   isImageDiffCandidate: isImageDiffCandidateMock,
 }));
 vi.mock("@/components/ui/EmptyState", () => ({
-  EmptyState: (props: { title: string; description?: string }) => (
+  EmptyState: (props: { title: string; description?: string; action?: ReactNode }) => (
     <div
       data-testid="empty-state-mock"
       data-title={props.title}
       data-description={props.description}
-    />
+    >
+      {props.action}
+    </div>
   ),
 }));
 
@@ -158,6 +160,7 @@ function sourceEnabledCalls(): boolean[] {
 }
 
 import { DiffPane } from "../DiffPane";
+import { actionService } from "@/services/ActionService";
 
 const PANEL_ID = "diff-1";
 const WORKTREE_ID = "wt-1";
@@ -896,11 +899,30 @@ describe("DiffPane — audio current-version mode (#11425)", () => {
 });
 
 describe("DiffPane — PDF current-version mode (#11427)", () => {
+  // The frame mounts only once a HEAD on its URL answers 200 (#12598).
+  const pdfProbeMock = vi.fn();
+  beforeEach(() => {
+    pdfProbeMock.mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", pdfProbeMock);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    pdfProbeMock.mockReset();
+  });
+
   function pdfFrame(container: HTMLElement): HTMLIFrameElement | null {
     return container.querySelector("iframe");
   }
 
-  it("shows the working-tree PDF instead of rendering a diff", () => {
+  function waitForFrame(container: HTMLElement): Promise<HTMLIFrameElement> {
+    return waitFor(() => {
+      const frame = pdfFrame(container);
+      if (!frame) throw new Error("no PDF frame yet");
+      return frame;
+    });
+  }
+
+  it("shows the working-tree PDF instead of rendering a diff", async () => {
     seedPanel({
       filePath: "docs/spec.pdf",
       fileStatus: "modified",
@@ -908,7 +930,7 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
     });
     const { container } = renderPane();
 
-    const src = new URL(pdfFrame(container)?.getAttribute("src") ?? "");
+    const src = new URL((await waitForFrame(container)).getAttribute("src") ?? "");
     expect(src.protocol).toBe("daintree-pdf:");
     // The absolute working-tree path rides the protocol URL, and no text diff
     // is attempted for a binary document.
@@ -916,13 +938,14 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
     expect(screen.queryByTestId("diff-viewer-mock")).toBeNull();
   });
 
-  it("hides the text-diff layout controls in PDF mode", () => {
+  it("hides the text-diff layout controls in PDF mode", async () => {
     seedPanel({
       filePath: "docs/spec.pdf",
       fileStatus: "modified",
       changeSet: [entry("docs/spec.pdf")],
     });
-    renderPane();
+    const { container } = renderPane();
+    await waitForFrame(container);
 
     expect(screen.queryByRole("button", { name: "Unified" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Wrap long lines" })).toBeNull();
@@ -937,7 +960,7 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
       changeSet: [entry("docs/spec.pdf")],
     });
     const { container } = renderPane();
-    const before = pdfFrame(container)?.getAttribute("src");
+    const before = (await waitForFrame(container)).getAttribute("src");
 
     fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
 
@@ -955,6 +978,68 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
 
     expect(pdfFrame(container)).toBeNull();
     expect(screen.getByTestId("empty-state-mock")).toBeTruthy();
+    // Nothing to frame, so nothing to probe.
+    expect(pdfProbeMock).not.toHaveBeenCalled();
+  });
+
+  it("shows the preview's reason instead of a blank frame when the document is refused (#12598)", async () => {
+    pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    const { container } = renderPane();
+
+    const empty = await screen.findByTestId("empty-state-mock");
+    expect(empty.getAttribute("data-title")).toBeTruthy();
+    expect(empty.getAttribute("data-description")).toBeTruthy();
+    expect(pdfFrame(container)).toBeNull();
+  });
+
+  it("hands a refused PDF to the default app from its error state", async () => {
+    const dispatch = vi
+      .spyOn(actionService, "dispatch")
+      .mockResolvedValue({ ok: true, result: undefined });
+    pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    renderPane();
+
+    const empty = await screen.findByTestId("empty-state-mock");
+    const open = Array.from(empty.querySelectorAll("button")).find(
+      (b) => b.textContent?.trim() === "Open in default app"
+    );
+    if (!open) throw new Error("no default-app action in the PDF error state");
+    await act(async () => {
+      fireEvent.click(open);
+    });
+
+    expect(dispatch).toHaveBeenCalledWith(
+      "file.openInBrowser",
+      { path: "/repo/docs/spec.pdf" },
+      { source: "user" }
+    );
+    dispatch.mockRestore();
+  });
+
+  it("tries the document again from the toolbar Refresh after a refusal", async () => {
+    pdfProbeMock.mockResolvedValueOnce({ ok: false, status: 404 });
+    seedPanel({
+      filePath: "docs/spec.pdf",
+      fileStatus: "modified",
+      changeSet: [entry("docs/spec.pdf")],
+    });
+    const { container } = renderPane();
+    await screen.findByTestId("empty-state-mock");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+
+    await waitForFrame(container);
+    expect(screen.queryByTestId("empty-state-mock")).toBeNull();
   });
 });
 

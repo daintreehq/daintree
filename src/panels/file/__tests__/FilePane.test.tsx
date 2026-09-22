@@ -1590,6 +1590,29 @@ describe("FilePane diff mode (#11274)", () => {
   });
 
   describe("PDF preview (#11427)", () => {
+    // The frame mounts only once a HEAD on its URL answers 200 (#12598).
+    const pdfProbeMock = vi.fn();
+    beforeEach(() => {
+      pdfProbeMock.mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal("fetch", pdfProbeMock);
+    });
+    afterEach(() => {
+      vi.unstubAllGlobals();
+      pdfProbeMock.mockReset();
+    });
+
+    function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | undefined {
+      return Array.from(container.querySelectorAll("button")).find(
+        (b) => b.textContent?.trim() === text
+      );
+    }
+
+    async function clickButton(el: HTMLElement) {
+      await act(async () => {
+        el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+    }
+
     it("frames the PDF scheme instead of reading the file as text", async () => {
       const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
 
@@ -1629,6 +1652,108 @@ describe("FilePane diff mode (#11274)", () => {
       await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
       expect(screen.queryByText(/Binary file/)).toBeNull();
       expect(readMock).not.toHaveBeenCalled();
+    });
+
+    describe("when the document can't be framed (#12598)", () => {
+      it("lands in the error state with the preview's reason instead of a blank frame", async () => {
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+        const { container } = await renderPane({ filePath: "/repo/docs/huge.pdf" });
+
+        await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
+        expect(container.querySelector("iframe")).toBeNull();
+        const message = container.querySelector('[data-testid="file-pane-body"] p')?.textContent;
+        expect(message).toBeTruthy();
+        // The code is shared with the text path, whose message names its own
+        // 500 KB ceiling — a PDF refused under a different cap must not borrow it.
+        expect(message).not.toBe(FILE_READ_ERROR_MESSAGES.FILE_TOO_LARGE);
+      });
+
+      it("offers to open a PDF inside a governed root in the default app", async () => {
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+        const { container } = await renderPane({ filePath: "/repo/docs/huge.pdf" });
+
+        const open = await waitFor(() => {
+          const found = buttonByText(container, "Open in default app");
+          if (!found) throw new Error("no default-app action yet");
+          return found;
+        });
+        await clickButton(open);
+
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "file.openInBrowser",
+          { path: "/repo/docs/huge.pdf" },
+          { source: "user" }
+        );
+      });
+
+      it("offers the guarded reveal instead for a PDF no project owns", async () => {
+        // The OS open is root-contained and would refuse this file outright;
+        // reveal carries the out-of-root fallback, so it is the way out here.
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+        const { container } = await renderPane({
+          filePath: "/elsewhere/huge.pdf",
+          worktreeId: undefined,
+        });
+
+        await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
+        expect(buttonByText(container, "Open in default app")).toBeUndefined();
+        const reveal = buttonByText(container, revealCopy().label);
+        if (!reveal) throw new Error("no reveal action in the error state");
+        await clickButton(reveal);
+
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "file.showItemInFolder",
+          { path: "/elsewhere/huge.pdf", allowOutsideRoots: true },
+          { source: "user" }
+        );
+      });
+
+      it("names a failed default-app open for what it tried, not for a browser", async () => {
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 404 });
+        dispatchMock.mockResolvedValue({
+          ok: false,
+          error: { code: "EXECUTION_ERROR", message: "No application" },
+        });
+        const { container } = await renderPane({ filePath: "/repo/docs/gone.pdf" });
+
+        const open = await waitFor(() => {
+          const found = buttonByText(container, "Open in default app");
+          if (!found) throw new Error("no default-app action yet");
+          return found;
+        });
+        await clickButton(open);
+
+        await waitFor(() => expect(screen.queryByText("No application")).not.toBeNull());
+        expect(screen.queryByText(/open in browser/i)).toBeNull();
+      });
+
+      it("retries by probing the document again, and frames it once it is admitted", async () => {
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValueOnce({ ok: false, status: 404 });
+        const { container } = await renderPane({ filePath: "/repo/docs/spec.pdf" });
+
+        const retry = await waitFor(() => {
+          const found = buttonByText(container, "Retry");
+          if (!found) throw new Error("no retry yet");
+          return found;
+        });
+        await clickButton(retry);
+
+        await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+        expect(pdfProbeMock).toHaveBeenCalledTimes(2);
+      });
+
+      it("offers no default-app action for a file that isn't a PDF", async () => {
+        seedWorktree([]);
+        readMock.mockRejectedValueOnce(new ClientAppError("BINARY_FILE", "binary"));
+        const { container } = await renderPane({ filePath: "/repo/bin/blob.bin" });
+
+        await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
+        expect(buttonByText(container, "Open in default app")).toBeUndefined();
+      });
     });
   });
 

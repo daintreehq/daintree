@@ -960,6 +960,20 @@ describe("FileBrowserViewer media rides its own nonce (#12165)", () => {
 });
 
 describe("FileBrowserViewer PDF preview (#11427)", () => {
+  // The frame mounts only once a HEAD on its URL answers 200 (#12598). One
+  // global restored rather than `vi.unstubAllGlobals()`, which would strip what
+  // vitest.setup.ts installs for every later test.
+  const pdfProbeMock = vi.fn();
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    pdfProbeMock.mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", pdfProbeMock);
+  });
+  afterEach(() => {
+    pdfProbeMock.mockReset();
+    vi.stubGlobal("fetch", realFetch);
+  });
+
   it("frames the PDF scheme without reading the file as text", async () => {
     const { container } = renderViewer("/repo/docs/spec.pdf");
     await act(async () => {});
@@ -1010,6 +1024,75 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
     // The reload rides the same frame, so the COEP contract must survive it.
     expect(refreshed?.hasAttribute("credentialless")).toBe(true);
     expect(refreshed?.hasAttribute("sandbox")).toBe(false);
+  });
+
+  it("shows the preview's reason instead of a blank frame when the document is refused (#12598)", async () => {
+    pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+    const { container } = renderViewer("/repo/docs/huge.pdf");
+
+    // The reason reaches the viewer's error state rather than an empty box.
+    expect(await screen.findByText("Can't show this file")).toBeTruthy();
+    expect(pdfProbeMock).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("iframe")).toBeNull();
+  });
+
+  it("hands a refused PDF to the default app from its error state", async () => {
+    pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+    renderViewer("/repo/docs/huge.pdf");
+
+    const open = await screen.findByRole("button", { name: "Open in default app" });
+    await act(async () => {
+      open.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "file.openInBrowser",
+      { path: "/repo/docs/huge.pdf" },
+      { source: "user" }
+    );
+  });
+
+  it("names a failed default-app open for what it tried", async () => {
+    pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
+    dispatchMock.mockResolvedValue({
+      ok: false,
+      error: { code: "EXECUTION_ERROR", message: "No application" },
+    });
+    renderViewer("/repo/docs/huge.pdf");
+
+    const open = await screen.findByRole("button", { name: "Open in default app" });
+    await act(async () => {
+      open.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(await screen.findByText("No application")).toBeTruthy();
+    expect(screen.queryByText(/open in editor/i)).toBeNull();
+    expect(screen.getByRole("button", { name: "Retry opening in default app" })).toBeTruthy();
+  });
+
+  it("recovers from a refusal once Refresh brings the document back", async () => {
+    // The error branch unmounts the preview, so a nonce the dead leaf would
+    // have read can't recover it on its own — the reload has to re-enter the
+    // PDF state and mount a fresh probe.
+    pdfProbeMock.mockResolvedValueOnce({ ok: false, status: 404 });
+    const { container, rerender } = renderViewer("/repo/docs/spec.pdf", {
+      revision: "0:0",
+      surfaceRefreshNonce: 0,
+    });
+    await screen.findByText("Can't show this file");
+
+    rerender(viewerJsx("/repo/docs/spec.pdf", { revision: "0:1", surfaceRefreshNonce: 1 }));
+
+    await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+    expect(screen.queryByText("Can't show this file")).toBeNull();
+  });
+
+  it("offers no default-app action when a non-PDF preview fails", async () => {
+    readMock.mockRejectedValue(new ClientAppError("BINARY_FILE", "BINARY_FILE"));
+    renderViewer("/repo/src/blob.bin");
+
+    expect(await screen.findByText(FILE_READ_ERROR_MESSAGES.BINARY_FILE)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Open in default app" })).toBeNull();
   });
 });
 

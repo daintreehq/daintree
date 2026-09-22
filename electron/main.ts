@@ -219,13 +219,17 @@ protocol.registerSchemesAsPrivileged([
     // PDF. Kept off daintree-file:// on purpose: that scheme serves arbitrary
     // repo files under extension-derived MIME types and a `sandbox` response
     // CSP, and a sandboxed document blocks PDFium (ERR_BLOCKED_BY_CLIENT).
-    // Deliberately minimal privileges: no `standard` (an opaque origin is more
-    // isolated, and the query-string URL shape needs no hierarchical parsing),
-    // and no supportFetchAPI/corsEnabled — the iframe navigates here, it never
-    // fetch()es.
+    // No `standard`: an opaque origin is more isolated, and the query-string
+    // URL shape needs no hierarchical parsing. supportFetchAPI/corsEnabled let
+    // the viewer HEAD the document before framing it (#12598) — an iframe
+    // reports no status, so a 404 or 413 would otherwise paint a blank frame.
+    // As with daintree-file://, eligibility alone grants nothing: the handler
+    // echoes Access-Control-Allow-Origin only for the trusted app origin.
     scheme: "daintree-pdf",
     privileges: {
       secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
     },
   },
   {

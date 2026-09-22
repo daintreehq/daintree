@@ -25,6 +25,7 @@ import type { DiffPanelData } from "@shared/types/panel";
 import { isAbsolute, join, resolveWorktreePathScope } from "@shared/utils/path";
 import { useShallow } from "zustand/react/shallow";
 import { FolderOpen } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
@@ -92,12 +93,15 @@ type DiffPaneLayout = DiffViewType | "rendered";
 type DiffContentScope = "changes" | "full-file";
 
 /** Which external surface a toolbar action aims the current file at. */
-type ExternalTarget = "reveal" | "editor" | "file-browser";
+// `default-app` is the PDF error state's way out (#12598): the OS default
+// handler for the file's type, which is what `file.openInBrowser` opens.
+type ExternalTarget = "reveal" | "editor" | "file-browser" | "default-app";
 
 const EXTERNAL_ACTIONS = {
   reveal: "file.showItemInFolder",
   editor: "file.openInEditor",
   "file-browser": "worktree.openFileBrowser",
+  "default-app": "file.openInBrowser",
 } as const;
 
 const FULL_FILE_FALLBACK_MESSAGES: Record<FullFileUnavailableReason, string> = {
@@ -357,14 +361,15 @@ export function DiffPane({
   // don't carry those bytes, so Refresh has to re-request the protocol URL itself.
   const [previewReloadNonce, setPreviewReloadNonce] = useState(0);
   // An allowlisted container can still hold a codec Chromium lacks, or the
-  // file may be unreadable — surface that instead of a dead native control.
-  // Holds the preview's specific reason (e.g. too large) when it gives one.
-  const [mediaPlaybackError, setMediaPlaybackError] = useState<MediaPreviewError | null>(null);
+  // file may be unreadable or too large — surface that instead of a dead native
+  // control or a blank PDF frame. Holds the preview's specific reason when it
+  // gives one.
+  const [previewError, setPreviewError] = useState<MediaPreviewError | null>(null);
   useEffect(() => {
-    // Any change to the playback attempt's identity — file, resolved root, or
+    // Any change to the preview attempt's identity — file, resolved root, or
     // an explicit refresh — gets a fresh attempt. absolutePath covers a
     // worktree move that filePath (relative) alone would miss.
-    setMediaPlaybackError(null);
+    setPreviewError(null);
   }, [filePath, absolutePath, worktreePath, previewReloadNonce]);
 
   const [pathCopied, setPathCopied] = useState(false);
@@ -868,11 +873,17 @@ export function DiffPane({
             retry: "Retry opening file browser",
             dismiss: "Dismiss file browser error",
           }
-        : {
-            title: "Couldn't open in editor",
-            retry: "Retry opening in editor",
-            dismiss: "Dismiss editor error",
-          };
+        : externalError?.target === "default-app"
+          ? {
+              title: "Couldn't open in default app",
+              retry: "Retry opening in default app",
+              dismiss: "Dismiss default app error",
+            }
+          : {
+              title: "Couldn't open in editor",
+              retry: "Retry opening in editor",
+              dismiss: "Dismiss editor error",
+            };
   const toolbar = filePath ? (
     <>
       <FileViewerToolbar.Root label="Diff viewer controls">
@@ -1124,13 +1135,13 @@ export function DiffPane({
                     }
                   />
                 </div>
-              ) : mediaPlaybackError !== null ? (
+              ) : previewError !== null ? (
                 <div className="flex h-full w-full items-center justify-center p-6">
                   <EmptyState
                     variant="zero-data"
                     scale="canvas"
-                    title={mediaPlaybackError.title}
-                    description={mediaPlaybackError.description}
+                    title={previewError.title}
+                    description={previewError.description}
                   />
                 </div>
               ) : isAudioMode ? (
@@ -1139,7 +1150,7 @@ export function DiffPane({
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={previewReloadNonce}
-                  onError={(error) => setMediaPlaybackError(error ?? GENERIC_AUDIO_ERROR)}
+                  onError={(error) => setPreviewError(error ?? GENERIC_AUDIO_ERROR)}
                 />
               ) : (
                 <FileVideoPreview
@@ -1147,7 +1158,7 @@ export function DiffPane({
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={previewReloadNonce}
-                  onError={(error) => setMediaPlaybackError(error ?? GENERIC_VIDEO_ERROR)}
+                  onError={(error) => setPreviewError(error ?? GENERIC_VIDEO_ERROR)}
                   maxHeightClassName="max-h-full"
                 />
               ))}
@@ -1164,12 +1175,32 @@ export function DiffPane({
                     description="This PDF was deleted, and the diff view can only show the current file."
                   />
                 </div>
+              ) : previewError !== null ? (
+                <div className="flex h-full w-full items-center justify-center p-6">
+                  <EmptyState
+                    variant="zero-data"
+                    scale="canvas"
+                    title={previewError.title}
+                    description={previewError.description}
+                    action={
+                      <Button
+                        variant="subtle"
+                        size="sm"
+                        onClick={() => void handleExternalAction("default-app")}
+                      >
+                        <ExternalLink />
+                        Open in default app
+                      </Button>
+                    }
+                  />
+                </div>
               ) : (
                 <FilePdfPreview
                   filePath={absolutePath}
                   rootPath={worktreePath}
                   label={fileName ?? filePath}
                   reloadKey={previewReloadNonce}
+                  onError={setPreviewError}
                 />
               ))}
 

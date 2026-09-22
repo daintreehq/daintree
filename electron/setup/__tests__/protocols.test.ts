@@ -1246,6 +1246,22 @@ describe("setupWebviewCSP — partition CSP wiring", () => {
     expect(pdfResult?.responseHeaders).toBe(pdfHeaders);
     expect(vi.mocked(mergeCspHeaders)).not.toHaveBeenCalled();
 
+    // Nor may PDFium's own viewer frame and scripts: the app policy blocks the
+    // chrome://resources modules the viewer boots from, leaving a blank pane
+    // with no error (#12598).
+    for (const url of [
+      "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html",
+      "chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/main.js",
+    ]) {
+      const viewerHeaders = { "Content-Type": ["text/html"] };
+      let viewerResult: { responseHeaders?: unknown } | undefined;
+      captured!({ url, responseHeaders: viewerHeaders }, (r) => {
+        viewerResult = r;
+      });
+      expect(viewerResult?.responseHeaders).toBe(viewerHeaders);
+    }
+    expect(vi.mocked(mergeCspHeaders)).not.toHaveBeenCalled();
+
     // A normal app response still gets the overlay, so the bypass is scoped.
     captured!({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
     expect(vi.mocked(mergeCspHeaders)).toHaveBeenCalledTimes(1);
@@ -3842,8 +3858,14 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
     const buffer = typeof content === "string" ? Buffer.from(content) : content;
     return {
       readFile: vi.fn().mockResolvedValue(buffer),
+      stat: vi.fn().mockResolvedValue({ size: buffer.length, isFile: () => true }),
       close: vi.fn().mockResolvedValue(undefined),
     };
+  }
+
+  async function installHandle(handle: ReturnType<typeof makeFileHandle>) {
+    const fs = await import("fs/promises");
+    vi.mocked(fs.open).mockResolvedValue(handle as unknown as Awaited<ReturnType<typeof fs.open>>);
   }
 
   beforeEach(async () => {
@@ -3994,6 +4016,165 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
     expect((await response.arrayBuffer()).byteLength).toBe(0);
   });
 
+  describe("HEAD admission probe (#12598)", () => {
+    // The viewer HEADs every document before framing it, so HEAD must refuse
+    // exactly what GET would — a probe that admits a request the read then
+    // refuses puts a bare error page back in the frame — without reading bytes
+    // it only has to measure.
+    it("sizes the response from the descriptor without reading the file", async () => {
+      const handle = makeFileHandle();
+      handle.stat.mockResolvedValue({ size: 4096, isFile: () => true });
+      await installHandle(handle);
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/spec.pdf", "/project", { method: "HEAD" })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Content-Length")).toBe("4096");
+      expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("opens the requested path with O_NOFOLLOW, as GET does", async () => {
+      const fs = await import("fs/promises");
+      const handler = await captureHandler();
+      await handler(makeRequest("/project/spec.pdf", "/project", { method: "HEAD" }));
+
+      expect(fs.open).toHaveBeenCalledWith(
+        path.normalize("/project/spec.pdf"),
+        fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW
+      );
+    });
+
+    it("refuses a final-component symlink with the same 404 GET gives", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.open).mockRejectedValue(Object.assign(new Error("loop"), { code: "ELOOP" }));
+
+      const handler = await captureHandler();
+      const head = await handler(makeRequest("/project/spec.pdf", "/project", { method: "HEAD" }));
+      const get = await handler(makeRequest("/project/spec.pdf", "/project"));
+
+      expect(head.status).toBe(404);
+      expect(get.status).toBe(404);
+    });
+
+    it("answers 413 past the ceiling on the pre-open stat", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.stat).mockResolvedValue({ size: 60 * 1024 * 1024 } as Awaited<
+        ReturnType<typeof fs.stat>
+      >);
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/huge.pdf", "/project", { method: "HEAD" })
+      );
+
+      expect(response.status).toBe(413);
+      expect(fs.open).not.toHaveBeenCalled();
+    });
+
+    it("answers 413 when the file grew past the ceiling after the pre-open stat", async () => {
+      const handle = makeFileHandle();
+      handle.stat.mockResolvedValue({ size: 60 * 1024 * 1024, isFile: () => true });
+      await installHandle(handle);
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/spec.pdf", "/project", { method: "HEAD" })
+      );
+
+      expect(response.status).toBe(413);
+      expect(handle.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("refuses a directory named like a PDF rather than admitting an unreadable frame", async () => {
+      const handle = makeFileHandle();
+      handle.stat.mockResolvedValue({ size: 96, isFile: () => false });
+      await installHandle(handle);
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/folder.pdf", "/project", { method: "HEAD" })
+      );
+
+      expect(response.status).toBe(404);
+      expect(handle.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("answers 415 for a .pdf name whose canonical path is not a PDF", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.realpath).mockImplementation((p) =>
+        Promise.resolve(
+          (p as string).endsWith("spec.pdf") ? path.normalize("/project/huge.bin") : (p as string)
+        )
+      );
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/spec.pdf", "/project", { method: "HEAD" })
+      );
+
+      expect(response.status).toBe(415);
+    });
+  });
+
+  describe("CORS gate (admission probe fetch, #12598)", () => {
+    // corsEnabled only makes the scheme eligible for cross-origin fetch; these
+    // pin the grant itself — the trusted app origin alone, never a remote site.
+    it("echoes Access-Control-Allow-Origin for the trusted app origin", async () => {
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/spec.pdf", "/project", {
+          method: "HEAD",
+          headers: { Origin: "app://daintree" },
+        })
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+    });
+
+    it("carries the grant on error responses so the probe can read the status", async () => {
+      const fs = await import("fs/promises");
+      vi.mocked(fs.stat).mockResolvedValue({ size: 60 * 1024 * 1024 } as Awaited<
+        ReturnType<typeof fs.stat>
+      >);
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/huge.pdf", "/project", {
+          method: "HEAD",
+          headers: { Origin: "app://daintree" },
+        })
+      );
+
+      expect(response.status).toBe(413);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
+    });
+
+    it("omits the grant for a foreign origin", async () => {
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/spec.pdf", "/project", {
+          method: "HEAD",
+          headers: { Origin: "https://evil.example" },
+        })
+      );
+
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
+
+    it("omits the grant on the frame's own navigation, which sends no Origin", async () => {
+      const handler = await captureHandler();
+      const response = await handler(makeRequest("/project/spec.pdf", "/project"));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
+  });
+
   it("allows a PDF larger than the raster-image ceiling but rejects one past its own", async () => {
     const fs = await import("fs/promises");
     const handler = await captureHandler();
@@ -4127,26 +4308,41 @@ describe("applyDaintreeAppCspToSession — preview response pass-through", () =>
     vi.clearAllMocks();
   });
 
-  it.each([["daintree-pdf://load?path=%2Frepo%2Fa.pdf"], ["daintree-html://tok/index.html"]])(
-    "passes %s through untouched",
-    async (url) => {
-      const { listener, mergeCspHeaders } = await captureListener();
-      const headers = { "Content-Type": ["application/pdf"] };
+  it.each([
+    ["daintree-pdf://load?path=%2Frepo%2Fa.pdf"],
+    ["daintree-html://tok/index.html"],
+    ["chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/index.html"],
+  ])("passes %s through untouched", async (url) => {
+    const { listener, mergeCspHeaders } = await captureListener();
+    const headers = { "Content-Type": ["application/pdf"] };
 
-      let result: { responseHeaders?: unknown } | undefined;
-      listener({ url, responseHeaders: headers }, (r) => {
-        result = r;
-      });
+    let result: { responseHeaders?: unknown } | undefined;
+    listener({ url, responseHeaders: headers }, (r) => {
+      result = r;
+    });
 
-      expect(result?.responseHeaders).toBe(headers);
-      expect(mergeCspHeaders).not.toHaveBeenCalled();
-    }
-  );
+    expect(result?.responseHeaders).toBe(headers);
+    expect(mergeCspHeaders).not.toHaveBeenCalled();
+  });
 
   it("still overlays the app CSP on ordinary responses", async () => {
     const { listener, mergeCspHeaders } = await captureListener();
 
     listener({ url: "app://daintree/index.html", responseHeaders: {} }, () => {});
+
+    expect(mergeCspHeaders).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps overlaying every other extension — the bypass is the PDF viewer's id alone", async () => {
+    const { listener, mergeCspHeaders } = await captureListener();
+
+    listener(
+      {
+        url: "chrome-extension://abcdefghijklmnopabcdefghijklmnop/index.html",
+        responseHeaders: {},
+      },
+      () => {}
+    );
 
     expect(mergeCspHeaders).toHaveBeenCalledTimes(1);
   });

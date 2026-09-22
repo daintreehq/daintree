@@ -9,6 +9,7 @@ import {
   XCircle,
 } from "lucide-react";
 import { CircleCheck, FolderOpen } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { actionService } from "@/services/ActionService";
 import { CodeViewer } from "@/components/FileViewer/CodeViewer";
 import { FileEditorBanner } from "@/components/FileViewer/FileEditorBanner";
@@ -183,7 +184,15 @@ export interface FileBrowserViewerProps {
 /** Toolbar sort menu entries, in menu order. */
 /** Narrow a menu value back to a known key, falling back to the current one. */
 /** Which external surface a toolbar action aims the current file at. */
-type ExternalTarget = "reveal" | "editor";
+// `default-app` is the PDF error state's way out (#12598): the OS default
+// handler for the file's type, which is what `file.openInBrowser` opens.
+type ExternalTarget = "reveal" | "editor" | "default-app";
+
+const EXTERNAL_ACTIONS = {
+  reveal: "file.showItemInFolder",
+  editor: "file.openInEditor",
+  "default-app": "file.openInBrowser",
+} as const;
 
 type ViewerState =
   | { status: "idle" }
@@ -496,7 +505,7 @@ export function FileBrowserViewer({
       setPendingTargets((current) => (current.includes(target) ? current : [...current, target]));
       try {
         const result = await actionService.dispatch(
-          target === "reveal" ? "file.showItemInFolder" : "file.openInEditor",
+          EXTERNAL_ACTIONS[target],
           { path: filePath },
           { source: "user" }
         );
@@ -505,10 +514,7 @@ export function FileBrowserViewer({
           setExternalError((current) => (current?.target === target ? null : current));
           return;
         }
-        logError(
-          `[FileBrowserViewer] ${target === "reveal" ? "showItemInFolder" : "openInEditor"} failed`,
-          result.error
-        );
+        logError(`[FileBrowserViewer] ${EXTERNAL_ACTIONS[target]} failed`, result.error);
         setExternalError({ message: result.error.message, target });
       } finally {
         // Releasing in `finally` keeps a rejection from wedging the button for
@@ -529,6 +535,26 @@ export function FileBrowserViewer({
   const showRetrySpinner = useDohertyGate(isErrorTargetPending);
 
   const reveal = revealCopy();
+  const externalErrorCopy =
+    externalError === null
+      ? null
+      : externalError.target === "reveal"
+        ? {
+            title: reveal.errorTitle,
+            retry: reveal.retryAriaLabel,
+            dismiss: "Dismiss file manager error",
+          }
+        : externalError.target === "default-app"
+          ? {
+              title: "Couldn't open in default app",
+              retry: "Retry opening in default app",
+              dismiss: "Dismiss default app error",
+            }
+          : {
+              title: "Couldn't open in editor",
+              retry: "Retry opening in editor",
+              dismiss: "Dismiss editor error",
+            };
 
   // One persistent toolbar with the tree toggle as its first control, rendered
   // whether or not a file is selected: the toggle is the sidebar's only home
@@ -651,11 +677,11 @@ export function FileBrowserViewer({
           onEdit={() => setExplicitRenderMode("edit")}
         />
       )}
-      {filePath && externalError && (
+      {filePath && externalError && externalErrorCopy && (
         <InlineStatusBanner
           icon={XCircle}
           severity="error"
-          title={externalError.target === "reveal" ? reveal.errorTitle : "Couldn't open in editor"}
+          title={externalErrorCopy.title}
           description={externalError.message}
           action={{
             id: "retry-external-action",
@@ -665,15 +691,10 @@ export function FileBrowserViewer({
             loading: showRetrySpinner,
             disabled: isErrorTargetPending,
             onClick: () => void handleExternalAction(externalError.target),
-            ariaLabel:
-              externalError.target === "reveal" ? reveal.retryAriaLabel : "Retry opening in editor",
+            ariaLabel: externalErrorCopy.retry,
           }}
           onClose={() => setExternalError(null)}
-          closeAriaLabel={
-            externalError.target === "reveal"
-              ? "Dismiss file manager error"
-              : "Dismiss editor error"
-          }
+          closeAriaLabel={externalErrorCopy.dismiss}
         />
       )}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
@@ -897,6 +918,20 @@ export function FileBrowserViewer({
               icon={<FileText className="h-6 w-6" />}
               title="Can't show this file"
               description={state.message}
+              // A PDF the viewer can't frame is still a perfectly good file, so
+              // hand it to something that can show it (#12598).
+              action={
+                isPdfFilePath(filePath) ? (
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => void handleExternalAction("default-app")}
+                  >
+                    <ExternalLink />
+                    Open in default app
+                  </Button>
+                ) : undefined
+              }
               className="w-full"
             />
           </div>
@@ -988,6 +1023,7 @@ export function FileBrowserViewer({
             rootPath={rootPath}
             label={fileName}
             reloadKey={surfaceRefreshNonce}
+            onError={(error) => setState({ status: "error", message: error.title })}
           />
         );
 
