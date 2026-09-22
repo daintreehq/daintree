@@ -71,6 +71,8 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
   const StateIcon = agentState ? getEffectiveStateIcon(agentState) : null;
   const placementLabel = term.location === "dock" ? "Docked" : "On grid";
   const placementId = `session-${term.id}-placement`;
+  const showCommand = !chrome.isAgent && term.activityStatus === "working" && !!term.lastCommand;
+  const commandId = `session-${term.id}-command`;
 
   return (
     <div
@@ -122,7 +124,7 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
               onClick(term);
             }}
             aria-pressed={isArmable ? isArmed : undefined}
-            aria-describedby={placementId}
+            aria-describedby={showCommand ? `${commandId} ${placementId}` : placementId}
             className={cn(
               // The ring is drawn by a pseudo-element reaching back over the
               // grip's gutter, so it outlines the row rather than clipping the
@@ -139,10 +141,13 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
               >
                 {term.title}
               </span>
-              {!chrome.isAgent && term.activityStatus === "working" && term.lastCommand && (
+              {showCommand && (
                 <Tooltip autoDismiss={false}>
                   <TooltipTrigger asChild>
-                    <span className="truncate text-2xs font-mono text-text-secondary">
+                    <span
+                      id={commandId}
+                      className="truncate text-2xs font-mono text-text-secondary"
+                    >
                       {term.lastCommand}
                     </span>
                   </TooltipTrigger>

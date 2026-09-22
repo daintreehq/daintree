@@ -444,6 +444,27 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     expect(descriptions).toEqual(["Docked", "On grid"]);
   });
 
+  it("a running command is part of the row's description, not only its tooltip", () => {
+    const running = makeTerminal({
+      id: "r1",
+      kind: "terminal",
+      hasPty: true,
+      activityStatus: "working",
+      lastCommand: "npm run test -- --watch",
+    });
+    renderSection({
+      isExpanded: true,
+      terminals: [running],
+      counts: { ...baseCounts, total: 1 },
+    });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
+    const described = (button.getAttribute("aria-describedby") ?? "")
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent);
+    expect(described).toContain("npm run test -- --watch");
+  });
+
   it("only claims multi-selection on a role that supports it", () => {
     const term = makeTerminal({
       id: "a1",
