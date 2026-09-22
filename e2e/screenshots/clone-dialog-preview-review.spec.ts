@@ -169,6 +169,15 @@ const STATES: State[] = [
     expectText: "helios-dashboard",
   },
   {
+    name: "22-invalid-url",
+    run: async (page) => {
+      await fill(page);
+      await page.locator("#clone-repo-url").fill("helios dashboard");
+      await page.waitForTimeout(150);
+    },
+    expectText: "Use a repository URL or owner/repo",
+  },
+  {
     name: "25-validation-error",
     run: async (page) => {
       await fill(page);
