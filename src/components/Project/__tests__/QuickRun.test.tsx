@@ -46,7 +46,9 @@ vi.mock("@/store/worktreeStore", () => ({
 
 vi.mock("@/hooks/useWorktrees", () => ({
   useWorktrees: () => ({
-    worktreeMap: new Map([["wt-1", { name: "main", path: "/tmp/test-worktree" }]]),
+    worktreeMap: new Map([
+      ["wt-1", { name: "main", branch: "develop", path: "/tmp/test-worktree" }],
+    ]),
   }),
 }));
 
@@ -275,6 +277,42 @@ describe("QuickRun", () => {
 
     expect(input.getAttribute("aria-expanded")).toBe("false");
     expect(document.activeElement).toBe(input);
+  });
+
+  it("captions the destination with the branch, not the worktree's folder name", () => {
+    render(<Footer projectId="test-project" />);
+    openPanel();
+
+    const panel = document.getElementById("quick-run-panel")!;
+    expect(panel.textContent).toContain("develop");
+    expect(panel.textContent).not.toContain("main");
+  });
+
+  it("keeps the arrow-key selection scrolled into view", () => {
+    localStorage.setItem(
+      "daintree_cmd_history_test-project",
+      JSON.stringify([
+        { command: "npm test", timestamp: 2 },
+        { command: "npm run lint", timestamp: 1 },
+      ])
+    );
+    const scrolled: string[] = [];
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push(this.id);
+    };
+    try {
+      render(<Footer projectId="test-project" />);
+      const input = openPanel();
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+      fireEvent.keyDown(input, { key: "ArrowDown" });
+
+      // Whatever row the combobox names as active is the row brought into view.
+      expect(scrolled.at(-1)).toBe(input.getAttribute("aria-activedescendant"));
+      expect(scrolled.length).toBeGreaterThanOrEqual(2);
+    } finally {
+      Element.prototype.scrollIntoView = original;
+    }
   });
 
   it("renders all main buttons with type='button'", () => {

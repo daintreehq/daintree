@@ -355,6 +355,16 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     expect(container.textContent).toContain("Last sampled 45s ago");
   });
 
+  it("shows the memory summary when an unrelated diagnostics read fails", async () => {
+    mockGetHeapStats.mockRejectedValue(new Error("heap read failed"));
+    mockGetProcessMetrics.mockRejectedValue(new Error("process read failed"));
+
+    const container = await renderOpenBadge();
+
+    expect(findMemoryRow(container, "900 MB")).toBeDefined();
+    expect(container.querySelector('[aria-label="Loading resource details"]')).toBeNull();
+  });
+
   it("attributes terminal memory per project from the same snapshot as the total", async () => {
     mockGetAll.mockResolvedValue([
       makeProject({ id: "p1", name: "Light" }),

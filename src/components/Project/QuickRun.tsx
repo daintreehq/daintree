@@ -216,6 +216,16 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   // caption and the running tasks the panel opened to show; a click or a key
   // in the field still brings the list up.
   const quietFocusRef = useRef(false);
+
+  // Keep the arrow-key selection on screen. `aria-activedescendant` names the
+  // row for assistive technology but scrolls nothing, so in a list longer than
+  // its cap Enter could run a command the user could not see.
+  useEffect(() => {
+    if (focusedSuggestionIndex < 0) return;
+    document
+      .getElementById(suggestionOptionId(focusedSuggestionIndex))
+      ?.scrollIntoView?.({ block: "nearest" });
+  }, [focusedSuggestionIndex]);
   useEffect(() => {
     if (!focusOnMountRef.current) return;
     quietFocusRef.current = true;
@@ -473,7 +483,9 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
   };
 
   const activeWorktree = activeWorktreeId ? worktreeMap.get(activeWorktreeId) : null;
-  const activeWorktreeName = activeWorktree?.name ?? "";
+  // The branch, beside a branch glyph — the worktree's folder name is often
+  // something else entirely (worktree "main" on branch "develop").
+  const destinationLabel = activeWorktree?.branch || activeWorktree?.name || "";
   const isWorktreeValid = activeWorktree != null && activeWorktree.path != null;
 
   return (
@@ -484,8 +496,8 @@ export function QuickRun({ projectId, focusOnMount = false }: QuickRunProps) {
       {isWorktreeValid && (
         <div className="mb-1.5 flex min-w-0 items-center gap-1 text-2xs text-text-secondary">
           <GitBranch className="h-3 w-3 shrink-0" aria-hidden="true" />
-          <span className="truncate" title={activeWorktreeName}>
-            {activeWorktreeName}
+          <span className="truncate" title={destinationLabel}>
+            {destinationLabel}
           </span>
         </div>
       )}

@@ -603,6 +603,17 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(container.querySelector('[data-testid="sidebar-status-items"]')).toBeNull();
   });
 
+  it("keeps counting projects when the memory read rejects outright", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1 } };
+    mockGetAppMetrics.mockRejectedValue(new Error("metrics ipc down"));
+
+    const { container } = render(<ProjectResourceBadge />);
+    await flush();
+
+    expect(container.querySelector("[data-status-readout]")?.textContent).toBe("1 project active");
+  });
+
   it("keeps whatever the footer pins beside the readout before the first read lands", async () => {
     mockGetAll.mockReturnValue(new Promise(() => {}));
     mockGetAppMetrics.mockReturnValue(new Promise(() => {}));

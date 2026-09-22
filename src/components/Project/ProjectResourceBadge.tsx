@@ -62,15 +62,27 @@ interface AggregateStats {
   runningProjects: number;
   /** Last measured app memory, or null before the first successful read. */
   totalMemoryMB: number | null;
-  /** When `totalMemoryMB` was measured, so a stalled read can't pass as current. */
+  /**
+   * Whether `totalMemoryMB` is recent enough to act on. A failed read keeps the
+   * last figure but, once it is older than a few polls, the figure stops
+   * counting: no warning, and "Unavailable" in the popover.
+   */
+  memoryFresh: boolean;
   memorySampledAt: number | null;
   projects: Array<{ id: string; name: string }>;
 }
 
+/** Each read settles on its own; a null is that read failing, not the popover. */
 interface PopoverData {
-  processMetrics: ProcessMetricEntry[];
-  heapStats: HeapStats;
-  diagnosticsInfo: DiagnosticsInfo;
+  processMetrics: ProcessMetricEntry[] | null;
+  heapStats: HeapStats | null;
+  diagnosticsInfo: DiagnosticsInfo | null;
+}
+
+function settled<T>(result: PromiseSettledResult<T>, what: string): T | null {
+  if (result.status === "fulfilled") return result.value;
+  logError(`[ProjectResourceBadge] Failed to fetch ${what}`, result.reason);
+  return null;
 }
 
 /** One label/value line. Values are tabular so a column of them lines up. */
@@ -294,9 +306,9 @@ function DiagnosticsSection({
   trend,
   trendSamples,
 }: {
-  diagnosticsInfo: DiagnosticsInfo;
-  processMetrics: ProcessMetricEntry[];
-  heapStats: HeapStats;
+  diagnosticsInfo: DiagnosticsInfo | null;
+  processMetrics: ProcessMetricEntry[] | null;
+  heapStats: HeapStats | null;
   trend: TrendDirection;
   trendSamples: number[];
 }) {
@@ -338,17 +350,28 @@ function DiagnosticsSection({
             <MemoryRow label="App memory trend" value={trendText} />
             <MemoryRow
               label="Main process JS heap"
-              value={`${formatMemory(heapStats.usedMB)} of ${formatMemory(heapStats.limitMB)}`}
+              value={
+                heapStats
+                  ? `${formatMemory(heapStats.usedMB)} of ${formatMemory(heapStats.limitMB)}`
+                  : "Unavailable"
+              }
             />
-            <MemoryRow label="Uptime" value={formatUptime(diagnosticsInfo.uptimeSeconds)} />
-            {diagnosticsInfo.eventLoopP99Ms > 50 && (
+            <MemoryRow
+              label="Uptime"
+              value={diagnosticsInfo ? formatUptime(diagnosticsInfo.uptimeSeconds) : "Unavailable"}
+            />
+            {diagnosticsInfo && diagnosticsInfo.eventLoopP99Ms > 50 && (
               <MemoryRow
                 label="Event loop delay (p99)"
                 value={`${diagnosticsInfo.eventLoopP99Ms} ms`}
               />
             )}
           </div>
-          <ProcessTable metrics={processMetrics} />
+          {processMetrics ? (
+            <ProcessTable metrics={processMetrics} />
+          ) : (
+            <div className="text-2xs text-text-secondary">Process list unavailable</div>
+          )}
         </div>
       )}
     </div>
@@ -380,6 +403,7 @@ export function ProjectResourceBadge({
   const [stats, setStats] = useState<AggregateStats>({
     runningProjects: 0,
     totalMemoryMB: null,
+    memoryFresh: false,
     memorySampledAt: null,
     projects: [],
   });
@@ -417,15 +441,19 @@ export function ProjectResourceBadge({
     return total;
   });
 
+  // The warning reads the same fresh-or-nothing figure the popover shows, so a
+  // stalled read can neither raise it nor hold it up.
   const memoryState =
-    stats.totalMemoryMB === null ? "normal" : getMemoryState(stats.totalMemoryMB, thresholds);
+    stats.memoryFresh && stats.totalMemoryMB !== null
+      ? getMemoryState(stats.totalMemoryMB, thresholds)
+      : "normal";
   const trend = getTrendDirection(samples, SAMPLES_PER_MIN);
   const projectNames = useMemo(
     () => new Map(stats.projects.map((p) => [p.id, p.name])),
     [stats.projects]
   );
 
-  const systemAvailableMB = popoverData?.diagnosticsInfo.systemAvailableMB ?? null;
+  const systemAvailableMB = popoverData?.diagnosticsInfo?.systemAvailableMB ?? null;
   const ageSec =
     popoverSampledAt !== null ? Math.max(0, Math.round((nowTs - popoverSampledAt) / 1000)) : null;
   // Silent while fresh. The popover polls every 4s, so "Updated just now" on
@@ -434,15 +462,20 @@ export function ProjectResourceBadge({
 
   const fetchStats = useCallback(async () => {
     try {
-      const [projects, appMetrics] = await Promise.all([
+      const [projectsResult, metricsResult] = await Promise.allSettled([
         projectClient.getAll(),
         systemClient.getAppMetrics(),
       ]);
+      // Without the project list there is nothing to count against.
+      if (projectsResult.status === "rejected") throw projectsResult.reason;
+      const projects = projectsResult.value;
 
-      // A failed metrics read withholds the memory figure — never a fake 0 —
-      // but not the project count, which comes from the stats store and has
-      // nothing to do with whether main could read its own processes.
-      const memoryMB = appMetrics.unavailable ? null : appMetrics.totalMemoryMB;
+      // A failed metrics read — rejected or reported unavailable — withholds
+      // the memory figure, never a fake 0, but not the project count, which
+      // comes from the stats store and has nothing to do with whether main
+      // could read its own processes.
+      const appMetrics = settled(metricsResult, "app metrics");
+      const memoryMB = appMetrics && !appMetrics.unavailable ? appMetrics.totalMemoryMB : null;
 
       const currentStats = useProjectStatsStore.getState().stats;
       let running = 0;
@@ -520,12 +553,17 @@ export function ProjectResourceBadge({
         if (cancelled || gen !== generation || !result) return;
         samplesRef.current = result.nextSamples;
         setSamples(result.nextSamples);
-        setStats((prev) => ({
-          runningProjects: result.runningProjects,
-          totalMemoryMB: result.totalMemoryMB ?? prev.totalMemoryMB,
-          memorySampledAt: result.totalMemoryMB !== null ? Date.now() : prev.memorySampledAt,
-          projects: result.projects,
-        }));
+        const now = Date.now();
+        setStats((prev) => {
+          const sampledAt = result.totalMemoryMB !== null ? now : prev.memorySampledAt;
+          return {
+            runningProjects: result.runningProjects,
+            totalMemoryMB: result.totalMemoryMB ?? prev.totalMemoryMB,
+            memorySampledAt: sampledAt,
+            memoryFresh: sampledAt !== null && now - sampledAt <= APP_MEMORY_FRESH_MS,
+            projects: result.projects,
+          };
+        });
         setIsLoading(false);
       } finally {
         if (inFlightGen === gen) inFlightGen = null;
@@ -608,17 +646,23 @@ export function ProjectResourceBadge({
       // here at all — Radix keeps the popover open across both.
       if (document.hidden || isProjectViewCached()) return;
       try {
-        const [processMetrics, heapStats, diagnosticsInfo, snapshot] = await Promise.all([
+        // Settled one by one. The memory summary and the diagnostics come from
+        // unrelated reads, and a single rejection in a `Promise.all` used to
+        // hold back a perfectly good snapshot along with everything else.
+        const [metricsResult, heapResult, infoResult, snapshotResult] = await Promise.allSettled([
           systemClient.getProcessMetrics(),
           systemClient.getHeapStats(),
           systemClient.getDiagnosticsInfo(),
-          // Isolate a snapshot failure: the rest of the popover still updates,
-          // and the memory rows degrade to their last-good/unavailable states.
-          systemClient.getMemorySnapshot().catch(() => null),
+          systemClient.getMemorySnapshot(),
         ]);
+        const snapshot = snapshotResult.status === "fulfilled" ? snapshotResult.value : null;
 
         if (!cancelled) {
-          setPopoverData({ processMetrics, heapStats, diagnosticsInfo });
+          setPopoverData({
+            processMetrics: settled(metricsResult, "process metrics"),
+            heapStats: settled(heapResult, "heap stats"),
+            diagnosticsInfo: settled(infoResult, "diagnostics info"),
+          });
           // A failed snapshot poll clears the live slice so old readings can't
           // masquerade as current; last-good values still render via
           // lastGoodWorkloads with their "showing last reading" note.
@@ -713,9 +757,11 @@ export function ProjectResourceBadge({
   // than a number that silently stopped moving.
   const appMemoryMB = memorySnapshot?.electron.available
     ? memorySnapshot.electron.totalWorkingSetMb
-    : stats.memorySampledAt !== null && nowTs - stats.memorySampledAt <= APP_MEMORY_FRESH_MS
+    : stats.memoryFresh
       ? stats.totalMemoryMB
       : null;
+  const popoverMemoryState =
+    appMemoryMB === null ? "normal" : getMemoryState(appMemoryMB, thresholds);
 
   const { shown: shownWorkloads, note: workloadNote } = pickWorkloads(
     memorySnapshot?.terminalWorkloads ?? null,
@@ -814,7 +860,7 @@ export function ProjectResourceBadge({
           {popoverData ? (
             <>
               <div className="space-y-1.5">
-                {memoryState === "critical" && (
+                {popoverMemoryState === "critical" && (
                   <div className="flex items-start gap-1.5 text-2xs text-text-primary">
                     <TriangleAlert
                       className="mt-px h-3 w-3 shrink-0 text-status-warning"
