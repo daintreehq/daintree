@@ -101,4 +101,116 @@ interface PluginDocumentPackage {
 /** Retained by the host document across plugin reloads, including failed loads. */
 declare function loadDocumentPackage<T = unknown>(moduleUrl: string, descriptor: PluginDocumentPackage): Promise<T>;
 
-export { type PluginDocumentPackage, type PluginEventHandler, type UseHostChannelResult, loadDocumentPackage, useHostChannel, usePluginEvent, usePluginPanelEvent };
+/**
+ * Counters for one {@link ViewScope}. They describe what the scope itself
+ * tracked and nothing else: a resource the view created without registering it
+ * is invisible here, so `active: 0` proves nothing about what survived an
+ * unmount — a heap snapshot is the tool for that.
+ */
+interface ViewScopeStats {
+    /** Registrations still held: not yet released, cancelled, or fired. */
+    readonly active: number;
+    /** Cleanups that ran without throwing, including early cancellations and late registrations released on arrival. A one-shot that fired on its own is not counted. */
+    readonly released: number;
+    /** Cleanups that threw. Each is logged; the rest of the scope is still released. */
+    readonly cleanupErrors: number;
+    /** Registrations attempted after the scope was disposed. Each is released (or never started) on arrival. */
+    readonly lateRegistrations: number;
+}
+interface ViewScopeOptions {
+    /**
+     * Called once, after the scope's first disposal has released everything it
+     * held — including disposal that happens inside `createViewScope` because the
+     * signal was already aborted. Opt-in rather than gated on a build flag: a
+     * plugin's panel is a production Vite library build even under
+     * `daintree-plugin dev`, so neither `process.env.NODE_ENV` nor
+     * `import.meta.env.DEV` says whether anyone is debugging.
+     */
+    readonly onReport?: (stats: ViewScopeStats) => void;
+}
+/**
+ * A bag of view-owned resources released together. Every method is safe to
+ * call after disposal: the resource is released (or never started) on the
+ * spot and counted in `lateRegistrations`, so an async continuation that
+ * outlives its view attempt cannot leak through the scope.
+ *
+ * Methods that start something return an idempotent function that releases
+ * it early; one-shots (a fired timeout or frame, a `once` listener) forget
+ * their registration before the callback runs, so the scope only ever holds
+ * what is still live.
+ */
+interface ViewScope {
+    /** True once disposal has started. */
+    readonly disposed: boolean;
+    /**
+     * Aborts when the scope is disposed, before any tracked resource is
+     * released. Pass it to `fetch` and other signal-aware APIs; work tied to it
+     * directly is not counted in {@link ViewScope.stats}.
+     */
+    readonly signal: AbortSignal;
+    listen<K extends keyof WindowEventMap>(target: Window, type: K, listener: (this: Window, event: WindowEventMap[K]) => void, options?: boolean | AddEventListenerOptions): () => void;
+    listen<K extends keyof DocumentEventMap>(target: Document, type: K, listener: (this: Document, event: DocumentEventMap[K]) => void, options?: boolean | AddEventListenerOptions): () => void;
+    listen<K extends keyof HTMLElementEventMap>(target: HTMLElement, type: K, listener: (this: HTMLElement, event: HTMLElementEventMap[K]) => void, options?: boolean | AddEventListenerOptions): () => void;
+    /**
+     * `addEventListener` whose removal is owned by the scope. Each call is an
+     * independent subscription, even for a listener already registered. A
+     * `signal` in `options` still unsubscribes early, and an already-aborted one
+     * subscribes nothing.
+     */
+    listen(target: EventTarget, type: string, listener: EventListenerOrEventListenerObject, options?: boolean | AddEventListenerOptions): () => void;
+    setTimeout<A extends unknown[]>(callback: (...args: A) => void, ms?: number, ...args: A): () => void;
+    setInterval<A extends unknown[]>(callback: (...args: A) => void, ms?: number, ...args: A): () => void;
+    requestAnimationFrame(callback: FrameRequestCallback): () => void;
+    /**
+     * Adopt a `ResizeObserver`, `MutationObserver`, `IntersectionObserver` or
+     * anything else with `disconnect()`. Returned as given so it can be created
+     * and adopted in one expression. To release one early, register it with
+     * {@link ViewScope.add} instead and call the function that returns.
+     */
+    observe<T extends {
+        disconnect(): void;
+    }>(observer: T): T;
+    /** Adopt a dedicated `Worker` (anything with `terminate()`). */
+    worker<T extends {
+        terminate(): void;
+    }>(worker: T): T;
+    /** `URL.createObjectURL` whose `revokeObjectURL` is owned by the scope. */
+    objectURL(object: Blob | MediaSource): string;
+    /**
+     * Adopt a WebGL context from a canvas the view owns. Disposal calls
+     * `WEBGL_lose_context.loseContext()` when the extension is available and the
+     * context is not already lost, so the GPU allocation goes now rather than at
+     * a later GC — Chromium evicts the oldest context once a renderer holds
+     * about sixteen.
+     */
+    webgl<T extends WebGLRenderingContext | WebGL2RenderingContext>(gl: T): T;
+    /** Register any synchronous cleanup. The returned function runs it early. */
+    add(disposer: () => void): () => void;
+    /**
+     * Release everything, newest first. Idempotent, never throws: a cleanup that
+     * throws is logged and counted, and the rest still run.
+     */
+    dispose(): void;
+    stats(): ViewScopeStats;
+}
+/**
+ * Tie view-owned resources to one mount attempt of a plugin panel view. Pass
+ * the view's `disposeSignal`: the scope disposes when it aborts, and when the
+ * owning effect calls `dispose()`, whichever comes first.
+ *
+ * ```tsx
+ * useEffect(() => {
+ *   const scope = createViewScope(disposeSignal);
+ *   scope.listen(window, "resize", onResize);
+ *   scope.observe(new ResizeObserver(onBoxChange)).observe(el);
+ *   return scope.dispose;
+ * }, [disposeSignal]);
+ * ```
+ *
+ * Create a fresh scope in each effect setup; a disposed scope cannot be
+ * reopened. The scope drops everything it captured once disposed, so holding a
+ * stale scope or cancel function retains nothing but its counters.
+ */
+declare function createViewScope(signal: AbortSignal, options?: ViewScopeOptions): ViewScope;
+
+export { type PluginDocumentPackage, type PluginEventHandler, type UseHostChannelResult, type ViewScope, type ViewScopeOptions, type ViewScopeStats, createViewScope, loadDocumentPackage, useHostChannel, usePluginEvent, usePluginPanelEvent };
