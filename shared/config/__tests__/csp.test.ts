@@ -151,17 +151,20 @@ describe("Daintree app CSP", () => {
     it.each([
       ["production", getDaintreeAppProdCSP],
       ["development", getDaintreeAppDevCSP],
-    ])("confines daintree-pdf: to frame-src in %s", (_label, build) => {
-      // Navigation-only: the iframe navigates to the scheme, nothing fetches it.
-      // Every directive is parsed rather than a hand-picked few, so the scheme
-      // can't leak into default-src, worker-src or anything added later.
+    ])("confines daintree-pdf: to frame-src and connect-src in %s", (_label, build) => {
+      // The iframe navigates to the scheme, and the viewer HEADs the same URL
+      // first so a 404 or 413 surfaces as an error rather than a blank frame
+      // (#12598). Nothing else may carry it. Every directive is parsed rather
+      // than a hand-picked few, so the scheme can't leak into default-src,
+      // script-src, worker-src or anything added later.
       const carriers = build()
         .split(";")
         .map((directive) => directive.trim())
         .filter((directive) => directive.includes("daintree-pdf:"))
-        .map((directive) => directive.split(/\s+/)[0]);
+        .map((directive) => directive.split(/\s+/)[0])
+        .sort();
 
-      expect(carriers).toEqual(["frame-src"]);
+      expect(carriers).toEqual(["connect-src", "frame-src"]);
     });
 
     it("keeps the existing frame-src entries alongside the new scheme", () => {

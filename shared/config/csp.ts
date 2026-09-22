@@ -9,13 +9,16 @@ const FILE_SCHEMES = "daintree-file:";
 // protocol handler serves (scoped to its exact token authority), never this one.
 const HTML_PREVIEW_SCHEME = "daintree-html:";
 
-// Inline PDF preview (#11427). Only appears in `frame-src`, so the file viewer
-// can mount a `daintree-pdf://load?…` iframe that Chromium hands to its built-in
-// PDFium viewer. `daintree-file:` is deliberately NOT granted this: it serves
-// arbitrary repo files under extension-derived MIME types, so framing it would
-// let a repo-controlled document render as a live page. The PDF scheme's handler
-// rejects any canonical path that isn't `.pdf` and answers with a hard-coded
-// `application/pdf`, so this allowance can never resolve to anything else.
+// Inline PDF preview (#11427). Appears in `frame-src`, so the file viewer can
+// mount a `daintree-pdf://load?…` iframe that Chromium hands to its built-in
+// PDFium viewer, and in `connect-src` for the HEAD the viewer sends first — a
+// frame reports no status, so that probe is the only way a 404 or 413 reaches
+// the error surface instead of painting a blank pane (#12598). `daintree-file:`
+// is deliberately NOT framable: it serves arbitrary repo files under
+// extension-derived MIME types, so framing it would let a repo-controlled
+// document render as a live page. The PDF scheme's handler rejects any
+// canonical path that isn't `.pdf` and answers with a hard-coded
+// `application/pdf`, so these allowances can never resolve to anything else.
 const PDF_PREVIEW_SCHEME = "daintree-pdf:";
 
 // Direct media playback (#12242). Only appears in `media-src`, so
@@ -120,7 +123,7 @@ export function getDaintreeAppProdCSP(options?: DaintreeCspOptions): string {
       options?.scriptSrcHashes
     ),
     "style-src 'self' 'unsafe-inline'",
-    `connect-src 'self' ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
+    `connect-src 'self' ${FILE_SCHEMES} ${PDF_PREVIEW_SCHEME} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     "font-src 'self' data:",
     // daintree-media:: the file viewer points <video>/<audio> straight at the
@@ -159,7 +162,7 @@ export function getDaintreeAppDevCSP(): string {
     `default-src 'self' ${origins} ${wsOrigins}`,
     `script-src 'self' ${origins} 'unsafe-inline' 'unsafe-eval' ${PLUGIN_SCHEME}`,
     `style-src 'self' ${origins} 'unsafe-inline'`,
-    `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PLUGIN_SCHEME}`,
+    `connect-src 'self' ${origins} ${wsOrigins} ${FILE_SCHEMES} ${PDF_PREVIEW_SCHEME} ${PLUGIN_SCHEME}`,
     `img-src 'self' ${origins} ${GITHUB_AVATARS} ${GRAVATAR} ${DAINTREE_DOCS} ${FILE_SCHEMES} data: blob:`,
     `font-src 'self' ${origins} data:`,
     // Mirrors the production policy — see getDaintreeAppProdCSP.

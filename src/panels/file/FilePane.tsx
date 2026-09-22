@@ -17,6 +17,7 @@ import type { FileReadErrorCode } from "@shared/types/ipc/files";
 import type { BuiltInRuntimeActionId } from "@shared/config/actionIds";
 import type { BasePanelProps } from "@/components/Panel/ContentPanel";
 import { ContentPanel } from "@/components/Panel/ContentPanel";
+import { Button } from "@/components/ui/button";
 import { FolderOpen, FolderTree } from "@/components/icons";
 import type { TabInfo } from "@/components/Panel/TabButton";
 import { MarkdownViewer, type MarkdownViewerHandle } from "@/components/Markdown/MarkdownViewer";
@@ -171,13 +172,16 @@ type FileLoadIntent = "explicit" | "ambient" | "revealed";
 // Which surface a toolbar action aims the current file at. `reveal` is always
 // offered; `browser`/`editor` is the mode-dependent open button; `file-browser`
 // is Daintree's own tree, offered only for a file inside a known worktree.
-type ExternalTarget = "reveal" | "browser" | "editor" | "file-browser";
+// `default-app` is the PDF error state's way out — the same OS-default handoff
+// as `browser`, named for what it opens rather than for HTML.
+type ExternalTarget = "reveal" | "browser" | "editor" | "file-browser" | "default-app";
 
 const EXTERNAL_ACTIONS = {
   reveal: "file.showItemInFolder",
   browser: "file.openInBrowser",
   editor: "file.openInEditor",
   "file-browser": "worktree.openFileBrowser",
+  "default-app": "file.openInBrowser",
 } as const satisfies Record<ExternalTarget, BuiltInRuntimeActionId>;
 
 // Button label comes from `revealCopy()` (platform-named); the failure banner's
@@ -211,6 +215,12 @@ function externalTargetCopy(
         errorTitle: "Couldn't open file browser",
         retryAriaLabel: "Retry opening file browser",
         dismissAriaLabel: "Dismiss file browser error",
+      };
+    case "default-app":
+      return {
+        errorTitle: "Couldn't open in default app",
+        retryAriaLabel: "Retry opening in default app",
+        dismissAriaLabel: "Dismiss default app error",
       };
   }
 }
@@ -1419,18 +1429,43 @@ export function FilePane({
                 extension can never succeed, so the action would be dead. A
                 directory is the same: it never becomes a readable file
                 (#12309). */}
-              {errorCode !== "NOT_A_FILE" &&
-                !isUnsupportedVideoFilePath(filePath) &&
-                !isUnsupportedAudioFilePath(filePath) && (
-                  <button
-                    type="button"
-                    onClick={() => loadFile("explicit")}
-                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-primary bg-border-default hover:bg-daintree-border/80 rounded transition-colors"
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {errorCode !== "NOT_A_FILE" &&
+                  !isUnsupportedVideoFilePath(filePath) &&
+                  !isUnsupportedAudioFilePath(filePath) && (
+                    <Button variant="subtle" size="sm" onClick={() => loadFile("explicit")}>
+                      <RefreshCw />
+                      Retry
+                    </Button>
+                  )}
+                {/* A PDF the viewer can't frame may still be a perfectly good
+                    file, so hand it to something that can show it (#12598).
+                    The OS open is root-contained and checks the canonical
+                    path, so it is only offered inside a governed root — and
+                    even there a link can resolve outside it. Reveal carries a
+                    guarded out-of-root fallback, so it is always offered as
+                    the route that still works when the open can't. */}
+                {isPdfFilePath(filePath) && isInsideGovernedRoot && (
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => void handleOpenExternal("default-app")}
                   >
-                    <RefreshCw className="w-3.5 h-3.5" />
-                    Retry
-                  </button>
+                    <ExternalLink />
+                    Open in default app
+                  </Button>
                 )}
+                {isPdfFilePath(filePath) && (
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => void handleOpenExternal("reveal")}
+                  >
+                    <FolderOpen />
+                    {reveal.label}
+                  </Button>
+                )}
+              </div>
             </div>
           )}
 
@@ -1490,6 +1525,11 @@ export function FilePane({
             rootPath={effectiveRootPath}
             label={fileName ?? filePath}
             reloadKey={reloadNonce}
+            onError={(error) => {
+              setErrorCode(error.code ?? "BINARY_FILE");
+              setErrorMessage(error.title);
+              setLoadState("error");
+            }}
           />
         )}
 

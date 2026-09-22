@@ -2510,6 +2510,20 @@ describe("FileBrowserPane refresh signal reaches both viewer paths (#11586)", ()
 // previews' reload key. Coming back is the only moment the tree and the open
 // file can learn what happened while the project sat in the background.
 describe("FileBrowserPane re-reads when the project view is revealed (#11588)", () => {
+  // The PDF frame mounts only once a HEAD on its URL answers 200 (#12598). Only
+  // `fetch` is restored: `vi.unstubAllGlobals()` would also strip what
+  // vitest.setup.ts installs for every later test.
+  const pdfProbeMock = vi.fn();
+  const realFetch = globalThis.fetch;
+  beforeEach(() => {
+    pdfProbeMock.mockResolvedValue({ ok: true, status: 200 });
+    vi.stubGlobal("fetch", pdfProbeMock);
+  });
+  afterEach(() => {
+    pdfProbeMock.mockReset();
+    vi.stubGlobal("fetch", realFetch);
+  });
+
   const PDF_ROW = {
     path: "docs/spec.pdf",
     name: "spec.pdf",
@@ -2617,6 +2631,8 @@ describe("FileBrowserPane re-reads when the project view is revealed (#11588)", 
     });
 
     expect(container.querySelector("iframe")?.getAttribute("src")).toBe(srcBefore);
+    // Nor may it re-probe the document: that is the first step of re-navigating.
+    expect(pdfProbeMock).toHaveBeenCalledTimes(1);
   });
 
   it("stops listening once the pane unmounts", () => {
