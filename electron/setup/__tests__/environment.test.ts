@@ -1275,6 +1275,21 @@ describe("macOS open-file directory routing (#10976)", () => {
     expect(env.getPendingOpenDirPaths()).toEqual(["/requeue"]);
   });
 
+  // The CLI and `file://` folder arguments share this entry with `open-file`,
+  // so every external folder open reaches the same router (#12593).
+  it("dispatchOpenDirPath queues until a consumer exists, then hands folders to it", async () => {
+    const env = await import("../environment.js");
+    env.dispatchOpenDirPath("/cli/early");
+    expect(env.getPendingOpenDirPaths()).toEqual(["/cli/early"]);
+
+    const consumer = vi.fn();
+    env.setOpenDirConsumer(consumer);
+    env.dispatchOpenDirPath("/cli/late");
+
+    expect(consumer).toHaveBeenCalledExactlyOnceWith("/cli/late");
+    expect(env.getPendingOpenDirPaths()).toEqual(["/cli/early"]);
+  });
+
   it("calls preventDefault for directories too", async () => {
     await import("../environment.js");
     const handler = getOpenFileHandler()!;

@@ -15,6 +15,7 @@ function win(windowId: number, overrides: Partial<OpenWorldWindow> = {}): OpenWo
     viewProjectIds: activeProjectId ? [activeProjectId] : [],
     ready: true,
     reservations: [],
+    unboundOpens: [],
     ...overrides,
   };
 }
@@ -105,6 +106,11 @@ describe("decideProjectOpenTarget — what counts as empty", () => {
     expect(decideProjectOpenTarget(external(), world([claimed]))).toEqual({ kind: "create" });
   });
 
+  it("never picks a window still holding a folder that settled without binding (git-init prompt)", () => {
+    const prompting = win(1, { unboundOpens: [{ projectId: null, projectPath: "/work/plain" }] });
+    expect(decideProjectOpenTarget(external(), world([prompting]))).toEqual({ kind: "create" });
+  });
+
   it("never picks a window whose outgoing workspace is still painted behind a switch", () => {
     const bridging = win(1, { bridgeProjectId: "leaving" });
     expect(decideProjectOpenTarget(external(), world([bridging]))).toEqual({ kind: "create" });
@@ -154,6 +160,15 @@ describe("decideProjectOpenTarget — rule 1: an existing owner wins", () => {
     });
   });
 
+  it("reopens a folder in the window still holding it from an unbound open", () => {
+    const prompting = win(2, { unboundOpens: [{ projectId: null, projectPath: "/work/dropped" }] });
+    expect(decideProjectOpenTarget(external(), world([occupied(1), prompting, win(3)]))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "owner",
+    });
+  });
+
   it("beats an explicit new-window request", () => {
     const decision = decideProjectOpenTarget(
       inApp(1, { disposition: "new" }),
@@ -172,9 +187,10 @@ describe("decideProjectOpenTarget — rule 1: an existing owner wins", () => {
 
   it("prefers the foreground owner over a cached duplicate", () => {
     const cached = win(1, { activeProjectId: "p1", viewProjectIds: ["p1", "dropped"] });
-    expect(
-      decideProjectOpenTarget(external(), world([cached, occupied(2, "dropped")]))
-    ).toEqual({ kind: "focus", windowId: 2 });
+    expect(decideProjectOpenTarget(external(), world([cached, occupied(2, "dropped")]))).toEqual({
+      kind: "focus",
+      windowId: 2,
+    });
   });
 
   it("prefers the asking window among duplicate foreground owners", () => {
@@ -196,10 +212,21 @@ describe("decideProjectOpenTarget — rule 2: explicit disposition beats the pre
     ).toEqual({ kind: "create" });
   });
 
-  it("new from an empty window reuses that window", () => {
+  it("new never reuses the asking window, even an empty one", () => {
     expect(
-      decideProjectOpenTarget(inApp(2, { disposition: "new" }), world([win(1), win(2)]))
-    ).toEqual({ kind: "activate", windowId: 2, reason: "empty" });
+      decideProjectOpenTarget(inApp(2, { disposition: "new" }), world([win(2), win(1)]))
+    ).toEqual({ kind: "activate", windowId: 1, reason: "empty" });
+    expect(decideProjectOpenTarget(inApp(2, { disposition: "new" }), world([win(2)]))).toEqual({
+      kind: "create",
+    });
+  });
+
+  it("the on preference may fill the asking window when it is empty", () => {
+    expect(decideProjectOpenTarget(inApp(2), world([win(1), win(2)], "on"))).toEqual({
+      kind: "activate",
+      windowId: 2,
+      reason: "empty",
+    });
   });
 
   it("current stays in the asking window even when the preference says new", () => {
@@ -225,7 +252,10 @@ describe("decideProjectOpenTarget — rule 3: navigation keeps its window", () =
   it("a switch stays in the asking window whatever the preference", () => {
     for (const preference of ["default", "on", "off"] as const) {
       expect(
-        decideProjectOpenTarget(inApp(1, { intent: "switch" }), world([occupied(1), win(2)], preference))
+        decideProjectOpenTarget(
+          inApp(1, { intent: "switch" }),
+          world([occupied(1), win(2)], preference)
+        )
       ).toEqual({ kind: "activate", windowId: 1, reason: "current" });
     }
   });
@@ -265,9 +295,11 @@ describe("decideProjectOpenTarget — rule 4: preference and origin", () => {
   });
 
   it("off sends external opens to the most recently focused window", () => {
-    expect(decideProjectOpenTarget(external(), world([occupied(3), occupied(1)], "off"))).toEqual(
-      { kind: "activate", windowId: 3, reason: "current" }
-    );
+    expect(decideProjectOpenTarget(external(), world([occupied(3), occupied(1)], "off"))).toEqual({
+      kind: "activate",
+      windowId: 3,
+      reason: "current",
+    });
   });
 
   it("off with no windows still creates one", () => {

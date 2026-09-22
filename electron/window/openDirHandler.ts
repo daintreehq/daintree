@@ -1,5 +1,5 @@
 import type { BrowserWindow } from "electron";
-import type { OpenFoldersInNewWindow } from "../../shared/types/windowOpen.js";
+import type { OpenFoldersInNewWindow, ProjectOpenOutcome } from "../../shared/types/windowOpen.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
 import {
   clearPendingOpenDirPaths,
@@ -7,7 +7,12 @@ import {
   setOpenDirConsumer,
 } from "../setup/environment.js";
 import { decideProjectOpenTarget } from "./windowOpenPolicy.js";
-import { markWindowReadyForOpens, reserveWindowForOpen, snapshotOpenWorld } from "./windowOpenState.js";
+import {
+  isWindowBound,
+  markWindowReadyForOpens,
+  reserveWindowForOpen,
+  snapshotOpenWorld,
+} from "./windowOpenState.js";
 
 /**
  * The executor for folders opened from outside the app (#12593): Dock drops,
@@ -26,16 +31,11 @@ export interface OpenDirHandlerDeps {
   resolveProject: (dirPath: string) => Promise<{ id: string; path: string }>;
   /** Open a directory as a project in an existing window (handleDirectoryOpen). */
   openDirectory: (dirPath: string, win: BrowserWindow) => Promise<void>;
-  /** Create a window bound to this directory. */
-  createWindowForPath: (dirPath: string) => Promise<void>;
+  /** Create a window bound to this directory; resolves to its id, rejects if none was made. */
+  createWindowForPath: (dirPath: string) => Promise<number>;
   getWindowRegistry: () => WindowRegistry | null | undefined;
   getPreference: () => OpenFoldersInNewWindow;
 }
-
-export type ExternalOpenOutcome =
-  | { kind: "focused"; windowId: number }
-  | { kind: "activated"; windowId: number }
-  | { kind: "created" };
 
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
 let openDirConsumerInstalled = false;
@@ -65,8 +65,10 @@ function revealWindow(win: BrowserWindow): void {
 export async function routeExternalOpen(
   dirPath: string,
   deps: OpenDirHandlerDeps
-): Promise<ExternalOpenOutcome> {
+): Promise<ProjectOpenOutcome> {
   const project = await deps.resolveProject(dirPath).catch(() => null);
+  // A folder that resolves to no project is still keyed by its path, so a
+  // second open of it finds the window already holding it.
   const targetPath = project?.path ?? dirPath;
   const registry = deps.getWindowRegistry();
 
@@ -75,7 +77,7 @@ export async function routeExternalOpen(
   const decision = decideProjectOpenTarget(
     {
       projectId: project?.id ?? null,
-      projectPath: project?.path ?? null,
+      projectPath: targetPath,
       source: "external",
       intent: "open",
       disposition: "default",
@@ -84,18 +86,15 @@ export async function routeExternalOpen(
     snapshotOpenWorld(registry, deps.getPreference())
   );
 
-  if (decision.kind === "create") {
-    await deps.createWindowForPath(targetPath);
-    return { kind: "created" };
-  }
-
-  const win = registry?.getByWindowId(decision.windowId)?.browserWindow;
-  if (!win || win.isDestroyed()) {
-    // The snapshot only lists live windows and nothing awaited since, so this
-    // is a registry that lost the window mid-read. Opening somewhere beats
-    // dropping the folder.
-    await deps.createWindowForPath(targetPath);
-    return { kind: "created" };
+  const win =
+    decision.kind === "create"
+      ? undefined
+      : registry?.getByWindowId(decision.windowId)?.browserWindow;
+  // A window the snapshot listed can only be missing here if the registry lost
+  // it mid-read — nothing has awaited since. Opening somewhere beats dropping
+  // the folder.
+  if (decision.kind === "create" || !win || win.isDestroyed()) {
+    return { kind: "created", windowId: await deps.createWindowForPath(targetPath) };
   }
 
   if (decision.kind === "focus") {
@@ -111,7 +110,7 @@ export async function routeExternalOpen(
     revealWindow(win);
     await deps.openDirectory(targetPath, win);
   } finally {
-    release();
+    release(isWindowBound(registry, decision.windowId));
   }
   return { kind: "activated", windowId: decision.windowId };
 }

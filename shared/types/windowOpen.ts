@@ -42,3 +42,16 @@ export function isOpenFoldersInNewWindow(value: unknown): value is OpenFoldersIn
     (OPEN_FOLDERS_IN_NEW_WINDOW_VALUES as readonly string[]).includes(value)
   );
 }
+
+/**
+ * Where an open ended up, so a window that asked but stayed as it was can tell
+ * the request was served elsewhere and clear its own switching state.
+ *
+ * - `focused`: a window already showing the project was brought forward.
+ * - `activated`: the project was opened or switched to inside an existing window.
+ * - `created`: a new window was made for it.
+ */
+export interface ProjectOpenOutcome {
+  kind: "focused" | "activated" | "created";
+  windowId: number;
+}

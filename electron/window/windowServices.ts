@@ -61,7 +61,7 @@ import {
   drainPendingOpenDirs,
   type OpenDirHandlerDeps,
 } from "./openDirHandler.js";
-import { reserveWindowForOpen } from "./windowOpenState.js";
+import { isWindowBound, reserveWindowForOpen } from "./windowOpenState.js";
 import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../../shared/types/windowOpen.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
@@ -117,17 +117,15 @@ const DEFAULT_TERMINAL_ID = "default";
 
 // Dependencies for folders opened from outside the app (#10976, #12593). Only
 // window creation comes from main.ts, which owns it; the install-once guard
-// lives in openDirHandler.ts. Without a factory (a harness boot) a folder that
-// needs a new window waits in the queue for the next window instead.
+// lives in openDirHandler.ts.
 function createOpenDirDeps(
-  createWindowForPath: ((dirPath: string) => Promise<void>) | undefined
+  createWindowForPath: (dirPath: string) => Promise<number>
 ): OpenDirHandlerDeps {
   return {
     resolveProject: (dirPath) => projectStore.addProject(dirPath),
     openDirectory: (dirPath, win) =>
       handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
-    createWindowForPath:
-      createWindowForPath ?? (async (dirPath) => queuePendingOpenDirPath(dirPath)),
+    createWindowForPath,
     getWindowRegistry,
     // #12595 stores the user's choice; until then every open follows the default.
     getPreference: () => DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
@@ -157,7 +155,7 @@ export interface SetupWindowServicesOptions {
    */
   backgroundProjectIds?: readonly string[];
   /** Create a window bound to a folder, for opens from outside the app that need one. */
-  createWindowForPath?: (dirPath: string) => Promise<void>;
+  createWindowForPath: (dirPath: string) => Promise<number>;
 }
 
 /**
@@ -963,7 +961,7 @@ export async function setupWindowServices(
     });
     handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined)
       .catch((err) => console.error("[MAIN] Failed to open initial project path:", err))
-      .finally(releaseInitialOpen);
+      .finally(() => releaseInitialOpen(isWindowBound(windowRegistry, ctx.windowId)));
   }
 
   // Folders opened from outside the app — Dock drops and "Open With" (macOS

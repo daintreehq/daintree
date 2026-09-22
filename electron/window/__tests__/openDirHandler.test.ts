@@ -110,9 +110,7 @@ function makeDeps(world: ReturnType<typeof makeWorld>) {
       fake.active = idFor(dirPath);
       if (!fake.views.includes(fake.active)) fake.views.push(fake.active);
     }),
-    createWindowForPath: vi.fn(async (dirPath: string) => {
-      world.add({ active: idFor(dirPath) });
-    }),
+    createWindowForPath: vi.fn(async (dirPath: string) => world.add({ active: idFor(dirPath) }).id),
     getWindowRegistry: () => world.registry,
     getPreference: () => "default" as const,
   };
@@ -142,7 +140,7 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
 
     const outcome = await routeExternalOpen("/work/new", deps);
 
-    expect(outcome).toEqual({ kind: "created" });
+    expect(outcome).toEqual({ kind: "created", windowId: 6 });
     expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/new");
     expect(deps.openDirectory).not.toHaveBeenCalled();
     expect(five.map((w) => w.active)).toEqual(["p1", "p2", "p3", "p4", "p5"]);
@@ -207,18 +205,56 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
     expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/plain");
   });
 
-  it("releases its claim on the target window when the open fails", async () => {
+  it("keeps a window left on a git-init prompt for that folder", async () => {
     const world = makeWorld();
     const empty = world.add();
+    const deps = makeDeps(world);
+    deps.resolveProject.mockRejectedValue(new Error("NOT_A_GIT_REPO"));
+    // handleDirectoryOpen shows the prompt and returns without binding anything.
+    deps.openDirectory.mockResolvedValueOnce(undefined);
+
+    await routeExternalOpen("/work/plain", deps);
+    await routeExternalOpen("/work/other", deps);
+
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/other");
+
+    // The same folder again goes back to its prompt rather than a new window.
+    await routeExternalOpen("/work/plain", deps);
+    expect(deps.openDirectory).toHaveBeenLastCalledWith("/work/plain", empty.win);
+    expect(deps.createWindowForPath).toHaveBeenCalledTimes(1);
+  });
+
+  it("frees an unbound window once it binds a workspace", async () => {
+    const world = makeWorld();
+    const empty = world.add();
+    const deps = makeDeps(world);
+    deps.openDirectory.mockResolvedValueOnce(undefined);
+    await routeExternalOpen("/work/plain", deps);
+
+    // The user picks a project in that window, then closes it back to the picker.
+    empty.active = "picked";
+    await routeExternalOpen("/work/picked-check", deps);
+    empty.active = null;
+    deps.createWindowForPath.mockClear();
+
+    await routeExternalOpen("/work/next", deps);
+    expect(deps.openDirectory).toHaveBeenLastCalledWith("/work/next", empty.win);
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+  });
+
+  it("retries a folder whose open threw in the window it failed in", async () => {
+    const world = makeWorld();
+    world.add();
     const deps = makeDeps(world);
     deps.openDirectory.mockRejectedValueOnce(new Error("boom"));
 
     await expect(routeExternalOpen("/work/a", deps)).rejects.toThrow("boom");
-    // Unclaimed and still on the picker, so the next folder may take it.
+    await routeExternalOpen("/work/a", deps);
+    // Any other folder still gets a window of its own.
     await routeExternalOpen("/work/b", deps);
 
-    expect(deps.openDirectory).toHaveBeenLastCalledWith("/work/b", empty.win);
-    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+    expect(deps.openDirectory).toHaveBeenCalledTimes(2);
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/b");
   });
 
   it("does not take a window whose own initial open is still in flight", async () => {
@@ -347,8 +383,9 @@ describe("drainPendingOpenDirs", () => {
       initialOpens.push(() => {
         created.active = idFor(dirPath);
         created.views.push(created.active);
-        release();
+        release(true);
       });
+      return created.id;
     });
     envMock.getPendingOpenDirPaths.mockReturnValue(["/a", "/b", "/c"]);
 

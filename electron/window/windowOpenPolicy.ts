@@ -51,7 +51,14 @@ export interface OpenWorldWindow {
    * never treated as empty.
    */
   ready: boolean;
+  /** Opens in flight into this window. */
   reservations: readonly WindowOpenReservation[];
+  /**
+   * Opens that settled without binding a workspace — the folder is waiting on
+   * the git-init prompt, or failed and said so. The window stays theirs until
+   * it binds something: never picked as empty, and the same folder reopens here.
+   */
+  unboundOpens: readonly WindowOpenReservation[];
 }
 
 export interface OpenWorld {
@@ -102,18 +109,34 @@ function findOwner(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDe
     if (cached) return { kind: "activate", windowId: cached.windowId, reason: "owner" };
   }
 
+  // Opened again rather than focused: the prompt it was waiting on may have
+  // been dismissed, and reopening puts it back in front of the user.
+  const unbound = windows.find((w) => w.unboundOpens.some((r) => reservationMatches(r, request)));
+  if (unbound) return { kind: "activate", windowId: unbound.windowId, reason: "owner" };
+
   return null;
 }
 
 function isEmptyWindow(w: OpenWorldWindow): boolean {
   return (
-    w.ready && w.activeProjectId === null && w.bridgeProjectId === null && w.reservations.length === 0
+    w.ready &&
+    w.activeProjectId === null &&
+    w.bridgeProjectId === null &&
+    w.reservations.length === 0 &&
+    w.unboundOpens.length === 0
   );
 }
 
-/** "New window": an empty window if there is one, otherwise a fresh one. */
+/**
+ * "New window": an empty window if there is one, otherwise a fresh one. An
+ * explicit "new" never reuses the window that asked, even an empty one — the
+ * gesture promises the asking window is left exactly as it was (#12594).
+ */
 function newWindowTarget(request: ProjectOpenRequest, world: OpenWorld): ProjectOpenDecision {
-  const empty = candidateOrder(request, world).find(isEmptyWindow);
+  const excluded = request.disposition === "new" ? request.initiatingWindowId : null;
+  const empty = candidateOrder(request, world).find(
+    (w) => w.windowId !== excluded && isEmptyWindow(w)
+  );
   if (empty) return { kind: "activate", windowId: empty.windowId, reason: "empty" };
   return { kind: "create" };
 }

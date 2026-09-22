@@ -6,6 +6,7 @@ const logErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/logger.js", () => ({ logError: logErrorMock }));
 
 import {
+  isWindowBound,
   markWindowReadyForOpens,
   reserveWindowForOpen,
   snapshotOpenWorld,
@@ -15,7 +16,10 @@ import {
 interface FakePvm {
   getActiveProjectId: () => string | null;
   getOutgoingBridgeProjectId: () => string | null;
-  getAllViews: () => Array<{ projectId: string; view: { webContents: { isDestroyed(): boolean } } }>;
+  getAllViews: () => Array<{
+    projectId: string;
+    view: { webContents: { isDestroyed(): boolean } };
+  }>;
 }
 
 function pvm(
@@ -64,6 +68,7 @@ describe("snapshotOpenWorld", () => {
           viewProjectIds: ["p3", "cached"],
           ready: true,
           reservations: [],
+          unboundOpens: [],
         },
         {
           windowId: 1,
@@ -72,15 +77,14 @@ describe("snapshotOpenWorld", () => {
           viewProjectIds: [],
           ready: false,
           reservations: [],
+          unboundOpens: [],
         },
       ],
     });
   });
 
   it("skips destroyed windows and tolerates a missing registry", () => {
-    expect(snapshotOpenWorld(registryOf([ctx(1, pvm(null), true)]), "default").windows).toEqual(
-      []
-    );
+    expect(snapshotOpenWorld(registryOf([ctx(1, pvm(null), true)]), "default").windows).toEqual([]);
     expect(snapshotOpenWorld(undefined, "default").windows).toEqual([]);
   });
 
@@ -125,13 +129,74 @@ describe("reserveWindowForOpen", () => {
       { projectId: null, projectPath: "/b" },
     ]);
 
-    first();
-    first();
+    first(true);
+    first(true);
     expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].reservations).toEqual([
       { projectId: null, projectPath: "/b" },
     ]);
 
-    second();
-    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].reservations).toEqual([]);
+    second(true);
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0]).toMatchObject({
+      reservations: [],
+      unboundOpens: [],
+    });
+  });
+
+  it("keeps an open that settled unbound until the window binds a workspace", () => {
+    let active: string | null = null;
+    const w = ctx(1, { ...pvm(null), getActiveProjectId: () => active });
+    reserveWindowForOpen(1, { projectId: null, projectPath: "/plain" })(false);
+
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0]).toMatchObject({
+      reservations: [],
+      unboundOpens: [{ projectId: null, projectPath: "/plain" }],
+    });
+
+    active = "picked";
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
+    active = null;
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
+  });
+
+  it("clears an unbound open when a later open into the window binds", () => {
+    const w = ctx(1, pvm(null));
+    reserveWindowForOpen(1, { projectId: null, projectPath: "/plain" })(false);
+    reserveWindowForOpen(1, { projectId: "p", projectPath: "/p" })(true);
+
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
+  });
+
+  it("forgets unbound opens of windows that have closed", () => {
+    reserveWindowForOpen(1, { projectId: null, projectPath: "/plain" })(false);
+    snapshotOpenWorld(registryOf([]), "default");
+
+    expect(
+      snapshotOpenWorld(registryOf([ctx(1, pvm(null))]), "default").windows[0].unboundOpens
+    ).toEqual([]);
+  });
+});
+
+describe("isWindowBound", () => {
+  function registryWith(manager: FakePvm | undefined): WindowRegistry {
+    return {
+      getByWindowId: (id: number) => (id === 1 ? ctx(1, manager) : undefined),
+    } as unknown as WindowRegistry;
+  }
+
+  it("is true only when the window has a workspace in front", () => {
+    expect(isWindowBound(registryWith(pvm("p")), 1)).toBe(true);
+    expect(isWindowBound(registryWith(pvm(null)), 1)).toBe(false);
+    expect(isWindowBound(registryWith(pvm("p")), 2)).toBe(false);
+    expect(isWindowBound(undefined, 1)).toBe(false);
+  });
+
+  it("reads a throwing view manager as unbound", () => {
+    const broken = {
+      ...pvm(null),
+      getActiveProjectId: () => {
+        throw new Error("disposing");
+      },
+    };
+    expect(isWindowBound(registryWith(broken), 1)).toBe(false);
   });
 });

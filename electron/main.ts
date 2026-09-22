@@ -370,6 +370,8 @@ if (!gotTheLock) {
     opts?: {
       revealMode?: "show" | "showInactive";
       backgroundProjectIds?: readonly string[];
+      /** Told the window's id as soon as it is registered, before setup awaits anything. */
+      onRegistered?: (windowId: number) => void;
     }
   ): Promise<CreateWindowResult> {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
@@ -382,6 +384,7 @@ if (!gotTheLock) {
       });
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
+    opts?.onRegistered?.(ctx.windowId);
 
     // Keep the persisted window manifest in step with this window (#11492).
     // The save listens on `closed`, not `close`: WindowRegistry still holds the
@@ -668,7 +671,7 @@ if (!gotTheLock) {
       projectViewManager: pvm,
       initialAppView: appView,
       backgroundProjectIds: opts?.backgroundProjectIds,
-      createWindowForPath: (dirPath) => createWindow(dirPath).then(() => {}),
+      createWindowForPath,
     });
 
     // The process is exiting, or the window never reached the registry and has
@@ -722,6 +725,22 @@ if (!gotTheLock) {
     }
 
     return "ok";
+  }
+
+  // For folders opened from outside the app that need a window of their own
+  // (#12593). Resolves to the new window's id so the open can report where it
+  // landed.
+  async function createWindowForPath(dirPath: string): Promise<number> {
+    let windowId: number | undefined;
+    const result = await createWindow(dirPath, undefined, {
+      onRegistered: (id) => {
+        windowId = id;
+      },
+    });
+    if (result !== "ok" || windowId === undefined) {
+      throw new Error(`No window was created for ${dirPath} (${result})`);
+    }
+    return windowId;
   }
 
   registerAppLifecycleHandlers({
