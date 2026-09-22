@@ -43,6 +43,7 @@ import {
   type ClaudeTrustPrompt,
 } from "../helpers/agentStartup";
 import { formatTerminalTail } from "../helpers/opencodeReady";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { writeTerminalInput, getTerminalText } from "../helpers/terminal";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import {
@@ -183,7 +184,9 @@ async function snap(page: Page, slug: string): Promise<string> {
 async function pinPanel(page: Page, launched: Locator): Promise<Locator> {
   await expect(launched).toBeVisible({ timeout: 60_000 });
   const panelId = await launched.evaluate(
-    (element) => element.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? ""
+    (element) => element.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? "",
+    undefined,
+    { timeout: T_SHORT }
   );
   if (!panelId) throw new Error("Launched agent panel has no data-panel-id");
   return page.locator(`[data-panel-id="${panelId}"]`);
@@ -223,16 +226,42 @@ async function readAgentStartupInfo(page: Page, panel: Locator): Promise<AgentSt
   if (!panelId) return null;
   return page
     .evaluate(async (id) => {
-      const info = await window.electron.terminal.getInfo(id);
-      return info ? { hasPty: info.hasPty, agentState: info.agentState } : null;
+      try {
+        const info = await window.electron.terminal.getInfo(id);
+        return info ? { hasPty: info.hasPty, agentState: info.agentState } : ("missing" as const);
+      } catch (error) {
+        // The handler throws "Terminal <id> not found" once the backend drops it.
+        return String(error).includes("not found") ? ("missing" as const) : null;
+      }
     }, panelId)
     .catch(() => null);
 }
 
-// Alternate directions so the answer does not depend on whether the CLI's
-// select list wraps: ArrowUp off the first option is a no-op in a list that
-// doesn't, and ArrowDown then reaches the next one.
+async function readTrustPrompt(panel: Locator): Promise<ClaudeTrustPrompt | null> {
+  return findLiveClaudeTrustPrompt(await getTerminalText(panel).catch(() => ""));
+}
+
+// ArrowUp first; ArrowDown only once ArrowUp visibly did nothing, which is the
+// first option of a list that doesn't wrap. The repeats cover a keystroke the
+// CLI dropped while it was still attaching its input reader.
 const TRUST_NAVIGATION_KEYS = ["\x1b[A", "\x1b[B", "\x1b[A", "\x1b[B"];
+const TRUST_KEY_REDRAW_TIMEOUT_MS = 3_000;
+
+/**
+ * Wait for the selection to leave "No, exit" before another key is sent, so a
+ * slow redraw is never read as the effect of a later key.
+ */
+async function waitForTrustSelectionChange(
+  page: Page,
+  panel: Locator
+): Promise<ClaudeTrustPrompt | null> {
+  const deadline = Date.now() + TRUST_KEY_REDRAW_TIMEOUT_MS;
+  for (;;) {
+    await page.waitForTimeout(250);
+    const current = await readTrustPrompt(panel);
+    if (!current?.rejectionSelected || Date.now() >= deadline) return current;
+  }
+}
 
 /**
  * Move Claude's trust dialog off "No, exit" and confirm, but only once an
@@ -243,18 +272,21 @@ async function answerClaudeTrustPrompt(
   page: Page,
   panel: Locator,
   prompt: ClaudeTrustPrompt
-): Promise<"answered" | "unreadable" | "stuck"> {
+): Promise<"answered" | "redrawn" | "unreadable" | "stuck"> {
   let current: ClaudeTrustPrompt | null = prompt;
   for (const key of TRUST_NAVIGATION_KEYS) {
     if (!current?.rejectionSelected) break;
     await writeTerminalInput(page, panel, key);
-    await page.waitForTimeout(500);
-    current = findLiveClaudeTrustPrompt(await getTerminalText(panel).catch(() => ""));
+    current = await waitForTrustSelectionChange(page, panel);
   }
-  // The dialog redrew into something else while navigating; the next poll decides.
-  if (!current) return "answered";
+  if (!current) return "redrawn";
   if (current.rejectionSelected) return "stuck";
   if (!current.acceptanceSelected) return "unreadable";
+  // Confirm against a settled frame: if a redraw from an earlier key is still
+  // in flight, the affirmative frame just read can already be stale.
+  await page.waitForTimeout(500);
+  const settled = await readTrustPrompt(panel);
+  if (!settled?.acceptanceSelected || settled.rejectionSelected) return "redrawn";
   await writeTerminalInput(page, panel, "\r");
   return "answered";
 }
@@ -283,42 +315,52 @@ async function waitForAgentReady(
   const label = kind === "opencode" ? "OpenCode" : "Claude";
   const budget = kind === "opencode" ? 360_000 : 270_000;
   const startedAt = Date.now();
-  let text = "";
+  // The last snapshot that read successfully, kept for the failure report only;
+  // decisions use the current read so a failed one never replays a stale screen.
+  let lastText = "";
+  let terminalSeen = false;
   let unreadableTrustPolls = 0;
 
-  const fail = (reason: string): never => {
+  function fail(reason: string): never {
     const elapsed = Math.round((Date.now() - startedAt) / 1000);
     const header = `${label} ${reason} (after ${elapsed}s of a ${budget / 1000}s budget)`;
-    const tail = formatTerminalTail(text);
+    const tail = formatTerminalTail(lastText);
     throw new Error(tail ? `${header}\n\nTerminal tail:\n${tail}` : header);
-  };
+  }
 
   while (Date.now() - startedAt < budget) {
     await dismissTelemetryConsent(page);
-    text = await getTerminalText(panel).catch(() => "");
-    if (isAgentStartupExited(await readAgentStartupInfo(page, panel))) {
-      fail("exited before reaching its ready screen");
-    }
+    const snapshot = await getTerminalText(panel).catch(() => null);
+    if (snapshot !== null) lastText = snapshot;
+    const text = snapshot ?? "";
+
+    const info = await readAgentStartupInfo(page, panel);
+    if (isAgentStartupExited(info, terminalSeen)) fail("exited before reaching its ready screen");
+    if (info && info !== "missing") terminalSeen = true;
 
     // A live dialog outranks ready text: the scrollback can hold a banner
     // drawn before the dialog appeared.
     const trustPrompt = kind === "claude" ? findLiveClaudeTrustPrompt(text) : null;
     if (trustPrompt) {
-      const outcome = await answerClaudeTrustPrompt(page, panel, trustPrompt);
+      const outcome = await answerClaudeTrustPrompt(page, panel, trustPrompt).catch(
+        (error: unknown) =>
+          fail(`failed to answer its trust prompt: ${formatErrorMessage(error, "input failed")}`)
+      );
       if (outcome === "stuck") {
-        text = await getTerminalText(panel).catch(() => text);
+        lastText = (await getTerminalText(panel).catch(() => null)) ?? lastText;
         fail("trust prompt did not move off the rejection option");
       }
-      if (outcome === "answered") {
+      if (outcome === "unreadable") {
+        if (++unreadableTrustPolls >= UNREADABLE_TRUST_PROMPT_POLLS) {
+          fail("showed a trust prompt with no recognizable selection");
+        }
+      } else if (outcome === "answered") {
         unreadableTrustPolls = 0;
-        await page.waitForTimeout(2000);
-      } else if (++unreadableTrustPolls >= UNREADABLE_TRUST_PROMPT_POLLS) {
-        fail("showed a trust prompt with no recognizable selection");
-      } else {
-        await page.waitForTimeout(1000);
       }
+      await page.waitForTimeout(outcome === "answered" ? 2000 : 1000);
       continue;
     }
+    unreadableTrustPolls = 0;
 
     if (matches.some((re) => re.test(text))) return;
     const lower = text.toLowerCase();

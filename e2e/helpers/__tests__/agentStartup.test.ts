@@ -43,7 +43,63 @@ describe("findLiveClaudeTrustPrompt", () => {
     ["› glyph", ["› Yes, proceed", "  No, exit"]],
     ["upper-case option text", ["> YES, I TRUST THIS FOLDER", "  NO, EXIT"]],
   ])("reads an affirmative selection drawn with %s", (_label, options) => {
-    expect(findLiveClaudeTrustPrompt(trustDialog(options))?.acceptanceSelected).toBe(true);
+    expect(findLiveClaudeTrustPrompt(trustDialog(options))).toEqual({
+      rejectionSelected: false,
+      acceptanceSelected: true,
+    });
+  });
+
+  it("reads the ruled, numbered layout with its workspace header", () => {
+    const text = [
+      "─".repeat(60),
+      "Accessing workspace: /tmp/surge-checkout",
+      "",
+      QUESTION,
+      "(Like your own code, a well-known open source project, or work from your team).",
+      "If not, take a moment to review what's in this folder first.",
+      "",
+      "Claude Code'll be able to read, edit, and execute files here. Security guide",
+      "",
+      "❯ 1. Yes, I trust this folder",
+      "  2. No, exit",
+      "",
+      "Enter to confirm · Esc to cancel",
+      "",
+    ].join("\n");
+    expect(findLiveClaudeTrustPrompt(text)).toEqual({
+      rejectionSelected: false,
+      acceptanceSelected: true,
+    });
+  });
+
+  it("does not read an API-key dialog below an answered trust dialog as trust", () => {
+    // Both dialogs share option and footer shapes; the stale "❯ Yes, I trust"
+    // must not authorize an Enter that would confirm "No (recommended)".
+    const text = [
+      trustDialog(["  No, exit", "❯ Yes, I trust this folder"], []),
+      "",
+      "Detected a custom API key in your environment",
+      "",
+      "Do you want to use this API key?",
+      "",
+      "  1. Yes",
+      "❯ 2. No (recommended)",
+      "",
+      "Enter to confirm · Esc to cancel",
+      "",
+    ].join("\n");
+    expect(findLiveClaudeTrustPrompt(text)).toBeNull();
+  });
+
+  it("does not read a lone API-key dialog as a trust dialog", () => {
+    const text = [
+      "Detected a custom API key in your environment",
+      "Do you want to use this API key?",
+      "  1. Yes",
+      "❯ 2. No (recommended)",
+      "Enter to confirm · Esc to cancel",
+    ].join("\n");
+    expect(findLiveClaudeTrustPrompt(text)).toBeNull();
   });
 
   it("reads the older 'Do you trust the files' dialog", () => {
@@ -78,7 +134,9 @@ describe("findLiveClaudeTrustPrompt", () => {
   });
 
   it("reports neither selection when the cursor glyph is not recognized", () => {
-    const text = trustDialog(["* No, exit", "  Yes, I trust this folder"]);
+    // The unknown glyph sits on the second option, after the dialog run has
+    // started, so the dialog only stays live if that row still reads as part of it.
+    const text = trustDialog(["  Yes, I trust this folder", "* No, exit"]);
     expect(findLiveClaudeTrustPrompt(text)).toEqual({
       rejectionSelected: false,
       acceptanceSelected: false,
@@ -103,8 +161,14 @@ describe("findLiveClaudeTrustPrompt", () => {
     });
   });
 
-  it("waits while the question has rendered but the options have not", () => {
-    expect(findLiveClaudeTrustPrompt(`${QUESTION}\n\n`)).toBeNull();
+  it("holds a question whose options have not rendered yet as live with no selection", () => {
+    // Live, so it outranks a welcome banner drawn above it; no selection, so
+    // nothing is typed until the options arrive.
+    const text = `✻ Welcome to Claude Code!\n\n${QUESTION}\n\n`;
+    expect(findLiveClaudeTrustPrompt(text)).toEqual({
+      rejectionSelected: false,
+      acceptanceSelected: false,
+    });
   });
 
   it("ignores unrelated mentions of trust", () => {
@@ -121,19 +185,29 @@ describe("findLiveClaudeTrustPrompt", () => {
 
 describe("isAgentStartupExited", () => {
   it("treats the agent as exited while its parent shell survives", () => {
-    expect(isAgentStartupExited({ hasPty: true, agentState: "exited" })).toBe(true);
+    expect(isAgentStartupExited({ hasPty: true, agentState: "exited" }, true)).toBe(true);
   });
 
-  it("treats a dead PTY as exited", () => {
-    expect(isAgentStartupExited({ hasPty: false })).toBe(true);
+  it("treats a dead PTY as exited whatever the agent state says", () => {
+    expect(isAgentStartupExited({ hasPty: false, agentState: "working" }, true)).toBe(true);
+  });
+
+  it("treats a terminal that disappeared after it was seen as exited", () => {
+    expect(isAgentStartupExited("missing", true)).toBe(true);
+  });
+
+  it("does not treat a terminal that has not registered yet as exited", () => {
+    expect(isAgentStartupExited("missing", false)).toBe(false);
   });
 
   it.each([
-    ["no record yet", null],
+    ["a failed read", null],
+    ["an empty record", {}],
+    ["a record with no PTY field", { agentState: "idle" }],
     ["a record with no agent state", { hasPty: true }],
     ["a working agent", { hasPty: true, agentState: "working" }],
     ["an idle agent", { hasPty: true, agentState: "idle" }],
   ])("does not treat %s as exited", (_label, info) => {
-    expect(isAgentStartupExited(info)).toBe(false);
+    expect(isAgentStartupExited(info, true)).toBe(false);
   });
 });

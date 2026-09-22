@@ -14,8 +14,11 @@ import { isClaudeTrustRejectionSelected } from "./claudeAuth";
 // anchoring on one would cut the other options out of the block.
 const TRUST_QUESTION = /quick safety check|do you trust|one you trust|trust the files/i;
 
+// Any single symbol is accepted as the cursor here, so an option drawn with a
+// glyph the selection regexes don't know still reads as part of the dialog
+// (and surfaces as "no recognizable selection" rather than as "gone").
 const TRUST_DIALOG_LINE =
-  /^\s*(?:[>❯›]\s*)?(?:\d+\.\s*)?(?:yes\b|no\b|enter to confirm|esc to (?:cancel|exit))/i;
+  /^\s*(?:[^\w\s]\s*)?(?:\d+\.\s*)?(?:yes\b|no\b|enter to confirm|esc to (?:cancel|exit))/i;
 
 const SELECTED_AFFIRMATIVE = /(?:^|\n)\s*[>❯›]\s*(?:\d+\.\s*)?yes\b/im;
 
@@ -33,7 +36,9 @@ export type ClaudeTrustPrompt = {
  * The Claude folder-trust dialog, if it is still live — the last content in
  * the buffer. Returns null when no dialog is present, or when anything other
  * than the dialog's own options and footer was printed after it (a shell
- * prompt after the CLI quit, the welcome banner after it was accepted).
+ * prompt after the CLI quit, the welcome banner after it was accepted). A
+ * question whose options have not rendered yet is still live, with no
+ * selection, so it holds off every other startup branch until it resolves.
  */
 export function findLiveClaudeTrustPrompt(text: string): ClaudeTrustPrompt | null {
   const lines = text.replace(/\r\n?/g, "\n").replace(BOX_DRAWING, " ").split("\n");
@@ -48,14 +53,16 @@ export function findLiveClaudeTrustPrompt(text: string): ClaudeTrustPrompt | nul
   if (questionIndex === -1) return null;
 
   const after = lines.slice(questionIndex + 1);
-  let lastDialogLine = -1;
-  for (let i = 0; i < after.length; i++) {
-    if (TRUST_DIALOG_LINE.test(after[i] ?? "")) lastDialogLine = i;
-  }
-  // The question has rendered but the options have not — nothing to answer yet.
-  if (lastDialogLine === -1) return null;
+  const firstDialogLine = after.findIndex((line) => TRUST_DIALOG_LINE.test(line));
+  if (firstDialogLine === -1) return { rejectionSelected: false, acceptanceSelected: false };
 
-  if (after.slice(lastDialogLine + 1).some((line) => line.trim() !== "")) return null;
+  // Explanatory text sits between the question and the options; from the first
+  // option on, only options and the footer belong to the dialog. Checking the
+  // whole run — not just what follows the last dialog-shaped line — matters
+  // because the next startup dialog (the API-key prompt) has the same option
+  // and footer shapes, and must not be read as more of this one.
+  const isDialogOrBlank = (line: string) => line.trim() === "" || TRUST_DIALOG_LINE.test(line);
+  if (!after.slice(firstDialogLine).every(isDialogOrBlank)) return null;
 
   const block = [lines[questionIndex], ...after].join("\n");
   return {
@@ -64,17 +71,22 @@ export function findLiveClaudeTrustPrompt(text: string): ClaudeTrustPrompt | nul
   };
 }
 
-export type AgentStartupInfo = {
-  hasPty?: boolean;
-  agentState?: string;
-} | null;
+/**
+ * One read of the backend terminal record: the record itself, `"missing"` when
+ * the backend no longer knows the terminal, or null when the read failed.
+ */
+export type AgentStartupInfo = { hasPty?: boolean; agentState?: string } | "missing" | null;
 
 /**
  * Whether the agent process is gone. `hasPty` alone is not enough: an agent
  * launched into a shell leaves that shell running after it quits, so the
- * backend's `exited` agent state is the signal for that case.
+ * backend's `exited` agent state is the signal for that case. A PTY that dies
+ * abnormally is dropped from the backend registry instead, so a terminal that
+ * goes missing after it was seen has exited too — before it was ever seen, a
+ * missing record only means it has not registered yet.
  */
-export function isAgentStartupExited(info: AgentStartupInfo): boolean {
+export function isAgentStartupExited(info: AgentStartupInfo, seenBefore: boolean): boolean {
+  if (info === "missing") return seenBefore;
   if (!info) return false;
   return info.hasPty === false || info.agentState === "exited";
 }
