@@ -31,6 +31,10 @@ import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pl
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
 import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
+import {
+  DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
+  type WindowOpeningConfig,
+} from "../shared/types/ipc/windowOpening.js";
 import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";
@@ -100,6 +104,12 @@ export interface StoreSchema {
   sessionRestore: {
     enabled: boolean;
   };
+  /**
+   * Whether opening a folder reuses the current window or opens a new one
+   * (#12595). Read through `readWindowOpeningConfig`, which folds an absent or
+   * hand-edited value back to the default.
+   */
+  windowOpening: WindowOpeningConfig;
   /**
    * Whether the power save blocker is held while agents work, and whether that
    * extends to battery power (#12516). `PowerSaveBlockerService` is the sole
@@ -674,6 +684,9 @@ const storeOptions = {
     // the user has.
     sessionRestore: {
       enabled: true,
+    },
+    windowOpening: {
+      openFoldersInNewWindow: DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
     },
     // On while plugged in, which is how it always behaved; off on battery, where
     // an unattended laptop that never idle-sleeps drains itself.

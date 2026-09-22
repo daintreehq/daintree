@@ -87,6 +87,9 @@ function setupDispatchMock() {
     if (actionId === "hibernation.getConfig") {
       return { ok: true, result: { enabled: false, inactiveThresholdHours: 24 } };
     }
+    if (actionId === "windowOpening.getConfig") {
+      return { ok: true, result: { openFoldersInNewWindow: "default" } };
+    }
     return { ok: true, result: undefined };
   });
 }

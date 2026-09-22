@@ -213,6 +213,9 @@ export type {
   IdleTerminalProjectEntry,
   // Session restore types
   SessionRestoreConfig,
+  // Window opening types
+  WindowOpeningConfig,
+  OpenFoldersInNewWindowMode,
   // Keep-awake types
   KeepAwakeConfig,
   KeepAwakeState,

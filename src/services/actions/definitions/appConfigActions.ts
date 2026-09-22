@@ -6,17 +6,26 @@ import {
   appClient,
   hibernationClient,
   sessionRestoreClient,
+  windowOpeningClient,
   idleTerminalClient,
   idleBackgroundAutoCloseClient,
   worktreeConfigClient,
 } from "@/clients";
 import { dispatchEscape } from "@/lib/escapeStack";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { OPEN_FOLDERS_IN_NEW_WINDOW_MODES } from "@shared/types/ipc/windowOpening";
 
 const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 
 /** Shared by `sessionRestore.updateConfig`'s declared schema and its body. */
 const SessionRestoreConfigPatchSchema = z.object({ enabled: z.boolean().optional() });
+
+const OpenFoldersInNewWindowSchema = z.enum(OPEN_FOLDERS_IN_NEW_WINDOW_MODES);
+
+/** Shared by `windowOpening.updateConfig`'s declared schema and its body. */
+const WindowOpeningConfigPatchSchema = z.object({
+  openFoldersInNewWindow: OpenFoldersInNewWindowSchema.optional(),
+});
 
 export function registerAppConfigActions(
   actions: ActionRegistry,
@@ -144,6 +153,40 @@ export function registerAppConfigActions(
       // a caller sending `{ enabled: "yes" }` is rejected here instead of
       // reaching the store.
       return await sessionRestoreClient.updateConfig(SessionRestoreConfigPatchSchema.parse(args));
+    },
+  }));
+
+  actions.set("windowOpening.getConfig", () => ({
+    id: "windowOpening.getConfig",
+    title: "Get window opening config",
+    description:
+      "Read whether opening a folder uses the current window or a new one. No arguments. Returns { openFoldersInNewWindow }: `default` gives a folder opened from outside Daintree (Dock, Finder, command line) a new window and lets a folder picked inside Daintree replace the current window's project; `on` always opens a new window; `off` always uses the current window. Default `default`. Switching to a known project, project history, focusing a waiting agent and session restore keep their assigned window whatever the value.",
+    category: "settings",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    resultSchema: z.object({
+      openFoldersInNewWindow: OpenFoldersInNewWindowSchema,
+    }),
+    run: async () => {
+      return await windowOpeningClient.getConfig();
+    },
+  }));
+
+  actions.set("windowOpening.updateConfig", () => ({
+    id: "windowOpening.updateConfig",
+    title: "Update window opening config",
+    description: "Update whether opening a folder uses the current window or a new one",
+    category: "settings",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    // Config-patch tool: a palette pick dispatches `{}` (an empty patch that
+    // changes nothing). Belongs in Settings, not the palette. Stays an MCP tool.
+    palette: { mode: "hidden" },
+    argsSchema: WindowOpeningConfigPatchSchema,
+    run: async (args: unknown) => {
+      return await windowOpeningClient.updateConfig(WindowOpeningConfigPatchSchema.parse(args));
     },
   }));
 

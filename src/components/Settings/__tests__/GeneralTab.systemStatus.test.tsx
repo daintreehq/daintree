@@ -93,6 +93,9 @@ function setupDispatchMock(cliAvailability: CliAvailability, agentSettings: Agen
         result: { enabled: false, inactiveThresholdHours: 24 } as HibernationConfig,
       };
     }
+    if (actionId === "windowOpening.getConfig") {
+      return { ok: true, result: { openFoldersInNewWindow: "default" } };
+    }
     return { ok: true, result: undefined };
   });
 }

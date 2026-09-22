@@ -381,6 +381,8 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `terminalConfig.setPerformanceMode` | Set performance mode | safe | `performanceMode` |
 | `terminalConfig.setScreenReaderMode` | Set screen reader mode | safe | `mode` |
 | `terminalConfig.setScrollback` | Set scrollback | safe | `scrollbackLines` |
+| `windowOpening.getConfig` | Get window opening config | safe | — |
+| `windowOpening.updateConfig` | Update window opening config | safe | `openFoldersInNewWindow?` |
 | `worktreeConfig.get` | Get worktree config | safe | — |
 | `worktreeConfig.setPattern` | Set worktree path pattern | safe | `pattern` |
 

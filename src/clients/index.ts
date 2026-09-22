@@ -22,6 +22,7 @@ export {
 export { globalEnvClient, invalidateGlobalEnvCache } from "./globalEnvClient";
 export { scratchClient } from "./scratchClient";
 export { sessionRestoreClient } from "./sessionRestoreClient";
+export { windowOpeningClient } from "./windowOpeningClient";
 export { keepAwakeClient } from "./keepAwakeClient";
 export { slashCommandsClient } from "./slashCommandsClient";
 export { systemClient } from "./systemClient";

@@ -2038,6 +2038,14 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { severity: "success" | "error" | "info" | "warning" | "neutral" | null }];
     result: void;
   };
+  "window-opening:get-config": {
+    args: [];
+    result: import("./windowOpening.js").WindowOpeningConfig;
+  };
+  "window-opening:update-config": {
+    args: [config: Partial<import("./windowOpening.js").WindowOpeningConfig>];
+    result: import("./windowOpening.js").WindowOpeningConfig;
+  };
   "workspace-residency:get": {
     args: [payload: { workspaceId: string }];
     result: boolean;
