@@ -318,10 +318,10 @@ describe("view reload budget (#12609)", () => {
     expect(admitViewReload("ghost", 0)).toBe("refused");
     expect(isViewReloadBlocked("ghost")).toBe(false);
     resetViewReloadBudget("ghost");
-    // Tracking an id is what gets it reported (and later swept as removed), so
-    // none of the budget calls may have registered it.
-    await Promise.resolve();
-    expect(report).not.toHaveBeenCalled();
+    // A tracked id missing from the store is swept as removed, so a reconcile
+    // is what would expose one of these calls having registered it.
+    syncPluginPanels([]);
+    expect(await drainPhases()).toEqual([]);
   });
 
   it("refuses a removed panel and gives a reused id a fresh budget", async () => {

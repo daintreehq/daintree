@@ -8,14 +8,20 @@ import {
 } from "@shared/config/panelKindRegistry";
 import { syncPluginPanels } from "@/services/plugin/pluginPanelLifecycle";
 
+interface ContentMountProps {
+  panelId: string;
+  panelRemovedSignal?: AbortSignal;
+  offerRequestReload?: boolean;
+}
+
 const h = vi.hoisted(() => ({
-  mounts: [] as Array<{ panelId: string; panelRemovedSignal?: AbortSignal }>,
+  mounts: [] as ContentMountProps[],
 }));
 
 vi.mock("@/components/Plugin/PluginViewContent", () => ({
   // The real content does a `plugin://` import over IPC; what is under test
   // here is the lifetime the surface hands it, not the loader.
-  makePluginViewContent: () => (props: { panelId: string; panelRemovedSignal?: AbortSignal }) => {
+  makePluginViewContent: () => (props: ContentMountProps) => {
     h.mounts.push(props);
     return <div data-testid="content" />;
   },
@@ -65,6 +71,11 @@ describe("ProjectSurfaceView", () => {
     act(() => syncPluginPanels([], new Set()));
 
     expect(mount?.panelRemovedSignal?.aborted).toBe(false);
+  });
+
+  it("offers its view no requestReload, having no panel record to police it (#12609)", () => {
+    render(<ProjectSurfaceView config={surfaceKind()} />);
+    expect(h.mounts.at(-1)?.offerRequestReload).toBeFalsy();
   });
 
   it("aborts the removal signal when the kind leaves the registry", () => {

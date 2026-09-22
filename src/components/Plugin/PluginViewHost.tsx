@@ -161,6 +161,12 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
             `initialArgs` instead, so the mapping happens here at the seam. */}
         {decoded.ok ? (
           <PluginViewContent
+            // Keyed by panel: a tab group reuses this host when the active tab
+            // switches between two panels of one kind, and everything the
+            // content holds — its frozen `initialArgs`, the attempt a view's
+            // `requestReload` is bound to, a reload block — belongs to one
+            // panel. Without the key, the next panel would inherit all of it.
+            key={panelProps.id}
             panelId={panelProps.id}
             initialArgs={decoded.state}
             stateVersion={decoded.version}

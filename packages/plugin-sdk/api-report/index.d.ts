@@ -1949,7 +1949,8 @@ interface PanelViewProps {
      * sibling pane, switching away from a dock tab, or caching a background
      * project view all tear the subtree down while the panel itself lives on.
      * Tie only view-scoped work to it — in-flight `fetch`es, DOM observers,
-     * `postToPanel` subscriptions.
+     * `postToPanel` subscriptions. On unmount it aborts just after React has run
+     * your effect cleanups, so a cleanup may still see it open.
      *
      * NEVER tie a durable resource (a spawned process, a long-lived session) to
      * this signal: it will be killed the first time the user maximizes another
@@ -2107,9 +2108,9 @@ interface PanelViewProps {
  *
  * `render-failed` means the panel has no working view: the current attempt
  * reached the host's error boundary, or the host stopped a view that kept
- * asking to reload (#12609). It is cleared by a successful retry, or by the user
- * reloading the panel. The failure detail stays in the renderer; only the fact
- * of failure crosses to the worker.
+ * asking to reload (#12609). It clears when a retry starts or the user reloads
+ * the panel, so the next phase is the new attempt's own. The failure detail
+ * stays in the renderer; only the fact of failure crosses to the worker.
  */
 type PluginPanelLifecyclePhase = "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
 /**

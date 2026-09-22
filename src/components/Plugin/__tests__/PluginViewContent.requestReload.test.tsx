@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { StrictMode, useEffect, useState } from "react";
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   PanelViewProps,
@@ -23,9 +23,21 @@ vi.mock("@/components/ui/Skeleton", () => ({
   Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
   SkeletonHint: () => null,
 }));
+// Forwards the focus handlers: they are how the content learns focus was inside
+// the view, which decides whether a reload block moves focus to the host.
 vi.mock("@/components/ui/ContentFadeIn", () => ({
-  ContentFadeIn: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="plugin-content">{children}</div>
+  ContentFadeIn: ({
+    children,
+    onFocus,
+    onBlur,
+  }: {
+    children: React.ReactNode;
+    onFocus?: React.FocusEventHandler<HTMLDivElement>;
+    onBlur?: React.FocusEventHandler<HTMLDivElement>;
+  }) => (
+    <div data-testid="plugin-content" onFocus={onFocus} onBlur={onBlur}>
+      {children}
+    </div>
   ),
 }));
 
@@ -93,7 +105,11 @@ function StableView(props: PanelViewProps) {
     });
     h.onMountEffect?.(mountProps);
   }, [seq, mountProps]);
-  return <div data-testid="plugin-view" data-seq={seq} />;
+  return (
+    <div data-testid="plugin-view" data-seq={seq}>
+      <button type="button">Inside the view</button>
+    </div>
+  );
 }
 
 let emit: Listener = () => {};
@@ -160,6 +176,12 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  // Unmount while the bridge still exists, and let the deferred dispose abort
+  // land, before any of it is torn out from under the content.
+  cleanup();
+  await act(async () => {});
+  boundaryCallbacks.onError = undefined;
+  boundaryCallbacks.onReset = undefined;
   const { _resetPluginRuntimeStatusStoreForTest } =
     await import("@/store/pluginRuntimeStatusStore");
   _resetPluginRuntimeStatusStoreForTest();
@@ -263,12 +285,17 @@ describe("requestReload (#12609)", () => {
   });
 
   it("restores the latest accepted state and version rather than the mount bag", async () => {
-    const readRecoveryState = vi.fn(() => ({ state: { tab: "logs" }, version: 3 }));
+    // What the panel record holds, which moves on as the view persists.
+    let accepted = { state: { tab: "overview" } as Record<string, unknown>, version: 2 };
+    const readRecoveryState = vi.fn(() => accepted);
     await mountContent({ initialArgs: { tab: "overview" }, stateVersion: 2, readRecoveryState });
+    expect(latest().initialArgs).toEqual({ tab: "overview" });
 
+    accepted = { state: { tab: "logs" }, version: 3 };
     await requestReload();
 
     await waitFor(() => expect(h.mounts).toHaveLength(2));
+    // Read when the reload ran, not cached from the mount.
     expect(latest().initialArgs).toEqual({ tab: "logs" });
     expect(latest().stateVersion).toBe(3);
   });
@@ -284,12 +311,15 @@ describe("requestReload (#12609)", () => {
     });
     await waitFor(() => expect(h.mounts).toHaveLength(2));
 
-    // The burst cost one unit: the rest of the budget is still there.
+    // The burst cost exactly one unit: the rest of the budget is still there,
+    // and not a unit more.
     for (let i = 1; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
       await requestReload();
     }
     expect(h.mounts).toHaveLength(lifecycle.VIEW_RELOAD_LIMIT + 1);
     expect(blockedBanner()).toBeNull();
+    await requestReload();
+    expect(blockedBanner()).not.toBeNull();
   });
 
   it("ignores a callback held by an attempt that has been replaced", async () => {
@@ -302,6 +332,12 @@ describe("requestReload (#12609)", () => {
     await requestReload(stale);
     await requestReload(stale);
     expect(h.mounts).toHaveLength(2);
+
+    // The stale calls charged nothing: the whole remaining budget is intact.
+    for (let i = 1; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await requestReload();
+    }
+    expect(h.mounts).toHaveLength(lifecycle.VIEW_RELOAD_LIMIT + 1);
     expect(lifecycle.isViewReloadBlocked("panel-1")).toBe(false);
   });
 
@@ -389,11 +425,21 @@ describe("requestReload (#12609)", () => {
     }
     const mountsWhenBlocked = h.mounts.length;
 
+    await pushStatus(worker({ generation: 2, state: "starting" }));
     await pushStatus(worker({ generation: 2 }));
 
     expect(blockedBanner()).not.toBeNull();
     expect(screen.queryByTestId("plugin-view")).toBeNull();
     expect(h.mounts).toHaveLength(mountsWhenBlocked);
+    // The block lives in the lifecycle service, not just in this component's
+    // state: the latch a remount reads is intact, and the panel still reports
+    // as failed.
+    expect(lifecycle.isViewReloadBlocked("panel-1")).toBe(true);
+    await act(async () => {});
+    const phases = reportPanelLifecycle.mock.calls.flatMap(([events]) =>
+      events.map((event) => event.phase)
+    );
+    expect(phases[phases.length - 1]).toBe("render-failed");
   });
 
   it("treats the user's Try again as a reload that starts the budget over", async () => {
@@ -408,9 +454,50 @@ describe("requestReload (#12609)", () => {
     });
     await waitFor(() => expect(h.mounts).toHaveLength(lifecycle.VIEW_RELOAD_LIMIT + 2));
 
-    await requestReload();
-    expect(h.mounts).toHaveLength(lifecycle.VIEW_RELOAD_LIMIT + 3);
+    // A whole fresh budget, then a block.
+    for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await requestReload();
+    }
+    expect(h.mounts).toHaveLength(2 * lifecycle.VIEW_RELOAD_LIMIT + 2);
     expect(blockedBanner()).toBeNull();
+    await requestReload();
+    expect(blockedBanner()).not.toBeNull();
+  });
+
+  it("moves focus to the host when a block takes away the view that held it", async () => {
+    const { lifecycle } = await mountContent();
+    for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await requestReload();
+    }
+    act(() => {
+      screen.getByRole("button", { name: "Inside the view" }).focus();
+    });
+
+    await requestReload();
+
+    expect(blockedBanner()).not.toBeNull();
+    // Onto the host-owned status wrapper, rather than stranded on the body.
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.contains(blockedBanner())).toBe(true);
+  });
+
+  it("leaves focus alone when it was somewhere else", async () => {
+    const { lifecycle } = await mountContent();
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    try {
+      for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+        await requestReload();
+      }
+      elsewhere.focus();
+
+      await requestReload();
+
+      expect(blockedBanner()).not.toBeNull();
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
   });
 
   it("refuses a request from a view that has failed, leaving recovery to the user", async () => {
@@ -496,7 +583,7 @@ describe("requestReload racing a backend restart (#12609)", () => {
   });
 
   it("leaves a reload requested mid-restart to the rebind the restart ends in", async () => {
-    await mountContent();
+    const { lifecycle } = await mountContent();
     await pushStatus(worker({ generation: 1 }));
     await pushStatus(worker({ generation: 2, state: "starting" }));
 
@@ -508,6 +595,13 @@ describe("requestReload racing a backend restart (#12609)", () => {
     await waitFor(() => expect(attempts()).toHaveLength(2));
     await act(async () => {});
     expect(attempts()).toHaveLength(2);
+
+    // Refused, so uncharged: the whole budget is still there.
+    for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await requestReload();
+    }
+    expect(attempts()).toHaveLength(lifecycle.VIEW_RELOAD_LIMIT + 2);
+    expect(blockedBanner()).toBeNull();
   });
 
   it("still rebinds when the backend is replaced after a reload finished", async () => {

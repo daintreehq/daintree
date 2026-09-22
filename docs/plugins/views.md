@@ -16,7 +16,7 @@ A render error shows the host's diagnostics pane with a Try again that re-import
 
 `requestReload()` asks the host to throw away the view you are running and mount a new one for the same panel. Use it when a view has built up more than it can shed — a long session of rendering, caches that only grow — and starting over is simpler than cleaning up in place. Your plugin's backend keeps running throughout.
 
-What a reload is, plainly: a new React attempt using the module that is already loaded. The current attempt's `disposeSignal` aborts and its React cleanup runs; the new attempt gets a fresh `disposeSignal` and fresh DOM, and `initialArgs` holds the latest state the host accepted through `persistState`, with its `stateVersion`. `panelId`, `panelRemovedSignal` (the same object, still open), the panel's place in the layout and the backend all carry over. The module is not re-imported.
+What a reload is, plainly: a new React attempt using the module that is already loaded. The current attempt's `disposeSignal` aborts and its React cleanup runs; the new attempt gets a fresh `disposeSignal` and fresh DOM, and `initialArgs` holds the latest state the host accepted through `persistState`, with its `stateVersion`. `panelId`, `panelRemovedSignal` (the same object, still open), the panel's place in the layout and the backend all carry over. The module is reused, not evaluated again.
 
 What a reload is not: module-scope variables, anything registered document-wide and anything you attached to `window` survive it untouched, so it frees only what your cleanup releases. It makes no promise about reclaiming memory, and it cannot rescue a view that is blocking the renderer — a stuck render loop never gets as far as asking.
 

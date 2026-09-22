@@ -458,6 +458,62 @@ describe("makePluginViewHost", () => {
     }
   });
 
+  it("gives each panel its own view when a tab group switches between two of one kind (#12609)", async () => {
+    // `GridTabGroup` renders one `GridPanel` for whichever tab is active, so
+    // switching tabs re-renders the SAME host with another panel's id. Reusing
+    // the content across that switch would hand panel B panel A's frozen
+    // `initialArgs`, A's dispose signal, and A's attempt — so a `requestReload`
+    // A's view still holds could rebuild the slot with A's state.
+    const captured: Array<{ panelId: string; initialArgs?: unknown; disposeSignal: AbortSignal }> =
+      [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: {
+            panelId: string;
+            initialArgs?: unknown;
+            disposeSignal: AbortSignal;
+          }) {
+            captured.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+      const tab = (id: string, state: Record<string, unknown>) => (
+        <Host
+          id={id}
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+          extensionState={state}
+        />
+      );
+
+      const { rerender } = render(tab("panel-a", { tab: "a" }));
+      await waitFor(() => expect(captured).not.toHaveLength(0));
+      const first = captured[captured.length - 1]!;
+
+      rerender(tab("panel-b", { tab: "b" }));
+      await waitFor(() => expect(captured[captured.length - 1]!.panelId).toBe("panel-b"));
+      await act(async () => {});
+
+      const second = captured[captured.length - 1]!;
+      expect(second.initialArgs).toEqual({ tab: "b" });
+      expect(second.disposeSignal).not.toBe(first.disposeSignal);
+      expect(first.disposeSignal.aborted).toBe(true);
+      expect(second.disposeSignal.aborted).toBe(false);
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
   it("keeps the plugin view mounted across panel prop changes (#11240)", async () => {
     // The content component type must be created once, at factory-construction
     // scope. Constructing it during the host's render mints a new type per
