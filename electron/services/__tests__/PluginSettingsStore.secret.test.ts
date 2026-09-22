@@ -106,6 +106,24 @@ describe("PluginSettingsStore secret tier", () => {
     expect(await keychainStore.storedSecretTier("token")).toBe("keychain");
   });
 
+  it("rewrites an existing envelope as plaintext once the keychain tier is lost", async () => {
+    const filePath = path.join(tmpDir, "acme.plugin.json");
+    await new PluginSettingsStore(filePath, fakeCipher(true)).set("token", "old-token", {
+      secret: true,
+    });
+
+    // e.g. a Linux host now on the basic_text backend: existing ciphertext still
+    // decrypts, but new writes are refused, so the envelope must not linger
+    // under a keychain label.
+    const plaintextStore = new PluginSettingsStore(filePath, fakeCipher(false));
+    expect(await plaintextStore.storedSecretTier("token")).toBe("keychain");
+    expect(await plaintextStore.set("token", "old-token", { secret: true })).toBe(true);
+
+    expect((await readRaw(filePath)).token).toBe("old-token");
+    expect(await plaintextStore.storedSecretTier("token")).toBe("plaintext");
+    expect(await plaintextStore.set("token", "old-token", { secret: true })).toBe(false);
+  });
+
   it("treats an unchanged encrypted secret as a no-op despite non-deterministic ciphertext", async () => {
     let counter = 0;
     // Non-deterministic encrypt: a different ciphertext each call for the same input.

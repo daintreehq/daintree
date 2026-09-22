@@ -30,15 +30,37 @@ export interface SecretCipher {
  * headless Linux box with no backing store — {@link encrypt} returns `null` and
  * the store persists plaintext under `chmod 0o600` as before.
  */
+type LinuxStorageBackend = ReturnType<typeof safeStorage.getSelectedStorageBackend>;
+
+/**
+ * On Linux `isEncryptionAvailable()` doesn't say what backs the encryption:
+ * `basic_text` uses Chromium's hardcoded key and `unknown` is what Electron
+ * reports before `ready` (#12614). Exhaustive over Electron's backend union so a
+ * new backend fails typecheck until it is classified; a string outside the union
+ * at runtime is treated as not a keychain.
+ */
+const LINUX_BACKEND_IS_KEYCHAIN: Record<LinuxStorageBackend, boolean> = {
+  gnome_libsecret: true,
+  kwallet: true,
+  kwallet5: true,
+  kwallet6: true,
+  basic_text: false,
+  unknown: false,
+};
+
 /**
  * `safeStorage.isEncryptionAvailable()` can throw on Linux when called before
  * the app `ready` event, and `safeStorage` is absent entirely outside an Electron
  * runtime. Treat any such failure as "no keychain" so secret writes degrade to
- * the plaintext-0600 fallback rather than crashing a settings read.
+ * the plaintext-0600 fallback rather than crashing a settings read. A Linux
+ * backend that isn't a real keychain degrades the same way, so the UI never
+ * labels it as one.
  */
 function keychainAvailable(): boolean {
   try {
-    return safeStorage?.isEncryptionAvailable() === true;
+    if (safeStorage?.isEncryptionAvailable() !== true) return false;
+    if (process.platform !== "linux") return true;
+    return LINUX_BACKEND_IS_KEYCHAIN[safeStorage.getSelectedStorageBackend()] === true;
   } catch {
     return false;
   }
