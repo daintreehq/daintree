@@ -11,7 +11,7 @@ The whole design is shaped by one case: an agent working in a fresh worktree sho
 ```
 <projectRoot>/.daintree/
 ├── recipes/                     # existing, git-tracked
-├── plugin-settings/             # existing, git-tracked, project-scope settings
+├── plugin-settings/             # existing, git-tracked, project-scope settings (never secrets)
 └── plugins/
     └── acme.dashboard/
         ├── plugin.json          # must declare "scope": "project"
@@ -190,7 +190,7 @@ Installed and builtin plugins keep their existing ambient behaviour — they hav
 
 ## Settings and storage
 
-`host.settings` with `scope: "project"` resolves from the bound project root, so a project plugin writes `<projectRoot>/.daintree/plugin-settings/<manifestId>.json` — never moved by a project switch. `host.storage` has three scopes and follows the same split:
+`host.settings` with `scope: "project"` resolves from the bound project root, so a project plugin writes `<projectRoot>/.daintree/plugin-settings/<manifestId>.json` — never moved by a project switch. Secret settings are the exception: a `type: "secret"` value is never written into the repository, so a project-scope secret goes to this machine's per-project local file, `~/.daintree/plugin-settings/local/<projectId>/<instanceKey>.json`, keyed by the same bound project. `host.storage` has three scopes and follows the same split:
 
 | Scope      | File                                                        |
 | ---------- | ----------------------------------------------------------- |

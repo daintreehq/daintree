@@ -1653,8 +1653,9 @@ export function createHost(
           );
         }
         const effectiveScope = declaredScope ?? scope ?? "user";
-        const filePath = deps.settings.resolveSettingsFilePath(
+        const filePath = deps.settings.resolveSettingsFilePathForKey(
           pluginId,
+          key,
           effectiveScope,
           boundScopeRoot
         );
@@ -1662,7 +1663,7 @@ export function createHost(
         // rather than throwing, matching the "unset key" return.
         if (!filePath) return undefined;
         return deps.settings
-          .getOrCreateSettingsStore(pluginId, effectiveScope, filePath)
+          .getOrCreateSettingsStore(pluginId, filePath)
           .get<T>(key, { secret: deps.settings.isSecretKey(pluginId, key) });
       },
       set: async <T = unknown>(
@@ -1678,13 +1679,18 @@ export function createHost(
         }
         deps.settings.assertSettingSerializable(pluginId, key, value);
         deps.settings.assertSettingDeclared(pluginId, key, scope);
-        const filePath = deps.settings.resolveSettingsFilePath(pluginId, scope, boundScopeRoot);
+        const filePath = deps.settings.resolveSettingsFilePathForKey(
+          pluginId,
+          key,
+          scope,
+          boundScopeRoot
+        );
         if (!filePath) {
           throw new Error(
             `Plugin "${pluginId}" settings.set: no active project — "project" scope has no target`
           );
         }
-        const store = deps.settings.getOrCreateSettingsStore(pluginId, scope, filePath);
+        const store = deps.settings.getOrCreateSettingsStore(pluginId, filePath);
         const changed = await store.set(key, value, {
           secret: deps.settings.isSecretKey(pluginId, key),
         });

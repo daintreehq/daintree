@@ -229,15 +229,33 @@ describe("PluginSettingsForm", () => {
     expect(await screen.findByText("Stored in OS keychain")).toBeTruthy();
   });
 
-  it("discloses the plaintext fallback when no keychain is available", async () => {
+  it("discloses that secrets can't be saved when no keychain is available", async () => {
     pluginApi.getSettingValues.mockResolvedValue(
-      uiValues({ secretsSet: ["token"], secretTier: "plaintext", secretsPlaintext: ["token"] })
+      uiValues({ secretsSet: ["token"], secretTier: "unavailable", secretsPlaintext: ["token"] })
     );
     render(
       <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
     );
     await screen.findByLabelText("Token");
-    expect(await screen.findByText(/keychain unavailable/)).toBeTruthy();
+    expect(await screen.findByText(/Secure storage unavailable/)).toBeTruthy();
+  });
+
+  it("keeps a refused secret in the field beside the error instead of marking it saved", async () => {
+    pluginApi.getSettingValues.mockResolvedValue(uiValues({ secretTier: "unavailable" }));
+    pluginApi.setSettingValue.mockRejectedValue(
+      new Error('Secure storage is unavailable on this device, so the secret "token" wasn\'t saved')
+    );
+    render(
+      <PluginSettingsForm plugin={makePlugin([{ id: "token", type: "secret", label: "Token" }])} />
+    );
+
+    const input = (await screen.findByLabelText("Token")) as HTMLInputElement;
+    await waitFor(() => expect(input.disabled).toBe(false));
+    fireEvent.change(input, { target: { value: "sk-typed" } });
+    fireEvent.blur(input);
+
+    expect(await screen.findByText(/wasn't saved/)).toBeTruthy();
+    expect(input.value).toBe("sk-typed");
   });
 
   it("nudges re-saving a secret still in plaintext while a keychain is now available", async () => {

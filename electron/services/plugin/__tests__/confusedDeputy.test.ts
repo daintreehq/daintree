@@ -625,7 +625,7 @@ describe("settings and storage roots", () => {
       path.join(projectRootOf(PROJECT_A), ".daintree", "plugin-settings", `${PLUGIN_ID}.json`)
     );
 
-    await manager.getOrCreateSettingsStore(PLUGIN_ID, "project", filePath!).set("token", "a-value");
+    await manager.getOrCreateSettingsStore(PLUGIN_ID, filePath!).set("token", "a-value");
 
     // The file is on disk under A, and B's tree was never touched — the §20.2
     // "Settings write" row, asserted against the filesystem rather than a path
@@ -678,12 +678,12 @@ describe("settings and storage roots", () => {
     const aPath = manager.resolveSettingsFilePath(PLUGIN_ID, "project", projectRootOf(PROJECT_A))!;
     const bPath = manager.resolveSettingsFilePath(PLUGIN_ID, "project", projectRootOf(PROJECT_B))!;
 
-    await manager.getOrCreateSettingsStore(PLUGIN_ID, "project", aPath).set("token", "a-value");
-    await manager.getOrCreateSettingsStore(PLUGIN_ID, "project", bPath).set("token", "b-value");
+    await manager.getOrCreateSettingsStore(PLUGIN_ID, aPath).set("token", "a-value");
+    await manager.getOrCreateSettingsStore(PLUGIN_ID, bPath).set("token", "b-value");
 
-    expect(
-      await manager.getOrCreateSettingsStore(PLUGIN_ID, "project", aPath).get<string>("token")
-    ).toBe("a-value");
+    expect(await manager.getOrCreateSettingsStore(PLUGIN_ID, aPath).get<string>("token")).toBe(
+      "a-value"
+    );
     expect(JSON.parse(await fs.readFile(bPath, "utf8"))).toEqual({ token: "b-value" });
   });
 

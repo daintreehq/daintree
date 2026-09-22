@@ -33,7 +33,7 @@ const windowRefMock = vi.hoisted(() => ({
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
-  getCurrentProject: vi.fn((): { path: string } | null => null),
+  getCurrentProject: vi.fn((): { id?: string; path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
 }));
 const storeMock = vi.hoisted(() => {
@@ -253,7 +253,6 @@ type ServiceWithSettingsManager = {
     ) => string | undefined;
     getOrCreateSettingsStore: (
       pluginId: string,
-      scope: SettingsScope,
       filePath: string
     ) => {
       get: <T = unknown>(key: string) => Promise<T | undefined>;
@@ -339,6 +338,28 @@ describe("createHost — settings", () => {
     expect(JSON.parse(raw)).toEqual({ token: "in-project" });
   });
 
+  // No `safeStorage` under vitest, so this host has no keychain: the secret is
+  // refused, and nothing of it may reach the repository either way.
+  it("refuses a project-scoped secret without a keychain and writes nothing under the project root (#12613)", async () => {
+    const projectDir = path.join(tmpDir, "proj-secret");
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: "a".repeat(64), path: projectDir });
+    const { service, settingsRoot } = await setupSettingsService("acme.settings-secret", [
+      { id: "token", type: "secret", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, "acme.settings-secret");
+    const cb = vi.fn();
+    await host.settings.onDidChange("token", cb, "project");
+
+    await expect(host.settings.set("token", "sk-host", "project")).rejects.toThrow(
+      /Secure storage is unavailable/
+    );
+
+    await expect(fs.access(path.join(projectDir, ".daintree"))).rejects.toThrow();
+    await expect(fs.access(path.join(settingsRoot, "local"))).rejects.toThrow();
+    expect(await host.settings.get("token")).toBeUndefined();
+    expect(cb).not.toHaveBeenCalled();
+  });
+
   // The host supplies no project root, so it stays on the ambient path: an
   // unbound (installed/builtin) plugin has no project of its own to pin.
   it("resolves the active project at call time when no project root is supplied", async () => {
@@ -368,13 +389,13 @@ describe("createHost — settings", () => {
 
     projectStoreMock.getCurrentProject.mockReturnValue({ path: path.join(tmpDir, "projA") });
     expect(settings.resolveSettingsFilePath(pluginId, "project", bound)).toBe(boundFile);
-    await settings.getOrCreateSettingsStore(pluginId, "project", boundFile).set("k", "bound-value");
+    await settings.getOrCreateSettingsStore(pluginId, boundFile).set("k", "bound-value");
 
     projectStoreMock.getCurrentProject.mockReturnValue({ path: path.join(tmpDir, "projB") });
     expect(settings.resolveSettingsFilePath(pluginId, "project", bound)).toBe(boundFile);
-    expect(
-      await settings.getOrCreateSettingsStore(pluginId, "project", boundFile).get<string>("k")
-    ).toBe("bound-value");
+    expect(await settings.getOrCreateSettingsStore(pluginId, boundFile).get<string>("k")).toBe(
+      "bound-value"
+    );
     // Only the bound read is pinned — the unbound one still follows the switch.
     expect(settings.resolveSettingsFilePath(pluginId, "project")).toBe(
       path.join(tmpDir, "projB", ".daintree", "plugin-settings", `${pluginId}.json`)

@@ -23,7 +23,7 @@ interface SecretTierInfo {
   plaintext: Set<string>;
 }
 
-const EMPTY_SECRET_INFO: SecretTierInfo = { tier: "plaintext", plaintext: new Set() };
+const EMPTY_SECRET_INFO: SecretTierInfo = { tier: "unavailable", plaintext: new Set() };
 
 const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
   user: "User",
@@ -131,7 +131,7 @@ interface SettingFieldProps {
   secretIsSet: boolean;
   /** At-rest tier new secret writes use right now, for honest disclosure (#9167). */
   secretTier: PluginSecretStorageTier;
-  /** Whether the stored secret value is still plaintext (pre-migration / no keychain at write). */
+  /** Whether the stored secret value is still legacy plaintext, awaiting migration. */
   secretIsPlaintext: boolean;
   /** Whether this field's scope values have finished loading. */
   loaded: boolean;
@@ -168,8 +168,9 @@ function SettingField({
   // Secret-specific state.
   const [hasStored, setHasStored] = useState(secretIsSet);
   const [revealed, setRevealed] = useState(false);
-  // Set true once a secret is (re)saved while a keychain is available, so the
-  // tier disclosure clears its "still plaintext" nudge without a form reload.
+  // Set true once a secret is (re)saved — a secret only saves into the keychain
+  // — so the tier disclosure clears its "still plaintext" nudge without a form
+  // reload.
   const [migratedToKeychain, setMigratedToKeychain] = useState(false);
   // Path-specific: tracks a `mustExist` path that no longer resolves on disk.
   const [pathMissing, setPathMissing] = useState(false);
@@ -348,7 +349,7 @@ function SettingField({
       setHasStored(true);
       setRevealed(false);
       setDraft("");
-      if (secretTier === "keychain") setMigratedToKeychain(true);
+      setMigratedToKeychain(true);
     }
   };
 
@@ -555,8 +556,8 @@ function SettingField({
           {renderControl()}
           {isSecret && scopeReady && (
             <p className="text-2xs text-text-secondary">
-              {secretTier === "plaintext"
-                ? "Stored as plaintext — keychain unavailable"
+              {secretTier === "unavailable"
+                ? "Secure storage unavailable — secrets can't be saved on this device"
                 : hasStored && secretIsPlaintext && !migratedToKeychain
                   ? "Stored as plaintext — re-save to move it into the OS keychain"
                   : "Stored in OS keychain"}
