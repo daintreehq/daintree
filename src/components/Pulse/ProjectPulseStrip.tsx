@@ -6,6 +6,7 @@ import { Activity } from "@/components/icons";
 import { ProjectPulseCard } from "./ProjectPulseCard";
 import { getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { StreakFlame } from "./StreakFlame";
+import { cn } from "@/lib/utils";
 
 interface ProjectPulseStripProps {
   worktreeId: string;
@@ -17,6 +18,26 @@ const MINI_CELLS = 18;
 const MINI_CELL_PX = 6;
 const MINI_GAP_PX = 2;
 
+/**
+ * Each cell carries `pulse-heat-cell` and `data-heat-level` so the rules the
+ * full heatmap already relies on reach the ribbon too — the size-coded
+ * `CanvasText` shape under `forced-colors: active`, and the 1px border under
+ * `prefers-contrast: more`. Without them the ribbon was painted by inline
+ * `background` alone, which forced-colors overrides to `Canvas`: the strip
+ * lost its cells entirely and rendered as an empty gap between its label and
+ * its counts.
+ *
+ * A quiet day is an OUTLINE, an active day a solid fill — the same grammar the
+ * forced-colors rule below uses, so the ribbon reads the same way in every
+ * mode. It started as a quiet FILL, but every overlay step on this theme family
+ * lands within 1.04–1.10:1 of the canvas (measured off the captures), which is
+ * under what an eye resolves: the zero cells were invisible on light themes and
+ * barely there on dark, so the strip read as floating clusters of green with no
+ * baseline and you could see the active days without being able to count the
+ * gap between them. A 1px border on a 6px cell is a third of its area, so a
+ * border token carries at a size where a fill cannot, and the track becomes
+ * legible without the ribbon getting louder than the launcher above it.
+ */
 function MiniRibbon({ cells }: { cells: HeatCell[] }) {
   return (
     <div
@@ -25,17 +46,32 @@ function MiniRibbon({ cells }: { cells: HeatCell[] }) {
       aria-hidden="true"
       data-testid="pulse-mini-ribbon"
     >
-      {cells.map((cell) => (
-        <span
-          key={cell.date}
-          className="rounded-[1px] shrink-0"
-          style={{
-            width: MINI_CELL_PX,
-            height: MINI_CELL_PX,
-            background: getPulseHeatLevelBackground(cell.level),
-          }}
-        />
-      ))}
+      {cells.map((cell) => {
+        const active = cell.count > 0 && cell.level > 0;
+        return (
+          // The quiet border is a CLASS, never an inline style: an inline
+          // `border` outranks the `.pulse-heat-cell` rules in `index.css` that
+          // `prefers-contrast: more` uses to lift every cell's boundary to the
+          // text colour, so quiet days would have stayed on the weaker theme
+          // border there. Only the active fill is inline, because its value is
+          // a per-level token the heatmap resolves at render.
+          <span
+            key={cell.date}
+            className={cn(
+              "pulse-heat-cell relative overflow-hidden rounded-[1px] shrink-0",
+              !active && "border border-border-strong bg-transparent"
+            )}
+            data-heat-level={active ? Math.min(4, cell.level) : undefined}
+            style={{
+              width: MINI_CELL_PX,
+              height: MINI_CELL_PX,
+              background: active ? getPulseHeatLevelBackground(cell.level) : undefined,
+            }}
+          >
+            {active && <span aria-hidden="true" className="pulse-heat-cell-shape" />}
+          </span>
+        );
+      })}
     </div>
   );
 }
@@ -138,13 +174,19 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
 
   const hasStreak = (pulse?.currentStreakDays ?? 0) > 1;
   // The button's explicit aria-label overrides its descendant text for the
-  // accessible name, so fold the visible active-days/streak peek into it —
-  // otherwise assistive tech hears only "Show project activity".
+  // accessible name, so every visible part — the label, the active-days count
+  // and the streak — has to be folded into it, or assistive tech hears only a
+  // fragment of what is on screen.
+  //
+  // It opens with the visible label verbatim. WCAG 2.2 SC 2.5.3 (Label in Name)
+  // wants the words on the control to appear in its accessible name so a
+  // speech-input user can say what they read — and "Show project activity"
+  // shares no phrase with the "Project pulse" printed on the button.
   const activityLabel = pulse
-    ? `Show project activity — ${pulse.activeDays} active day${
+    ? `Project pulse — ${pulse.activeDays} active day${
         pulse.activeDays !== 1 ? "s" : ""
-      }${hasStreak ? `, ${pulse.currentStreakDays} day streak` : ""}`
-    : "Show project activity";
+      }${hasStreak ? `, ${pulse.currentStreakDays} day streak` : ""}, show activity`
+    : "Project pulse — show activity";
 
   return (
     <button
@@ -153,7 +195,16 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       onClick={expand}
       aria-expanded={false}
       aria-label={activityLabel}
-      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+      // No border at rest. The palette button is the surface's launch anchor
+      // and the only full-width bordered box it is supposed to have; a second
+      // one at the bottom of the column made the LOWEST-priority band rhyme
+      // with the highest, and the eye read the two as a matched pair bracketing
+      // the content. Borderless with a hover fill is the same quiet affordance
+      // the resume line already uses — the other one-line context row on this
+      // surface — so the two now share a visual language instead of each having
+      // their own. Both accessibility media modes still draw their own button
+      // boundary, so nothing is lost where a boundary is load-bearing.
+      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
     >
       <Activity className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
       <span className="shrink-0 text-xs font-medium text-text-secondary">Project pulse</span>

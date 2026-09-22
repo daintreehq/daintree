@@ -80,7 +80,7 @@ export const TIPS: TipEntry[] = [
     id: "launch-claude",
     message: (
       <>
-        Press <Kbd>⌘⌥N</Kbd> to launch a Claude agent in this worktree
+        Press <Kbd>⌘⌥C</Kbd> to launch a Claude agent in this worktree
       </>
     ),
     messageWithShortcut: (shortcut) => (
@@ -88,7 +88,18 @@ export const TIPS: TipEntry[] = [
         Press <Kbd>{shortcut}</Kbd> to launch a Claude agent in this worktree
       </>
     ),
-    actionId: "agent.terminal",
+    // `agent.claude`, NOT `agent.terminal`. The tip says "launch a Claude
+    // agent" and ⌘⌥N is `agent.terminal`, whose own description is "open a
+    // plain shell terminal with no agent attached" — so the tip taught a
+    // binding that does something else, and the button under it launched a
+    // bare shell. Both now point at the action the sentence names.
+    //
+    // `agent.claude` is bound by default (⌘⌥C, the same chord the launcher
+    // chip prints), so the tip stays eligible whenever the Claude CLI is
+    // available and now teaches the key that actually does what it says. If a
+    // user unbinds it, `requiresShortcut` hides the tip rather than letting it
+    // fall back to a chord for a different action.
+    actionId: "agent.claude",
     actionLabel: "Launch agent",
     requiresShortcut: true,
     requiredAgents: ["claude"],
@@ -97,7 +108,7 @@ export const TIPS: TipEntry[] = [
     id: "launch-gemini",
     message: (
       <>
-        Press <Kbd>⌘⌥N</Kbd> to launch a Gemini agent in this worktree
+        Press <Kbd>⌘⌥G</Kbd> to launch a Gemini agent in this worktree
       </>
     ),
     messageWithShortcut: (shortcut) => (
@@ -105,7 +116,8 @@ export const TIPS: TipEntry[] = [
         Press <Kbd>{shortcut}</Kbd> to launch a Gemini agent in this worktree
       </>
     ),
-    actionId: "agent.terminal",
+    // Same correction as the Claude tip above.
+    actionId: "agent.gemini",
     actionLabel: "Launch agent",
     requiresShortcut: true,
     requiredAgents: ["gemini"],
@@ -294,7 +306,7 @@ export function RotatingTip() {
             // centred text at the same size and colour as the sentence above
             // it, the only control that names the user's actual goal read as a
             // second sentence — an affordance nobody could see was there.
-            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-text-primary hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded px-1"
+            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-text-primary hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-[var(--radius-sm)] px-1"
           >
             {tip.actionLabel}
           </button>

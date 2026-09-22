@@ -35,7 +35,7 @@ export function RecipeRunnerEmpty({
             >
               <Play
                 className={cn(
-                  "h-3.5 w-3.5 text-status-success/50 transition-colors shrink-0",
+                  "h-3.5 w-3.5 text-status-success transition-colors shrink-0",
                   !disabled && "group-hover:text-status-success"
                 )}
                 aria-hidden

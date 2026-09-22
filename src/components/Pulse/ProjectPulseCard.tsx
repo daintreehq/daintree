@@ -58,7 +58,7 @@ function CIStatusIcon({ status }: { status: ForgeProjectHealthPayload["ciStatus"
     case "expected":
       return <Clock className="w-3.5 h-3.5 text-status-warning" />;
     default:
-      return <CircleMinus className="w-3.5 h-3.5 text-daintree-text/40" />;
+      return <CircleMinus className="w-3.5 h-3.5 text-text-secondary" />;
   }
 }
 
@@ -522,7 +522,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             <span className="text-xs">{error}</span>
             <button
               onClick={handleRefresh}
-              className="pulse-control ml-auto rounded-md p-1 text-daintree-text/55 transition-colors hover:text-daintree-text/80"
+              className="pulse-control ml-auto rounded-md p-1 text-text-secondary transition-colors hover:text-text-primary"
               aria-label="Retry now"
             >
               <RefreshCw className="w-3 h-3" aria-hidden="true" />
@@ -584,7 +584,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-text-secondary" />
           <span className="text-sm font-medium text-text-primary">{title}</span>
-          {isLoading && <Spinner size="xs" className="text-daintree-text/55" />}
+          {isLoading && <Spinner size="xs" className="text-text-secondary" />}
         </div>
 
         <div className="flex items-center gap-2">
@@ -624,7 +624,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           <button
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control rounded-md p-1.5 text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
+            className="pulse-control rounded-md p-1.5 text-text-secondary transition-colors hover:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
             aria-label="Refresh"
           >
             <SpinningIcon icon={RefreshCw} active={isLoading} className="w-3 h-3" />

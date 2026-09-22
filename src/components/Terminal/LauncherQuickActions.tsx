@@ -54,16 +54,23 @@ function QuickAction({
       onKeyDown={onKeyDown}
       tabIndex={tabIndex}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="launcher-press group inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-border-subtle px-2.5 py-1.5 text-sm text-daintree-text/80 transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-soft hover:border-border-default hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+      className="launcher-press group inline-flex items-center gap-2 rounded-[var(--radius-md)] border border-border-subtle px-2.5 py-1.5 text-sm text-text-secondary transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-soft hover:border-border-default hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
     >
       <span className="shrink-0">{icon}</span>
       <span className="truncate">{label}</span>
       {/* Decorative chip — the binding is exposed to AT via aria-keyshortcuts
           above, so the sr-only chord text stays out of the button's name
-          (otherwise "Claude" reads as "Claude Cmd Alt C"). */}
+          (otherwise "Claude" reads as "Claude Cmd Alt C").
+
+          `bare`, not the default boxed chip: every chip in this row that has a
+          binding shows it, so the boxes stopped distinguishing keys from words
+          and started drawing a second grid over the group — fifteen bordered
+          rectangles inside seven bordered pills. Unboxed, the chord also stops
+          padding the chip, so a chip WITH a binding and one WITHOUT are close
+          enough in width that the wrapped rows no longer read as ragged. */}
       {combo && (
         <span aria-hidden="true">
-          <KbdChord shortcut={combo} className="ml-0.5" />
+          <KbdChord shortcut={combo} density="bare" className="ml-0.5" />
         </span>
       )}
     </button>
@@ -97,9 +104,16 @@ function PaletteSearchButton() {
       type="button"
       onClick={handleClick}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="launcher-press flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-default bg-overlay-medium px-3 py-3 text-sm text-text-secondary transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-strong hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+      // `border-strong`, not `border-default`. The fill alone was carrying the
+      // whole distinction and it is a ~1.06:1 lift off the canvas — below what
+      // an eye resolves, so at rest the anchor was really just "the wide one".
+      // The boundary is where the weight can go without spending accent (house
+      // rule: a neutral high-contrast control beats an accent one for a primary
+      // CTA), and it is the one border on the surface that is allowed to be
+      // stronger than `subtle`.
+      className="launcher-press flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-strong bg-overlay-medium px-3 py-3 text-sm text-text-secondary transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-strong hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
     >
-      <Search className="h-4 w-4 shrink-0 text-daintree-text/55" aria-hidden="true" />
+      <Search className="h-4 w-4 shrink-0 text-text-secondary" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate text-left">Search agents &amp; panels…</span>
       {combo && (
         <span aria-hidden="true">
@@ -300,7 +314,13 @@ export function LauncherQuickActions() {
         aria-label="Quick launch"
         aria-orientation="horizontal"
         onKeyDown={handleToolbarKeyDown}
-        className="flex w-full flex-wrap items-center justify-center gap-2"
+        // `justify-start`, not `justify-center`. The palette above is full
+        // width, so the column already has a hard left edge; a centred wrap
+        // put every row after the first on its own private edge — three of
+        // them on a narrow canvas, none matching anything else on the surface.
+        // Left-aligned, the group reads as one block under the anchor and the
+        // rows stay put as chips are pinned and unpinned.
+        className="flex w-full flex-wrap items-center justify-start gap-2"
       >
         {chips.map((chip, index) => (
           <QuickAction

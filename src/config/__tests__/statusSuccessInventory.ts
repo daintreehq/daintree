@@ -710,7 +710,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   "src/components/Terminal/RecipeRunner/RecipeRunnerEmpty.tsx": [
     {
       category: "affordance",
-      signature: "text-status-success/50",
+      signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Go-colour on the run-suggestion control",
     },
@@ -725,20 +725,25 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "affordance",
       signature: "text-status-success",
+      anchor: '!disabled && "group-hover:text-status-success"',
       expectedOccurrences: 1,
-      rationale: "Go-colour on the run-recipe control",
+      rationale: "Go-colour on the run-recipe control in the card",
+    },
+    {
+      category: "affordance",
+      // The collapsed row used to paint this at `/50` and lift to full on
+      // hover, so the same control was two different greens depending on how
+      // many recipes existed. It now matches the card in both modes.
+      signature: "text-status-success",
+      anchor: 'className="h-3.5 w-3.5 text-status-success transition-colors shrink-0"',
+      expectedOccurrences: 1,
+      rationale: "Go-colour on the run-recipe control in the collapsed row",
     },
     {
       category: "affordance",
       signature: "group-hover:text-status-success",
       expectedOccurrences: 1,
       rationale: "Go-colour on the run-recipe control at hover",
-    },
-    {
-      category: "affordance",
-      signature: "text-status-success/50 group-hover:text-status-success",
-      expectedOccurrences: 2,
-      rationale: "Go-colour on the run-recipe control in the collapsed row",
     },
   ],
   "src/components/TerminalRecipe/RecipeManager.tsx": [
@@ -1058,4 +1063,4 @@ export const STATUS_SUCCESS_INVENTORY = {
  * where a whole file moves without either check firing.
  */
 export const EXPECTED_STATUS_SUCCESS_SITES = 127;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 148;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 147;

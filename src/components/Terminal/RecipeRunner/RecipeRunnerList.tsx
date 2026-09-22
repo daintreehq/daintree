@@ -126,7 +126,7 @@ export function RecipeRunnerList({
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
               placeholder="Filter recipes…"
-              className="w-full rounded-[var(--radius-md)] border border-border-subtle bg-transparent py-1 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-placeholder focus:border-daintree-accent/40 focus:outline-hidden focus:ring-1 focus:ring-daintree-accent/40"
+              className="w-full rounded-[var(--radius-md)] border border-border-subtle bg-transparent py-1 pl-7 pr-2 text-xs text-text-primary placeholder:text-text-placeholder focus:border-accent-primary focus:outline-hidden focus:ring-1 focus:ring-accent-primary"
             />
           </div>
         </div>
@@ -147,7 +147,7 @@ export function RecipeRunnerList({
             {flatRecipes.length > 0 ? (
               flatRecipes.map(renderItem)
             ) : (
-              <div className="px-3 py-2 text-sm text-text-muted">
+              <div className="px-3 py-2 text-sm text-text-secondary">
                 No recipes match &ldquo;{searchQuery}&rdquo;
               </div>
             )}
@@ -206,7 +206,13 @@ export function RecipeRunnerList({
           type="button"
           tabIndex={-1}
           onClick={onCreate}
-          className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60"
+          // `border-transparent` at rest reserves the box so the active boundary
+          // below never shifts the row. Same `overlay-raised` + `selection-outline`
+          // pair the recipe rows and the palettes use: with focus parked in the
+          // filter input, this button's own focus ring can never paint, so the
+          // fill alone (~1.1:1) would be the only cue that Enter creates rather
+          // than runs.
+          className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] border border-transparent hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]"
         >
           <Plus
             className="h-3.5 w-3.5 text-text-secondary group-hover:text-text-primary transition-colors shrink-0"

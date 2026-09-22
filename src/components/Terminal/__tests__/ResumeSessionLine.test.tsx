@@ -1,6 +1,18 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
+import type { ReactNode } from "react";
+
+// The launcher's truncating controls disclose their full name through the
+// shared Tooltip, which needs a TooltipProvider ancestor it has no business
+// growing inside a unit test. Stubbed the same way the panel suites do it —
+// these tests are about keyboard behaviour, not the tooltip.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: () => null,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 // Hoisted so the vi.mock factories (which are hoisted above module code) can
 // safely reference this shared, mutable mock state.
@@ -88,7 +100,7 @@ describe("ResumeSessionLine", () => {
   it("offers a '+N more' browse entry into the resume launcher", () => {
     h.items.list = [makeItem("s1", "Resume Claude"), makeItem("s2", "Resume Codex")];
     render(<ResumeSessionLine />);
-    const more = screen.getByRole("button", { name: /browse 1 more resumable session/i });
+    const more = screen.getByRole("button", { name: /^\+1 more — browse resumable session/i });
     fireEvent.click(more);
     // Shortcut-hint teardown around the launcher open is now global — the
     // launcher's own open transition clears it (AppPaletteDialog overlay
@@ -101,6 +113,6 @@ describe("ResumeSessionLine", () => {
   it("does not show '+N more' when there is only one session", () => {
     h.items.list = [makeItem("s1", "Resume Claude")];
     render(<ResumeSessionLine />);
-    expect(screen.queryByRole("button", { name: /more resumable/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /more — browse resumable/i })).toBeNull();
   });
 });

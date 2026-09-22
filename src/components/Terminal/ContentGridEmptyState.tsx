@@ -263,7 +263,7 @@ export function ContentGridEmptyState({
   const identityMark = sanitizedIcon?.ok ? (
     <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-14 w-14 object-contain" />
   ) : (
-    <DaintreeIcon className="h-14 w-14 text-daintree-text/65" aria-hidden="true" />
+    <DaintreeIcon className="h-14 w-14 text-text-secondary" aria-hidden="true" />
   );
 
   // The container no longer fades as one block — each launcher section below
@@ -316,9 +316,19 @@ export function ContentGridEmptyState({
               // launch entry up. Reserving the footprint costs a scratch some
               // empty air and buys the same launch position in every kind of
               // workspace, which is the whole point of anchoring it.
+              //
+              // 9.25rem, not the 8.5rem this first shipped with: the tallest
+              // form actually measures ~145px (mark 56 + mb-3 12 + name line 32
+              // + gap 6 + branch line 20 + gap 2 + path line 16), so 136px was
+              // eight short. A project OVERFLOWED the reserve while a scratch
+              // sat inside it, and the palette rendered 9px lower in a project
+              // than in a scratch — the exact drift the reserve exists to
+              // prevent, just moved from "which bands resolved" to "which kind
+              // of workspace". Every line here is `truncate`, so the tallest
+              // form is a fixed height and this can be an exact number.
               <div
                 className={cn(
-                  "mb-6 flex min-h-[8.5rem] flex-col items-center justify-end text-center",
+                  "mb-6 flex min-h-[9.25rem] flex-col items-center justify-end text-center",
                   SECTION_ENTRY
                 )}
               >
@@ -343,7 +353,7 @@ export function ContentGridEmptyState({
                         <button
                           type="button"
                           onClick={handleOpenProjectSettings}
-                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-text-secondary opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
                           aria-label="Project settings"
                         >
                           <Settings className="h-3.5 w-3.5" />

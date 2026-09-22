@@ -63,7 +63,7 @@ const OUTPUT_DIR = path.resolve(process.cwd(), "artifacts", "canvas-home-shots",
 
 const CANVAS = "#panel-grid";
 const PALETTE_SEARCH = 'button:has-text("Search agents")';
-const PULSE_STRIP = 'button[aria-label^="Show project activity"]';
+const PULSE_STRIP = 'button[aria-label^="Project pulse"]';
 
 const WIDE = { width: 1680, height: 1050 };
 

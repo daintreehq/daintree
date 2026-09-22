@@ -3001,6 +3001,21 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: 1px solid CanvasText;
   }
 
+  /* The canvas-home's collapsed pulse ribbon (ProjectPulseStrip.MiniRibbon).
+     Same span-not-button problem as the legend above, at 6px: a size-coded
+     inner shape is too small to read here, so the ribbon codes activity as
+     filled-vs-outlined instead. Every cell keeps a CanvasText outline so the
+     18-day TRACK stays visible — without it the active days float with no
+     baseline and the strip reads as scattered marks rather than a sequence —
+     and an active day fills solid. */
+  [data-testid="pulse-mini-ribbon"] .pulse-heat-cell {
+    border: 1px solid CanvasText;
+  }
+  [data-testid="pulse-mini-ribbon"] .pulse-heat-cell[data-heat-level] .pulse-heat-cell-shape {
+    width: 100%;
+    height: 100%;
+  }
+
   /* Diff-viewer forced-colors rules live in src/components/Worktree/DiffViewer.css
      (component-owned: the stylesheet rides the lazy diff chunk). */
 }
