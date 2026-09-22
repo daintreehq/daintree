@@ -131,7 +131,7 @@ describe("compileAgentMcpSchema", () => {
     ["a relative document", "record.json"],
   ])("refuses a reference to %s", (_label, ref) => {
     expect(() => compileAgentMcpSchema(schema({ properties: { record: { $ref: ref } } }))).toThrow(
-      /which is outside the schema; only references within the schema itself/
+      /which does not resolve within the schema; references to anything outside it/
     );
   });
 
@@ -143,7 +143,67 @@ describe("compileAgentMcpSchema", () => {
     // Another tool's identifier is not something a schema can reach.
     expect(() =>
       compileAgentMcpSchema(schema({ properties: { a: { $ref: "https://acme.example/shared" } } }))
-    ).toThrow(/outside the schema/);
+    ).toThrow(/does not resolve within the schema/);
+  });
+
+  it("follows a reference to the schema's own root", () => {
+    const check = compileAgentMcpSchema(
+      schema({ properties: { name: { type: "string" }, child: { $ref: "#" } } })
+    );
+    expect(check({ name: "a", child: { name: "b", child: {} } })).toBeNull();
+    expect(check({ child: { child: { name: 1 } } })).toBe("/child/child/name must be string");
+  });
+
+  it("names a reference to a part of the schema that does not exist", () => {
+    expect(() =>
+      compileAgentMcpSchema(schema({ properties: { a: { $ref: "#/$defs/missing" } } }))
+    ).toThrow('references "#/$defs/missing", which does not resolve within the schema');
+  });
+
+  it("refuses $dynamicRef, which Ajv resolves to the wrong schema", () => {
+    expect(() =>
+      compileAgentMcpSchema(
+        schema({
+          $defs: { id: { $dynamicAnchor: "id", type: "integer" } },
+          properties: { id: { $dynamicRef: "#id" } },
+        })
+      )
+    ).toThrow("uses $dynamicRef at /properties/id, which is not supported");
+    // A property that happens to be named $dynamicRef is just a property.
+    expect(() =>
+      compileAgentMcpSchema(schema({ properties: { $dynamicRef: { type: "string" } } }))
+    ).not.toThrow();
+  });
+
+  it("refuses an embedded resource in another dialect, which would be checked as the root's", () => {
+    expect(() =>
+      compileAgentMcpSchema(
+        schema({
+          $defs: {
+            pair: {
+              $id: "https://acme.example/pair",
+              $schema: "http://json-schema.org/draft-07/schema#",
+              items: [{ type: "string" }],
+            },
+          },
+        })
+      )
+    ).toThrow(
+      'declares $schema "http://json-schema.org/draft-07/schema#" at /$defs/pair; a schema must use one dialect throughout'
+    );
+    expect(() =>
+      compileAgentMcpSchema(
+        schema({
+          $defs: {
+            pair: {
+              $id: "https://acme.example/pair",
+              $schema: "https://json-schema.org/draft/2020-12/schema",
+              prefixItems: [{ type: "string" }],
+            },
+          },
+        })
+      )
+    ).not.toThrow();
   });
 
   it.each([
@@ -174,7 +234,7 @@ describe("compileAgentMcpSchema", () => {
           title: "Record",
           "x-acme-owner": "ledger",
           properties: {
-            memo: { type: "string", examples: ["weekly shop"], default: "", nullable: true },
+            memo: { type: "string", examples: ["weekly shop"], default: "", "x-widget": "area" },
           },
         })
       )

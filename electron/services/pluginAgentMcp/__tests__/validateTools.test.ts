@@ -191,7 +191,7 @@ describe("validateAgentMcpTools", () => {
     [
       "a remote reference",
       { type: "object", properties: { a: { $ref: "https://example.com/a.json" } } },
-      /references "https:\/\/example.com\/a.json", which is outside the schema/,
+      /references "https:\/\/example.com\/a.json", which does not resolve within the schema/,
     ],
     ["an async schema", { type: "object", $async: true }, /is an async \(\$async\) schema/],
     [

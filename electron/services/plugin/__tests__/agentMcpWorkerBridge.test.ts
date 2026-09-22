@@ -415,6 +415,19 @@ describe("worker-side host.mcp", () => {
     expect(sent).toHaveLength(0);
   });
 
+  it("throws at the call site for a schema the host could not enforce", () => {
+    const { proxy, sent } = makeProxy();
+    expect(() =>
+      proxy.host.mcp.registerTools("data", {
+        list_rows: {
+          ...tool(),
+          inputSchema: { type: "object", properties: { a: { $ref: "https://example.com/a" } } },
+        },
+      })
+    ).toThrow(/tool "list_rows" inputSchema references "https:\/\/example\.com\/a"/);
+    expect(sent).toHaveLength(0);
+  });
+
   it("refuses registration once activation has closed", () => {
     const { proxy } = makeProxy();
     proxy.revoke();

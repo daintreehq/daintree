@@ -304,6 +304,15 @@ describe("createPluginSessionServer", () => {
     expect(textOf(result)).toBe("ledger is locked");
   });
 
+  it("clips a long thrown error message to 2,000 characters", async () => {
+    const invoke = vi.fn<AgentMcpToolInvoker>(async () => {
+      throw new Error("x".repeat(2_500));
+    });
+    const { client } = await connect(invoke);
+    const result = await client.callTool({ name: "lookup", arguments: {} });
+    expect(textOf(result)).toBe(`${"x".repeat(2_000)}…`);
+  });
+
   it("turns a value JSON cannot serialize into a tool error", async () => {
     const invoke = vi.fn<AgentMcpToolInvoker>(async () => ({ amount: 10n }));
     const { client } = await connect(invoke);

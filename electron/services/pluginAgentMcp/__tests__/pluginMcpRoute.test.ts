@@ -310,6 +310,20 @@ describe("PluginMcpRoute", () => {
     expect(JSON.stringify(caller)).not.toContain(token);
   });
 
+  it("answers arguments that break the input schema with a tool error, over HTTP too", async () => {
+    const { token } = issue();
+    const { client } = await connect(token);
+    const refused = await client.callTool({ name: "lookup", arguments: { id: 7 } });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain("-32602");
+    expect(JSON.stringify(refused.content)).toContain("/id must be string");
+    expect(invoke).not.toHaveBeenCalled();
+
+    const accepted = await client.callTool({ name: "lookup", arguments: { id: "r-1" } });
+    expect(accepted.isError).toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   it("answers a missing or orchestration bearer with a 401 challenge", async () => {
     for (const token of [undefined, "daintree-api-key-value", "pane-token-abc"]) {
       const response = await rawRequest(token === undefined ? {} : { token });

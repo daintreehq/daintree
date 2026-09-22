@@ -150,7 +150,7 @@ export async function activate(host: PluginHostApi) {
         additionalProperties: false,
       },
       async execute(args, caller, signal) {
-        // `args` is only guaranteed to be a JSON object; validate it yourself.
+        // `args` already matches inputSchema; `limit` is optional, so default it.
         const limit = typeof args.limit === "number" ? args.limit : 20;
         // `caller.projectId` is the project the calling terminal belongs to.
         return { entries: await readEntries(caller.projectId, limit, signal) };

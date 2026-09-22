@@ -81,8 +81,7 @@ function metaValidatorFor(dialect: Dialect): AjvInstance {
   return instance;
 }
 
-function dialectOf(schema: PluginMcpJsonSchema): Dialect {
-  const declared = schema.$schema;
+function dialectOf(declared: unknown): Dialect {
   if (declared === undefined) return "2020-12";
   const dialect =
     typeof declared === "string" ? DIALECT_BY_META_ID[declared.replace(/#$/, "")] : undefined;
@@ -92,6 +91,44 @@ function dialectOf(schema: PluginMcpJsonSchema): Dialect {
     );
   }
   return dialect;
+}
+
+function pointerTo(path: readonly string[]): string {
+  return `/${path.map((part) => part.replace(/~/g, "~0").replace(/\//g, "~1")).join("/")}`;
+}
+
+/**
+ * Refuse the constructs Ajv compiles without complaint but does not enforce
+ * as written: an embedded resource in another dialect is checked under the
+ * root's, and 2020-12 `$dynamicRef` resolves to the wrong schema. Keywords are
+ * matched by string value so a property that happens to be named `$schema`
+ * (whose value is a schema object) is not mistaken for one.
+ */
+function refuseUnenforceable(schema: PluginMcpJsonSchema, dialect: Dialect): void {
+  const pending: Array<{ node: unknown; path: string[] }> = [{ node: schema, path: [] }];
+  while (pending.length > 0) {
+    const { node, path } = pending.pop()!;
+    if (typeof node !== "object" || node === null) continue;
+    for (const [key, value] of Object.entries(node)) {
+      if (typeof value === "string") {
+        if (
+          key === "$schema" &&
+          path.length > 0 &&
+          DIALECT_BY_META_ID[value.replace(/#$/, "")] !== dialect
+        ) {
+          throw new Error(
+            `declares $schema ${JSON.stringify(value)} at ${pointerTo(path)}; a schema must use one dialect throughout`
+          );
+        }
+        if (key === "$dynamicRef" && dialect === "2020-12") {
+          throw new Error(`uses $dynamicRef at ${pointerTo(path)}, which is not supported`);
+        }
+      }
+      if (typeof value === "object" && value !== null) {
+        pending.push({ node: value, path: [...path, key] });
+      }
+    }
+  }
 }
 
 function clip(text: string): string {
@@ -123,10 +160,12 @@ function describeErrors(errors: readonly AjvErrorObject[] | null | undefined): s
  * Each schema gets its own compiler that knows no other schema — not the
  * meta-schemas, not the other tools' — so a `$ref` can only resolve inside the
  * schema that holds it, and nothing a roster compiles outlives the roster.
+ * Keywords beside a `$ref` apply in both dialects, as Ajv applies them.
  * Values are checked as sent: nothing is coerced, defaulted or stripped.
  */
 export function compileAgentMcpSchema(schema: PluginMcpJsonSchema): AgentMcpSchemaCheck {
-  const dialect = dialectOf(schema);
+  const dialect = dialectOf(schema.$schema);
+  refuseUnenforceable(schema, dialect);
 
   const meta = metaValidatorFor(dialect);
   if (meta.validateSchema(schema) !== true) {
@@ -144,7 +183,6 @@ export function compileAgentMcpSchema(schema: PluginMcpJsonSchema): AgentMcpSche
   const ajv = new Ajv({
     meta: false,
     validateSchema: false,
-    addUsedSchema: false,
     // Unknown keywords are annotations, as JSON Schema defines them; a vendor
     // `x-` keyword is not a reason to refuse a roster.
     strict: false,
@@ -166,7 +204,7 @@ export function compileAgentMcpSchema(schema: PluginMcpJsonSchema): AgentMcpSche
     const missingRef = (err as { missingRef?: unknown } | null)?.missingRef;
     if (typeof missingRef === "string") {
       throw new Error(
-        `references ${JSON.stringify(missingRef)}, which is outside the schema; only references within the schema itself are supported`,
+        `references ${JSON.stringify(missingRef)}, which does not resolve within the schema; references to anything outside it are not supported`,
         { cause: err }
       );
     }
