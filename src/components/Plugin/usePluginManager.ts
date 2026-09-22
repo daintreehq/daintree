@@ -47,9 +47,10 @@ function installErrorMessage(error: PluginInstallError | undefined): string {
       // "check the file" would send the user down the wrong path (#11302).
       return "Unpacking the plugin took too long and was stopped. Try installing it again.";
     case "archive_mismatch":
-      // The server answered the install with different bytes than it served
-      // the preview (#12612). Re-checking shows what it serves now.
-      return "The plugin changed after you reviewed it, so nothing was installed. Check for updates again to review the current version.";
+      // The install no longer matches the preview the user approved — the
+      // server sent different bytes, or the plugin is gone (#12612).
+      // Re-checking shows what's actually there now.
+      return "This update no longer matches what you reviewed, so nothing was installed. Check for updates again.";
     default:
       return error?.message ?? "Installation failed. Check the file and try again.";
   }

@@ -479,6 +479,24 @@ describe("verifyPluginArchive", () => {
     if (!result.valid) expect(result.error).toContain("Duplicate entry");
   });
 
+  it("rejects a plugin.json alias that differs only by case", async () => {
+    // On a case-insensitive filesystem the later entry would overwrite the
+    // manifest an update preview read (#12612); the archive is refused on every
+    // platform so the alias can't be authored unnoticed.
+    const archivePath = path.join(tmpDir, "case-alias.dntr");
+    await fs.writeFile(
+      archivePath,
+      buildRawZip([
+        { name: "plugin.json", content: JSON.stringify(validManifest()) },
+        { name: "Plugin.json", content: JSON.stringify(validManifest({ version: "6.6.6" })) },
+      ])
+    );
+
+    const result = await verifyPluginArchive(archivePath);
+    expect(result.valid).toBe(false);
+    if (!result.valid) expect(result.error).toContain("Duplicate entry");
+  });
+
   it("rejects an archive with invalid manifest (missing version)", async () => {
     const sourceDir = path.join(tmpDir, "source");
     await createFixture(sourceDir, {

@@ -3,6 +3,7 @@ import { access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { markAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
+import type { PluginCheckUpdateResult } from "../../../../shared/types/plugin.js";
 
 // `withContext` handlers read `event.sender.id`, so every invocation needs a
 // sender-bearing event the way a real IPC call always has one.
@@ -683,17 +684,22 @@ describe("registerPluginHandlers", () => {
     mockNetFetch.mockResolvedValue(
       mockResponse({ headers: { "content-type": "application/zip" } })
     );
-    let presentMidInstall: boolean | undefined;
-    let downloadPath = "";
-    mockInstallPlugin.mockImplementationOnce(async (archivePath: string) => {
-      downloadPath = archivePath;
-      // Yield past the handler's own continuation, as the real installer does
-      // while it takes the install lock, before it ever reads the file.
-      await new Promise((resolve) => setTimeout(resolve, 10));
-      presentMidInstall = await access(archivePath).then(
+    const exists = (p: string) =>
+      access(p).then(
         () => true,
         () => false
       );
+    let presentMidInstall = true;
+    let downloadPath = "";
+    mockInstallPlugin.mockImplementationOnce(async (archivePath: string) => {
+      downloadPath = archivePath;
+      // The real installer yields for the install lock before it reads the
+      // file. Watch for a while: a cleanup that races ahead (a bare `return`
+      // inside the handler's try/finally) unlinks it within a few ms.
+      for (let i = 0; i < 20 && presentMidInstall; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        presentMidInstall = await exists(archivePath);
+      }
       return { status: "installed", pluginId: "acme.my-plugin" };
     });
     const handler = getHandler("plugin:install-from-url");
@@ -701,12 +707,7 @@ describe("registerPluginHandlers", () => {
     expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
     expect(presentMidInstall).toBe(true);
     // ...and still reaped once the install is done.
-    expect(
-      await access(downloadPath).then(
-        () => true,
-        () => false
-      )
-    ).toBe(false);
+    expect(await exists(downloadPath)).toBe(false);
   });
 
   it("PLUGIN_INSTALL_FROM_URL accepts application/x-dntr content type", async () => {
@@ -1156,21 +1157,19 @@ describe("registerPluginHandlers", () => {
   });
 
   it("PLUGIN_CHECK_FOR_UPDATE delegates to pluginService.checkForUpdate and returns the result", async () => {
-    mockCheckForUpdate.mockResolvedValue({
+    const preview = {
       status: "available",
       name: "acme.my-plugin",
       version: "2.0.0",
       capabilities: ["network:fetch"],
-    });
+      archiveHash: "c".repeat(64),
+    } satisfies PluginCheckUpdateResult;
+    mockCheckForUpdate.mockResolvedValue(preview);
     const handler = getHandler("plugin:check-for-update");
     const result = await handler({}, "acme.my-plugin");
     expect(mockCheckForUpdate).toHaveBeenCalledWith("acme.my-plugin");
-    expect(result).toEqual({
-      status: "available",
-      name: "acme.my-plugin",
-      version: "2.0.0",
-      capabilities: ["network:fetch"],
-    });
+    // The digest must survive the hop: it is what a confirmed update is held to.
+    expect(result).toEqual(preview);
   });
 
   it("PLUGIN_CHECK_FOR_UPDATE returns invalid-id for an empty id without delegating", async () => {

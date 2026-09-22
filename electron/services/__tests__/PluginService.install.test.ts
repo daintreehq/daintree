@@ -1249,12 +1249,14 @@ describe("installPlugin — reviewed-update binding (#12612)", () => {
     return entries.filter((e) => e.startsWith(".install-tmp-") || e.includes(".old-"));
   }
 
-  it("installs an archive whose digest and name match the expectation", async () => {
-    const archive = await makeArchive({ name: "acme.bound", version: "2.0.0" });
+  it("updates to an archive whose digest and name match the expectation", async () => {
     const service = new PluginService(pluginsRoot, "0.0.0");
-    const archiveHash = await sha256(archive);
+    const v1 = await makeArchive({ name: "acme.bound", version: "1.0.0" });
+    expect((await service.installPlugin(v1)).status).toBe("installed");
+    const v2 = await makeArchive({ name: "acme.bound", version: "2.0.0" });
+    const archiveHash = await sha256(v2);
 
-    const result = await service.installPlugin(archive, {
+    const result = await service.installPlugin(v2, {
       source: "url",
       originalUrl: "https://example.com/bound.dntr",
       expected: { pluginId: "acme.bound", archiveHash },
@@ -1264,6 +1266,63 @@ describe("installPlugin — reviewed-update binding (#12612)", () => {
     expect(recordedHash("acme.bound")).toBe(archiveHash);
 
     service.dispose();
+  });
+
+  it("refuses a reviewed update for a plugin uninstalled since its preview", async () => {
+    // An update replaces what is installed; it must not quietly resurrect a
+    // plugin the user removed (e.g. from another window) while it was parked.
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const archive = await makeArchive({ name: "acme.gone", version: "2.0.0" });
+
+    const result = await service.installPlugin(archive, {
+      source: "url",
+      expected: { pluginId: "acme.gone", archiveHash: await sha256(archive) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors[0]?.code).toBe("archive_mismatch");
+      expect(result.errors[0]?.message).toContain("no longer installed");
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.gone"))).toBe(false);
+    expect(await stagingLeftovers()).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("reports a cancel during hashing as cancelled, not as a mismatch", async () => {
+    const archive = await makeArchive({ name: "acme.hash-cancel", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const jobId = "cancel-while-hashing";
+    const hashSpy = vi
+      .spyOn(PluginArchive, "computeArchiveHash")
+      .mockImplementationOnce(async () => {
+        pluginInstallJobs.cancel(jobId);
+        return "0".repeat(64);
+      });
+    const extractSpy = vi.spyOn(PluginArchive, "extractPluginArchive");
+
+    try {
+      pluginInstallJobs.begin(jobId, () => {});
+      const result = await service.installPlugin(archive, {
+        jobId,
+        expected: { pluginId: "acme.hash-cancel", archiveHash: "f".repeat(64) },
+      });
+
+      expect(result).toEqual({ status: "cancelled" });
+      expect(extractSpy).not.toHaveBeenCalled();
+      expect(await stagingLeftovers()).toHaveLength(0);
+      // The lock was released: the next install goes through.
+      expect(await service.installPlugin(archive)).toEqual({
+        status: "installed",
+        pluginId: "acme.hash-cancel",
+      });
+    } finally {
+      pluginInstallJobs.end(jobId);
+      hashSpy.mockRestore();
+      extractSpy.mockRestore();
+      service.dispose();
+    }
   });
 
   it("refuses a digest mismatch before extracting a single entry", async () => {

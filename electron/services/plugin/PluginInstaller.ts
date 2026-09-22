@@ -431,6 +431,15 @@ export class PluginInstaller {
         existing = false;
       }
 
+      // A reviewed update replaces an installed plugin; one uninstalled since
+      // its preview (say, from another window) isn't this approval's to restore.
+      if (expected && !existing) {
+        return fail(
+          "archive_mismatch",
+          `"${pluginId}" is no longer installed, so its update wasn't applied`
+        );
+      }
+
       // Reject a name collision BEFORE the swap (#10518). The `existing` probe
       // only sees the user plugins root, so without this a `.dntr` whose id
       // matches a built-in (never in the user root) or a launch-reserved name

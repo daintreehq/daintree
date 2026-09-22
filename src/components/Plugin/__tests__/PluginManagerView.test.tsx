@@ -777,7 +777,9 @@ describe("PluginManagerView", () => {
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
     fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
 
-    await waitFor(() => expect(screen.getByText(/changed after you reviewed it/)).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText(/no longer matches what you reviewed/)).toBeTruthy()
+    );
   });
 
   it("guards against double-clicks while a check is in flight", async () => {
@@ -1059,7 +1061,7 @@ describe("PluginManagerView", () => {
     );
   });
 
-  it("drops a cancelled http reinstall's binding before a later manual install", async () => {
+  it("leaves a manual http install unbound after a cancelled http reinstall", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       urlPlugin({ originalUrl: "http://example.com/p.dntr" }),
     ]);
