@@ -322,9 +322,9 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
       writeText(res, 429, "Too many sessions for this credential");
       return;
     }
-    // Reserved before the first await: a session is only filed once the SDK
-    // has read its body and initialised it, and every handshake admitted in
-    // the meantime has to count this one.
+    // Reserved in the same turn as the cap check: a session is only filed once
+    // the SDK has read its body and initialised it, and every handshake
+    // admitted in the meantime has to count this one.
     const newSessionId = randomUUID();
     this.reserveHandshake(grant.credentialId, newSessionId, () => {
       // The request drops its connection even when a pipelined response is
