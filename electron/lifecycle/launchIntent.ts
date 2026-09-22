@@ -47,15 +47,49 @@ export interface LaunchIntentSignals {
 export function resolveLaunchIntent(signals: LaunchIntentSignals): LaunchIntent {
   if (signals.isSafeMode || signals.hasPendingCrash) return "recovery";
 
-  if (signals.hasCliPathFlag(signals.argv)) return "targeted";
-  if (signals.extractDirectoryPaths(signals.argv).length > 0) return "targeted";
-  if (signals.pendingOpenDirPaths.length > 0) return "targeted";
+  if (launchOpensFolder(signals)) return "targeted";
   // A double-clicked `.dntr` archive is still "I launched you to do this one
   // thing". Treating it as targeted keeps today's single-window behaviour for
   // every launch that names something, which is the conservative default.
   if (signals.pendingOpenFilePaths.length > 0) return "targeted";
 
   return "cold";
+}
+
+/**
+ * Whether this launch was asked to open a folder: `--cli-path`, a `file://`
+ * folder URI, or a Finder drop queued before the first window.
+ *
+ * Such a launch starts its first window on the project picker rather than the
+ * last-active project. The folders are routed like any external open (#12593),
+ * which fills an empty window before creating one — a launch window that had
+ * already restored the last project would be occupied, and one folder would
+ * open two windows.
+ */
+export function launchOpensFolder(
+  signals: Pick<
+    LaunchIntentSignals,
+    "argv" | "hasCliPathFlag" | "extractDirectoryPaths" | "pendingOpenDirPaths"
+  >
+): boolean {
+  return (
+    signals.hasCliPathFlag(signals.argv) ||
+    signals.extractDirectoryPaths(signals.argv).length > 0 ||
+    signals.pendingOpenDirPaths.length > 0
+  );
+}
+
+/**
+ * The project the first window restores when there is no window manifest to
+ * read: the last-active one, except on a launch that opens a folder, whose
+ * first window starts on the picker for that folder to fill.
+ */
+export function resolveRestoreFallbackProjectId(
+  signals: Parameters<typeof launchOpensFolder>[0],
+  lastActiveProjectId: string | null | undefined
+): string | undefined {
+  if (launchOpensFolder(signals)) return undefined;
+  return lastActiveProjectId ?? undefined;
 }
 
 /** Only a plain cold launch rebuilds the whole window set. */

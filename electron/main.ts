@@ -39,7 +39,11 @@ import {
   registerAppLifecycleHandlers,
   registerWindowSessionEndHandler,
 } from "./lifecycle/appLifecycle.js";
-import { resolveLaunchIntent, shouldRestoreWindowFleet } from "./lifecycle/launchIntent.js";
+import {
+  resolveLaunchIntent,
+  resolveRestoreFallbackProjectId,
+  shouldRestoreWindowFleet,
+} from "./lifecycle/launchIntent.js";
 import {
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
@@ -59,6 +63,7 @@ import { buildMemoryAttribution } from "./utils/memoryAttribution.js";
 import { helpSessionService } from "./services/HelpSessionService.js";
 import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
+import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView } from "./window/portDistribution.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
@@ -68,7 +73,6 @@ import {
   setPtyClientRef,
   getWorkspaceClientRef,
   getWorktreePortBrokerRef,
-  getCliAvailabilityServiceRef,
   getCleanupIpcHandlers,
   setCleanupIpcHandlers,
   getCleanupErrorHandlers,
@@ -367,6 +371,8 @@ if (!gotTheLock) {
     opts?: {
       revealMode?: "show" | "showInactive";
       backgroundProjectIds?: readonly string[];
+      /** Told the window's id as soon as it is registered, before setup awaits anything. */
+      onRegistered?: (windowId: number) => void;
     }
   ): Promise<CreateWindowResult> {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
@@ -379,6 +385,14 @@ if (!gotTheLock) {
       });
     setMainWindow(win);
     const ctx = windowRegistry.register(win, { projectPath: initialProjectPath ?? undefined });
+    opts?.onRegistered?.(ctx.windowId);
+    // A restored window only binds its workspace once setup reaches
+    // `registerInitialView`. Until then it is claimed for that workspace, so a
+    // folder opened from outside meanwhile finds this window instead of
+    // building a second view of the same project (#12593).
+    const releaseRestoreClaim = initialProjectId
+      ? reserveWindowForOpen(ctx.windowId, { projectId: initialProjectId, projectPath: null })
+      : undefined;
 
     // Keep the persisted window manifest in step with this window (#11492).
     // The save listens on `closed`, not `close`: WindowRegistry still holds the
@@ -655,17 +669,23 @@ if (!gotTheLock) {
       })
     );
 
-    const servicesResult = await setupWindowServices(win, {
-      loadRenderer,
-      smokeTestTimer,
-      smokeRendererUnresponsive,
-      windowRegistry,
-      initialProjectPath: initialProjectPath ?? undefined,
-      initialProjectId,
-      projectViewManager: pvm,
-      initialAppView: appView,
-      backgroundProjectIds: opts?.backgroundProjectIds,
-    });
+    let servicesResult: CreateWindowResult;
+    try {
+      servicesResult = await setupWindowServices(win, {
+        loadRenderer,
+        smokeTestTimer,
+        smokeRendererUnresponsive,
+        windowRegistry,
+        initialProjectPath: initialProjectPath ?? undefined,
+        initialProjectId,
+        projectViewManager: pvm,
+        initialAppView: appView,
+        backgroundProjectIds: opts?.backgroundProjectIds,
+        createWindowForPath,
+      });
+    } finally {
+      releaseRestoreClaim?.(isWindowBound(windowRegistry, ctx.windowId));
+    }
 
     // The process is exiting, or the window never reached the registry and has
     // no services. Either way stop here, so a restore fan-out doesn't keep
@@ -720,11 +740,25 @@ if (!gotTheLock) {
     return "ok";
   }
 
+  // For folders opened from outside the app that need a window of their own
+  // (#12593). Resolves to the new window's id so the open can report where it
+  // landed.
+  async function createWindowForPath(dirPath: string): Promise<number> {
+    let windowId: number | undefined;
+    const result = await createWindow(dirPath, undefined, {
+      onRegistered: (id) => {
+        windowId = id;
+      },
+    });
+    if (result !== "ok" || windowId === undefined) {
+      throw new Error(`No window was created for ${dirPath} (${result})`);
+    }
+    return windowId;
+  }
+
   registerAppLifecycleHandlers({
     onCreateWindow: () => createWindow().then(() => {}),
-    onCreateWindowForPath: (cliPath) => createWindow(cliPath).then(() => {}),
     getMainWindow,
-    getCliAvailabilityService: getCliAvailabilityServiceRef,
     windowRegistry,
   });
 
@@ -794,7 +828,7 @@ if (!gotTheLock) {
       // through the existing confirm/security gates, never silently.
       activateDeepLinkHandler(windowRegistry);
       setupWebviewCSP();
-      const launchIntent = resolveLaunchIntent({
+      const launchSignals = {
         argv: process.argv,
         hasCliPathFlag,
         extractDirectoryPaths,
@@ -802,7 +836,12 @@ if (!gotTheLock) {
         pendingOpenFilePaths: getPendingOpenFilePaths(),
         isSafeMode: getCrashLoopGuard().isSafeMode(),
         hasPendingCrash: getCrashRecoveryService().getPendingCrash() !== null,
-      });
+      };
+      const launchIntent = resolveLaunchIntent(launchSignals);
+      // A launch that opens a folder starts on the picker, so the folder routing
+      // fills that window instead of opening a second one beside the last-active
+      // project (#12593).
+      const fallbackProjectId = resolveRestoreFallbackProjectId(launchSignals, lastActiveProjectId);
 
       // A recovery launch deliberately opens one window. It must not then
       // persist that as the window set, or safe mode would overwrite the user's
@@ -830,7 +869,7 @@ if (!gotTheLock) {
       const primaryRestoreProjectId = resolvePrimaryRestoreProjectId(
         restoreRecords,
         hadManifest,
-        lastActiveProjectId ?? undefined
+        fallbackProjectId
       );
 
       // Prime the hydrate prefetch cache for the window that will take focus so
@@ -869,7 +908,7 @@ if (!gotTheLock) {
       await restoreWindowFleet({
         records: fleetRecords,
         hadManifest,
-        fallbackProjectId: lastActiveProjectId ?? undefined,
+        fallbackProjectId,
         createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
         suppressSaves: suppressOpenWindowsSaves,
         resumeSaves: resumeOpenWindowsSaves,

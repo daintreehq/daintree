@@ -696,3 +696,17 @@ export type {
   CredentialField,
   CredentialFieldType,
 } from "./forge.js";
+
+// Window-open routing — which window a project open lands in (#12593)
+export type {
+  ProjectOpenDisposition,
+  OpenFoldersInNewWindow,
+  ProjectOpenOutcome,
+} from "./windowOpen.js";
+export {
+  PROJECT_OPEN_DISPOSITIONS,
+  OPEN_FOLDERS_IN_NEW_WINDOW_VALUES,
+  DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
+  isProjectOpenDisposition,
+  isOpenFoldersInNewWindow,
+} from "./windowOpen.js";

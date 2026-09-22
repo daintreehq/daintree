@@ -4,26 +4,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type { CliAvailabilityService } from "../services/CliAvailabilityService.js";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
-import { handleDirectoryOpen } from "../menu.js";
 import { refreshProjectMenuState } from "../projectMenuState.js";
 import { getCrashRecoveryService } from "../services/CrashRecoveryService.js";
 import { setSignalShutdown, setSafetyBeltTimer } from "./signalShutdownState.js";
 import { isWindowRecreating } from "./windowRecreationState.js";
 import { SAFETY_BELT_TIMEOUT_MS } from "./shutdownConfig.js";
 import { extractDaintreeUrl, handleDaintreeUrl } from "../setup/deepLinkInstall.js";
-import { queuePendingOpenDirPath } from "../setup/environment.js";
-
-let pendingCliPath: string | null = null;
-
-export function getPendingCliPath(): string | null {
-  return pendingCliPath;
-}
-
-export function setPendingCliPath(p: string | null): void {
-  pendingCliPath = p;
-}
+import { dispatchOpenDirPath } from "../setup/environment.js";
 
 const CLI_PATH_FLAG = "--cli-path";
 const CLI_PATH_PREFIX = `${CLI_PATH_FLAG}=`;
@@ -225,38 +213,6 @@ export function extractDirectoryPaths(argv: string[]): string[] {
   return paths;
 }
 
-// Open each folder in its own window when the app can make one, mirroring the
-// `--cli-path` branch. With no live window the folder joins the same pre-window
-// queue the macOS `open-file` drop path uses, so `openDirHandler`'s drain owns
-// the windowless case for every ingress.
-async function openDirectoryPaths(
-  paths: readonly string[],
-  liveWindow: BrowserWindow | null,
-  opts: AppLifecycleOptions
-): Promise<void> {
-  for (const dirPath of paths) {
-    if (!liveWindow) {
-      queuePendingOpenDirPath(dirPath);
-      continue;
-    }
-    // Isolated per folder: one path that vanished between the stat and the
-    // open must not strand the rest of a multi-selection.
-    try {
-      if (opts.onCreateWindowForPath) {
-        await opts.onCreateWindowForPath(dirPath);
-      } else {
-        await handleDirectoryOpen(
-          dirPath,
-          liveWindow,
-          opts.getCliAvailabilityService() ?? undefined
-        );
-      }
-    } catch (err) {
-      console.error("[MAIN] Failed to open folder:", dirPath, err);
-    }
-  }
-}
-
 // Queue a `.dntr` archive for install confirmation (#11280). The archive is
 // never installed here: `archiveInstallIntent` reads its manifest without
 // extracting, then prompts the user in the primary window, and only an approved
@@ -270,9 +226,7 @@ export async function queueDntrPaths(archivePaths: readonly string[]): Promise<v
 
 export interface AppLifecycleOptions {
   onCreateWindow: () => void | Promise<void>;
-  onCreateWindowForPath?: (cliPath: string) => void | Promise<void>;
   getMainWindow: () => BrowserWindow | null;
-  getCliAvailabilityService: () => CliAvailabilityService | null;
   windowRegistry?: WindowRegistry;
 }
 
@@ -360,28 +314,17 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
       handleDaintreeUrl(daintreeUrl);
     }
 
+    // Folders from the CLI and the OS context menu take the same route as a
+    // Dock drop: `openDirHandler` picks an empty window or makes a new one, and
+    // queues them itself until the first window is up (#12593).
     if (cliPath) {
-      if (liveWindow && opts.onCreateWindowForPath) {
-        console.log("[MAIN] Creating new window for CLI path:", cliPath);
-        opts.onCreateWindowForPath(cliPath);
-      } else if (liveWindow) {
-        console.log("[MAIN] Opening CLI path in existing window:", cliPath);
-        handleDirectoryOpen(
-          cliPath,
-          liveWindow,
-          opts.getCliAvailabilityService() ?? undefined
-        ).catch((err) => console.error("[MAIN] Failed to open CLI path:", err));
-      } else {
-        pendingCliPath = cliPath;
-        console.log("[MAIN] Queuing CLI path for when window is ready:", cliPath);
-      }
+      console.log("[MAIN] Opening CLI path:", cliPath);
+      dispatchOpenDirPath(cliPath);
     }
 
     if (directoryPaths.length > 0) {
       console.log("[MAIN] Opening folder(s) from OS context menu:", directoryPaths);
-      void openDirectoryPaths(directoryPaths, liveWindow, opts).catch((err) =>
-        console.error("[MAIN] Failed to open folder(s):", err)
-      );
+      for (const dirPath of directoryPaths) dispatchOpenDirPath(dirPath);
     }
 
     if (dntrPaths.length > 0) {
@@ -395,9 +338,8 @@ export function registerAppLifecycleHandlers(opts: AppLifecycleOptions): void {
     }
 
     // Bring the primary window to the front for `.dntr` installs and for plain
-    // re-launches (no path argument). The CLI-path branch manages its own
-    // window via onCreateWindowForPath / handleDirectoryOpen, so it is excluded
-    // — and so is a folder open, which raises the window it opens into.
+    // re-launches (no path argument). A CLI path or folder open raises the
+    // window it lands in, so it is excluded.
     if (liveWindow && (dntrPaths.length > 0 || (!cliPath && directoryPaths.length === 0))) {
       if (liveWindow.isMinimized()) liveWindow.restore();
       liveWindow.focus();
