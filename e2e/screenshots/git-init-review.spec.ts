@@ -453,7 +453,11 @@ test("git init dialog review — configuration, progress, recovery and success",
     //    shows whether it ever read as dependent in the first place.
     await step("commit-off", async () => {
       await openGitSetup(folder("harbour-lights"));
-      await page.locator(TID.dialog).locator('input[type="checkbox"]').first().uncheck();
+      // A Radix checkbox is a button with role=checkbox, not a native input.
+      await page
+        .locator(TID.dialog)
+        .getByRole("checkbox", { name: "Create initial commit" })
+        .click();
       await snap(page, "20-configure-commit-off", { marker: TID.dialog, locator: DIALOG });
     });
 

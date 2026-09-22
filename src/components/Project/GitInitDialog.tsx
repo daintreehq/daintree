@@ -190,7 +190,6 @@ export function GitInitDialog({
   const previousModeRef = useRef<"configure" | "running" | "failed" | "complete">("configure");
   const nameErrorId = useId();
   const commitMessageErrorId = useId();
-  const commitOptionsId = useId();
 
   const trimmedProjectName = projectName.trim();
   // The name is seeded from the folder, so this only ever fires after the user
@@ -680,7 +679,7 @@ export function GitInitDialog({
                     onCheckedChange={(checked) => setCreateInitialCommit(checked === true)}
                     disabled={configDisabled}
                     aria-expanded={createInitialCommit}
-                    aria-controls={commitOptionsId}
+                    aria-controls="git-init-commit-message"
                   />
                   <label
                     htmlFor="git-init-create-commit"
@@ -696,7 +695,7 @@ export function GitInitDialog({
               {createInitialCommit && (
                 <FormRow
                   label="Message"
-                  htmlFor={commitOptionsId}
+                  htmlFor="git-init-commit-message"
                   hint={
                     isCommitMessageMissing && (
                       <p
@@ -711,7 +710,7 @@ export function GitInitDialog({
                   }
                 >
                   <input
-                    id={commitOptionsId}
+                    id="git-init-commit-message"
                     type="text"
                     value={initialCommitMessage}
                     onChange={(e) => setInitialCommitMessage(e.target.value)}
