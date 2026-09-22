@@ -153,7 +153,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   const overflowTasks = visibleTasks.slice(MAX_VISIBLE);
 
   return (
-    <div className="mb-2 space-y-0.5">
+    <div className="-mx-2 mb-2 space-y-0.5">
       {displayTasks.map((t) => {
         const status = deriveTaskStatus(t);
         return (
@@ -274,7 +274,6 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
   const elapsed = terminal.startedAt ? now - terminal.startedAt : 0;
   const isActive = status === "running" || status === "restarting";
   const command = terminal.command || terminal.title;
-  const truncatedCommand = command.length > 28 ? command.slice(0, 28) + "…" : command;
 
   return (
     // The row used to be a `role="button"` wrapping these action buttons, which
@@ -288,7 +287,6 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       className={cn(
         "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-sm)] text-2xs font-mono group",
         "hover:bg-tint/[0.04] transition-colors",
-        status === "failed" && "border-l-2 border-status-error",
         status === "success" && "opacity-60"
       )}
     >
@@ -302,18 +300,30 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
         className="flex-1 truncate text-left text-text-secondary hover:text-text-primary transition-colors cursor-pointer min-w-0"
         title={command}
       >
-        {truncatedCommand}
+        {command}
       </button>
 
       {/* Elapsed time */}
+      {/* Elapsed time and the failure word trade places with the actions on
+          hover or focus. The actions used to sit at opacity 0 and keep their
+          width, which pushed the time into the middle of the row and cut the
+          command to a letter at the 200px floor. */}
       {isActive && (
-        <span className="text-3xs text-text-placeholder tabular-nums shrink-0">
+        <span className="text-3xs text-text-secondary tabular-nums shrink-0 group-hover:hidden group-focus-within:hidden">
           {formatElapsed(elapsed)}
+        </span>
+      )}
+      {/* Failure in words, where the elapsed time sat while it ran. A red dot
+          alone leaves it to colour, and the left border that used to mark the
+          row curved with the row's radius into a stray "(". */}
+      {status === "failed" && (
+        <span className="text-3xs text-text-secondary shrink-0 group-hover:hidden group-focus-within:hidden">
+          Failed
         </span>
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
+      <div className="hidden items-center gap-0.5 shrink-0 group-hover:flex group-focus-within:flex">
         {isActive && (
           <button
             onClick={(e) => {

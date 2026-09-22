@@ -115,11 +115,10 @@ export function ProjectPluginIndicator() {
         <button
           type="button"
           aria-label={`Project plugins — ${summary}`}
-          // Same strip as the resource readout directly beneath it: identical
-          // chrome, row height, dot and type. These two are the only rows in
-          // the sidebar footer, so any divergence between them is visible in a
-          // single glance.
-          className="px-4 py-1.5 min-h-7 border-t border-divider surface-chrome flex items-center shrink-0 w-full hover:bg-overlay-soft transition-colors cursor-pointer"
+          // Same row as the resource readout at the foot of the footer: identical
+          // height, dot and type. The footer owns the surface and the divider,
+          // so this row carries neither and reads as part of that one unit.
+          className="px-4 py-1.5 min-h-7 flex items-center shrink-0 w-full hover:bg-overlay-soft transition-colors cursor-pointer"
         >
           <div className="flex items-center gap-2 min-w-0">
             {/* Hollow, matching the footer's idle mark: staged plugins are a

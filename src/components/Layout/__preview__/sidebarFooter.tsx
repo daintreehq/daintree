@@ -13,9 +13,7 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
-import { QuickRun } from "@/components/Project/QuickRun";
-import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
-import { SidebarStatusBar } from "../SidebarStatusBar";
+import { SidebarFooter } from "../SidebarFooter";
 import type { WorktreeSnapshot } from "@shared/types/workspace-host";
 import type { PtyPanelData } from "@shared/types/panel";
 import type { Project, RunCommand } from "@shared/types";
@@ -192,15 +190,15 @@ const BUSY_PROJECT_NAMES = [
   "ask-google",
 ] as const;
 
-/** terminals, measured MB, top process — per running project, in list order. */
-const BUSY_TERMINALS: ReadonlyArray<[number, number, string]> = [
-  [4, 2048, "/Users/greg/.nvm/versions/node/v22.23.2/bin/node"],
-  [1, 1741, "/Users/greg/.local/bin/claude"],
-  [1, 704, "/Users/greg/.nvm/versions/node/v22.23.2/bin/node"],
-  [1, 500, "/Users/greg/.local/bin/claude"],
-  [2, 1741, "node"],
-  [2, 3379, "/Users/greg/.cargo/bin/codex"],
-  [1, 445, "/Users/greg/.local/bin/claude"],
+/** terminals and measured MB per running project, in list order. */
+const BUSY_TERMINALS: ReadonlyArray<[number, number]> = [
+  [4, 2048],
+  [1, 1741],
+  [1, 704],
+  [1, 500],
+  [2, 1741],
+  [2, 3379],
+  [1, 445],
 ];
 
 const BUSY_PROCESSES = [
@@ -225,34 +223,30 @@ const BUSY_PROCESSES = [
   ["Utility", "Network Service", 57, 0],
 ] as const;
 
-let BULK_STATS: Record<string, unknown> = {};
+let WORKLOAD_BY_PROJECT: Array<{
+  projectId: string | null;
+  terminalCount: number;
+  processCount: number;
+  memoryMb: number;
+  topProcesses: never[];
+}> = [];
 let TERMINAL_WORKLOAD_MB = 0;
 
 /** Seed the popover's reads for the busy session. */
 function seedBusySession(): void {
   seedStats(7, 3868, 3, BUSY_PROJECT_NAMES);
-  // A fresh object each time: `baseline()` resets it for every other fixture.
-  const bulk: Record<string, unknown> = {};
-  BUSY_PROJECT_NAMES.forEach((_, i) => {
-    const running = BUSY_TERMINALS[i];
-    const base = useProjectStatsStore.getState().stats[`proj-${i}`]!;
-    bulk[`proj-${i}`] = {
-      ...base,
-      processCount: running ? running[0] : 0,
-      terminalCount: running ? running[0] : 0,
-      estimatedMemoryMB: running ? running[0] * 50 : 0,
-      terminalTypes: {},
-      processIds: [],
-      ...(running
-        ? {
-            terminalMemoryMB: running[1],
-            topProcess: { name: running[2], memoryMB: Math.round(running[1] * 0.6) },
-          }
-        : {}),
-    };
-  });
-  BULK_STATS = bulk;
-  TERMINAL_WORKLOAD_MB = BUSY_TERMINALS.reduce((sum, [, mb]) => sum + mb, 0);
+  WORKLOAD_BY_PROJECT = [
+    ...BUSY_TERMINALS.map(([terminals, mb], i) => ({
+      projectId: `proj-${i}`,
+      terminalCount: terminals,
+      processCount: terminals * 3,
+      memoryMb: mb,
+      topProcesses: [],
+    })),
+    // A terminal opened outside any project — the remainder row.
+    { projectId: null, terminalCount: 1, processCount: 2, memoryMb: 182, topProcesses: [] },
+  ];
+  TERMINAL_WORKLOAD_MB = WORKLOAD_BY_PROJECT.reduce((sum, p) => sum + p.memoryMb, 0);
 }
 
 /** Reset everything a fixture might have set, so one sweep can't leak into the next. */
@@ -284,7 +278,7 @@ function baseline(): void {
     state: { config: { enabled: true, onBattery: false }, isBlocking: true, revision: 1 },
     loadError: null,
   });
-  BULK_STATS = {};
+  WORKLOAD_BY_PROJECT = [];
   TERMINAL_WORKLOAD_MB = 0;
   seedStats(1, 1240);
 }
@@ -514,8 +508,6 @@ installPreviewShims({
     getSettings: async () => ({ runCommands: SAVED_RUNNERS }),
     detectRunners: async () => DETECTED_RUNNERS,
     onStatsUpdated: () => () => undefined,
-    getBulkStats: async (ids: string[]) =>
-      Object.fromEntries(ids.filter((id) => id in BULK_STATS).map((id) => [id, BULK_STATS[id]])),
   }),
   system: answering({
     getAppMetrics: async () => ({
@@ -554,7 +546,7 @@ installPreviewShims({
         totalMemoryMb: TERMINAL_WORKLOAD_MB,
         processCount: 24,
         terminalCount: 12,
-        byProject: [],
+        byProject: WORKLOAD_BY_PROJECT,
       },
     }),
   }),
@@ -602,9 +594,7 @@ function Preview() {
           case — it is here so the two strips are reviewed as the pair they
           form, since they share chrome, row height, dot and type. */}
       <div data-footer-region className="flex flex-col">
-        <QuickRun projectId={PROJECT_ID} />
-        <ProjectPluginIndicator />
-        <SidebarStatusBar />
+        <SidebarFooter projectId={PROJECT_ID} />
       </div>
     </div>
   );

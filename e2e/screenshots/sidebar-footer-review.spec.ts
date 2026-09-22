@@ -129,6 +129,9 @@ async function open(
   // Type metrics drive every measurement in a strip this dense, so a capture
   // taken before the fonts land measures the fallback face.
   await page.evaluate(() => document.fonts.ready);
+  // Playwright keeps the pointer where the last fixture's click left it, so a
+  // row under that spot photographs in its hover state. Park it off the column.
+  await page.mouse.move(width + 30, 5);
   await page.waitForTimeout(250);
   return shell;
 }

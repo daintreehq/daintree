@@ -705,15 +705,15 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
 
     const { container } = render(<ProjectResourceBadge />);
     await flush();
-    expect(container.textContent ?? "").not.toContain("High memory");
+    expect(container.textContent ?? "").not.toContain("High app memory");
 
     // 0.33 of 16GB is ~5.4GB; 9GB is past it.
     mockGetAppMetrics.mockResolvedValue({ totalMemoryMB: 9_000 });
     await advance(10_000);
 
-    expect(container.textContent ?? "").toContain("High memory");
+    expect(container.textContent ?? "").toContain("High app memory");
     const trigger = container.querySelector("[data-status-readout]");
-    expect(trigger?.textContent ?? "").not.toContain("High memory");
+    expect(trigger?.textContent ?? "").not.toContain("High app memory");
   });
 
   it("removes visibility listener on unmount", () => {

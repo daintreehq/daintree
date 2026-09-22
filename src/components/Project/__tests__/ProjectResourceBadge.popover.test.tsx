@@ -2,10 +2,10 @@
 /**
  * ProjectResourceBadge — popover memory honesty.
  *
- * The popover must label measured vs estimated memory truthfully: measured
- * workload totals come from the composite memory snapshot, unavailable reads
+ * The popover must label its memory truthfully: workload totals and the
+ * per-project split come from one composite snapshot, unavailable reads
  * preserve the last good value with an explicit note (never a fake 0), and
- * per-project estimates carry the `~` legend.
+ * process-level detail stays folded until asked for.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render } from "@testing-library/react";
@@ -54,7 +54,6 @@ vi.mock("@/components/ui/popover", () => ({
 import { projectClient, systemClient } from "@/clients";
 import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { Project } from "@shared/types";
-import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type {
   CompositeMemorySnapshot,
   TerminalWorkloadSlice,
@@ -110,23 +109,6 @@ function makeMemorySnapshot(
       sampledAt: Date.now(),
     },
     terminalWorkloads: makeWorkloads(workloadOverrides),
-  };
-}
-
-function makeBulkStatsEntry(overrides: Partial<BulkProjectStatsEntry> = {}): BulkProjectStatsEntry {
-  return {
-    processCount: 2,
-    terminalCount: 2,
-    estimatedMemoryMB: 100,
-    terminalTypes: {},
-    processIds: [],
-    activeAgentCount: 0,
-    waitingAgentCount: 0,
-    blockedAgentCount: 0,
-    completedAgentCount: 0,
-    unacknowledgedCompletedAgentCount: 0,
-    snoozedAgentCount: 0,
-    ...overrides,
   };
 }
 
@@ -189,12 +171,7 @@ function setupDefaultMocks(): void {
   });
   __resetProjectViewCacheStateForTests();
   mockGetAll.mockReset().mockResolvedValue([makeProject()]);
-  mockGetBulkStats.mockReset().mockResolvedValue({
-    p1: makeBulkStatsEntry({
-      terminalMemoryMB: 750,
-      topProcess: { name: "node", memoryMB: 400 },
-    }),
-  });
+  mockGetBulkStats.mockReset();
   mockGetAppMetrics.mockReset().mockResolvedValue({ totalMemoryMB: 290 });
   mockGetHardwareInfo.mockReset().mockResolvedValue({
     totalMemoryBytes: 8 * 1024 * 1024 * 1024,
@@ -232,21 +209,13 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
   it("labels measured app and workload memory from the composite snapshot", async () => {
     const container = await renderOpenBadge();
 
-    // Scoped to the row carrying the measured figure, and asserted on meaning
-    // rather than the exact sentence: the row must name what it measures and
-    // disclose the double-count instead of claiming a footprint it isn't.
-    const workingSetRow = findMemoryRow(container, "300MB");
-    expect(workingSetRow).toBeDefined();
-    const workingSetLabel = workingSetRow?.children[0]?.textContent?.toLowerCase() ?? "";
-    expect(workingSetLabel).toContain("working set");
-    expect(workingSetLabel).toContain("shared pages");
-    expect(workingSetLabel).not.toContain("app memory");
-    expect(container.textContent).toContain("Terminal workloads");
-    expect(container.textContent).toContain("900MB");
-    // Measured per-project value renders without the estimate marker or legend.
-    expect(container.textContent).toContain("750MB");
-    expect(container.textContent).not.toContain("~");
-    expect(container.textContent).not.toContain("estimated from terminal count");
+    // Asserted on meaning rather than the exact sentence: each figure names
+    // what it measures, and the double-count is disclosed once, in words.
+    const appRow = findMemoryRow(container, "300 MB");
+    expect(appRow?.children[0]?.textContent?.toLowerCase()).toContain("daintree");
+    const workloadRow = findMemoryRow(container, "900 MB");
+    expect(workloadRow?.children[0]?.textContent?.toLowerCase()).toContain("terminal");
+    expect(container.textContent?.toLowerCase()).toContain("counted twice");
   });
 
   it("stops the popover poll when the project view is cached", async () => {
@@ -314,15 +283,15 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
 
     const container = await renderOpenBadge();
 
-    expect(container.textContent).toContain("Terminal workloads");
-    expect(container.textContent).toContain("Unavailable");
+    const row = findMemoryRow(container, "Unavailable");
+    expect(row?.children[0]?.textContent).toContain("Terminal programs");
     expect(container.textContent).toContain("Process table unavailable");
-    expect(container.textContent).not.toContain("Terminal workloads0MB");
+    expect(findMemoryRow(container, "0 MB")).toBeUndefined();
   });
 
   it("preserves the last good workload reading across an unavailable poll", async () => {
     const container = await renderOpenBadge();
-    expect(container.textContent).toContain("900MB");
+    expect(container.textContent).toContain("900 MB");
 
     // The next popover poll finds the process table unreadable; the rollup
     // degrades to available:false with zeroed fresh values.
@@ -333,7 +302,7 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
       await vi.advanceTimersByTimeAsync(4_000);
     });
 
-    expect(container.textContent).toContain("900MB");
+    expect(container.textContent).toContain("900 MB");
     expect(container.textContent).toContain("showing last reading");
     expect(container.textContent).not.toContain("Unavailable —");
   });
@@ -354,14 +323,14 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
 
     const container = await renderOpenBadge();
 
-    expect(container.textContent).toContain("900MB");
+    expect(container.textContent).toContain("900 MB");
     expect(container.textContent).toContain("showing last reading");
     expect(container.textContent).not.toContain("Unavailable");
   });
 
   it("keeps the last good reading when the snapshot poll itself fails", async () => {
     const container = await renderOpenBadge();
-    expect(container.textContent).toContain("900MB");
+    expect(container.textContent).toContain("900 MB");
 
     // The snapshot IPC rejects outright on the next poll; the stale-guarded
     // fallback must show the last good value with its note, not the previous
@@ -371,7 +340,7 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
       await vi.advanceTimersByTimeAsync(4_000);
     });
 
-    expect(container.textContent).toContain("900MB");
+    expect(container.textContent).toContain("900 MB");
     expect(container.textContent).toContain("showing last reading");
   });
 
@@ -382,19 +351,94 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
 
     const container = await renderOpenBadge();
 
-    expect(container.textContent).toContain("900MB");
+    expect(container.textContent).toContain("900 MB");
     expect(container.textContent).toContain("Last sampled 45s ago");
   });
 
-  it("marks per-project estimates with the ~ legend when unmeasured", async () => {
-    mockGetBulkStats.mockResolvedValue({
-      p1: makeBulkStatsEntry({ terminalCount: 3, estimatedMemoryMB: 150 }),
-    });
+  it("attributes terminal memory per project from the same snapshot as the total", async () => {
+    mockGetAll.mockResolvedValue([
+      makeProject({ id: "p1", name: "Light" }),
+      makeProject({ id: "p2", name: "Heavy" }),
+      makeProject({ id: "p3", name: "Dormant" }),
+    ]);
+    mockGetMemorySnapshot.mockResolvedValue(
+      makeMemorySnapshot({
+        byProject: [
+          { projectId: null, terminalCount: 1, processCount: 1, memoryMb: 5_000, topProcesses: [] },
+          { projectId: "p1", terminalCount: 1, processCount: 2, memoryMb: 200, topProcesses: [] },
+          { projectId: "p2", terminalCount: 2, processCount: 4, memoryMb: 700, topProcesses: [] },
+          { projectId: "p3", terminalCount: 0, processCount: 0, memoryMb: 0, topProcesses: [] },
+        ],
+      })
+    );
 
     const container = await renderOpenBadge();
+    const text = container.textContent ?? "";
 
-    expect(container.textContent).toContain("~150MB");
-    expect(container.textContent).toContain("estimated from terminal count, not measured");
+    // Heaviest project first; the unattributed remainder last whatever its
+    // size; a project with no terminals gets no row at all.
+    expect(text.indexOf("Heavy")).toBeLessThan(text.indexOf("Light"));
+    expect(text.indexOf("Light")).toBeLessThan(text.indexOf("Other terminals"));
+    expect(text).not.toContain("Dormant");
+    // Never the second read's path-bearing process names.
+    expect(mockGetBulkStats).not.toHaveBeenCalled();
+  });
+
+  it("folds a long project list behind a disclosure whose label does not change", async () => {
+    const projects = Array.from({ length: 8 }, (_, i) =>
+      makeProject({ id: `p${i}`, name: `Project ${i}` })
+    );
+    mockGetAll.mockResolvedValue(projects);
+    mockGetMemorySnapshot.mockResolvedValue(
+      makeMemorySnapshot({
+        byProject: projects.map((p, i) => ({
+          projectId: p.id,
+          terminalCount: 1,
+          processCount: 1,
+          memoryMb: 100 + i,
+          topProcesses: [],
+        })),
+      })
+    );
+
+    const container = await renderOpenBadge();
+    const countRows = () => projects.filter((p) => container.textContent?.includes(p.name)).length;
+    const toggle = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("aria-controls") === "resource-project-rows"
+    )!;
+
+    expect(countRows()).toBeLessThan(projects.length);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    const closedLabel = toggle.textContent;
+
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(countRows()).toBe(projects.length);
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(toggle.textContent).toBe(closedLabel);
+  });
+
+  it("keeps process-level diagnostics folded until asked for", async () => {
+    mockGetProcessMetrics.mockResolvedValue([
+      { pid: 321, type: "GPU", name: "GPU", memoryMB: 90, cpuPercent: 0 },
+    ]);
+
+    const container = await renderOpenBadge();
+    const toggle = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("aria-controls") === "resource-diagnostics"
+    )!;
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector('[title$="(321)"]')).toBeNull();
+
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    expect(container.querySelector('[title$="(321)"]')).not.toBeNull();
   });
 });
 
@@ -407,7 +451,18 @@ describe("ProjectResourceBadge — process ownership", () => {
     return { pid: 400, type: "Tab", name: "Tab", memoryMB: 100, cpuPercent: 1, ...overrides };
   }
 
-  /** The process row's label cell, located by the pid it renders. */
+  async function renderWithDiagnostics(): Promise<HTMLElement> {
+    const container = await renderOpenBadge();
+    const toggle = Array.from(container.querySelectorAll("button")).find(
+      (b) => b.getAttribute("aria-controls") === "resource-diagnostics"
+    )!;
+    await act(async () => {
+      fireEvent.click(toggle);
+    });
+    return container;
+  }
+
+  /** The process row's label cell, located by the pid its title carries. */
   function processRowLabel(container: HTMLElement, pid: number): string {
     const row = container.querySelector(`[title$="(${pid})"]`);
     if (!row) throw new Error(`No process row for pid ${pid}`);
@@ -417,9 +472,9 @@ describe("ProjectResourceBadge — process ownership", () => {
   it("names the owning project instead of the generic renderer label", async () => {
     mockGetProcessMetrics.mockResolvedValue([makeProcess({ projectNames: ["RuinWeave"] })]);
 
-    const container = await renderOpenBadge();
+    const container = await renderWithDiagnostics();
 
-    expect(processRowLabel(container, 400)).toBe("RuinWeave view (400)");
+    expect(processRowLabel(container, 400)).toBe("RuinWeave view");
   });
 
   it("leaves an unowned process on its generic label", async () => {
@@ -427,10 +482,10 @@ describe("ProjectResourceBadge — process ownership", () => {
       makeProcess({ pid: 200, type: "GPU", name: "GPU Process" }),
     ]);
 
-    const container = await renderOpenBadge();
+    const container = await renderWithDiagnostics();
 
     // Scoped to the row: unrelated popover copy may legitimately say "view".
-    expect(processRowLabel(container, 200)).toBe("GPU Process (200)");
+    expect(processRowLabel(container, 200)).toBe("GPU Process");
   });
 
   it("surfaces the full label on hover when the row truncates", async () => {
@@ -438,7 +493,7 @@ describe("ProjectResourceBadge — process ownership", () => {
       makeProcess({ projectNames: ["Cedar Forge", "RuinWeave"] }),
     ]);
 
-    const container = await renderOpenBadge();
+    const container = await renderWithDiagnostics();
 
     const row = container.querySelector('[title*="RuinWeave"]');
     expect(row?.getAttribute("title")).toBe("2 views · Cedar Forge, RuinWeave (400)");
