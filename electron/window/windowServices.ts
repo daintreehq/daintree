@@ -61,7 +61,7 @@ import {
   drainPendingOpenDirs,
   type OpenDirHandlerDeps,
 } from "./openDirHandler.js";
-import { isWindowBound, reserveWindowForOpen } from "./windowOpenState.js";
+import { holdWindowForOpen, isWindowBound } from "./windowOpenState.js";
 import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../../shared/types/windowOpen.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
@@ -115,6 +115,11 @@ export {
 
 const DEFAULT_TERMINAL_ID = "default";
 
+// A closed project keeps its view — and the window's binding to it — alive to
+// paint the picker, so its id is only "in front" while its row isn't closed.
+const isProjectClosed = (projectId: string): boolean =>
+  projectStore.getProjectById(projectId)?.status === "closed";
+
 // Dependencies for folders opened from outside the app (#10976, #12593). Only
 // window creation comes from main.ts, which owns it; the install-once guard
 // lives in openDirHandler.ts.
@@ -129,6 +134,7 @@ function createOpenDirDeps(
     getWindowRegistry,
     // #12595 stores the user's choice; until then every open follows the default.
     getPreference: () => DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
+    isProjectClosed,
   };
 }
 
@@ -955,13 +961,15 @@ export async function setupWindowServices(
     // it is claimed for its own folder — otherwise the next queued external
     // open would take it for an empty window and replace the folder it was
     // created for.
-    const releaseInitialOpen = reserveWindowForOpen(ctx.windowId, {
-      projectId: null,
-      projectPath: initialProjectPath,
-    });
-    handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined)
-      .catch((err) => console.error("[MAIN] Failed to open initial project path:", err))
-      .finally(() => releaseInitialOpen(isWindowBound(windowRegistry, ctx.windowId)));
+    void holdWindowForOpen(
+      ctx.windowId,
+      { projectId: null, projectPath: initialProjectPath },
+      () =>
+        handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
+          (err) => console.error("[MAIN] Failed to open initial project path:", err)
+        ),
+      () => isWindowBound(windowRegistry, ctx.windowId, isProjectClosed)
+    );
   }
 
   // Folders opened from outside the app — Dock drops and "Open With" (macOS
@@ -982,13 +990,18 @@ export async function setupWindowServices(
   // sequentially so the prompts keep argv order.
   // A folder named `foo.dntr` opened from the OS is a project, not an archive —
   // the stat-backed directory scan above wins, mirroring `second-instance`.
-  const firstLaunchDntrPaths = !getProcessArgvDntrHandled()
-    ? extractDntrPaths(process.argv, process.cwd()).filter(
-        (dntrPath) => !coldDirectoryPaths.includes(dntrPath)
-      )
-    : [];
-  if (firstLaunchDntrPaths.length > 0) {
+  let firstLaunchDntrPaths: string[] = [];
+  if (!getProcessArgvDntrHandled()) {
+    // Retired on the first scan even when it finds nothing: only this window
+    // holds the directory list that tells a folder named `foo.dntr` from an
+    // archive, and a folder launch now opens more windows, whose rescan of argv
+    // would queue that folder for install.
     setProcessArgvDntrHandled(true);
+    firstLaunchDntrPaths = extractDntrPaths(process.argv, process.cwd()).filter(
+      (dntrPath) => !coldDirectoryPaths.includes(dntrPath)
+    );
+  }
+  if (firstLaunchDntrPaths.length > 0) {
     void queueDntrPaths(firstLaunchDntrPaths).catch((err) =>
       console.error("[MAIN] Failed to queue .dntr plugin(s):", err)
     );

@@ -40,8 +40,8 @@ import {
   registerWindowSessionEndHandler,
 } from "./lifecycle/appLifecycle.js";
 import {
-  launchOpensFolder,
   resolveLaunchIntent,
+  resolveRestoreFallbackProjectId,
   shouldRestoreWindowFleet,
 } from "./lifecycle/launchIntent.js";
 import {
@@ -828,9 +828,7 @@ if (!gotTheLock) {
       // A launch that opens a folder starts on the picker, so the folder routing
       // fills that window instead of opening a second one beside the last-active
       // project (#12593).
-      const fallbackProjectId = launchOpensFolder(launchSignals)
-        ? undefined
-        : (lastActiveProjectId ?? undefined);
+      const fallbackProjectId = resolveRestoreFallbackProjectId(launchSignals, lastActiveProjectId);
 
       // A recovery launch deliberately opens one window. It must not then
       // persist that as the window set, or safe mode would overwrite the user's

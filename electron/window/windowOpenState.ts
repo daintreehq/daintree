@@ -2,21 +2,39 @@ import type { BrowserWindow } from "electron";
 import type { OpenFoldersInNewWindow } from "../../shared/types/windowOpen.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
 import type { OpenWorld, OpenWorldWindow, WindowOpenReservation } from "./windowOpenPolicy.js";
+import { getProjectHistory } from "../services/ProjectHistoryService.js";
 import { logError } from "../utils/logger.js";
 
 /**
  * Process-wide world state behind `decideProjectOpenTarget` (#12593): which
  * windows have finished booting, which have an open in flight, and which are
  * holding a folder whose open settled without binding a workspace. All three
- * keep a window out of the empty set while `getActiveProjectId()` reads null —
- * a window mid-boot is about to bind the workspace it was created or restored
- * for, a window mid-open is about to show the project it was claimed for, and a
- * window left on the picker by a git-init prompt is still answering it.
+ * keep a window out of the empty set while it reads as the picker — a window
+ * mid-boot is about to bind the workspace it was created or restored for, a
+ * window mid-open is about to show the project it was claimed for, and a window
+ * left on the picker by a git-init prompt is still answering it.
  */
+
+/**
+ * True for a workspace id whose project row is closed. Closing the project a
+ * window shows keeps its view (and the view manager's binding) alive to paint
+ * the picker, so the id outlives the open project — the same rule the menu's
+ * project gate applies (`projectMenuState.ts`). Scratch ids have no project row
+ * and are never closed.
+ */
+export type IsClosedWorkspace = (workspaceId: string) => boolean;
+
+const neverClosed: IsClosedWorkspace = () => false;
+
+interface UnboundOpens {
+  claims: WindowOpenReservation[];
+  /** The window's history head when the claims were parked. */
+  historyHead: string | null;
+}
 
 const readyWindows = new WeakSet<BrowserWindow>();
 const reservations = new Map<number, Set<WindowOpenReservation>>();
-const unboundOpens = new Map<number, WindowOpenReservation[]>();
+const unboundOpens = new Map<number, UnboundOpens>();
 
 /** Called once a window has finished setting up and may be picked as an empty window. */
 export function markWindowReadyForOpens(win: BrowserWindow): void {
@@ -55,9 +73,15 @@ export function reserveWindowForOpen(
     }
     if (bound) {
       unboundOpens.delete(windowId);
-    } else {
-      unboundOpens.set(windowId, [...(unboundOpens.get(windowId) ?? []), token]);
+      return;
     }
+    // Every completed switch records into the window's history, so a head that
+    // has moved since earlier claims were parked means the window bound a
+    // workspace in between: those claims are stale.
+    const historyHead = getProjectHistory(windowId).current();
+    const parked = unboundOpens.get(windowId);
+    const claims = parked?.historyHead === historyHead ? parked.claims : [];
+    unboundOpens.set(windowId, { claims: [...claims, token], historyHead });
   };
 }
 
@@ -67,14 +91,41 @@ export function reserveWindowForOpen(
  */
 export function isWindowBound(
   registry: WindowRegistry | null | undefined,
-  windowId: number
+  windowId: number,
+  isClosedWorkspace: IsClosedWorkspace = neverClosed
 ): boolean {
   try {
-    return (
-      registry?.getByWindowId(windowId)?.services.projectViewManager?.getActiveProjectId() != null
-    );
+    const activeId = registry
+      ?.getByWindowId(windowId)
+      ?.services.projectViewManager?.getActiveProjectId();
+    return activeId != null && !isClosedWorkspace(activeId);
   } catch {
     return false;
+  }
+}
+
+/**
+ * Run `open` with `windowId` claimed for it: reserved before `open` starts, and
+ * released when it settles, bound or not as `isBound` then reports. Rejections
+ * propagate after the release.
+ */
+export async function holdWindowForOpen(
+  windowId: number,
+  reservation: WindowOpenReservation,
+  open: () => Promise<void>,
+  isBound: () => boolean
+): Promise<void> {
+  const release = reserveWindowForOpen(windowId, reservation);
+  try {
+    await open();
+  } finally {
+    let bound = false;
+    try {
+      bound = isBound();
+    } catch {
+      // Unknown reads as unbound, as in isWindowBound.
+    }
+    release(bound);
   }
 }
 
@@ -87,8 +138,11 @@ export function isWindowBound(
  */
 export function snapshotOpenWorld(
   registry: WindowRegistry | null | undefined,
-  preference: OpenFoldersInNewWindow
+  preference: OpenFoldersInNewWindow,
+  isClosedWorkspace: IsClosedWorkspace = neverClosed
 ): OpenWorld {
+  const shown = (id: string | null | undefined): string | null =>
+    id != null && !isClosedWorkspace(id) ? id : null;
   const windows: OpenWorldWindow[] = [];
   const live = new Set<number>();
   for (const ctx of registry?.focusOrder() ?? []) {
@@ -98,11 +152,19 @@ export function snapshotOpenWorld(
     const held = [...(reservations.get(ctx.windowId) ?? [])];
     const pvm = ctx.services.projectViewManager;
     try {
-      const activeProjectId = pvm?.getActiveProjectId() ?? null;
-      const bridgeProjectId = pvm?.getOutgoingBridgeProjectId() ?? null;
-      // A window that has since bound a workspace (a project picked from its
-      // own picker, say) has moved on from the folder it was waiting on.
-      if (activeProjectId !== null || bridgeProjectId !== null) unboundOpens.delete(ctx.windowId);
+      const activeProjectId = shown(pvm?.getActiveProjectId());
+      const bridgeProjectId = shown(pvm?.getOutgoingBridgeProjectId());
+      // A window that has bound a workspace since — on screen now, or one it
+      // has already left again — has moved on from the folder it was holding.
+      const parked = unboundOpens.get(ctx.windowId);
+      if (
+        parked &&
+        (activeProjectId !== null ||
+          bridgeProjectId !== null ||
+          getProjectHistory(ctx.windowId).current() !== parked.historyHead)
+      ) {
+        unboundOpens.delete(ctx.windowId);
+      }
       windows.push({
         windowId: ctx.windowId,
         activeProjectId,
@@ -114,7 +176,7 @@ export function snapshotOpenWorld(
             .map((entry) => entry.projectId) ?? [],
         ready: pvm !== undefined && readyWindows.has(win),
         reservations: held,
-        unboundOpens: [...(unboundOpens.get(ctx.windowId) ?? [])],
+        unboundOpens: [...(unboundOpens.get(ctx.windowId)?.claims ?? [])],
       });
     } catch (error) {
       logError("window-open-snapshot-manager-failed", error, { windowId: ctx.windowId });
@@ -125,7 +187,7 @@ export function snapshotOpenWorld(
         viewProjectIds: [],
         ready: false,
         reservations: held,
-        unboundOpens: [...(unboundOpens.get(ctx.windowId) ?? [])],
+        unboundOpens: [...(unboundOpens.get(ctx.windowId)?.claims ?? [])],
       });
     }
   }

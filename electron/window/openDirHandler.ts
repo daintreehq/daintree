@@ -8,10 +8,11 @@ import {
 } from "../setup/environment.js";
 import { decideProjectOpenTarget } from "./windowOpenPolicy.js";
 import {
+  holdWindowForOpen,
   isWindowBound,
   markWindowReadyForOpens,
-  reserveWindowForOpen,
   snapshotOpenWorld,
+  type IsClosedWorkspace,
 } from "./windowOpenState.js";
 
 /**
@@ -35,6 +36,8 @@ export interface OpenDirHandlerDeps {
   createWindowForPath: (dirPath: string) => Promise<number>;
   getWindowRegistry: () => WindowRegistry | null | undefined;
   getPreference: () => OpenFoldersInNewWindow;
+  /** Whether a workspace id names a closed project — its window is showing the picker. */
+  isProjectClosed: IsClosedWorkspace;
 }
 
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
@@ -83,7 +86,7 @@ export async function routeExternalOpen(
       disposition: "default",
       initiatingWindowId: null,
     },
-    snapshotOpenWorld(registry, deps.getPreference())
+    snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed)
   );
 
   const win =
@@ -102,17 +105,17 @@ export async function routeExternalOpen(
     return { kind: "focused", windowId: decision.windowId };
   }
 
-  const release = reserveWindowForOpen(decision.windowId, {
-    projectId: project?.id ?? null,
-    projectPath: targetPath,
-  });
-  try {
-    revealWindow(win);
-    await deps.openDirectory(targetPath, win);
-  } finally {
-    release(isWindowBound(registry, decision.windowId));
-  }
-  return { kind: "activated", windowId: decision.windowId };
+  const { windowId } = decision;
+  await holdWindowForOpen(
+    windowId,
+    { projectId: project?.id ?? null, projectPath: targetPath },
+    async () => {
+      revealWindow(win);
+      await deps.openDirectory(targetPath, win);
+    },
+    () => isWindowBound(registry, windowId, deps.isProjectClosed)
+  );
+  return { kind: "activated", windowId };
 }
 
 /**

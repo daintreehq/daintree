@@ -79,6 +79,19 @@ export function launchOpensFolder(
   );
 }
 
+/**
+ * The project the first window restores when there is no window manifest to
+ * read: the last-active one, except on a launch that opens a folder, whose
+ * first window starts on the picker for that folder to fill.
+ */
+export function resolveRestoreFallbackProjectId(
+  signals: Parameters<typeof launchOpensFolder>[0],
+  lastActiveProjectId: string | null | undefined
+): string | undefined {
+  if (launchOpensFolder(signals)) return undefined;
+  return lastActiveProjectId ?? undefined;
+}
+
 /** Only a plain cold launch rebuilds the whole window set. */
 export function shouldRestoreWindowFleet(intent: LaunchIntent): boolean {
   return intent === "cold";

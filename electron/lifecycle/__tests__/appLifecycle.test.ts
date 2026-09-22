@@ -1345,8 +1345,9 @@ describe("registerAppLifecycleHandlers – second-instance folder handling", () 
     getHandler()({}, ["daintree", pathToFileURL(archiveNamed).href], "/work");
 
     expect(dispatchOpenDirPathMock).toHaveBeenCalledExactlyOnceWith(archiveNamed);
-    // Give the fire-and-forget archive queue a chance to run before asserting it didn't.
-    await Promise.resolve();
+    // The archive queue dynamic-imports its module first; let that settle so an
+    // enqueue it was going to make has been made.
+    await vi.dynamicImportSettled();
     expect(enqueueArchiveInstallIntentsMock).not.toHaveBeenCalled();
   });
 });

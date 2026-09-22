@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   launchOpensFolder,
   resolveLaunchIntent,
+  resolveRestoreFallbackProjectId,
   shouldRestoreWindowFleet,
   stripLaunchTargets,
   type LaunchIntentSignals,
@@ -108,6 +109,26 @@ describe("launchOpensFolder", () => {
     expect(
       launchOpensFolder(signals({ isSafeMode: true, pendingOpenDirPaths: ["/repos/app"] }))
     ).toBe(true);
+  });
+});
+
+describe("resolveRestoreFallbackProjectId", () => {
+  it("drops the last-active project for every kind of folder launch", () => {
+    for (const folderLaunch of [
+      signals({ hasCliPathFlag: () => true }),
+      signals({ extractDirectoryPaths: () => ["/repos/app"] }),
+      signals({ pendingOpenDirPaths: ["/repos/app"] }),
+    ]) {
+      expect(resolveRestoreFallbackProjectId(folderLaunch, "last")).toBeUndefined();
+    }
+  });
+
+  it("keeps it for a plain or .dntr-only launch", () => {
+    expect(resolveRestoreFallbackProjectId(signals(), "last")).toBe("last");
+    expect(
+      resolveRestoreFallbackProjectId(signals({ pendingOpenFilePaths: ["/tmp/x.dntr"] }), "last")
+    ).toBe("last");
+    expect(resolveRestoreFallbackProjectId(signals(), null)).toBeUndefined();
   });
 });
 

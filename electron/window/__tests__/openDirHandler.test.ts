@@ -9,10 +9,13 @@ import {
   type OpenDirHandlerDeps,
 } from "../openDirHandler.js";
 import {
+  holdWindowForOpen,
+  isWindowBound,
   markWindowReadyForOpens,
   reserveWindowForOpen,
   _resetWindowOpenStateForTest,
 } from "../windowOpenState.js";
+import { getProjectHistory, resetProjectHistory } from "../../services/ProjectHistoryService.js";
 
 // Spy on the environment.ts queue primitives openDirHandler drives. Mocking the
 // module keeps this test free of environment.ts's heavy main-process init while
@@ -48,6 +51,7 @@ interface FakeWindow {
  */
 function makeWorld() {
   const windows: FakeWindow[] = [];
+  const closed = new Set<string>();
   let nextId = 1;
 
   function add(opts: { active?: string | null; ready?: boolean; minimized?: boolean } = {}) {
@@ -66,6 +70,8 @@ function makeWorld() {
       focus: vi.fn(),
     } as unknown as FakeWindow["win"];
     windows.unshift(fake);
+    // WindowRegistry.register hands every new window a fresh history.
+    resetProjectHistory(fake.id);
     if (opts.ready ?? true) markWindowReadyForOpens(fake.win);
     return fake;
   }
@@ -97,7 +103,7 @@ function makeWorld() {
   } as unknown as WindowRegistry;
 
   const byWin = (win: BrowserWindow) => windows.find((w) => w.win === win)!;
-  return { windows, add, registry, byWin };
+  return { windows, closed, add, registry, byWin };
 }
 
 const idFor = (dirPath: string) => `id:${dirPath}`;
@@ -105,14 +111,19 @@ const idFor = (dirPath: string) => `id:${dirPath}`;
 function makeDeps(world: ReturnType<typeof makeWorld>) {
   const deps = {
     resolveProject: vi.fn(async (dirPath: string) => ({ id: idFor(dirPath), path: dirPath })),
+    // Mirrors handleDirectoryOpen: the switch lands, the row reopens, and the
+    // window's history records it.
     openDirectory: vi.fn(async (dirPath: string, win: BrowserWindow) => {
       const fake = world.byWin(win);
       fake.active = idFor(dirPath);
       if (!fake.views.includes(fake.active)) fake.views.push(fake.active);
+      world.closed.delete(fake.active);
+      getProjectHistory(fake.id).record(fake.active);
     }),
     createWindowForPath: vi.fn(async (dirPath: string) => world.add({ active: idFor(dirPath) }).id),
     getWindowRegistry: () => world.registry,
     getPreference: () => "default" as const,
+    isProjectClosed: (projectId: string) => world.closed.has(projectId),
   };
   return deps satisfies OpenDirHandlerDeps;
 }
@@ -280,6 +291,87 @@ describe("routeExternalOpen (#12593 acceptance)", () => {
   });
 });
 
+describe("routeExternalOpen — owners and the picker", () => {
+  it("reuses a window whose project was closed back to the picker", async () => {
+    const world = makeWorld();
+    const picker = world.add({ active: "was-open" });
+    world.closed.add("was-open");
+    world.add({ active: "busy" });
+    const deps = makeDeps(world);
+
+    const outcome = await routeExternalOpen("/work/new", deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: picker.id });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/new", picker.win);
+  });
+
+  it("reopens a closed project in the window still holding its view instead of focusing the picker", async () => {
+    const world = makeWorld();
+    const picker = world.add({ active: idFor("/work/known") });
+    world.closed.add(idFor("/work/known"));
+    const deps = makeDeps(world);
+
+    const outcome = await routeExternalOpen("/work/known", deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: picker.id });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/known", picker.win);
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+  });
+
+  it("activates a cached view in the window that owns it", async () => {
+    const world = makeWorld();
+    const owner = world.add({ active: "front" });
+    owner.views.push(idFor("/work/known"));
+    world.add();
+    const deps = makeDeps(world);
+
+    const outcome = await routeExternalOpen("/work/known", deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: owner.id });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/known", owner.win);
+  });
+
+  it("focuses a window whose open of the same folder is still in flight, without opening it again", async () => {
+    const world = makeWorld();
+    const deps = makeDeps(world);
+    let created: FakeWindow | undefined;
+    deps.createWindowForPath.mockImplementationOnce(async (dirPath) => {
+      created = world.add();
+      void holdWindowForOpen(
+        created.id,
+        { projectId: null, projectPath: dirPath },
+        () => new Promise<void>(() => {}),
+        () => false
+      );
+      return created.id;
+    });
+
+    await routeExternalOpen("/work/a", deps);
+    const second = await routeExternalOpen("/work/a", deps);
+
+    expect(second).toEqual({ kind: "focused", windowId: created!.id });
+    expect(created!.win.focus).toHaveBeenCalled();
+    expect(deps.createWindowForPath).toHaveBeenCalledTimes(1);
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+  });
+
+  it("frees a git-init window the user has since used and closed, with no external open in between", async () => {
+    const world = makeWorld();
+    const empty = world.add();
+    const deps = makeDeps(world);
+    deps.openDirectory.mockResolvedValueOnce(undefined);
+    await routeExternalOpen("/work/plain", deps);
+
+    // A project picked from that window's picker, then closed again: the view
+    // manager is back to nothing, only the history saw it.
+    getProjectHistory(empty.id).record("picked");
+
+    await routeExternalOpen("/work/next", deps);
+    expect(deps.openDirectory).toHaveBeenLastCalledWith("/work/next", empty.win);
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+  });
+});
+
 describe("installOpenDirConsumer", () => {
   it("registers a consumer exactly once (idempotent)", () => {
     const deps = makeDeps(makeWorld());
@@ -374,17 +466,25 @@ describe("drainPendingOpenDirs", () => {
     const world = makeWorld();
     const launch = world.add({ ready: false });
     const deps = makeDeps(world);
-    // A created window reports ready at once but its own open lands later —
-    // exactly the window a naive router would mistake for empty.
+    // A created window is ready once its setup returns, but its own open —
+    // held the way windowServices holds it — lands later: exactly the window a
+    // naive router would mistake for empty.
     const initialOpens: Array<() => void> = [];
     deps.createWindowForPath.mockImplementation(async (dirPath) => {
       const created = world.add();
-      const release = reserveWindowForOpen(created.id, { projectId: null, projectPath: dirPath });
-      initialOpens.push(() => {
-        created.active = idFor(dirPath);
-        created.views.push(created.active);
-        release(true);
-      });
+      void holdWindowForOpen(
+        created.id,
+        { projectId: null, projectPath: dirPath },
+        () =>
+          new Promise<void>((resolve) =>
+            initialOpens.push(() => {
+              created.active = idFor(dirPath);
+              created.views.push(created.active);
+              resolve();
+            })
+          ),
+        () => isWindowBound(world.registry, created.id)
+      );
       return created.id;
     });
     envMock.getPendingOpenDirPaths.mockReturnValue(["/a", "/b", "/c"]);
@@ -397,6 +497,10 @@ describe("drainPendingOpenDirs", () => {
     expect(deps.createWindowForPath.mock.calls.map(([p]) => p)).toEqual(["/b", "/c"]);
     for (const finish of initialOpens) finish();
     expect(world.windows.map((w) => w.active).sort()).toEqual(["id:/a", "id:/b", "id:/c"]);
+
+    // A fourth folder replaces none of them.
+    await routeExternalOpen("/d", deps);
+    expect(deps.createWindowForPath).toHaveBeenLastCalledWith("/d");
   });
 
   it("warm drop mid-drain is serialized after the queued folders", async () => {

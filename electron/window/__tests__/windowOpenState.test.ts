@@ -6,12 +6,14 @@ const logErrorMock = vi.hoisted(() => vi.fn());
 vi.mock("../../utils/logger.js", () => ({ logError: logErrorMock }));
 
 import {
+  holdWindowForOpen,
   isWindowBound,
   markWindowReadyForOpens,
   reserveWindowForOpen,
   snapshotOpenWorld,
   _resetWindowOpenStateForTest,
 } from "../windowOpenState.js";
+import { getProjectHistory, resetProjectHistory } from "../../services/ProjectHistoryService.js";
 
 interface FakePvm {
   getActiveProjectId: () => string | null;
@@ -50,6 +52,7 @@ function registryOf(contexts: ReturnType<typeof ctx>[]): WindowRegistry {
 beforeEach(() => {
   vi.clearAllMocks();
   _resetWindowOpenStateForTest();
+  for (let id = 1; id <= 5; id++) resetProjectHistory(id);
 });
 
 describe("snapshotOpenWorld", () => {
@@ -86,6 +89,16 @@ describe("snapshotOpenWorld", () => {
   it("skips destroyed windows and tolerates a missing registry", () => {
     expect(snapshotOpenWorld(registryOf([ctx(1, pvm(null), true)]), "default").windows).toEqual([]);
     expect(snapshotOpenWorld(undefined, "default").windows).toEqual([]);
+  });
+
+  it("reads a closed project in front as the picker, keeping its view as owned", () => {
+    const closed = new Set(["closed-p"]);
+    const w = ctx(1, pvm("closed-p", [["closed-p"]], "closed-p"));
+    markWindowReadyForOpens(w.browserWindow);
+
+    expect(
+      snapshotOpenWorld(registryOf([w]), "default", (id) => closed.has(id)).windows[0]
+    ).toMatchObject({ activeProjectId: null, bridgeProjectId: null, viewProjectIds: ["closed-p"] });
   });
 
   it("never reports a window without a view manager as ready", () => {
@@ -166,6 +179,28 @@ describe("reserveWindowForOpen", () => {
     expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
   });
 
+  it("drops an unbound open once the window has bound a workspace, even one it has left again", () => {
+    const w = ctx(1, pvm(null));
+    reserveWindowForOpen(1, { projectId: null, projectPath: "/plain" })(false);
+
+    // The user picks a project in that window and closes it again before any
+    // external open looks: only the history remembers the bind.
+    getProjectHistory(1).record("picked");
+
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([]);
+  });
+
+  it("parks a new unbound open without reviving claims from before a bind", () => {
+    const w = ctx(1, pvm(null));
+    reserveWindowForOpen(1, { projectId: null, projectPath: "/old" })(false);
+    getProjectHistory(1).record("picked");
+    reserveWindowForOpen(1, { projectId: null, projectPath: "/new" })(false);
+
+    expect(snapshotOpenWorld(registryOf([w]), "default").windows[0].unboundOpens).toEqual([
+      { projectId: null, projectPath: "/new" },
+    ]);
+  });
+
   it("forgets unbound opens of windows that have closed", () => {
     reserveWindowForOpen(1, { projectId: null, projectPath: "/plain" })(false);
     snapshotOpenWorld(registryOf([]), "default");
@@ -190,6 +225,10 @@ describe("isWindowBound", () => {
     expect(isWindowBound(undefined, 1)).toBe(false);
   });
 
+  it("reads a closed project in front as unbound", () => {
+    expect(isWindowBound(registryWith(pvm("p")), 1, (id) => id === "p")).toBe(false);
+  });
+
   it("reads a throwing view manager as unbound", () => {
     const broken = {
       ...pvm(null),
@@ -198,5 +237,88 @@ describe("isWindowBound", () => {
       },
     };
     expect(isWindowBound(registryWith(broken), 1)).toBe(false);
+  });
+});
+
+describe("holdWindowForOpen", () => {
+  function deferred() {
+    let resolve!: () => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<void>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    return { promise, resolve, reject };
+  }
+
+  const reservationsOf = (w: ReturnType<typeof ctx>) =>
+    snapshotOpenWorld(registryOf([w]), "default").windows[0];
+
+  it("claims the window before the open starts and releases it once bound", async () => {
+    const w = ctx(1, pvm(null));
+    const open = deferred();
+    let seenDuringOpen: unknown;
+    const held = holdWindowForOpen(
+      1,
+      { projectId: null, projectPath: "/a" },
+      () => {
+        seenDuringOpen = reservationsOf(w).reservations;
+        return open.promise;
+      },
+      () => true
+    );
+
+    expect(seenDuringOpen).toEqual([{ projectId: null, projectPath: "/a" }]);
+    open.resolve();
+    await held;
+
+    expect(reservationsOf(w)).toMatchObject({ reservations: [], unboundOpens: [] });
+  });
+
+  it("parks the claim when the open settles without binding", async () => {
+    const w = ctx(1, pvm(null));
+    await holdWindowForOpen(
+      1,
+      { projectId: null, projectPath: "/plain" },
+      async () => {},
+      () => false
+    );
+
+    expect(reservationsOf(w)).toMatchObject({
+      reservations: [],
+      unboundOpens: [{ projectId: null, projectPath: "/plain" }],
+    });
+  });
+
+  it("releases and rethrows when the open rejects", async () => {
+    const w = ctx(1, pvm(null));
+    const open = deferred();
+    const held = holdWindowForOpen(
+      1,
+      { projectId: null, projectPath: "/a" },
+      () => open.promise,
+      () => false
+    );
+    open.reject(new Error("boom"));
+
+    await expect(held).rejects.toThrow("boom");
+    expect(reservationsOf(w)).toMatchObject({
+      reservations: [],
+      unboundOpens: [{ projectId: null, projectPath: "/a" }],
+    });
+  });
+
+  it("treats a bind check that throws as unbound", async () => {
+    const w = ctx(1, pvm(null));
+    await holdWindowForOpen(
+      1,
+      { projectId: null, projectPath: "/a" },
+      async () => {},
+      () => {
+        throw new Error("disposing");
+      }
+    );
+
+    expect(reservationsOf(w).unboundOpens).toEqual([{ projectId: null, projectPath: "/a" }]);
   });
 });
