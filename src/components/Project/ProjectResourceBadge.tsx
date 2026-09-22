@@ -138,14 +138,11 @@ function MemorySummary({
   appMemoryMB,
   workloads,
   workloadNote,
-  hasWorkloadReading,
   systemAvailableMB,
 }: {
   appMemoryMB: number | null;
   workloads: TerminalWorkloadSlice | null;
   workloadNote: string | null;
-  /** Whether any workload reading has ever arrived — before one, the row waits. */
-  hasWorkloadReading: boolean;
   systemAvailableMB: number | null;
 }) {
   return (
@@ -154,13 +151,13 @@ function MemorySummary({
         label="Daintree app"
         value={appMemoryMB !== null ? formatMemory(appMemoryMB) : "Unavailable"}
       />
-      {hasWorkloadReading && (
-        <MemoryRow
-          label="Terminal programs"
-          title="Dev servers, agents and tools your terminals started"
-          value={workloads !== null ? formatMemory(workloads.totalMemoryMb) : "Unavailable"}
-        />
-      )}
+      {/* Always a row once the first read settles: a snapshot that fails from
+          the start reads "Unavailable" here rather than dropping the line. */}
+      <MemoryRow
+        label="Terminal programs"
+        title="Dev servers, agents and tools your terminals started"
+        value={workloads !== null ? formatMemory(workloads.totalMemoryMb) : "Unavailable"}
+      />
       {workloadNote !== null && (
         <div className="flex items-center gap-1 text-2xs text-text-secondary">
           <TriangleAlert className="h-3 w-3 shrink-0 text-status-warning" aria-hidden="true" />
@@ -323,9 +320,9 @@ function DiagnosticsSection({
   const windowLabel = windowSec < 90 ? `${windowSec}s` : `${Math.round(windowSec / 60)} min`;
   const trendText =
     trend === "up"
-      ? `Grew ${Math.abs(Math.round(trendDeltaMB))} MB in ${windowLabel}`
+      ? `Grew ${formatMemory(Math.abs(trendDeltaMB))} in ${windowLabel}`
       : trend === "down"
-        ? `Fell ${Math.abs(Math.round(trendDeltaMB))} MB in ${windowLabel}`
+        ? `Fell ${formatMemory(Math.abs(trendDeltaMB))} in ${windowLabel}`
         : "Stable";
 
   return (
@@ -857,30 +854,40 @@ export function ProjectResourceBadge({
         className="w-72 p-3"
       >
         <div className="space-y-3">
-          {popoverData ? (
-            <>
-              <div className="space-y-1.5">
-                {popoverMemoryState === "critical" && (
-                  <div className="flex items-start gap-1.5 text-2xs text-text-primary">
-                    <TriangleAlert
-                      className="mt-px h-3 w-3 shrink-0 text-status-warning"
-                      aria-hidden="true"
-                    />
-                    Daintree's own memory use is high for this machine
-                  </div>
-                )}
-                <div className="flex items-baseline justify-between gap-2">
-                  <SectionLabel id="resource-usage-title">Memory</SectionLabel>
-                  {ageLabel && <span className="text-2xs text-text-secondary">{ageLabel}</span>}
-                </div>
-                <MemorySummary
-                  appMemoryMB={appMemoryMB}
-                  workloads={shownWorkloads}
-                  workloadNote={workloadNote}
-                  hasWorkloadReading={memorySnapshot !== null || shownWorkloads !== null}
-                  systemAvailableMB={systemAvailableMB}
+          <div className="space-y-1.5">
+            {popoverMemoryState === "critical" && (
+              <div className="flex items-start gap-1.5 text-2xs text-text-primary">
+                <TriangleAlert
+                  className="mt-px h-3 w-3 shrink-0 text-status-warning"
+                  aria-hidden="true"
                 />
+                Daintree's own memory use is high for this machine
               </div>
+            )}
+            {/* Mounted before the data lands: it names the popover, and the
+                popover takes focus on open, so a heading that waited for the
+                first read left focus on an unnamed dialog. */}
+            <div className="flex items-baseline justify-between gap-2">
+              <SectionLabel id="resource-usage-title">Memory</SectionLabel>
+              {ageLabel && <span className="text-2xs text-text-secondary">{ageLabel}</span>}
+            </div>
+            {popoverData ? (
+              <MemorySummary
+                appMemoryMB={appMemoryMB}
+                workloads={shownWorkloads}
+                workloadNote={workloadNote}
+                systemAvailableMB={systemAvailableMB}
+              />
+            ) : (
+              <Skeleton label="Loading resource details" className="space-y-1.5">
+                <SkeletonBone className="h-3 w-full" />
+                <SkeletonBone className="h-3 w-5/6" />
+                <SkeletonBone className="h-3 w-3/4" />
+              </Skeleton>
+            )}
+          </div>
+          {popoverData && (
+            <>
               {shownWorkloads !== null && (
                 <ProjectBreakdown workloads={shownWorkloads} projectNames={projectNames} />
               )}
@@ -889,15 +896,6 @@ export function ProjectResourceBadge({
                 these totals run high.
               </p>
             </>
-          ) : (
-            <Skeleton label="Loading resource details" className="space-y-3">
-              <SkeletonBone className="h-3 w-16" />
-              <div className="space-y-1.5">
-                <SkeletonBone className="h-3 w-full" />
-                <SkeletonBone className="h-3 w-5/6" />
-                <SkeletonBone className="h-3 w-3/4" />
-              </div>
-            </Skeleton>
           )}
           {/* The keep-awake hold used to be a coffee cup pinned to the strip.
               Its state and settings route survive here as one line.

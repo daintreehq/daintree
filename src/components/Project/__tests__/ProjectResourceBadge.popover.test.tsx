@@ -365,6 +365,30 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     expect(container.querySelector('[aria-label="Loading resource details"]')).toBeNull();
   });
 
+  it("reports terminal memory as Unavailable when the snapshot fails from the start", async () => {
+    mockGetMemorySnapshot.mockRejectedValue(new Error("snapshot ipc down"));
+
+    const container = await renderOpenBadge();
+
+    expect(findMemoryRow(container, "Unavailable")?.children[0]?.textContent).toBe(
+      "Terminal programs"
+    );
+  });
+
+  it("names the popover before its first read lands", async () => {
+    mockGetProcessMetrics.mockReturnValue(new Promise(() => {}));
+    mockGetHeapStats.mockReturnValue(new Promise(() => {}));
+    mockGetDiagnosticsInfo.mockReturnValue(new Promise(() => {}));
+    mockGetMemorySnapshot.mockReturnValue(new Promise(() => {}));
+
+    const container = await renderOpenBadge();
+
+    // The content takes focus on open and is labelled by this heading, so it
+    // must exist while the skeleton is still showing.
+    expect(container.querySelector('[aria-label="Loading resource details"]')).not.toBeNull();
+    expect(container.querySelector("#resource-usage-title")?.textContent).toBe("Memory");
+  });
+
   it("attributes terminal memory per project from the same snapshot as the total", async () => {
     mockGetAll.mockResolvedValue([
       makeProject({ id: "p1", name: "Light" }),
