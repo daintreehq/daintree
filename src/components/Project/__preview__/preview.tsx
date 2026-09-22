@@ -6,6 +6,8 @@ import { resolveAppTheme } from "@shared/theme/themes";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { CloneRepoDialog } from "../CloneRepoDialog";
+import { CreateProjectFolderDialog } from "../CreateProjectFolderDialog";
+import { GitInitDialog } from "../GitInitDialog";
 import "@/index.css";
 
 const params = new URLSearchParams(window.location.search);
@@ -13,10 +15,24 @@ applyAppThemeToRoot(document.documentElement, resolveAppTheme(params.get("theme"
 document.body.style.background = "var(--color-surface-canvas)";
 document.body.style.margin = "0";
 
+/** `?dialog=` picks which project-entry twin to render; they share one field module. */
+const dialog = params.get("dialog") ?? "clone";
+
 function Preview() {
   return (
     <div data-preview-shell className="h-screen w-screen">
-      <CloneRepoDialog isOpen onSuccess={() => undefined} onCancel={() => undefined} />
+      {dialog === "create-folder" ? (
+        <CreateProjectFolderDialog isOpen onClose={() => undefined} />
+      ) : dialog === "git-init" ? (
+        <GitInitDialog
+          isOpen
+          directoryPath="/Users/you/Code/helios-dashboard"
+          onSuccess={() => undefined}
+          onCancel={() => undefined}
+        />
+      ) : (
+        <CloneRepoDialog isOpen onSuccess={() => undefined} onCancel={() => undefined} />
+      )}
     </div>
   );
 }

@@ -175,7 +175,7 @@ const STATES: State[] = [
       await page.locator("#clone-repo-url").fill("helios dashboard");
       await page.waitForTimeout(150);
     },
-    expectText: "Use a repository URL or owner/repo",
+    expectText: "Check the repository URL",
   },
   {
     name: "25-validation-error",
@@ -258,6 +258,33 @@ const STATES: State[] = [
   },
 ];
 
+/**
+ * The clone dialog's twins, which share `projectDialogFields`: a change to that
+ * module reaches them too, so they are captured beside it.
+ */
+const SIBLINGS: State[] = [
+  { name: "80-create-folder", query: "&dialog=create-folder", run: async () => undefined },
+  {
+    name: "82-create-folder-invalid",
+    query: "&dialog=create-folder",
+    run: async (page) => {
+      await page.locator("#create-folder-name").fill("helios:dashboard");
+      await page.waitForTimeout(150);
+    },
+  },
+  { name: "85-git-init", query: "&dialog=git-init", run: async () => undefined },
+];
+
+async function openSibling(page: Page, theme: string, query: string): Promise<Locator> {
+  await page.setViewportSize({ width: 1000, height: 820 });
+  await page.goto(`${server!.baseURL}/clone-dialog-preview.html?theme=${theme}${query}`);
+  const panel = page.locator('div[aria-modal="true"] > div').first();
+  await expect(panel).toBeAttached({ timeout: ATTACH_TIMEOUT_MS });
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForTimeout(400);
+  return panel;
+}
+
 test("clone dialog preview — every state, every theme", async ({ context }) => {
   test.info().annotations.push({
     type: "conditional-skip",
@@ -286,8 +313,20 @@ test("clone dialog preview — every state, every theme", async ({ context }) =>
     }
   }
 
+  for (const theme of THEMES) {
+    for (const state of SIBLINGS) {
+      written.push(
+        await withPage(context, `${state.name} ${theme}`, async (page) => {
+          const panel = await openSibling(page, theme, state.query!);
+          await state.run(page);
+          return snap(panel, `${state.name}-${theme}.png`);
+        })
+      );
+    }
+  }
+
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * STATES.length);
+  expect(onDisk.length).toBe(THEMES.length * (STATES.length + SIBLINGS.length));
   console.log(`[clone-preview-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

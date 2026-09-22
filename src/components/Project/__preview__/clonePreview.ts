@@ -30,6 +30,20 @@ const SETTLED_CLONE_MS = 50;
 let release: (() => void) | null = null;
 let cancelled = false;
 
+/**
+ * Anything the harness does not answer resolves to `undefined` AND works as an
+ * unsubscribe: the bridge mixes requests and subscriptions, and StrictMode runs
+ * every effect cleanup once on mount, so a bare Promise fails as a cleanup.
+ */
+function inertMethod(): unknown {
+  const settled = Promise.resolve(undefined);
+  return Object.assign(() => undefined, {
+    then: settled.then.bind(settled),
+    catch: settled.catch.bind(settled),
+    finally: settled.finally.bind(settled),
+  });
+}
+
 function encodedGitError(reason: string, message: string): Error {
   return new Error(`[GitError|${reason}||] ${message}`);
 }
@@ -82,8 +96,13 @@ installPreviewShims({
       },
     },
     {
-      get: (target, key) =>
-        key in target ? Reflect.get(target, key) : () => Promise.resolve(undefined),
+      get: (target, key) => (key in target ? Reflect.get(target, key) : inertMethod),
+    }
+  ),
+  system: new Proxy(
+    { getHomeDir: async () => "/Users/you" },
+    {
+      get: (target, key) => (key in target ? Reflect.get(target, key) : inertMethod),
     }
   ),
   forge: {
