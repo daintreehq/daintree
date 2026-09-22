@@ -2502,8 +2502,8 @@ interface PluginFsStat {
     mtimeMs: number;
 }
 /**
- * Options for the checked write path of {@link PluginFsApi.writeFile}
- * (#12323). Passing any options object selects the checked path.
+ * Options for {@link PluginFsApi.writeFile} (#12323). Omitting them is the
+ * same write as passing `{}`.
  */
 interface PluginFsWriteOptions {
     /**
@@ -2550,6 +2550,13 @@ interface PluginFsApi {
      * Read a file as UTF-8 text. Resolves the contained absolute path; rejects on
      * a missing read capability, an out-of-scope path, or a non-file target. Pass
      * `options.signal` to cancel a read that is no longer needed.
+     *
+     * A symlink the caller names is followed when it resolves inside a root.
+     * Once open, the descriptor must be the entry standing at the contained path
+     * (#12618): a leaf swapped for a symlink after containment rejects with
+     * `TARGET_IS_SYMLINK`, and a descriptor that is not the file now at the path
+     * with `TARGET_UNAVAILABLE`. A read that races a legitimate replace can see
+     * the latter and is safe to retry.
      */
     readFile(filePath: string, options?: PluginHostCallOptions): Promise<string>;
     /**
@@ -2570,18 +2577,22 @@ interface PluginFsApi {
      * out-of-scope path. Recorded in the audit trail. No cancellation signal —
      * partial-write semantics are deliberately out of scope.
      *
-     * Without `options` this is the plain write it has always been. Passing an
-     * `options` object — even an empty one — selects the checked write
-     * (#12323): the host serialises writes per resolved path, refuses a symlink
-     * target, replaces the file atomically (sibling temp file, flush, rename,
-     * original mode preserved), and compares the file's current bytes against
-     * {@link PluginFsWriteOptions.expectedRevision} before touching it. Either
-     * path resolves the revision of the bytes actually written, so the next
-     * `expectedRevision` needs no re-read.
+     * Every write is checked (#12323, #12618), with or without `options`: the
+     * host serialises writes per resolved path, re-proves containment once the
+     * consent prompt and the queue wait are over, refuses a symlink target
+     * (`TARGET_IS_SYMLINK`), and — when
+     * {@link PluginFsWriteOptions.expectedRevision} is a revision — compares the
+     * file's current bytes against it before touching it. The file is then
+     * replaced atomically (sibling temp file, flush, rename, original mode
+     * preserved), so a file watcher sees the old inode go and a new one arrive.
+     * A create-new write (`expectedRevision: null`) is an exclusive create at
+     * the target instead, with no temp file. The write resolves the revision of
+     * the bytes actually written, so the next `expectedRevision` needs no
+     * re-read.
      *
-     * What the checked write promises: it never clobbers a change the caller has
-     * not seen, never leaves a partial file, and serialises every host-mediated
-     * writer. What it does not promise: a lock against an uncooperative external
+     * What the write promises: a replace never leaves a partial file, every
+     * host-mediated writer is serialised, and — given an `expectedRevision` — no
+     * change the caller has not seen is clobbered. What it does not promise: a lock against an uncooperative external
      * process — a write that lands between the hash check and the rename is
      * overwritten. The window is small, and callers that care keep their own
      * copy of what they asked to write.
