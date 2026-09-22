@@ -73,6 +73,7 @@ const FIXTURES = [
   "no-worktree",
   "long-branch",
   "running-tasks",
+  "busy-session",
 ] as const;
 
 /**
@@ -115,10 +116,11 @@ async function open(
   page: Page,
   fixture: string,
   theme: string,
-  width = DEFAULT_WIDTH
+  width = DEFAULT_WIDTH,
+  height = 760
 ): Promise<Locator> {
   await stubViteHmrClient(page);
-  await page.setViewportSize({ width: width + 40, height: 760 });
+  await page.setViewportSize({ width: width + 40, height });
   await page.goto(
     `${baseURL}/sidebar-footer-preview.html?theme=${theme}&fixture=${fixture}&width=${width}`
   );
@@ -134,6 +136,21 @@ async function open(
 /** The footer alone, for the tight crops; the shell for the in-context ones. */
 function footer(page: Page): Locator {
   return page.locator("[data-footer-region]");
+}
+
+/**
+ * Open the readout's resource popover and wait for its data, not its skeleton.
+ *
+ * The popover loads on open, so a capture taken on the first frame photographs
+ * the loading bones. Radix portals it to the body, which is why the capture is
+ * the whole viewport rather than the shell.
+ */
+async function openResourcePopover(page: Page): Promise<void> {
+  await page.locator("[data-status-readout]").click();
+  const content = page.locator("[data-radix-popper-content-wrapper]");
+  await expect(content).toBeVisible();
+  await expect(content.getByLabel("Loading resource details")).toHaveCount(0);
+  await page.waitForTimeout(250);
 }
 
 /**
@@ -208,6 +225,17 @@ test("Sidebar footer — states, widths and themes", async ({ page }) => {
     await page.getByLabel("Command input").click();
     await page.waitForTimeout(250);
     written.push(await snap(page.locator("[data-preview-shell]"), `suggestions-${theme}.png`));
+
+    // The resource popover — the breakdown the readout opens — in every theme
+    // for the heavy session, and once for the ordinary one-project case.
+    for (const t of THEMES) {
+      await open(page, "busy-session", t, DEFAULT_WIDTH, 1180);
+      await openResourcePopover(page);
+      written.push(await snap(page.locator("body"), `popover-busy-${t}.png`));
+    }
+    await open(page, "default", theme, DEFAULT_WIDTH, 900);
+    await openResourcePopover(page);
+    written.push(await snap(page.locator("body"), `popover-default-${theme}.png`));
 
     // The status row on its own, at 3x the size, so the dot can be judged as a
     // glyph rather than as a smudge.

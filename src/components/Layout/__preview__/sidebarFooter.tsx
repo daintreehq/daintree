@@ -135,11 +135,13 @@ interface Fixture {
  * reading. Process presence and agent activity are separate axes on purpose —
  * the strip reports the first in words and the second with its mark.
  */
-function seedStats(runningProjects: number, totalMemoryMB: number, workingAgents = 1): void {
-  const projects = Array.from({ length: 4 }, (_, i) => ({
-    id: `proj-${i}`,
-    name: ["Daintree", "Assistant", "Backend", "Site builder"][i]!,
-  }));
+function seedStats(
+  runningProjects: number,
+  totalMemoryMB: number,
+  workingAgents = 1,
+  names: readonly string[] = ["Daintree", "Assistant", "Backend", "Site builder"]
+): void {
+  const projects = names.map((name, i) => ({ id: `proj-${i}`, name }));
   const stats: ProjectStatusMap = {};
   projects.forEach((p, i) => {
     const running = i < runningProjects;
@@ -160,6 +162,98 @@ function seedStats(runningProjects: number, totalMemoryMB: number, workingAgents
 
 let PROJECT_LIST: Array<{ id: string; name: string }> = [];
 let APP_MEMORY_MB = 1240;
+
+/**
+ * The shape of a real heavy session, taken from the owner's own popover: twenty
+ * registered projects, seven with terminals, and most of the rest idle. Sparse
+ * fixtures hid exactly what made the popover a wall of text — thirteen rows of
+ * "0 terms ~0MB" and a nineteen-row process table.
+ */
+const BUSY_PROJECT_NAMES = [
+  "Daintree",
+  "PageSugar",
+  "LifePlan",
+  "BusinessBenchmark",
+  "Daintree Website",
+  "Assistant Backend",
+  "Claude Commands",
+  "Everkinetic",
+  "Assistant Lab",
+  "Video Scripting",
+  "Daintree Assistant",
+  "Video Editor",
+  "SearchSocket",
+  "YouTube Thumbnails",
+  "RuinWeave",
+  "CandidCue",
+  "Personal Bio",
+  "Writing",
+  "SpokenAir",
+  "ask-google",
+] as const;
+
+/** terminals, measured MB, top process — per running project, in list order. */
+const BUSY_TERMINALS: ReadonlyArray<[number, number, string]> = [
+  [4, 2048, "/Users/greg/.nvm/versions/node/v22.23.2/bin/node"],
+  [1, 1741, "/Users/greg/.local/bin/claude"],
+  [1, 704, "/Users/greg/.nvm/versions/node/v22.23.2/bin/node"],
+  [1, 500, "/Users/greg/.local/bin/claude"],
+  [2, 1741, "node"],
+  [2, 3379, "/Users/greg/.cargo/bin/codex"],
+  [1, 445, "/Users/greg/.local/bin/claude"],
+];
+
+const BUSY_PROCESSES = [
+  ["Tab", "Daintree view", 512, 0.2],
+  ["Tab", "LifePlan view", 450, 0],
+  ["Tab", "PageSugar view", 419, 0],
+  ["Tab", "Daintree Website view", 366, 0.6],
+  ["Browser", "Browser", 364, 0.2],
+  ["Utility", "daintree-pty-host", 329, 0.2],
+  ["Tab", "Claude Commands view", 244, 0],
+  ["GPU", "GPU", 196, 0.2],
+  ["Tab", "Tab", 170, 0],
+  ["Utility", "daintree-workspace-host", 118, 0],
+  ["Utility", "daintree-workspace-host", 94, 0],
+  ["Utility", "daintree-workspace-host", 92, 0],
+  ["Utility", "daintree-workspace-host", 86, 0],
+  ["Utility", "daintree-workspace-host", 84, 0],
+  ["Utility", "daintree-plugin-prod", 79, 0],
+  ["Utility", "daintree-workspace-host", 78, 0],
+  ["Utility", "daintree-pty-host", 72, 0],
+  ["Utility", "daintree-watchdog", 58, 0],
+  ["Utility", "Network Service", 57, 0],
+] as const;
+
+let BULK_STATS: Record<string, unknown> = {};
+let TERMINAL_WORKLOAD_MB = 0;
+
+/** Seed the popover's reads for the busy session. */
+function seedBusySession(): void {
+  seedStats(7, 3868, 3, BUSY_PROJECT_NAMES);
+  // A fresh object each time: `baseline()` resets it for every other fixture.
+  const bulk: Record<string, unknown> = {};
+  BUSY_PROJECT_NAMES.forEach((_, i) => {
+    const running = BUSY_TERMINALS[i];
+    const base = useProjectStatsStore.getState().stats[`proj-${i}`]!;
+    bulk[`proj-${i}`] = {
+      ...base,
+      processCount: running ? running[0] : 0,
+      terminalCount: running ? running[0] : 0,
+      estimatedMemoryMB: running ? running[0] * 50 : 0,
+      terminalTypes: {},
+      processIds: [],
+      ...(running
+        ? {
+            terminalMemoryMB: running[1],
+            topProcess: { name: running[2], memoryMB: Math.round(running[1] * 0.6) },
+          }
+        : {}),
+    };
+  });
+  BULK_STATS = bulk;
+  TERMINAL_WORKLOAD_MB = BUSY_TERMINALS.reduce((sum, [, mb]) => sum + mb, 0);
+}
 
 /** Reset everything a fixture might have set, so one sweep can't leak into the next. */
 function baseline(): void {
@@ -190,6 +284,8 @@ function baseline(): void {
     state: { config: { enabled: true, onBattery: false }, isBlocking: true, revision: 1 },
     loadError: null,
   });
+  BULK_STATS = {};
+  TERMINAL_WORKLOAD_MB = 0;
   seedStats(1, 1240);
 }
 
@@ -272,6 +368,18 @@ export const FIXTURES: Record<string, Fixture> = {
     seed: () => {
       baseline();
       seedStats(4, 24_000);
+    },
+  },
+
+  /**
+   * The owner's real session: seven of twenty projects running. Captured with
+   * the readout's popover open, since that breakdown is the thing under review.
+   */
+  "busy-session": {
+    what: "seven of twenty projects running, the resource breakdown's real load",
+    seed: () => {
+      baseline();
+      seedBusySession();
     },
   },
 
@@ -406,6 +514,8 @@ installPreviewShims({
     getSettings: async () => ({ runCommands: SAVED_RUNNERS }),
     detectRunners: async () => DETECTED_RUNNERS,
     onStatsUpdated: () => () => undefined,
+    getBulkStats: async (ids: string[]) =>
+      Object.fromEntries(ids.filter((id) => id in BULK_STATS).map((id) => [id, BULK_STATS[id]])),
   }),
   system: answering({
     getAppMetrics: async () => ({
@@ -417,7 +527,35 @@ installPreviewShims({
     getDiagnosticsInfo: async () => ({
       uptimeSeconds: 7_400,
       eventLoopP99Ms: 12,
-      systemAvailableMB: 18_400,
+      systemAvailableMB: 15_770,
+    }),
+    getProcessMetrics: async () =>
+      BUSY_PROCESSES.map(([type, name, memoryMB, cpuPercent], i) => ({
+        pid: 64_500 + i * 17,
+        type,
+        name,
+        memoryMB,
+        cpuPercent,
+      })),
+    getHeapStats: async () => ({ usedMB: 56, limitMB: 4096, percent: 1.4, externalMB: 12 }),
+    getMemorySnapshot: async () => ({
+      timestamp: Date.now(),
+      electron: {
+        available: true,
+        totalWorkingSetMb: APP_MEMORY_MB,
+        processCount: BUSY_PROCESSES.length,
+        sampledAt: Date.now(),
+      },
+      terminalWorkloads: {
+        available: true,
+        stale: false,
+        ageMs: 1_000,
+        sampledAt: Date.now(),
+        totalMemoryMb: TERMINAL_WORKLOAD_MB,
+        processCount: 24,
+        terminalCount: 12,
+        byProject: [],
+      },
     }),
   }),
 });
