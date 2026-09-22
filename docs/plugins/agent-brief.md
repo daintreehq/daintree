@@ -33,7 +33,7 @@ The whole design exists so that an agent working in a fresh worktree can write a
 | The shape of the contribution you're adding — panels, views, commands, toolbar buttons, context menus, keybindings, settings | [contribution-points.md](./contribution-points.md) |
 | What `host` can do inside `activate()`, and the calling conventions | [host-api.md](./host-api.md) |
 | What your view gets in the DOM, and how to style it so it reads as native | [views.md](./views.md) |
-| Working patterns: pull then push, watch and badge, open files, launch an agent, own the canvas | [patterns.md](./patterns.md) |
+| Working patterns: pull then push, watch and badge, refresh when the user comes back, open files, launch an agent, own the canvas | [patterns.md](./patterns.md) |
 | What the capability tokens actually mean, and what they don't | [trust-model.md](./trust-model.md) |
 | The watcher loop and the `daintree-plugin` CLI | [dev-loop.md](./dev-loop.md) |
 

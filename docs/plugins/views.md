@@ -148,6 +148,35 @@ const objectUrl = URL.createObjectURL(blob); // <audio src={objectUrl}>; revoke 
 
 Fetch into a blob rather than pointing an element's `src` at the URL directly; the blob path is the one the host has verified against Electron's media pipeline. This works because views are inline; it is not part of the host API, and a future move to an isolated view host would replace it with one.
 
+## Project switches and staleness
+
+"The user just switched to my project, refresh" is a question the DOM cannot answer, and the obvious answer is wrong in a way that fails silently.
+
+Switching projects does not unmount anything: the outgoing project's `WebContentsView` is detached and marked `setVisible(false)`, its renderer keeps running, and your view stays mounted with its React state intact. Neither of those operations changes page visibility, because Chromium tracks that at the `BrowserWindow` level — so a backgrounded project view goes on reporting whatever its window reports, `document.visibilityState === "visible"` while that window is on screen, and its `requestAnimationFrame` callbacks can keep firing at the full rate. Every gate written as `document.visibilityState !== "visible"` is dead code in a project the user has switched away from, which is how one backgrounded project ended up at 4.5% CPU and 3300 idle wakeups a second (#11212). `document` tells you whether the window is on screen, never whether your project is the one being shown.
+
+The signal that does answer it is main's explicit lifecycle broadcast, which exists precisely because no DOM event covers this. Views are inline, so it is on `window.electron.app`:
+
+| Call | What it means |
+| --- | --- |
+| `isViewCached()` | Not an event — the current state, latched in preload before any page script ran. This is what you seed from. |
+| `onViewCached(cb)` | Main has detached and hidden this project view. Nothing can observe it until it returns: stop periodic work here. |
+| `onViewWarmActivated(cb)` | Main has re-attached the view. It may still sit behind the anti-flash bridge where Chromium culls paints, so this means "running again", not "on screen". Fires on **every** reactivation. |
+| `onViewRevealed(cb)` | The view is the presenting foreground surface. Sent only when it is still the active project by the time the swap completes, so a switch superseded mid-flight never produces one. |
+
+Four things follow, and the first is the one that bites.
+
+**They are edges, and nothing replays.** A cold switch can be released as early as the pre-React skeleton, so a switch storm can cache the view before your module has evaluated. Seed from `isViewCached()` and subscribe; a subscription alone answers "not cached" forever for a view that was already cached. Clear your own cached flag on `onViewWarmActivated`, not on `onViewRevealed`: warm activation is the cached-to-active edge and precedes presentation, while a reveal is only sent if this project is still the active one when the swap completes — a cold switch that rolls back reactivates the view and sends warm activation alone, so a flag cleared only on reveal can stay demoted with the view running.
+
+**This bridge is the host's own, not part of the plugin API.** It works because views are inline, exactly like `daintree-file://` above, and an isolated view host would replace it. The host's internal wrapper (`src/lib/viewCacheState.ts`, with `usePollingLifecycle` and `useProjectViewRevealed` on top) is what Daintree's own panes use; read it before you build anything elaborate.
+
+**Combine it with document visibility rather than replacing it.** Minimising the window is a real `visibilitychange` — as is being fully covered by another window, on the platforms that report occlusion — and both are independent of caching, so a view can be uncached and unseen. The host's own consumers AND the two together. Whether a backgrounded renderer's timers actually stop varies: main deliberately applies no CPU throttling, and an explicit `Page.setWebLifecycleState` freeze is conditional and is skipped while the cached project has a live agent or an MCP binding — the cases that cost the most. So treat "my timers stopped" and "my timers kept running" as both possible, and demote your own periodic work on `onViewCached` instead of hoping the platform does it for you. A poll that must not miss a beat belongs in the worker, which for a non-builtin plugin is a separate utility process that does not freeze with the view (builtins run in main).
+
+**Memory pressure turns the flip into a fresh mount.** The host can reclaim a backgrounded project view and destroy its renderer. That is not a close — the project stays open and your worker keeps running — but the recreated view mounts from scratch, so the work you do on reveal must be the same work you do on mount or the user gets one of two states depending on whether their renderer survived. The worker is told nothing about the destruction itself: the host drops what that renderer reported rather than synthesizing a `removed` phase, since a reclaimed renderer says nothing about whether the user closed a panel. It does see the recreated view's `mounted`.
+
+[Patterns → Refresh when the user comes back](./patterns.md#refresh-when-the-user-comes-back) is the whole recipe, worker half included.
+
+Worker-side there is no equivalent, and the three subscriptions that look close are not it. `onDidChangePanelLifecycle` reports mount and unmount, which a switch does not cause. `onDidChangeActiveWorktree` fires on worktree activation and, for an unbound plugin, resolves against whichever project is focused — mid-switch that can still be the outgoing one, and the snapshot it hands you carries no `projectId` to check, so confirming which project you are looking at means a `getWorktreesResult()` with `status === "ok"` and a comparison against its `projectId`. `onDidWake` is machine sleep, explicitly machine-scoped. Keep the "is this stale?" decision in the view.
+
 ## Global registration survives reload
 
 Views share one document per project view, so anything you put in a browser-global registry is shared by every view in that project — and outlives every reload of the plugin that put it there. Custom elements are the sharp case: `customElements.define` is keyed by name and the spec gives no way to unregister one. The entry belongs to the document, so only replacing the document clears it.

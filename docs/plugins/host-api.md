@@ -487,7 +487,7 @@ export async function activate(host: PluginHostApi) {
 | Phase | Meaning |
 | --- | --- |
 | `mounted` | A view for this panel is rendered. |
-| `hidden` | The panel record is live but no view is mounted — a sibling pane was maximized, its dock tab is inactive, its project view is cached, or a retry is loading. **Not** a close. |
+| `hidden` | The panel record is live but no view is mounted — a sibling pane was maximized, its dock tab is inactive, or a retry is loading. **Not** a close, and **not** a project switch: backgrounding a project view unmounts nothing. |
 | `backgrounded` | The panel is at `location: "background"`. |
 | `trashed` | Soft close. Recoverable from the trash bin, so it is not permanent disposal. |
 | `restored` | One-shot edge out of the trash, emitted immediately before the phase the panel landed in. |
@@ -499,6 +499,8 @@ export async function activate(host: PluginHostApi) {
 On subscribe the host **replays the current phase of every live panel** of your plugin. That matters because plugins activate lazily — opening a view is usually what triggers `activate()`, so without replay you would never see that panel's `mounted`. One-shot transitions (`restored`) and terminal ones (`removed`) are not replayed.
 
 A renderer being destroyed or evicted never synthesizes `removed`: a cached project view says nothing about whether the user closed the panel, and a false terminal event is the exact misreading this API exists to prevent.
+
+**A project switch is not a phase change.** Switching away detaches and hides the outgoing project's `WebContentsView` without unmounting anything inside it, so as long as that renderer is retained, a panel in the project the user left keeps the phase it already had and you are told nothing in either direction. Reclaiming the renderer under memory pressure is silent too — no phase is synthesized for it — but the view the user comes back to is then a new mount, and that is reported. That is correct — the panel really is still there — but it means this is the wrong subscription to hang "refresh when the user comes back to this project" on, and so is `document.visibilityState`, which does not change for a backgrounded project view. The signal is main's own lifecycle broadcast, read in the view; see [Views → Project switches and staleness](./views.md#project-switches-and-staleness).
 
 Like the other `onDidChange*` methods this is revoke-guarded — subscribe during `activate()`. Events themselves fire for the plugin's whole lifetime and fall silent after unload. Events are frozen before delivery.
 

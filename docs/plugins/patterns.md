@@ -1,6 +1,6 @@
 # Patterns
 
-The reference pages document each host call on its own. This page is how they compose into a plugin that does something: the eight shapes a real project plugin is built from, each with the exact calls. The worked example throughout is a "Videos" dashboard, the first real project plugin built against this system, which uses every one of them. Read the [agent brief](./agent-brief.md) first; the rules there decide whether any of this loads.
+The reference pages document each host call on its own. This page is how they compose into a plugin that does something: the shapes a real project plugin is built from, each with the exact calls. The worked example throughout is a "Videos" dashboard, the first real project plugin built against this system, which uses every one of them. Read the [agent brief](./agent-brief.md) first; the rules there decide whether any of this loads.
 
 Throughout, `host` is the object `activate()` receives in the worker, and "the view" is the React component the renderer mounts. The two talk over channels; nothing else crosses the boundary.
 
@@ -19,6 +19,8 @@ export async function activate(host) {
     slate = await scanVideos(host);
     await host.postToPanel("slate", slate); // the push, to every open instance
   };
+  // Polling belongs here, not in the view: the worker is a separate utility
+  // process, so it keeps its cadence while the user is in another project.
   const timer = setInterval(() => void refresh(), 15_000);
   return () => clearInterval(timer);
 }
@@ -73,6 +75,65 @@ await host.setPanelBadge(panelId, { kind: "dot", color: "warning", tooltip: "2 g
 ```
 
 Watchers and badges are both released on unload; `dispose()` the watcher yourself when the panel that needed it is removed (`onDidChangePanelLifecycle`, phase `removed`).
+
+## Refresh when the user comes back
+
+Switching projects leaves your view mounted, its React state intact, and its page visibility unchanged — nothing in the DOM marks the switch. The signal is main's, on `window.electron.app`, and the pull it drives is the one you already wrote for mount.
+
+```js
+// view: pull on mount, re-pull when this project is shown again, and keep the
+// push subscription from "Pull on mount, then push" — reveal is an extra
+// trigger for the same load, not a replacement for it.
+useEffect(() => {
+  let live = true;
+  const load = async () => {
+    // `invoke` rejects when the handler throws or the plugin has unloaded.
+    const next = await window.electron.plugin.invoke(pluginId, "slate").catch(() => null);
+    if (live && next) setSlate(next);
+  };
+  void load(); // first mount, and the remount after a reclaimed renderer
+  const off = window.electron.plugin.on(pluginId, "slate", setSlate);
+  const offRevealed = window.electron?.app?.onViewRevealed?.(() => void load());
+  return () => {
+    live = false;
+    off();
+    offRevealed?.();
+  };
+}, [pluginId]);
+```
+
+The mount pull is not redundant with the reveal pull: under memory pressure the host destroys a backgrounded project view outright, and the user's next switch back is a cold mount with no reveal to catch. Route both through one function and the two cannot drift.
+
+Periodic work in the view is the other half, and it needs the cache edges rather than the reveal: `onViewRevealed` arrives only for a switch that completes with your project in front. Seed from `isViewCached()` — these are edges, nothing replays, and a mount can land in an already-cached view — and AND it with document visibility, which covers the window being minimised while this project is the active one.
+
+```js
+// view: demote while nobody can see this project.
+useEffect(() => {
+  const app = window.electron?.app;
+  // Reconcile rather than start/stop on the edge: the mount itself can land
+  // already cached, and the latch is the only thing that can say so.
+  const sync = () => {
+    const idle = (app?.isViewCached?.() ?? false) || document.hidden;
+    if (idle) stopTicking();
+    else startTicking();
+  };
+  sync();
+  const offCached = app?.onViewCached?.(sync);
+  // Warm activation, not reveal: warm activation is the cached-to-active edge
+  // and can arrive without a reveal ever following it — a cold switch that
+  // rolls back sends it alone.
+  const offActive = app?.onViewWarmActivated?.(sync);
+  document.addEventListener("visibilitychange", sync);
+  return () => {
+    offCached?.();
+    offActive?.();
+    document.removeEventListener("visibilitychange", sync);
+    stopTicking();
+  };
+}, []);
+```
+
+[Views → Project switches and staleness](./views.md#project-switches-and-staleness) has why the DOM cannot do this, what each signal means, and the caveat that this bridge is the host's own rather than part of the plugin API.
 
 ## Open files the Daintree way
 
@@ -201,15 +262,17 @@ Declaring `shell:exec` raises every command the plugin registers to a confirm di
 
 ## What survives what
 
-| State | Remount (maximise a sibling, leave a dock tab) | Hot reload (`dist/` rebuilt) | Project close |
-| --- | --- | --- | --- |
-| React state in the view | lost | lost | lost |
-| Module-scope state in the worker | kept | lost | lost |
-| `persistState` bag on the panel | kept | kept | kept with the layout |
-| `host.storage`, `host.settings` | kept | kept | kept |
-| Spawned processes, watchers, badges | kept | killed and cleared | killed and cleared |
-| Custom element registrations | kept | kept — registration is irreversible | cleared with the document |
+| State | Project switch (view kept) | Remount (maximise a sibling, leave a dock tab) | Hot reload (`dist/` rebuilt) | Project close |
+| --- | --- | --- | --- | --- |
+| React state in the view | kept | lost | lost | lost |
+| Module-scope state in the worker | kept | kept | lost | lost |
+| `persistState` bag on the panel | kept | kept | kept | kept with the layout |
+| `host.storage`, `host.settings` | kept | kept | kept | kept |
+| Spawned processes, watchers, badges | kept | kept | killed and cleared | killed and cleared |
+| Custom element registrations | kept | kept | kept — registration is irreversible | cleared with the document |
 
-Design for the middle column. A reload is a fresh worker and a fresh view generation; anything the user would be annoyed to lose belongs in `persistState` or `host.storage`.
+The first column is the switch itself: nothing unmounts, so nothing in it is lost. Under memory pressure the host can go further and destroy a backgrounded project view, and that column then reads like a remount — the document goes with it, so custom element registrations clear too — while the worker and everything it owns carries on. [Views → Project switches and staleness](./views.md#project-switches-and-staleness) is how a view learns which of the two happened.
+
+Design for the hot-reload column. A reload is a fresh worker and a fresh view generation; anything the user would be annoyed to lose belongs in `persistState` or `host.storage`.
 
 The last row is the one that surprises people, because it is the only kind of state a reload cannot give you back: a custom element name outlives the module that registered it, so the rebuilt copy is either silently ignored or rejected outright, depending on whether the library guards its own `define`. [Views → Global registration survives reload](./views.md#global-registration-survives-reload) covers what to do about it.
