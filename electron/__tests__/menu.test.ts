@@ -1142,7 +1142,18 @@ describe("handleDirectoryOpen window targeting", () => {
       })),
       getActiveProjectId: vi.fn<() => string | null>(() => null),
       getOutgoingBridgeProjectId: vi.fn<() => string | null>(() => null),
+      getAllViews: vi.fn<() => unknown[]>(() => []),
+      getActiveView: vi.fn<() => unknown>(() => null),
+      setPendingFocusIntent: vi.fn(),
     };
+  }
+
+  function windowContext(
+    windowId: number,
+    projectViewManager: unknown,
+    browserWindow: unknown = { id: windowId, isDestroyed: () => false }
+  ) {
+    return { windowId, browserWindow, services: { projectViewManager } };
   }
 
   beforeEach(() => {
@@ -1171,6 +1182,7 @@ describe("handleDirectoryOpen window targeting", () => {
       getByWindowId: (id: number) =>
         id === 7 ? { services: { projectViewManager: targetManager } } : undefined,
       getPrimary: () => ({ services: { projectViewManager: targetManager } }),
+      all: () => [windowContext(7, targetManager)],
     });
 
     const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
@@ -1197,6 +1209,7 @@ describe("handleDirectoryOpen window targeting", () => {
       // handleDirectoryOpen rebuilds the menu, and the rebuild resolves the
       // project gates against the focused window.
       getPrimary: () => ({ services: { projectViewManager: targetManager } }),
+      all: () => [windowContext(7, targetManager), windowContext(9, newestManager)],
     });
     windowRefMock.getProjectViewManager.mockReturnValue(newestManager);
 
@@ -1208,6 +1221,86 @@ describe("handleDirectoryOpen window targeting", () => {
       entryPoint: "menu",
     });
     expect(newestManager.switchTo).not.toHaveBeenCalled();
+  });
+
+  // #12596: Open Recent, Cmd+O and folder drops all land here, and a folder that
+  // another window already has open goes to that window instead of opening a
+  // second view of it in this one.
+  it("brings forward the window already showing the project instead of opening it again", async () => {
+    const targetManager = createManager();
+    const ownerManager = createManager();
+    const ownerViewWebContents = { isDestroyed: () => false, focus: vi.fn(), send: vi.fn() };
+    ownerManager.getActiveProjectId.mockReturnValue(PROJECT.id);
+    ownerManager.getAllViews.mockReturnValue([
+      { projectId: PROJECT.id, view: { webContents: ownerViewWebContents } },
+    ]);
+    ownerManager.getActiveView.mockReturnValue({ webContents: ownerViewWebContents });
+    const ownerWindow = {
+      id: 9,
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) =>
+        id === 7 ? { services: { projectViewManager: targetManager } } : undefined,
+      getPrimary: () => ({ services: { projectViewManager: targetManager } }),
+      all: () => [windowContext(7, targetManager), windowContext(9, ownerManager, ownerWindow)],
+    });
+
+    const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    expect(ownerWindow.focus).toHaveBeenCalled();
+    expect(ownerViewWebContents.focus).toHaveBeenCalled();
+    expect(targetManager.switchTo).not.toHaveBeenCalled();
+    expect(ownerManager.switchTo).not.toHaveBeenCalled();
+    expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+  });
+
+  it("has the owning window switch to a project it only holds cached", async () => {
+    const targetManager = createManager();
+    const ownerManager = createManager();
+    ownerManager.getActiveProjectId.mockReturnValue("project-other");
+    ownerManager.getAllViews.mockReturnValue([
+      { projectId: "project-other", view: { webContents: { isDestroyed: () => false } } },
+      { projectId: PROJECT.id, view: { webContents: { isDestroyed: () => false } } },
+    ]);
+    const ownerWindow = {
+      id: 9,
+      isDestroyed: () => false,
+      isMinimized: () => false,
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+    const ownerAppWebContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+    };
+    getAppWebContentsMock.mockImplementation((win: unknown) =>
+      win === ownerWindow ? ownerAppWebContents : { isDestroyed: () => false, send: vi.fn() }
+    );
+    windowRefMock.getWindowRegistry.mockReturnValue({
+      getByWindowId: (id: number) =>
+        id === 7 ? { services: { projectViewManager: targetManager } } : undefined,
+      getPrimary: () => ({ services: { projectViewManager: targetManager } }),
+      all: () => [windowContext(7, targetManager), windowContext(9, ownerManager, ownerWindow)],
+    });
+
+    const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
+    await handleDirectoryOpen(PROJECT.path, targetWindow);
+
+    expect(ownerAppWebContents.send).toHaveBeenCalledWith("menu-action", {
+      actionId: "project.switch",
+      args: { projectId: PROJECT.id },
+    });
+    expect(ownerWindow.focus).toHaveBeenCalled();
+    expect(targetManager.switchTo).not.toHaveBeenCalled();
+    expect(ownerManager.switchTo).not.toHaveBeenCalled();
   });
 });
 
@@ -1229,6 +1322,9 @@ describe("handleDirectoryOpen status timing (#12461)", () => {
       getByWindowId: (id: number) =>
         id === 7 ? { services: { projectViewManager: manager } } : undefined,
       getPrimary: () => ({ services: { projectViewManager: manager } }),
+      all: () => [
+        { windowId: 7, browserWindow: targetWindow, services: { projectViewManager: manager } },
+      ],
     });
     vi.mocked(getWorkspaceClientRef).mockReturnValue(
       (workspace

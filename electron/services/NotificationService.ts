@@ -2,6 +2,7 @@ import { app, Notification, webContents as webContentsModule } from "electron";
 import type { WindowRegistry, WindowContext } from "../window/WindowRegistry.js";
 import { sendToRenderer } from "../ipc/utils.js";
 import { getAppWebContents, getWindowForWebContents } from "../window/webContentsRegistry.js";
+import { revealWindow } from "../window/projectOwnership.js";
 import {
   FALLBACK_WINDOW_TITLE,
   composeWindowTitle,
@@ -374,7 +375,7 @@ class NotificationService {
     const fallbackWindow = this.registry?.getPrimary()?.browserWindow;
     if (!fallbackWindow || fallbackWindow.isDestroyed()) return;
 
-    this.revealWindow(fallbackWindow);
+    revealWindow(fallbackWindow);
     sendToRenderer(fallbackWindow, navigateChannel, context);
   }
 
@@ -391,7 +392,7 @@ class NotificationService {
 
     const ownerWindow = getWindowForWebContents(ownerWebContents);
     if (ownerWindow && !ownerWindow.isDestroyed()) {
-      this.revealWindow(ownerWindow);
+      revealWindow(ownerWindow);
     }
 
     try {
@@ -400,14 +401,6 @@ class NotificationService {
     } catch {
       return false;
     }
-  }
-
-  private revealWindow(browserWindow: import("electron").BrowserWindow): void {
-    if (browserWindow.isMinimized()) {
-      browserWindow.restore();
-    }
-    browserWindow.show();
-    browserWindow.focus();
   }
 
   dispose(): void {

@@ -262,8 +262,17 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
       test.slow();
       test.setTimeout(900_000);
 
-      const fixture = prepareFixture(scale);
       const windowMode = process.env.BACKGROUND_ENERGY_SECOND_WINDOW;
+      // "mirror" opened this same fixture again in a second window. A project
+      // has one live view across the app now (#12596) — that open brings the
+      // first window forward instead — so the duplicate it measured can't be built.
+      // Checked before any fixture is created, which nothing would clean up.
+      if (windowMode === "mirror") {
+        throw new Error(
+          "BACKGROUND_ENERGY_SECOND_WINDOW=mirror is retired: a project can no longer be open in two windows (#12596)"
+        );
+      }
+      const fixture = prepareFixture(scale);
       const secondFixture = windowMode ? prepareFixture(1) : undefined;
       const thirdFixture = windowMode === "1" ? prepareFixture(1) : undefined;
       let ctx: AppContext | undefined;
@@ -457,27 +466,20 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
           let cachedIds = launched;
           if (secondFixture) {
             const existingPages = new Set(ctx.app.windows());
-            const mirrorMode = windowMode === "mirror";
-            let projectId = mirrorMode
-              ? await page.evaluate(() => (window as any).__DAINTREE_INITIAL_PROJECT__?.id)
-              : undefined;
-            await openSecondWindow(ctx.app, page, {
-              projectPath: mirrorMode ? fixture.dir : secondFixture.dir,
-            });
-            if (!mirrorMode) {
-              await expect
-                .poll(
-                  async () => {
-                    projectId = await page.evaluate(async (name) => {
-                      const all = await (window as any).electron.project.getAll();
-                      return all.find((p: any) => p.path.endsWith(name))?.id;
-                    }, path.basename(secondFixture.dir));
-                    return !!projectId;
-                  },
-                  { timeout: 30_000 }
-                )
-                .toBe(true);
-            }
+            let projectId: string | undefined;
+            await openSecondWindow(ctx.app, page, { projectPath: secondFixture.dir });
+            await expect
+              .poll(
+                async () => {
+                  projectId = await page.evaluate(async (name) => {
+                    const all = await (window as any).electron.project.getAll();
+                    return all.find((p: any) => p.path.endsWith(name))?.id;
+                  }, path.basename(secondFixture.dir));
+                  return !!projectId;
+                },
+                { timeout: 30_000 }
+              )
+              .toBe(true);
             mirroredProjectId = projectId;
             await expect
               .poll(
@@ -496,19 +498,7 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
               )
               .toBe(true);
             if (!cachedMirror) throw new Error("Second project view did not attach");
-            if (mirrorMode) {
-              for (const wt of worktrees.slice(0, scale)) {
-                await cachedMirror.evaluate(
-                  (id) => (window as any).electron.worktree.setActive(id),
-                  wt.id
-                );
-                const id = launched[worktrees.indexOf(wt)];
-                await expect(
-                  cachedMirror.locator(`[data-panel-id="${id}"][data-panel-location="grid"]`)
-                ).toBeVisible({ timeout: T_LONG });
-                await cachedMirror.waitForTimeout(100);
-              }
-            } else {
+            {
               let id: string | null = null;
               await expect
                 .poll(
@@ -984,24 +974,19 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
                   }),
                 cachedIds.filter((id) => id !== flipPanelId)
               );
-            const expectedLastSteps =
-              windowMode === "mirror"
-                ? await readLastSteps(page)
-                : await cachedMirror.evaluate(
-                    async (ids) =>
-                      Promise.all(
-                        ids.map(async (id) => {
-                          const snapshot = await (
-                            window as any
-                          ).electron.terminal.getSerializedState(id);
-                          const matches = [
-                            ...(snapshot?.data ?? "").matchAll(/working\.\.\. step (\d+)/g),
-                          ];
-                          return Number(matches.at(-1)?.[1] ?? 0);
-                        })
-                      ),
-                    cachedIds
-                  );
+            const expectedLastSteps = await cachedMirror.evaluate(
+              async (ids) =>
+                Promise.all(
+                  ids.map(async (id) => {
+                    const snapshot = await (window as any).electron.terminal.getSerializedState(id);
+                    const matches = [
+                      ...(snapshot?.data ?? "").matchAll(/working\.\.\. step (\d+)/g),
+                    ];
+                    return Number(matches.at(-1)?.[1] ?? 0);
+                  })
+                ),
+              cachedIds
+            );
             expect(expectedLastSteps.every((step) => step > 20)).toBe(true);
             const started = Date.now();
             await secondActivePage.evaluate((id) => {

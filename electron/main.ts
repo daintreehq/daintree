@@ -65,6 +65,7 @@ import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView } from "./window/portDistribution.js";
+import { findOtherProjectOwner, redirectNewWindowToOwner } from "./window/projectOwnership.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
@@ -365,6 +366,21 @@ if (!gotTheLock) {
   let powerMonitorInitialized = false;
   let idleHarnessStarted = false;
 
+  // A new window asked for a project another window already has brings that
+  // window forward instead (#12596) — checked before creating anything, so the
+  // redirect doesn't leave an empty window behind.
+  async function openWindowForPath(projectPath?: string): Promise<void> {
+    if (
+      projectPath &&
+      (await redirectNewWindowToOwner(windowRegistry, projectPath, (p) =>
+        projectStore.getProjectByPath(p)
+      ))
+    ) {
+      return;
+    }
+    await createWindow(projectPath);
+  }
+
   async function createWindow(
     initialProjectPath?: string | null,
     initialProjectId?: string,
@@ -378,7 +394,7 @@ if (!gotTheLock) {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname, {
         onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
-        onCreateWindow: (projectPath?: string) => createWindow(projectPath).then(() => {}),
+        onCreateWindow: (projectPath?: string) => openWindowForPath(projectPath),
         projectPath: initialProjectPath,
         initialProjectId,
         revealMode: opts?.revealMode,
@@ -915,6 +931,8 @@ if (!gotTheLock) {
         onBackgroundWindowFailed: (reason) => {
           console.error("[MAIN] Restoring a background window failed:", reason);
         },
+        isProjectOwned: (projectId) =>
+          findOtherProjectOwner(windowRegistry, projectId, {}) !== null,
       });
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);

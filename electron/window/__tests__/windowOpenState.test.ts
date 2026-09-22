@@ -15,6 +15,8 @@ import {
   _resetWindowOpenStateForTest,
 } from "../windowOpenState.js";
 import { getProjectHistory, resetProjectHistory } from "../../services/ProjectHistoryService.js";
+import { claimProjectActivation } from "../projectActivationClaims.js";
+import { decideProjectOpenTarget } from "../windowOpenPolicy.js";
 
 interface FakePvm {
   getActiveProjectId: () => string | null;
@@ -100,6 +102,40 @@ describe("snapshotOpenWorld", () => {
     expect(
       snapshotOpenWorld(registryOf([w]), "default", (id) => closed.has(id)).windows[0]
     ).toMatchObject({ activeProjectId: null, bridgeProjectId: null, viewProjectIds: ["closed-p"] });
+  });
+
+  it("counts an in-app activation still in flight as an open into its window (#12596)", () => {
+    const switching = ctx(1, pvm(null));
+    const other = ctx(2, pvm(null));
+    markWindowReadyForOpens(switching.browserWindow);
+    markWindowReadyForOpens(other.browserWindow);
+    const release = claimProjectActivation("p", 1);
+
+    try {
+      const world = snapshotOpenWorld(registryOf([other, switching]), "default");
+      expect(world.windows.find((w) => w.windowId === 1)?.reservations).toEqual([
+        { projectId: "p", projectPath: null },
+      ]);
+      expect(
+        decideProjectOpenTarget(
+          {
+            projectId: "p",
+            projectPath: "/p",
+            source: "external",
+            intent: "open",
+            disposition: "default",
+            initiatingWindowId: null,
+          },
+          world
+        )
+      ).toEqual({ kind: "focus", windowId: 1 });
+    } finally {
+      release();
+    }
+
+    expect(snapshotOpenWorld(registryOf([switching]), "default").windows[0]?.reservations).toEqual(
+      []
+    );
   });
 
   it("reports readiness only once a window has been marked", () => {

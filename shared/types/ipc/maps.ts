@@ -81,6 +81,7 @@ import type {
   ProjectWorktreeLoadStatusPayload,
   ProjectFocusOnActivateIntent,
   ProjectSwitchTrace,
+  ProjectSwitchResult,
 } from "./project.js";
 import type { FleetSnapshot } from "./fleet.js";
 import type {
@@ -616,7 +617,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       outgoingState?: ProjectSwitchOutgoingState,
       options?: { focusIntent?: ProjectFocusOnActivateIntent; trace?: ProjectSwitchTrace },
     ];
-    result: Project;
+    result: ProjectSwitchResult;
   };
   "project:prefetch-hydrate": {
     args: [projectId: string];
@@ -648,7 +649,7 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
       outgoingState?: ProjectSwitchOutgoingState,
       options?: { trace?: ProjectSwitchTrace },
     ];
-    result: Project;
+    result: ProjectSwitchResult;
   };
   "project:get-stats": {
     args: [projectId: string];
