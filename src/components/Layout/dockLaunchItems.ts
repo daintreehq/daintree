@@ -33,8 +33,8 @@ import type { RecipeContext } from "@/utils/recipeVariables";
 
 export const AGENT_MRU_PREFIX = "agent.";
 
-/** Cap the "Recently launched" band so it stays a quick-reach shortcut rather
- * than a second full agent list above the fixed Pinned/Other groups. */
+/** Cap the recent group at the head of the agents so it stays a quick-reach
+ * handful rather than reordering the whole agent list. */
 export const RECENCY_BAND_CAP = 3;
 
 /** Terminal opts out of the palette (it has dedicated spawn actions) but is the
@@ -360,8 +360,6 @@ export function rowHasPresets(row: DockLaunchRow | undefined): boolean {
 export interface DockLaunchModel {
   /** Capped frecency band; entries also appear in the agent groups below. */
   recentAgents: DockLaunchAgent[];
-  /** True when `pinnedCount` splits the agents into a strict Pinned/Other subset. */
-  showAgentGroups: boolean;
   dockPanels: DockLaunchPanelItem[];
   gridPanels: DockLaunchPanelItem[];
   recipes: DockLaunchRecipeItem[];
@@ -474,7 +472,7 @@ export function selectRecentAgents(
 }
 
 /**
- * The "Recently launched" rows of {@link DockLaunchModel.browseRows}. Split out
+ * The recent rows at the head of {@link DockLaunchModel.browseRows}. Split out
  * because `useDockLaunchModel` derives the band outside its memo (see there) and
  * has to splice it back onto a `browseRows` built without it.
  *
@@ -514,7 +512,6 @@ export function buildRecentBrowseRows(
  */
 export function buildDockLaunchModel({
   agents,
-  pinnedCount,
   activeWorktreeId,
   recipes,
   mruEntries,
@@ -598,11 +595,6 @@ export function buildDockLaunchModel({
     mruEntries
   );
 
-  // The Pinned/Other split describes the launchable group it slices; counting
-  // it against every agent would put setup rows on the wrong side of the line.
-  const showAgentGroups =
-    pinnedCount !== undefined && pinnedCount > 0 && pinnedCount < launchAgents.length;
-
   const browseRows: DockLaunchRow[] = [];
   const pushRows = (band: DockLaunchBandId, items: ReadonlyArray<DockLaunchItem>) => {
     for (const item of items) {
@@ -674,7 +666,6 @@ export function buildDockLaunchModel({
 
   return {
     recentAgents,
-    showAgentGroups,
     dockPanels,
     gridPanels,
     recipes: recipeItems,

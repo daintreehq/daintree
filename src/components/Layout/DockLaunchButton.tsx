@@ -1196,7 +1196,7 @@ function rowShortcutAgentId(row: DockLaunchRow): BuiltInAgentId | null {
  * Not simply "the band changed". An expanded agent's presets are spliced into
  * the flat list as `band: "presets"` rows sitting INSIDE their parent's band,
  * so the first agent after them looked like the start of a new group and
- * re-rendered "Launch agent" — splitting one list of three agents into two
+ * re-rendered its heading — splitting one list of three agents into two
  * apparent lists of one and two. Walking back past the preset block asks the
  * question the heading is actually answering: is this row in the same group as
  * the last row that was not part of an expansion?

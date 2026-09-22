@@ -350,21 +350,6 @@ describe("buildDockLaunchModel — bands and recipes", () => {
     );
   });
 
-  it("splits Pinned/Other only for a strict subset", () => {
-    // Counted against the LAUNCHABLE agents, not every agent offered: a setup
-    // row sits in its own band, so including it would split the group one row
-    // early and leave "Other" describing nothing.
-    const two = { agents: LAUNCHABLE_AGENTS };
-    expect(build({ ...two, pinnedCount: 1 }).showAgentGroups).toBe(true);
-    expect(build({ ...two, pinnedCount: 0 }).showAgentGroups).toBe(false);
-    expect(build({ ...two, pinnedCount: LAUNCHABLE_AGENTS.length }).showAgentGroups).toBe(false);
-    expect(build(two).showAgentGroups).toBe(false);
-
-    // One launchable agent and one that needs setup: a pinnedCount of 1 covers
-    // the whole launchable group, so there is nothing to split.
-    expect(build({ pinnedCount: 1 }).showAgentGroups).toBe(false);
-  });
-
   it("scopes recipes to the active worktree, keeping unscoped ones", () => {
     const model = build({
       activeWorktreeId: "wt-1",
