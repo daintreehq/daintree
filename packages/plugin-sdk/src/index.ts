@@ -8,3 +8,7 @@ export { PLUGIN_PROCESS_STREAM_CHANNEL } from "../../../shared/types/plugin-sdk.
 // `localAuthStubs` is a runtime const a local/offline forge provider spreads
 // into its impl, so it needs an explicit value re-export for the same reason.
 export { localAuthStubs } from "../../../shared/types/plugin-sdk.js";
+// `PLUGIN_STYLE_ROOT_ATTRIBUTE` is the data attribute a panel's style root
+// must carry; authors read it at runtime, so the api-report's value declaration
+// needs a real binding behind it.
+export { PLUGIN_STYLE_ROOT_ATTRIBUTE } from "../../../shared/types/plugin-sdk.js";

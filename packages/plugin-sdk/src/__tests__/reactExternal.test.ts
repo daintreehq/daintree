@@ -91,6 +91,16 @@ describe("@daintreehq/plugin-sdk/react — React stays external", () => {
     expect(bundledPackages).toEqual([]);
   });
 
+  it("covers every entry in one metafile", () => {
+    // The config is a function that collapses to a single JS build under
+    // `--no-dts`; if it ever became an array again, two builds would race over
+    // this file and one of the entries would be missing here.
+    const outputs = Object.keys(metafile.outputs).map((out) => path.basename(out));
+    for (const entry of ["index.js", "react.js", "files.js", "testing.js"]) {
+      expect(outputs, `metafile is missing ${entry}`).toContain(entry);
+    }
+  });
+
   it("emits react as an external import of the react entry", () => {
     const [, reactEntry] =
       Object.entries(metafile.outputs).find(([out]) => out.endsWith("react.js")) ?? [];

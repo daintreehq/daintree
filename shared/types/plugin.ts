@@ -97,6 +97,8 @@ export interface PanelContribution {
    * `false` to opt out (for a kind with no meaningful compact chip-row form).
    */
   dockable?: boolean;
+  /** Schema version stamped on every persisted panel-state write; bump only for an incompatible shape change. */
+  stateVersion?: number;
 }
 
 export interface ToolbarButtonContribution {
@@ -923,6 +925,8 @@ export interface PluginAuthor {
 export type PluginOrigin = "builtin" | "user" | "project";
 
 export interface PluginManifest {
+  /** JSON Schema URL for editor completion; accepted by the validator, never read by the host. */
+  $schema?: string;
   name: string;
   version: string;
   displayName?: string;

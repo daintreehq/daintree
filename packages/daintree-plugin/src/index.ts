@@ -3,6 +3,7 @@
  * (the `npm create daintree-plugin` shim) to reuse the scaffold entry point.
  */
 export { runNew, scaffoldPlugin } from "./commands/new.js";
+export { runNewFromArgv } from "./commands/newCommand.js";
 export type { ScaffoldPluginOptions, ScaffoldResult } from "./commands/new.js";
 export { runValidate } from "./commands/validate.js";
 export type { ValidateOptions, ValidateResult } from "./commands/validate.js";

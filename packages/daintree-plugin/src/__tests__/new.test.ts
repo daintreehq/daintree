@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { scaffoldPlugin, runNew, findProjectRoot } from "../commands/new.js";
+import { runNewFromArgv } from "../commands/newCommand.js";
+import { runValidate } from "../commands/validate.js";
 import { getPluginManifestSchema } from "../../../../electron/schemas/plugin.js";
 import { isPluginIconId } from "../../../../shared/config/pluginIconIds.js";
 import { TEMPLATE_KINDS } from "../scaffold/templates.js";
@@ -234,6 +236,32 @@ describe("scaffoldPlugin", () => {
     });
   }
 
+  it("declares the daintree-plugin CLI its scripts call, installed and project-local alike", async () => {
+    const projectRoot = path.join(tmpDir, "cli-proj");
+    await fs.mkdir(path.join(projectRoot, ".daintree"), { recursive: true });
+    for (const template of TEMPLATE_KINDS) {
+      for (const local of [false, true]) {
+        const result = await scaffoldPlugin({
+          cwd: tmpDir,
+          targetDir: `cli-${template}-${local ? "project" : "installed"}`,
+          publisher: "acme",
+          displayName: "Cli Dep",
+          template,
+          ...(local ? { projectRoot } : {}),
+        });
+        const pkg = await readJson(path.join(result.dir, "package.json"));
+        const scripts = pkg.scripts as Record<string, string>;
+        const dev = pkg.devDependencies as Record<string, string>;
+        // Every scaffold emits a script that shells out to the CLI, so a clone
+        // without a global install would fail at `npm run validate`.
+        expect(scripts.validate).toBe("daintree-plugin validate");
+        expect(dev["daintree-plugin"]).toBe("^0.1.0");
+        // Tracks the host's TypeScript major; every template typechecks on 6.
+        expect(dev.typescript).toBe("^6.0.0");
+      }
+    }
+  });
+
   it("React templates declare @types/react devDependencies; non-React ones don't (#10513)", async () => {
     const viewPkg = (await scaffoldView("typed-view")).pkg;
     const viewDev = viewPkg.devDependencies as Record<string, string>;
@@ -459,18 +487,19 @@ describe("scaffoldPlugin --project", () => {
     expect(manifest.name).toBe(path.basename(result.dir));
   });
 
-  it("marks the manifest as project scope and is otherwise a valid manifest", async () => {
+  it("marks the manifest as project scope and passes the project-origin schema", async () => {
     const result = await scaffoldProject();
     const manifest = await readJson(path.join(result.dir, "plugin.json"));
     expect(manifest.scope).toBe("project");
 
-    // `scope` is added to the manifest schema by the project-plugin host phase.
-    // Until that lands the schema is a strictObject that rejects the key, so
-    // validate everything else here rather than assert a failure we expect to
-    // stop being a failure.
-    const { scope: _scope, ...rest } = manifest;
-    const parsed = getPluginManifestSchema(false).safeParse(rest);
-    expect(parsed.success).toBe(true);
+    // The host keys the schema off the discovery origin and checks `scope` in
+    // both directions, so the manifest has to be validated as a project plugin
+    // — under "user" it is rejected outright, and stripping `scope` first would
+    // only prove the rest of the manifest is fine.
+    expect(getPluginManifestSchema("project").safeParse(manifest).success).toBe(true);
+    expect(getPluginManifestSchema("user").safeParse(manifest).success).toBe(false);
+    const { scope: _scope, ...withoutScope } = manifest;
+    expect(getPluginManifestSchema("project").safeParse(withoutScope).success).toBe(false);
   });
 
   it("ships a .gitignore that force-includes dist/", async () => {
@@ -734,6 +763,105 @@ describe("runNew --project", () => {
     );
     await expect(fs.access(path.join(orphan, ".daintree"))).rejects.toThrow();
   });
+});
+
+/**
+ * The real `create-daintree-plugin` / `daintree-plugin new` entry, unmocked:
+ * commander parses argv, `runNew` resolves the project root from the cwd, and
+ * the scaffold lands on disk. `newCommand.test.ts` mocks `runNew`, so nothing
+ * else proves the flags survive the parse and produce a loadable plugin.
+ */
+describe("runNewFromArgv end to end", () => {
+  let cwdSpy: ReturnType<typeof vi.spyOn> | undefined;
+  let logSpy: ReturnType<typeof vi.spyOn> | undefined;
+  afterEach(() => {
+    cwdSpy?.mockRestore();
+    logSpy?.mockRestore();
+    cwdSpy = undefined;
+    logSpy = undefined;
+  });
+
+  it.each(["command", "view"] as const)(
+    "scaffolds a %s plugin under the enclosing project with --project",
+    async (template) => {
+      // A bare .git marker, nothing else: the scaffold has to create .daintree/
+      // itself, and the cwd sits two levels below the root so the walk-up is
+      // what finds it.
+      const root = path.join(tmpDir, `argv-${template}`);
+      const cwd = path.join(root, "src", "deep");
+      await fs.mkdir(path.join(root, ".git"), { recursive: true });
+      await fs.mkdir(cwd, { recursive: true });
+      cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(cwd);
+      logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      const name = `dash-${template}`;
+      await runNewFromArgv([
+        name,
+        "--yes",
+        "--publisher",
+        "acme",
+        "--template",
+        template,
+        "--project",
+      ]);
+
+      const scopedName = `acme.${name}`;
+      const pluginDir = path.join(root, ".daintree", "plugins", scopedName);
+      const manifest = await readJson(path.join(pluginDir, "plugin.json"));
+      expect(manifest.name).toBe(scopedName);
+      expect(manifest.scope).toBe("project");
+      expect(manifest.displayName).toBe(
+        `Dash ${template.charAt(0).toUpperCase()}${template.slice(1)}`
+      );
+      // --project was honoured, so nothing was written beside the cwd.
+      await expect(fs.access(path.join(cwd, name))).rejects.toThrow();
+      await expect(
+        fs.access(path.join(root, ".daintree", "recipes", `${scopedName}-watch.json`))
+      ).resolves.toBeUndefined();
+
+      // Validated as the project plugin it is: the host's schema under the
+      // origin `.daintree/plugins/` discovery uses, and the CLI's own validator
+      // the way `doctor` calls it for that directory.
+      expect(getPluginManifestSchema("project").safeParse(manifest).success).toBe(true);
+      const validated = await runValidate({ dir: pluginDir, origin: "project" });
+      expect(validated.errors).toEqual([]);
+      expect(validated.ok).toBe(true);
+
+      expect(logSpy).toHaveBeenCalledWith(
+        `Created ${scopedName} in ${path.relative(cwd, pluginDir)}`
+      );
+    }
+  );
+
+  it.each(["mcp", "full"] as const)(
+    "rejects --template %s with --project and writes nothing",
+    async (template) => {
+      const root = path.join(tmpDir, `argv-reject-${template}`);
+      await fs.mkdir(path.join(root, ".daintree"), { recursive: true });
+      cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(root);
+      logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+      await expect(
+        runNewFromArgv([
+          "dash",
+          "--yes",
+          "--publisher",
+          "acme",
+          "--template",
+          template,
+          "--project",
+        ])
+      ).rejects.toThrow(
+        `The "${template}" template contributes an MCP server, which a project-local plugin may not declare`
+      );
+
+      // Neither the plugin nor its watcher recipe, and no stray standalone
+      // scaffold under the cwd either.
+      expect(await fs.readdir(root)).toEqual([".daintree"]);
+      expect(await fs.readdir(path.join(root, ".daintree"))).toEqual([]);
+      expect(logSpy).not.toHaveBeenCalled();
+    }
+  );
 });
 
 /**

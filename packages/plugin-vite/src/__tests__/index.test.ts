@@ -1,4 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { build } from "vite";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { reactExternals, daintreePlugin, HOST_IMPORTMAP_SPECIFIERS } from "../index.js";
 
 describe("@daintreehq/plugin-vite — reactExternals", () => {
@@ -40,26 +44,104 @@ describe("@daintreehq/plugin-vite — daintreePlugin", () => {
     expect(typeof plugin.config).toBe("function");
   });
 
-  it("contributes the React externals through the config hook", () => {
-    const plugin = daintreePlugin();
-    const configFn = plugin.config as unknown as () => {
-      build: { rollupOptions: { external: ReadonlyArray<string | RegExp> } };
+  type ExternalFn = (id: string, importer?: string, isResolved?: boolean) => boolean;
+  function externalOf(plugin: ReturnType<typeof daintreePlugin>, userConfig = {}): ExternalFn {
+    const configFn = plugin.config as unknown as (config: unknown) => {
+      build: { rollupOptions: { external: ExternalFn } };
     };
-    const result = configFn();
-    expect(result.build.rollupOptions.external).toHaveLength(reactExternals.length);
-    for (const re of reactExternals) {
-      expect(result.build.rollupOptions.external).toContain(re);
+    return configFn(userConfig).build.rollupOptions.external;
+  }
+
+  it("externalizes everything the React regexes cover, as a function", () => {
+    const external = externalOf(daintreePlugin());
+    expect(typeof external).toBe("function");
+    for (const specifier of HOST_IMPORTMAP_SPECIFIERS) {
+      expect(reactExternals.some((re) => re.test(specifier))).toBe(true);
+      expect(external(specifier)).toBe(true);
     }
+    expect(external("react-router")).toBe(false);
+    expect(external("./local-module")).toBe(false);
   });
 
-  it("merges caller-supplied externals after the React preset", () => {
-    const plugin = daintreePlugin({ externals: ["@host/shared-ui", /^@daintree\//] });
-    const configFn = plugin.config as unknown as () => {
-      build: { rollupOptions: { external: ReadonlyArray<string | RegExp> } };
-    };
-    const externals = configFn().build.rollupOptions.external;
-    expect(externals).toContain("@host/shared-ui");
-    expect(externals.length).toBe(reactExternals.length + 2);
+  it("throws from the external decision for an unmapped React subpath", () => {
+    // `external` is consulted before `resolveId`, and a match skips resolution
+    // entirely, so this is the only hook where the guard is guaranteed to run.
+    const external = externalOf(daintreePlugin());
+    expect(() => external("react-dom/server")).toThrow(/import map does not serve/);
+    expect(() => external("react/compiler-runtime")).toThrow(/react\/compiler-runtime/);
+  });
+
+  it("merges caller-supplied externals with the React preset", () => {
+    const external = externalOf(daintreePlugin({ externals: ["@host/shared-ui", /^@daintree\//] }));
+    expect(external("@host/shared-ui")).toBe(true);
+    expect(external("@daintree/anything")).toBe(true);
+    // Strings are exact ids, as in Rollup — a prefix is not a match.
+    expect(external("@host/shared-ui/deep")).toBe(false);
+    expect(external("react")).toBe(true);
+  });
+
+  it("matches a global or sticky regex the same way on every call", () => {
+    // `RegExp.test` advances `lastIndex` on a `g`/`y` regex, so without a reset
+    // the second consecutive match against the same pattern fails.
+    const external = externalOf(daintreePlugin({ externals: [/^@acme\//g] }));
+    expect(external("@acme/a")).toBe(true);
+    expect(external("@acme/b")).toBe(true);
+    expect(external("@acme/c")).toBe(true);
+  });
+
+  it("folds an external the author set in their own config into the function", () => {
+    // Vite's config merge would concatenate an author array with this function
+    // into a shape Rolldown cannot consume, so the preset absorbs it instead.
+    const userConfig = { build: { rollupOptions: { external: ["lodash", /^@acme\//] } } };
+    const external = externalOf(daintreePlugin(), userConfig);
+    expect(external("lodash")).toBe(true);
+    expect(external("@acme/ui")).toBe(true);
+    expect(external("react")).toBe(true);
+    expect(userConfig.build.rollupOptions.external).toBeUndefined();
+
+    const fromFn = externalOf(daintreePlugin(), {
+      build: { rollupOptions: { external: (id: string) => id === "chalk" } },
+    });
+    expect(fromFn("chalk")).toBe(true);
+    expect(fromFn("lodash")).toBe(false);
+  });
+});
+
+describe("@daintreehq/plugin-vite — real build honours the unmapped subpath guard", () => {
+  async function buildEntry(source: string) {
+    const root = await mkdtemp(path.join(tmpdir(), "daintree-vite-external-"));
+    try {
+      const entry = path.join(root, "entry.js");
+      await writeFile(entry, source);
+      const result = await build({
+        configFile: false,
+        root,
+        logLevel: "silent",
+        plugins: [daintreePlugin()],
+        build: { write: false, lib: { entry, formats: ["es"], fileName: "entry" } },
+      });
+      const outputs = Array.isArray(result) ? result : [result];
+      return outputs
+        .flatMap((output) => ("output" in output ? output.output : []))
+        .filter((file) => file.type === "chunk");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it("rejects a bundle importing react-dom/server instead of emitting an unresolvable import", async () => {
+    await expect(
+      buildEntry('import { renderToString } from "react-dom/server"; export { renderToString };')
+    ).rejects.toThrow(/react-dom\/server.*import map does not serve/);
+  });
+
+  it("leaves a host-mapped specifier external in the emitted chunk", async () => {
+    const chunks = await buildEntry(
+      'import { createRoot } from "react-dom/client"; export const mount = (el) => createRoot(el);'
+    );
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]?.imports).toEqual(["react-dom/client"]);
+    expect(chunks[0]?.code).toContain('from "react-dom/client"');
   });
 });
 

@@ -3,6 +3,21 @@
   "version": "0.1.0",
   "description": "Scaffold a new Daintree plugin. Shim for `npm create daintree-plugin`.",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/daintreehq/daintree.git",
+    "directory": "packages/create-daintree-plugin"
+  },
+  "homepage": "https://github.com/daintreehq/daintree/tree/develop/docs/plugins",
+  "bugs": {
+    "url": "https://github.com/daintreehq/daintree/issues"
+  },
+  "keywords": [
+    "daintree",
+    "daintree-plugin",
+    "create",
+    "scaffold"
+  ],
   "type": "module",
   "bin": {
     "create-daintree-plugin": "./dist/create.js"

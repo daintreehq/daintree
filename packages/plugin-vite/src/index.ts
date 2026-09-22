@@ -2,7 +2,7 @@ import { builtinModules } from "node:module";
 import { createHash } from "node:crypto";
 import path from "node:path";
 import { build } from "vite";
-import type { Plugin } from "vite";
+import type { Plugin, UserConfig } from "vite";
 
 /**
  * The exact React specifiers the Daintree host import map serves. This is the
@@ -43,11 +43,12 @@ export const HOST_IMPORTMAP_SPECIFIERS = [
  * other chunks import from it, so `import { useState } from "react"` failed to
  * load in every packaged build until #11208.
  *
- * Breadth here is safe only because {@link daintreePlugin} also runs a
- * `resolveId` guard that fails the build on any React subpath the host import
- * map does NOT serve (anything outside {@link HOST_IMPORTMAP_SPECIFIERS}) —
- * so an externalized-but-unmapped specifier is caught at build time, not at
- * runtime as an unresolved bare specifier.
+ * Breadth here is safe only because {@link daintreePlugin} installs these
+ * through an `external` function that fails the build on any React subpath the
+ * host import map does NOT serve (anything outside
+ * {@link HOST_IMPORTMAP_SPECIFIERS}) — so an externalized-but-unmapped
+ * specifier is caught at build time, not at runtime as an unresolved bare
+ * specifier.
  */
 export const reactExternals: readonly RegExp[] = [/^react($|\/)/, /^react-dom($|\/)/] as const;
 
@@ -57,6 +58,56 @@ function isReactSpecifier(id: string): boolean {
 
 function isHostMappedSpecifier(id: string): boolean {
   return (HOST_IMPORTMAP_SPECIFIERS as readonly string[]).includes(id);
+}
+
+function unmappedReactError(id: string): Error {
+  return new Error(
+    `[daintree-plugin-vite] "${id}" is externalized as React but the Daintree host ` +
+      `import map does not serve it, so it would fail at runtime as an unresolved bare ` +
+      `specifier. Supported specifiers: ${HOST_IMPORTMAP_SPECIFIERS.join(", ")}.`
+  );
+}
+
+type ExternalOption = NonNullable<
+  NonNullable<NonNullable<UserConfig["build"]>["rollupOptions"]>["external"]
+>;
+
+/**
+ * Rollup's matching rules for a non-function `external` entry: a string is an
+ * exact id. `lastIndex` is reset first because `test()` on a `g` or `y`
+ * regex resumes from the previous match, so `/^@acme\//g` would accept
+ * `@acme/a` and then reject `@acme/b`.
+ */
+function matchesExternal(pattern: string | RegExp, id: string): boolean {
+  if (typeof pattern === "string") return pattern === id;
+  pattern.lastIndex = 0;
+  return pattern.test(id);
+}
+
+/**
+ * The browser preset's `external`, as a function rather than the regex array:
+ * Rolldown never runs `resolveId` for an id an `external` pattern already
+ * matched, so a `resolveId` guard alone lets `react-dom/server` through to a
+ * bundle that only fails at load. Deciding here is the one place every React
+ * import is guaranteed to pass through. Any `external` the author already set
+ * is folded in, because Vite's config merge would otherwise concatenate their
+ * array with this function into a shape Rolldown rejects.
+ */
+function browserExternal(
+  extras: ReadonlyArray<string | RegExp>,
+  inherited: ExternalOption | undefined
+): (id: string, importer: string | undefined, isResolved: boolean) => boolean {
+  return (id, importer, isResolved) => {
+    if (isReactSpecifier(id)) {
+      if (!isHostMappedSpecifier(id)) throw unmappedReactError(id);
+      return true;
+    }
+    if (extras.some((pattern) => matchesExternal(pattern, id))) return true;
+    if (typeof inherited === "function") return inherited(id, importer, isResolved) === true;
+    if (inherited === undefined) return false;
+    const patterns = Array.isArray(inherited) ? inherited : [inherited];
+    return patterns.some((pattern) => matchesExternal(pattern, id));
+  };
 }
 
 /**
@@ -373,13 +424,18 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
       }
       return null;
     },
-    config: () => ({
-      build: {
-        rollupOptions: {
-          external: [...reactExternals, ...extras],
+    config: (userConfig) => {
+      const rolldownOptions = userConfig.build?.rolldownOptions ?? userConfig.build?.rollupOptions;
+      const inherited = rolldownOptions?.external;
+      if (rolldownOptions) delete rolldownOptions.external;
+      return {
+        build: {
+          rollupOptions: {
+            external: browserExternal(extras, inherited),
+          },
         },
-      },
-    }),
+      };
+    },
     // `configResolved` rather than `config`: the plugin array is only complete
     // once Vite has merged every source of configuration, so this is the first
     // point at which "is Tailwind wired into this build" has a true answer.
@@ -417,12 +473,11 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
         return null;
       },
     },
-    // Fail the build on any React subpath that is externalized (matched by the
-    // regexes above) but is NOT served by the host import map. Without this the
-    // bundle builds clean and only fails at load with an unresolved bare
-    // specifier (the classic `react-dom/server` trap). Returns `null` for
-    // mapped specifiers so the `external` config above still externalizes them,
-    // and for non-React ids so normal resolution proceeds.
+    // The React branch is a second line behind `browserExternal`: it fires for
+    // an id that reaches resolution some other way, such as a plugin calling
+    // `this.resolve` directly. Returns `null` for mapped specifiers so
+    // `external` still owns them, and for non-React ids so normal resolution
+    // proceeds.
     resolveId(id) {
       if (id.startsWith(packagePrefix)) {
         const name = id.slice(packagePrefix.length);
@@ -430,13 +485,7 @@ export function daintreePlugin(options: DaintreePluginOptions = {}): Plugin {
           this.error(`Undeclared document package: ${name}`);
         return `\0${id}`;
       }
-      if (isReactSpecifier(id) && !isHostMappedSpecifier(id)) {
-        throw new Error(
-          `[daintree-plugin-vite] "${id}" is externalized as React but the Daintree host ` +
-            `import map does not serve it, so it would fail at runtime as an unresolved bare ` +
-            `specifier. Supported specifiers: ${HOST_IMPORTMAP_SPECIFIERS.join(", ")}.`
-        );
-      }
+      if (isReactSpecifier(id) && !isHostMappedSpecifier(id)) throw unmappedReactError(id);
       return null;
     },
   };

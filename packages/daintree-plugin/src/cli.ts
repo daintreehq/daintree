@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { runNew } from "./commands/new.js";
+import { newCommand } from "./commands/newCommand.js";
 import { runValidate } from "./commands/validate.js";
 import { runPackage } from "./commands/package.js";
 import { runInstall } from "./commands/install.js";
@@ -8,6 +8,7 @@ import { runUninstall } from "./commands/uninstall.js";
 import { runDev } from "./commands/dev.js";
 import { runDoctor } from "./commands/doctor.js";
 import { runSchema } from "./commands/schema.js";
+import { CLI_VERSION } from "./version.js";
 
 function fail(message: string): never {
   console.error(message);
@@ -19,36 +20,11 @@ const program = new Command();
 program
   .name("daintree-plugin")
   .description("Build, validate, package, and install Daintree plugins")
-  .version("0.1.0");
+  .version(CLI_VERSION);
 
-program
-  .command("new")
-  .argument("[name]", "plugin name (also the directory)")
-  .description("Scaffold a new plugin project")
-  .option("--publisher <publisher>", "publisher segment (e.g. acme)")
-  .option("--template <template>", "command | view | mcp | full")
-  .option(
-    "--project",
-    "scaffold into the enclosing project's .daintree/plugins/ (committed, loads with that project)"
-  )
-  .option("--yes", "non-interactive: accept defaults, skip prompts (requires name + --publisher)")
-  .action(
-    async (
-      name: string | undefined,
-      opts: { publisher?: string; template?: string; yes?: boolean; project?: boolean }
-    ) => {
-      try {
-        await runNew(name, {
-          publisher: opts.publisher,
-          template: opts.template,
-          yes: opts.yes,
-          project: opts.project,
-        });
-      } catch (err) {
-        fail((err as Error).message);
-      }
-    }
-  );
+// A scaffold failure rejects out of parseAsync and lands in the catch at the
+// bottom, which is the same `fail` the other commands call inline.
+program.addCommand(newCommand());
 
 program
   .command("validate")

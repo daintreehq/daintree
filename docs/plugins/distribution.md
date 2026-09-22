@@ -42,10 +42,11 @@ Produces `{pluginId}-{version}.dntr` in the project root. Runs through:
 
 1. Validates the manifest via the same Zod schema Daintree uses at load.
 2. Builds the plugin with Vite (unless `--skip-build` is passed).
-3. Copies the build output + referenced assets + manifest into a zip.
-4. Excludes `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`), and anything in `.gitignore`.
+3. Collects the file list. The candidates are every file `.gitignore` does not exclude, **plus** everything under the build-output directories even when they are gitignored — `dist/` always, and the top-level directory of `main` and of every view `componentPath` — because build output is ignored by convention and is exactly what ships. `.dntrignore` (root only, `.gitignore` syntax) then prunes that union, protected directories included, so `dist/docs/**` can be kept out of the archive; it is strictly subtractive and cannot re-include something `.gitignore` dropped. `plugin.json` is always added. Dotfiles never ship.
+4. Applies the normative exclusion list on top: `node_modules/`, `.git/`, source files (`*.ts`/`*.tsx`), source maps (unless `--sourcemaps`), root-level dev metadata (`package.json`, lockfiles, `tsconfig*.json`, `*.config.*`, `.dntrignore` itself) and any `*.dntr`. Then it checks that `main`, every view `componentPath` and every skill `path` survived, and fails naming the missing file rather than writing an archive the installer would reject.
+5. Writes the zip.
 
-The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file on the same OS. This matters if you're signing releases or publishing reproducible artifacts.
+The output is deterministic — the same source tree + `daintree-plugin` version produces a byte-identical `.dntr` file on the same OS. This matters if you're signing releases or publishing reproducible artifacts. The archive writer (entry order, `plugin.json` first, fixed timestamps) and the normative exclusion list in step 4 are shared with Daintree's own packer, so the host produces the identical archive when it packs the same file set; the selection rules in step 3 — `.gitignore`, the protected build directories, `.dntrignore`, the dotfile skip, and dropping `*.dntr` — are CLI-side policy that the host's `readdir`-based collector does not apply.
 
 Use `--verbose` to see what's included. Use `--dry-run` to preview without writing the archive.
 
@@ -100,12 +101,12 @@ The following are never included in a `.dntr` archive:
 
 - `node_modules/` — dependency trees
 - `.git/` — repository metadata
-- `.gitignore`'d entries — matched at pack time by the CLI packager
+- `.gitignore`'d entries — matched at pack time by the CLI packager, except for the build-output directories it preserves (`dist/` and whatever directory `main` or a view `componentPath` points into), which ship even when gitignored; `.dntrignore` prunes after that and is the way to drop a file from inside one of them
 - Source files (`*.ts`, `*.tsx`) — the archive ships compiled output
 - Source maps (`*.js.map`, `*.mjs.map`) — excluded by default, included only when `--sourcemaps` is passed to the packager
 - Root-level dev metadata — `package.json`, lockfiles (`package-lock.json`, `npm-shrinkwrap.json`, `yarn.lock`, `pnpm-lock.yaml`, `bun.lock`, `bun.lockb`), `tsconfig*.json`, and any root `*.config.*` (e.g. `vite.config.ts`, `tsup.config.mjs`). Scoped to the archive root only — a runtime asset like `dist/app.config.json` is kept. `package.json` is excluded because it carries the author's full dependency layout and, in a monorepo/`file:` setup, leaks the author's absolute home path into every distributed copy.
 
-The reference implementation in `PluginArchive.ts` applies the explicit exclusion list (`REQUIRED_EXCLUSIONS`, `SOURCE_EXTS`, `ROOT_DEV_FILE_NAMES`, `ROOT_CONFIG_FILE`) at both pack and verify time. Full `.gitignore` matching is the CLI packager's responsibility (F32) since it requires a git working tree.
+The reference implementation in `PluginArchive.ts` applies the explicit exclusion list (`REQUIRED_EXCLUSIONS`, `SOURCE_EXTS`, `ROOT_DEV_FILE_NAMES`, `ROOT_CONFIG_FILE`) at both pack and verify time. `.gitignore` matching, the preserved build-output directories, and `.dntrignore` are the CLI packager's responsibility (`packages/daintree-plugin/src/commands/package.ts`), in that order; the host's own packer sees none of them.
 
 ### SHA-256 archive hash
 

@@ -35,7 +35,7 @@ export async function runSchema(opts: SchemaOptions = {}): Promise<string | null
     $schema: $schema ?? "https://json-schema.org/draft/2020-12/schema",
     title: opts.project ? "Daintree project plugin manifest" : "Daintree plugin manifest",
     description:
-      "Structural rules only — the cross-field rules the host enforces at load (a view's id matching a declared panel's, the contribution types refused under project scope, the reserved daintree.* namespace) cannot be expressed in JSON Schema and are not encoded here.",
+      "Structural rules only — the cross-field rules the host enforces at load (a view's id matching a declared panel's, the contribution types refused under project scope, the reserved daintree.* namespace) are refinements the generated schema omits and are not encoded here.",
     ...body,
   };
 

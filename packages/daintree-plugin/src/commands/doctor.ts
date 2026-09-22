@@ -318,9 +318,11 @@ export async function runDoctor(
     const pluginId = typeof manifest?.name === "string" ? manifest.name : null;
 
     const engines = manifest?.engines as { daintree?: unknown } | undefined;
+    // A warning, not an error: the host loads a plugin outside its engine range
+    // and warns (#12589), so doctor mirrors the severity it will actually see.
     const caret =
       typeof engines?.daintree === "string" ? caretEngineAdvisory(engines.daintree) : null;
-    if (caret) errors.push(caret);
+    if (caret) warnings.push(caret);
 
     const realDir = await fs.realpath(dir).catch(() => path.resolve(dir));
     for (const [label, target] of buildTargets(manifest)) {
