@@ -15,10 +15,13 @@ import {
 import type { PanelViewProps } from "@shared/types/plugin";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import {
+  admitViewReload,
   clearViewRenderFailure,
   getPanelRemovedSignal,
+  isViewReloadBlocked,
   reportViewMounted,
   reportViewRenderFailed,
+  resetViewReloadBudget,
 } from "@/services/plugin/pluginPanelLifecycle";
 import { Package } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
@@ -129,6 +132,12 @@ export interface PluginViewContentProps {
    * — which is why nothing in the recovery UI promises the user a saved panel.
    */
   readRecoveryState?: () => { state?: Record<string, unknown>; version?: number } | null;
+  /**
+   * Hand the view `requestReload` (#12609). Opt-in because the loop guard that
+   * polices it lives on the panel's lifecycle record, so only a host presenting
+   * a real panel — grid, dock, or dialog — can offer it. Project surfaces don't.
+   */
+  offerRequestReload?: boolean;
 }
 
 /**
@@ -211,12 +220,14 @@ function isPluginViewModule(mod: unknown): mod is { default: ComponentType<Panel
  *
  * Lifetime contract — two signals, because a panel outlives its views (#11301):
  *   - `disposeSignal` is per mount attempt. The content creates an
- *     `AbortController` on mount and aborts it when this subtree unmounts, when
- *     "Try again" swaps in a fresh attempt, and when the plugin's kind
- *     disappears from a `plugin:panel-kinds-changed` broadcast (that broadcast
- *     fires before the main process tears down plugin IPC handlers, so
- *     signal-driven cleanup runs while host APIs are still live). A temporary
- *     unmount — maximizing a sibling pane, leaving a dock tab — aborts it too.
+ *     `AbortController` on mount and aborts it when this subtree unmounts (a
+ *     microtask later, so a StrictMode effect replay can call it off), when
+ *     "Try again" or an accepted `requestReload` swaps in a fresh attempt, and
+ *     when the plugin's kind disappears from a `plugin:panel-kinds-changed`
+ *     broadcast (that broadcast fires before the main process tears down plugin
+ *     IPC handlers, so signal-driven cleanup runs while host APIs are still
+ *     live). A temporary unmount — maximizing a sibling pane, leaving a dock
+ *     tab — aborts it too.
  *   - `panelRemovedSignal` is per panel. It comes from `pluginPanelLifecycle`,
  *     which keys it by `panelId` so every mount of the same panel receives the
  *     same object, and aborts it only when the panel is permanently removed. A
@@ -468,6 +479,7 @@ export function makePluginViewContent(
     worktreeId,
     panelRemovedSignal: panelRemovedSignalOverride,
     readRecoveryState,
+    offerRequestReload = false,
   }: PluginViewContentProps) {
     // Resolved before any attempt is built so the first attempt already takes
     // the right path. Reactive, because a slot registered after this panel
@@ -518,6 +530,19 @@ export function makePluginViewContent(
     // counter is observable to the boundary even though the lazy ref lives
     // in its own slot.
     const [retryCount, setRetryCount] = useState(0);
+    /**
+     * The attempt that is current right now, which `retryCount` only catches up
+     * to on the next render. Advanced synchronously wherever an attempt is
+     * retired, so a view's `requestReload` can tell it has been superseded even
+     * before the replacement commits (#12609).
+     */
+    const attemptRef = useRef(0);
+    // Read once per mount from the lifecycle service, which is where the block
+    // lives: a panel stopped for reloading too often stays stopped across a
+    // sibling maximize or a dock-tab switch.
+    const [reloadBlocked, setReloadBlocked] = useState(
+      () => offerRequestReload && isViewReloadBlocked(panelId)
+    );
 
     // Warm the plugin runtime mirror at mount so the dev-mode flag is usually
     // already there if this view later throws. The fallback re-pulls for the
@@ -540,7 +565,20 @@ export function makePluginViewContent(
       controllerRef.current = controller;
     }, [controller]);
 
+    // The abort a teardown has queued but not yet run. See the effect below.
+    const pendingDisposal = useRef<{ cancelled: boolean } | null>(null);
+
     useEffect(() => {
+      // StrictMode replays this effect on mount, running the cleanup and then
+      // this setup back to back in one commit. Aborting inside the cleanup
+      // handed every view an already-aborted `disposeSignal` on its first mount
+      // in development (1db069bf4d). The cleanup now defers the abort by a
+      // microtask and a replayed setup calls it off here; a real unmount never
+      // re-runs setup, so its abort still lands.
+      if (pendingDisposal.current) {
+        pendingDisposal.current.cancelled = true;
+        pendingDisposal.current = null;
+      }
       let disposed = false;
       const electron = typeof window !== "undefined" ? window.electron : undefined;
       const onChanged = electron?.plugin?.onPanelKindsChanged;
@@ -561,7 +599,14 @@ export function makePluginViewContent(
       return () => {
         disposed = true;
         cleanup?.();
-        controllerRef.current?.abort();
+        // Captured now: the microtask must abort the attempt that was live at
+        // teardown, never whichever one happens to be current when it runs.
+        const outgoing = controllerRef.current;
+        const disposal = { cancelled: false };
+        pendingDisposal.current = disposal;
+        queueMicrotask(() => {
+          if (!disposal.cancelled) outgoing.abort();
+        });
       };
     }, []);
 
@@ -641,6 +686,10 @@ export function makePluginViewContent(
      */
     const replaceAttempt = useCallback(
       (requestRecoveryPath: boolean): void => {
+        // Retire the outgoing attempt before aborting its signal: an abort
+        // listener that calls back into `requestReload` must already find its
+        // attempt stale.
+        attemptRef.current += 1;
         // The attempt being built is new, so whatever the last one threw is no
         // longer on screen once it commits.
         boundaryShowingError.current = false;
@@ -670,7 +719,7 @@ export function makePluginViewContent(
         const builtin = builtinComponentRef.current;
         setLazyView(() => createAttempt(requestRecoveryPath, builtin));
         setAttemptBuiltin(() => builtin);
-        setRetryCount((c) => c + 1);
+        setRetryCount(attemptRef.current);
         // The retry is under way, so the panel is no longer failed — it is
         // loading. Clearing here (rather than waiting for the next commit) keeps
         // a worker from seeing a stale `render-failed` for as long as the import
@@ -681,8 +730,19 @@ export function makePluginViewContent(
     );
 
     const handleReset = (): void => {
+      // "Try again" is the user reloading the panel, so it starts the reload
+      // budget over as well (#12609).
+      resetViewReloadBudget(panelId);
       replaceAttempt(lastErrorWasImportStage.current);
     };
+
+    // The user's own reload, and the only thing that lifts a reload block:
+    // neither time nor a backend restart does (#12609).
+    const handleReloadPanel = useCallback(() => {
+      resetViewReloadBudget(panelId);
+      setReloadBlocked(false);
+      replaceAttempt(false);
+    }, [panelId, replaceAttempt]);
 
     // The path this attempt was built for. A change — a slot registering after
     // mount, a builtin re-registering its component, or its plugin toggling —
@@ -718,13 +778,14 @@ export function makePluginViewContent(
       if (worker?.state === "ready") setEverReady(true);
     }, [worker?.state]);
     const [restarting, setRestarting] = useState(false);
-    // Guards the settle: a panel closed mid-restart must not set state on a
-    // subtree React has already torn down.
-    const restartAliveRef = useRef(true);
+    // Guards work that lands after the render that started it — a restart's
+    // settle, a queued reload — so a panel closed in between never sets state
+    // on a subtree React has already torn down.
+    const aliveRef = useRef(true);
     useEffect(() => {
-      restartAliveRef.current = true;
+      aliveRef.current = true;
       return () => {
-        restartAliveRef.current = false;
+        aliveRef.current = false;
       };
     }, []);
     const handleRestartPlugin = useCallback(() => {
@@ -738,7 +799,7 @@ export function makePluginViewContent(
           // which is the state the user needs to see either way.
         })
         .finally(() => {
-          if (restartAliveRef.current) setRestarting(false);
+          if (aliveRef.current) setRestarting(false);
         });
       // `pluginId` is a factory-scope constant, not a reactive value.
     }, []);
@@ -788,6 +849,61 @@ export function makePluginViewContent(
       replaceAttempt(false);
     }, [worker, replaceAttempt]);
 
+    /**
+     * A view's reload request, bound to the attempt that made it (#12609).
+     *
+     * Plugin-initiated, so it is the one replacement that is rationed: user
+     * retries and backend rebinds call `replaceAttempt` directly and are never
+     * charged, while this one passes the panel's budget first.
+     */
+    const requestReloadFor = useCallback(
+      (attempt: number): void => {
+        // Stale the moment its attempt is retired — including by a replacement
+        // still waiting to commit — so a callback that outlived its view can
+        // never reload the view that replaced it.
+        if (attempt !== attemptRef.current) return;
+        // Never acted on inline. A view may call this while rendering, where
+        // setting this component's state or aborting a signal is illegal. The
+        // deferral is also what merges a burst: the first queued request to act
+        // retires the attempt, and the rest find it stale.
+        queueMicrotask(() => {
+          if (!aliveRef.current || attempt !== attemptRef.current) return;
+          // A failed view recovers through the user's Try again, not through a
+          // timer the dead attempt left running.
+          if (boundaryShowingError.current) return;
+          // A backend that is restarting, or already replaced but not yet
+          // rebound, owns this panel's next attempt: the rebind it ends in
+          // replaces the view anyway. Reloading first would spend the budget on
+          // an attempt that is about to be thrown away.
+          const bound = boundWorkerGeneration.current;
+          const live = usePluginRuntimeStatusStore.getState().statusById.get(pluginId)?.worker;
+          if (bound !== null && live && (live.state !== "ready" || live.generation !== bound)) {
+            return;
+          }
+          const admission = admitViewReload(panelId);
+          if (admission === "refused") return;
+          if (admission === "blocked") {
+            // Discard the view it asked to discard, but mount nothing in its
+            // place: retire the attempt so nothing it still holds can act, and
+            // leave the next one to the user.
+            attemptRef.current += 1;
+            controllerRef.current.abort();
+            setReloadBlocked(true);
+            return;
+          }
+          replaceAttempt(false);
+        });
+      },
+      // `pluginId` is a factory-scope constant, not a reactive value.
+      [panelId, replaceAttempt]
+    );
+
+    // One callback per attempt, so a view can safely list it as a dependency.
+    const requestReload = useMemo(
+      () => (offerRequestReload ? () => requestReloadFor(retryCount) : undefined),
+      [offerRequestReload, requestReloadFor, retryCount]
+    );
+
     // Stale content stays visible behind a terminal failure — it is the last
     // thing the plugin actually produced, and blanking it loses context the user
     // may still want to read — but it stops being interactive. Clicking a
@@ -803,9 +919,11 @@ export function makePluginViewContent(
     // Ownership is tracked as it happens rather than read back afterwards: this
     // effect runs after the commit that applied `inert`, by which point the
     // browser may already have blurred the descendant and `document.activeElement`
-    // reads as `body`.
+    // reads as `body`. A reload block, which unmounts the content outright,
+    // strands focus the same way and takes the same rescue.
+    const contentUnavailable = contentInert || reloadBlocked;
     useEffect(() => {
-      if (!contentInert) return;
+      if (!contentUnavailable) return;
       const content = contentNodeRef.current;
       const active = document.activeElement;
       const hadFocus =
@@ -813,7 +931,7 @@ export function makePluginViewContent(
       if (!hadFocus) return;
       focusWasInsideContent.current = false;
       statusRef.current?.focus({ preventScroll: true });
-    }, [contentInert]);
+    }, [contentUnavailable]);
 
     return (
       // Outside the boundary, not inside: the fallback is rendered BY the
@@ -841,6 +959,8 @@ export function makePluginViewContent(
               panelDisplayName={displayName}
               onRestartPlugin={handleRestartPlugin}
               restarting={restarting}
+              reloadBlocked={reloadBlocked}
+              onReloadPanel={handleReloadPanel}
             />
           )}
         </div>
@@ -880,7 +1000,9 @@ export function makePluginViewContent(
         {/* It must not fall through to the `plugin://` path either: a builtin
             ships no bundle there to import. A stale attempt waits one commit
             for the rebind effect. */}
-        {builtinDisabled || attemptBuiltin !== builtinComponent ? null : (
+        {/* A panel stopped for reloading too often renders no view at all —
+            the banner above is the whole pane until the user reloads it. */}
+        {builtinDisabled || reloadBlocked || attemptBuiltin !== builtinComponent ? null : (
           <ErrorBoundary
             // The attempt counter is the boundary's KEY, not its `resetKeys`.
             //
@@ -950,6 +1072,7 @@ export function makePluginViewContent(
                   initialArgs={mountArgs}
                   stateVersion={mountStateVersion}
                   persistState={persistState}
+                  requestReload={requestReload}
                   worktreeId={worktreeId}
                   styleRootAttributes={PLUGIN_STYLE_ROOT_PROPS}
                 />

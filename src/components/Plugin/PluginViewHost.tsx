@@ -168,6 +168,7 @@ export function makePluginViewHost(config: PanelKindConfig): ComponentType<Plugi
             readRecoveryState={readRecoveryState}
             onRequestClose={handleRequestClose}
             worktreeId={panelProps.worktreeId}
+            offerRequestReload
           />
         ) : (
           <PluginViewLoadError

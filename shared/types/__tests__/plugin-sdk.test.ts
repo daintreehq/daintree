@@ -577,6 +577,8 @@ describe("plugin-sdk boundary", () => {
       // Spreadable onto a `createPortal` container, which is the one place a
       // view leaves the subtree the host marked as its style root (#12220).
       expectTypeOf(props.styleRootAttributes).toEqualTypeOf<Readonly<Record<string, string>>>();
+      // Optional: a host that cannot police reload loops offers none (#12609).
+      expectTypeOf(props.requestReload).toEqualTypeOf<(() => void) | undefined>();
     });
 
     it("exposes the panel lifecycle contract as named SDK types", () => {

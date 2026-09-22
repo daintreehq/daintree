@@ -421,6 +421,43 @@ describe("makePluginViewHost", () => {
     }
   });
 
+  it("offers the mounted view requestReload, since it presents a real panel (#12609)", async () => {
+    const capturedProps: Array<Record<string, unknown>> = [];
+    vi.doMock("react", async () => {
+      const actual = await vi.importActual<typeof import("react")>("react");
+      return {
+        ...actual,
+        lazy: () =>
+          function CapturingView(props: Record<string, unknown>) {
+            capturedProps.push(props);
+            return <div data-testid="plugin-view" />;
+          },
+      };
+    });
+
+    try {
+      const { makePluginViewHost } = await import("../PluginViewHost");
+      const Host = makePluginViewHost(makeConfig());
+
+      render(
+        <Host
+          id="panel-reload"
+          title="Dashboard"
+          isFocused={false}
+          onFocus={(): void => {}}
+          onClose={(): void => {}}
+        />
+      );
+
+      await waitFor(() => expect(screen.queryByTestId("plugin-view")).toBeTruthy());
+      // The content withholds it unless the host opts in; grid, dock and
+      // dialog panels all render through this host, so all of them get it.
+      expect(typeof capturedProps[capturedProps.length - 1]!.requestReload).toBe("function");
+    } finally {
+      vi.doUnmock("react");
+    }
+  });
+
   it("keeps the plugin view mounted across panel prop changes (#11240)", async () => {
     // The content component type must be created once, at factory-construction
     // scope. Constructing it during the host's render mints a new type per
