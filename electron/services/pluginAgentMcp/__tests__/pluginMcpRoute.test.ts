@@ -1,5 +1,5 @@
 import http from "node:http";
-import type { AddressInfo } from "node:net";
+import net, { type AddressInfo } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
@@ -459,17 +459,23 @@ describe("PluginMcpRoute", () => {
 
     const { token } = issue();
     const attempts = MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL + 4;
-    const pending = Array.from({ length: attempts }, () => rawRequest({ token }));
+    // Settled into a value up front, so a failure before the barrier cannot
+    // leave these rejecting unhandled.
+    const pending = Array.from({ length: attempts }, () =>
+      rawRequest({ token }).then(
+        async (response) => {
+          await response.body?.cancel();
+          return response.status;
+        },
+        (err: unknown) => err
+      )
+    );
     await waitFor(() => listener.inFlight() === attempts);
-    // Every request passes the cap check in the same turn, before any of them
-    // has reached the SDK.
+    // Every request reaches the cap check in the same turn, before any
+    // session has initialised.
     loadCheck.resolve(true);
 
-    const statuses: number[] = [];
-    for (const response of await Promise.all(pending)) {
-      statuses.push(response.status);
-      await response.body?.cancel();
-    }
+    const statuses = await Promise.all(pending);
     expect(statuses.filter((status) => status === 200)).toHaveLength(
       MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL
     );
@@ -490,7 +496,13 @@ describe("PluginMcpRoute", () => {
     const refused = await rawRequest({ token });
     expect(refused.status).toBe(429);
 
-    for (const request of held) request.finish();
+    // One initialised plus seven still arriving is still the whole cap.
+    held[0].finish();
+    expect(await held[0].outcome).toBe(200);
+    expect(route.sessionCount).toBe(1);
+    expect((await rawRequest({ token })).status).toBe(429);
+
+    for (const request of held.slice(1)) request.finish();
     expect(await Promise.all(held.map((request) => request.outcome))).toEqual(
       Array(MAX_PLUGIN_MCP_SESSIONS_PER_CREDENTIAL).fill(200)
     );
@@ -500,7 +512,9 @@ describe("PluginMcpRoute", () => {
   it("drops a handshake that outlives the deadline and gives its slot back", async () => {
     route.dispose();
     await listener.close();
-    route = makeRoute({ handshakeTimeoutMs: 100 });
+    // Long enough that every held request is admitted, and the ninth refused,
+    // before the first reservation can lapse.
+    route = makeRoute({ handshakeTimeoutMs: 500 });
     listener = await startListener(route);
 
     const { token } = issue();
@@ -519,14 +533,24 @@ describe("PluginMcpRoute", () => {
   });
 
   it("drops pending handshakes on revocation and when the listener stops", async () => {
+    route.dispose();
+    await listener.close();
+    // Past the test timeout, so only the sweeps themselves can end these.
+    route = makeRoute({ handshakeTimeoutMs: 60_000 });
+    listener = await startListener(route);
+
     const { token } = issue();
     const { token: revokedToken } = issue({ terminalId: "term-2" });
     const revoked = holdInitialize(revokedToken);
+    const unaffected = holdInitialize(token);
     const stopped = holdInitialize(token);
-    await waitFor(() => listener.inFlight() === 2);
+    await waitFor(() => listener.inFlight() === 3);
 
     pluginMcpGrantRegistry.revokeTerminal("term-2");
     expect(await revoked.outcome).toBeInstanceOf(Error);
+    unaffected.finish();
+    expect(await unaffected.outcome).toBe(200);
+
     route.closeAllSessions();
     expect(await stopped.outcome).toBeInstanceOf(Error);
 
@@ -555,6 +579,41 @@ describe("PluginMcpRoute", () => {
 
     expect(route.sessionCount).toBe(0);
     await expectFullCapacity(token);
+  });
+
+  it("drops a pipelined handshake whose response is queued behind another", async () => {
+    route.dispose();
+    await listener.close();
+    route = makeRoute({ handshakeTimeoutMs: 100 });
+    listener = await startListener(route);
+
+    const { token } = issue();
+    const opened = await rawRequest({ token });
+    const sessionId = opened.headers.get("mcp-session-id");
+    await opened.body?.cancel();
+    expect(sessionId).toBeTruthy();
+
+    const socket = net.connect(listener.port, "127.0.0.1");
+    socket.on("error", () => {});
+    // Read what arrives: a paused socket never reports the server's close.
+    socket.resume();
+    const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+    const path = pluginMcpRoutePath(INSTANCE, ENDPOINT);
+    const common = `Host: 127.0.0.1:${listener.port}\r\nAuthorization: Bearer ${token}\r\n`;
+    const body = JSON.stringify(INIT_BODY);
+    // The standalone SSE stream holds the connection's response slot, so the
+    // handshake behind it has a response with no socket of its own yet.
+    socket.write(
+      `GET ${path} HTTP/1.1\r\n${common}Accept: text/event-stream\r\n` +
+        `mcp-session-id: ${sessionId}\r\n\r\n` +
+        `POST ${path} HTTP/1.1\r\n${common}Content-Type: application/json\r\n` +
+        `Accept: application/json, text/event-stream\r\n` +
+        `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body.slice(0, -1)}`
+    );
+
+    await closed;
+    await waitFor(() => listener.inFlight() === 0);
+    expect(route.sessionCount).toBe(1);
   });
 
   it("waits for a roster that registers after activation instead of listing nothing", async () => {

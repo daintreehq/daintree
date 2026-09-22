@@ -326,7 +326,12 @@ export class PluginMcpRoute implements PluginMcpRouteHandler {
     // has read its body and initialised it, and every handshake admitted in
     // the meantime has to count this one.
     const newSessionId = randomUUID();
-    this.reserveHandshake(grant.credentialId, newSessionId, () => res.destroy());
+    this.reserveHandshake(grant.credentialId, newSessionId, () => {
+      // The request drops its connection even when a pipelined response is
+      // still queued behind another and has no socket for `res` to destroy.
+      req.destroy();
+      res.destroy();
+    });
     try {
       await this.handleNewSession(req, res, grant, port, epoch, newSessionId);
     } finally {
