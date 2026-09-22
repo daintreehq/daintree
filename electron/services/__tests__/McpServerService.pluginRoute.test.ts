@@ -83,6 +83,7 @@ import { agentMcpEndpointRegistry } from "../pluginAgentMcp/endpointRegistry.js"
 import { pluginMcpGrantRegistry } from "../pluginAgentMcp/grantRegistry.js";
 import { setAgentMcpEndpointEnabled } from "../pluginAgentMcp/projectEnablement.js";
 import { pluginMcpRoutePath, type AgentMcpToolInvoker } from "../pluginAgentMcp/types.js";
+import { compileAgentMcpTool } from "../pluginAgentMcp/validateTools.js";
 
 const API_KEY = "orchestration-api-key";
 const PANE_TOKEN = "pane-token-workbench";
@@ -147,7 +148,11 @@ describe("McpServerService plugin route", () => {
       pluginInstanceId: INSTANCE,
       endpointId: ENDPOINT,
       tools: [
-        { name: "lookup", description: "Look a record up.", inputSchema: { type: "object" } },
+        compileAgentMcpTool({
+          name: "lookup",
+          description: "Look a record up.",
+          inputSchema: { type: "object" },
+        }),
       ],
       invoke,
     });

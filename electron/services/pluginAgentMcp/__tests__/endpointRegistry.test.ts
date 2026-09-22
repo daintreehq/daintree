@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { AgentMcpEndpointRegistry } from "../endpointRegistry.js";
 import type { AgentMcpEndpointRegistration } from "../types.js";
+import { compileAgentMcpTool } from "../validateTools.js";
 
 function registration(
   pluginInstanceId: string,
@@ -10,7 +11,9 @@ function registration(
   return {
     pluginInstanceId,
     endpointId,
-    tools: [{ name: toolName, description: "d", inputSchema: { type: "object" } }],
+    tools: [
+      compileAgentMcpTool({ name: toolName, description: "d", inputSchema: { type: "object" } }),
+    ],
     invoke: vi.fn(async () => null),
   };
 }

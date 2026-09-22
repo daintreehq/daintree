@@ -1657,11 +1657,13 @@ type PluginMcpJsonSchema = {
     type: "object";
 } & Record<string, unknown>;
 /**
- * One tool on an `agentMcp` endpoint. `execute` receives the arguments the
- * agent sent (validated only as a JSON object — checking them against
- * `inputSchema` is the plugin's job), the caller's provenance, and a signal
- * aborted when the call is cancelled, times out, or the plugin unloads. The
- * return value must be JSON-serializable; it reaches the agent as the tool
+ * One tool on an `agentMcp` endpoint. Both schemas are compiled at
+ * registration. `execute` receives the arguments the agent sent, already
+ * checked against `inputSchema` and never coerced, defaulted or stripped; a
+ * call that does not match never reaches it. It also receives the caller's
+ * provenance, and a signal aborted when the call is cancelled, times out, or
+ * the plugin unloads. The return value must be JSON-serializable, and match
+ * `outputSchema` when one is declared; it reaches the agent as the tool
  * result. A thrown error becomes a tool error carrying its message.
  */
 interface PluginMcpToolDefinition {

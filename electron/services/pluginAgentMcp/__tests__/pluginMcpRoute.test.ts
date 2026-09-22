@@ -27,12 +27,8 @@ import {
   parsePluginMcpRoute,
   type PluginMcpRouteDeps,
 } from "../pluginMcpRoute.js";
-import {
-  PLUGIN_MCP_ROUTE_PREFIX,
-  pluginMcpRoutePath,
-  type AgentMcpToolDescriptor,
-  type AgentMcpToolInvoker,
-} from "../types.js";
+import { PLUGIN_MCP_ROUTE_PREFIX, pluginMcpRoutePath, type AgentMcpToolInvoker } from "../types.js";
+import { compileAgentMcpTool } from "../validateTools.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -40,16 +36,16 @@ const INSTANCE = "acme.ledger";
 const OTHER_INSTANCE = "acme.crm";
 const ENDPOINT = "data";
 
-const LOOKUP: AgentMcpToolDescriptor = {
+const LOOKUP = compileAgentMcpTool({
   name: "lookup",
   description: "Look a record up.",
   inputSchema: { type: "object", properties: { id: { type: "string" } } },
-};
-const SUMMARY: AgentMcpToolDescriptor = {
+});
+const SUMMARY = compileAgentMcpTool({
   name: "summary",
   description: "Summarise the ledger.",
   inputSchema: { type: "object" },
-};
+});
 
 const INIT_BODY = {
   jsonrpc: "2.0",
@@ -312,6 +308,20 @@ describe("PluginMcpRoute", () => {
     expect(caller).toEqual(expected);
     expect(Object.isFrozen(caller)).toBe(true);
     expect(JSON.stringify(caller)).not.toContain(token);
+  });
+
+  it("answers arguments that break the input schema with a tool error, over HTTP too", async () => {
+    const { token } = issue();
+    const { client } = await connect(token);
+    const refused = await client.callTool({ name: "lookup", arguments: { id: 7 } });
+    expect(refused.isError).toBe(true);
+    expect(JSON.stringify(refused.content)).toContain("-32602");
+    expect(JSON.stringify(refused.content)).toContain("/id must be string");
+    expect(invoke).not.toHaveBeenCalled();
+
+    const accepted = await client.callTool({ name: "lookup", arguments: { id: "r-1" } });
+    expect(accepted.isError).toBeUndefined();
+    expect(invoke).toHaveBeenCalledTimes(1);
   });
 
   it("answers a missing or orchestration bearer with a 401 challenge", async () => {
