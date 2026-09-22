@@ -79,6 +79,7 @@ import type {
   PluginActionDescriptor,
   PluginInstallOptions,
   PluginInstallError,
+  PluginInstallExpectation,
   PluginInstallResult,
   PluginCheckUpdateResult,
   PluginBackgroundUpdateCheckResult,
@@ -372,9 +373,23 @@ async function handleInstallFromPathOp(
 async function handleInstallFromUrlOp(
   ctx: IpcContext,
   url: string,
-  jobId?: string
+  jobId?: string,
+  expected?: PluginInstallExpectation
 ): Promise<PluginInstallResult> {
-  return withInstallJob(ctx, jobId, (id) => handleInstallFromUrl(url, id));
+  return withInstallJob(ctx, jobId, (id) => handleInstallFromUrl(url, id, expected));
+}
+
+const ARCHIVE_HASH_PATTERN = /^[0-9a-f]{64}$/;
+
+function isInstallExpectation(value: unknown): value is PluginInstallExpectation {
+  if (typeof value !== "object" || value === null) return false;
+  const { pluginId, archiveHash } = value as Record<string, unknown>;
+  return (
+    typeof pluginId === "string" &&
+    SCOPED_PLUGIN_NAME_PATTERN.test(pluginId) &&
+    typeof archiveHash === "string" &&
+    ARCHIVE_HASH_PATTERN.test(archiveHash)
+  );
 }
 
 /**
@@ -391,10 +406,16 @@ async function handleInstallFromUrlOp(
  * tailored message; the handler-owned temp file is always removed in `finally`
  * (PluginService extracts into its own temp dir and doesn't take ownership of
  * the download artifact).
+ *
+ * `expected` binds a confirmed update to the archive its preview was read from
+ * (#12612): the installer refuses the download unless its digest and
+ * `manifest.name` match. Omitted for ordinary URL installs, including the
+ * `daintree-plugin install` CLI, which has no preview step.
  */
 export async function handleInstallFromUrl(
   url: string,
-  jobId?: string
+  jobId?: string,
+  expected?: PluginInstallExpectation
 ): Promise<PluginInstallResult> {
   if (typeof url !== "string" || url.trim().length === 0) {
     return { status: "invalid-url" };
@@ -423,6 +444,15 @@ export async function handleInstallFromUrl(
     status: "failed",
     errors: [{ code, message }],
   });
+
+  // A binding that arrives malformed must fail closed — falling back to an
+  // unbound install would quietly drop the guarantee the caller asked for.
+  if (expected !== undefined && !isInstallExpectation(expected)) {
+    return failed(
+      "archive_mismatch",
+      "The update approval was malformed, so nothing was installed."
+    );
+  }
 
   const tempPath = path.join(os.tmpdir(), `daintree-plugin-${crypto.randomUUID()}.dntr`);
   // Redirects are followed MANUALLY so every hop's host is revalidated through
@@ -545,10 +575,15 @@ export async function handleInstallFromUrl(
     const service = await getPluginService();
     // See `handleInstall` — the same init gate, for the same two reasons.
     await service.waitForInit();
-    return service.installPlugin(tempPath, {
+    // Awaited, not returned bare: the `finally` below deletes the download, and
+    // a bare `return` would run it while the installer is still reading it.
+    return await service.installPlugin(tempPath, {
       source: "url",
       originalUrl: trimmed,
       ...(jobId === undefined ? {} : { jobId }),
+      ...(expected === undefined
+        ? {}
+        : { expected: { pluginId: expected.pluginId, archiveHash: expected.archiveHash } }),
     });
   } finally {
     if (wroteTempFile) {

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { rm, writeFile } from "node:fs/promises";
+import { access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { markAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
@@ -628,6 +628,85 @@ describe("registerPluginHandlers", () => {
     const [archivePath, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
     expect(archivePath).toMatch(/daintree-plugin-.*\.dntr$/);
     expect(opts).toEqual({ source: "url", originalUrl: "https://example.com/p.dntr" });
+  });
+
+  // #12612: a confirmed update carries the reviewed archive's identity + digest
+  // so the installer can refuse whatever else the second download returns.
+  const REVIEWED = { pluginId: "acme.my-plugin", archiveHash: "a".repeat(64) };
+
+  it("PLUGIN_INSTALL_FROM_URL forwards a reviewed-update expectation to the installer", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    await handler(
+      { sender: { id: 1 } },
+      "https://example.com/p.dntr",
+      undefined,
+      // Extra keys from the renderer are dropped, not passed through.
+      { ...REVIEWED, smuggled: true }
+    );
+    const [, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
+    expect(opts).toEqual({
+      source: "url",
+      originalUrl: "https://example.com/p.dntr",
+      expected: REVIEWED,
+    });
+  });
+
+  it.each([
+    ["null", null],
+    ["a non-object", "acme.my-plugin"],
+    ["a missing hash", { pluginId: "acme.my-plugin" }],
+    ["an empty hash", { pluginId: "acme.my-plugin", archiveHash: "" }],
+    ["an uppercase hash", { pluginId: "acme.my-plugin", archiveHash: "A".repeat(64) }],
+    ["an unscoped plugin id", { pluginId: "../victim", archiveHash: "a".repeat(64) }],
+  ])(
+    "PLUGIN_INSTALL_FROM_URL refuses %s expectation without downloading",
+    async (_label, expected) => {
+      const handler = getHandler("plugin:install-from-url");
+      const result = (await handler(
+        { sender: { id: 1 } },
+        "https://example.com/p.dntr",
+        undefined,
+        expected
+      )) as { status: string; errors: Array<{ code: string }> };
+      // Failing closed: a broken binding must never degrade to an unbound install.
+      expect(result.status).toBe("failed");
+      expect(result.errors[0]!.code).toBe("archive_mismatch");
+      expect(mockNetFetch).not.toHaveBeenCalled();
+      expect(mockInstallPlugin).not.toHaveBeenCalled();
+    }
+  );
+
+  it("PLUGIN_INSTALL_FROM_URL keeps the download on disk until the installer settles", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    let presentMidInstall: boolean | undefined;
+    let downloadPath = "";
+    mockInstallPlugin.mockImplementationOnce(async (archivePath: string) => {
+      downloadPath = archivePath;
+      // Yield past the handler's own continuation, as the real installer does
+      // while it takes the install lock, before it ever reads the file.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      presentMidInstall = await access(archivePath).then(
+        () => true,
+        () => false
+      );
+      return { status: "installed", pluginId: "acme.my-plugin" };
+    });
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/p.dntr");
+    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+    expect(presentMidInstall).toBe(true);
+    // ...and still reaped once the install is done.
+    expect(
+      await access(downloadPath).then(
+        () => true,
+        () => false
+      )
+    ).toBe(false);
   });
 
   it("PLUGIN_INSTALL_FROM_URL accepts application/x-dntr content type", async () => {

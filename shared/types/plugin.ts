@@ -1438,6 +1438,12 @@ export type PluginCheckUpdateResult =
       version: string;
       displayName?: string;
       capabilities: PluginCapability[];
+      /**
+       * SHA-256 of the archive this preview was read from. A confirmed update
+       * passes it back as {@link PluginInstallExpectation.archiveHash} so the
+       * install refuses any bytes other than the ones the user reviewed (#12612).
+       */
+      archiveHash: string;
     }
   | { status: "invalid-id" }
   | { status: "fetch-failed"; message: string };
@@ -1555,6 +1561,10 @@ export interface InstalledPluginRecord {
  * - `namespace_unauthorized` — reserved `daintree.*` name or publisher/name disagreement
  * - `name_collision` — the id matches a built-in or a launch-reserved plugin name; rejected before the swap so no broken dir is left
  * - `hash_failed` — couldn't compute the archive SHA-256
+ * - `archive_mismatch` — the install carried an {@link PluginInstallExpectation} (a
+ *   reviewed update) and the archive's digest or `manifest.name` differs from it;
+ *   refused before extraction (digest) or before the swap (name), so nothing runs
+ *   or is replaced
  * - `unload_failed` — the existing plugin's disposer cascade threw
  * - `swap_failed` — atomic rename failed but the prior state was restored
  * - `swap_unrecoverable` — rename failed AND rollback failed; on-disk state is inconsistent
@@ -1578,6 +1588,7 @@ export type PluginInstallErrorCode =
   | "namespace_unauthorized"
   | "name_collision"
   | "hash_failed"
+  | "archive_mismatch"
   | "unload_failed"
   | "swap_failed"
   | "swap_unrecoverable"
@@ -1641,6 +1652,24 @@ export interface PluginInstallOptions {
    * without progress events or a cancel target. Not persisted.
    */
   jobId?: string;
+  /**
+   * The archive a user approved from an update preview. When set, the install
+   * is refused unless the archive's SHA-256 and `manifest.name` both match it.
+   * Transient: checked, never persisted.
+   */
+  expected?: PluginInstallExpectation;
+}
+
+/**
+ * Binds a confirmed update to the archive its preview was read from (#12612).
+ * The confirm re-downloads the URL, so without this the server could answer the
+ * check with one archive and the install with another. Both fields come from the
+ * `available` {@link PluginCheckUpdateResult}: `pluginId` is the installed
+ * plugin's `manifest.name`, `archiveHash` the reviewed archive's digest.
+ */
+export interface PluginInstallExpectation {
+  pluginId: string;
+  archiveHash: string;
 }
 
 /**

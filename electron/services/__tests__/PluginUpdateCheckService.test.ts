@@ -65,6 +65,7 @@ function available(name: string, version: string) {
     version,
     displayName: name,
     capabilities: ["commands"],
+    archiveHash: "f".repeat(64),
   };
 }
 

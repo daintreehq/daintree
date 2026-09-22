@@ -1267,7 +1267,11 @@ export interface GeneratedIpcInvokeMap {
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:install-from-url": {
-    args: [url: string, jobId?: string | undefined];
+    args: [
+      url: string,
+      jobId?: string | undefined,
+      expected?: import("../plugin.js").PluginInstallExpectation | undefined,
+    ];
     result: import("../plugin.js").PluginInstallResult;
   };
   "plugin:keybindings": {

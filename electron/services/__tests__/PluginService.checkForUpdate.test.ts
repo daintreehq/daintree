@@ -29,6 +29,10 @@ const storeMock = vi.hoisted(() => {
     _state: state,
   };
 });
+// Consent pins are purged when an upgrade actually swaps (#12612 binding tests);
+// stubbed so those assertions don't stand up real consent persistence.
+const consentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
+const capConsentMock = vi.hoisted(() => ({ revokeAllForPlugin: vi.fn(() => true) }));
 
 vi.mock("electron", () => ({
   app: appMock,
@@ -92,8 +96,20 @@ vi.mock("../PluginMcpSupervisor.js", () => ({
   }),
 }));
 
+vi.mock("../plugin-mcp/instances.js", () => ({
+  getPluginMcpConsentService: () => consentMock,
+  getPluginMcpRateLimiter: () => ({ dropPlugin: vi.fn() }),
+}));
+vi.mock("../plugin-capability/instances.js", () => ({
+  getPluginCapabilityConsentService: () => capConsentMock,
+}));
+
+import { createHash } from "crypto";
 import { PluginService } from "../PluginService.js";
 import { packPluginArchive } from "../PluginArchive.js";
+// Namespace import so the binding tests can prove a refused archive is never
+// extracted, not merely never swapped in.
+import * as PluginArchive from "../PluginArchive.js";
 import { MAX_DNTR_BYTES } from "../../utils/pluginArchiveConstants.js";
 
 const storeState = storeMock._state;
@@ -336,6 +352,9 @@ describe("checkForUpdate — hash comparison", () => {
       version: "2.0.0",
       displayName: "Acme Diff Pro",
       capabilities: ["network:fetch", "git:read"],
+      // The digest of the bytes previewed, not the installed baseline — it is
+      // what a confirmed update is later held to (#12612).
+      archiveHash: createHash("sha256").update(bytes).digest("hex"),
     });
     expect(await leftoverTempDirs()).toHaveLength(0);
     service.dispose();
@@ -510,6 +529,147 @@ describe("checkForUpdate — fetch failures", () => {
 
     expect(result.status).toBe("fetch-failed");
     expect(await leftoverTempDirs()).toHaveLength(0);
+    service.dispose();
+  });
+});
+
+// #12612 regression: the confirm re-downloads the URL, so a server (or anyone on
+// an http path) can answer the check with archive A and the install with B. The
+// binding the preview hands back must stop every B variant from running or
+// replacing anything, while the reviewed A still installs.
+describe("checkForUpdate → install binding (#12612)", () => {
+  const TARGET = "acme.target";
+  const VICTIM = "acme.victim";
+  const TARGET_URL = "https://example.com/target.dntr";
+
+  /** Pack at a caller-named path: same-name/version variants must not collide. */
+  async function packAs(
+    label: string,
+    manifest: ManifestShape,
+    files: Record<string, string> = {}
+  ): Promise<string> {
+    const src = await fs.mkdtemp(path.join(tmpDir, "variant-"));
+    await fs.writeFile(path.join(src, "plugin.json"), JSON.stringify(manifest));
+    for (const [rel, content] of Object.entries(files)) {
+      await fs.mkdir(path.dirname(path.join(src, rel)), { recursive: true });
+      await fs.writeFile(path.join(src, rel), content);
+    }
+    const out = path.join(tmpDir, `${label}.dntr`);
+    await packPluginArchive(src, out);
+    return out;
+  }
+
+  const reviewedManifest = {
+    name: TARGET,
+    version: "2.0.0",
+    capabilities: ["git:read"],
+  };
+  const reviewedFiles = { "dist/index.js": "module.exports = { reviewed: true };" };
+
+  async function readManifestVersion(pluginId: string): Promise<string> {
+    const raw = await fs.readFile(path.join(pluginsRoot, pluginId, "plugin.json"), "utf-8");
+    return (JSON.parse(raw) as { version: string }).version;
+  }
+
+  function recordedHash(pluginId: string): string | undefined {
+    return (storeState.get("plugins") as { installed: Record<string, { archiveHash: string }> })
+      .installed[pluginId]?.archiveHash;
+  }
+
+  /** Install target + victim at v1, then preview the reviewed archive A. */
+  async function reviewUpdate(service: PluginService) {
+    await installUrlPlugin(service, { name: TARGET, version: "1.0.0" }, TARGET_URL);
+    await installUrlPlugin(
+      service,
+      { name: VICTIM, version: "1.0.0" },
+      "https://example.com/victim.dntr"
+    );
+    const reviewed = await packAs("reviewed-a", reviewedManifest, reviewedFiles);
+    netMock.fetch.mockResolvedValueOnce(
+      fakeResponse([new Uint8Array(await fs.readFile(reviewed))])
+    );
+
+    const result = await service.checkForUpdate(TARGET);
+    if (result.status !== "available") throw new Error(`expected available, got ${result.status}`);
+    // What confirmReinstall sends back: the installed plugin's id + the preview digest.
+    return { reviewed, expected: { pluginId: TARGET, archiveHash: result.archiveHash } };
+  }
+
+  it.each([
+    [
+      "different payload bytes",
+      () =>
+        packAs("b-bytes", reviewedManifest, {
+          "dist/index.js": "module.exports = { reviewed: false };",
+        }),
+    ],
+    [
+      "different capabilities",
+      () =>
+        packAs(
+          "b-caps",
+          { ...reviewedManifest, capabilities: ["git:read", "network:fetch"] },
+          reviewedFiles
+        ),
+    ],
+    [
+      "a manifest.name naming another installed plugin",
+      () => packAs("b-victim", { name: VICTIM, version: "2.0.0" }, reviewedFiles),
+    ],
+  ])("refuses a second download with %s", async (_label, makeSwapped) => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const { expected } = await reviewUpdate(service);
+    const targetHash = recordedHash(TARGET);
+    const victimHash = recordedHash(VICTIM);
+    const swapped = await makeSwapped();
+    const extractSpy = vi.spyOn(PluginArchive, "extractPluginArchive");
+    consentMock.revokeAllForPlugin.mockClear();
+    capConsentMock.revokeAllForPlugin.mockClear();
+
+    try {
+      const result = await service.installPlugin(swapped, {
+        source: "url",
+        originalUrl: TARGET_URL,
+        expected,
+      });
+
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
+      // Never unpacked, so nothing in it could run...
+      expect(extractSpy).not.toHaveBeenCalled();
+      // ...and nothing was replaced: both plugins keep their v1 dir and record,
+      // and neither had its consent pins reset by an upgrade.
+      expect(await readManifestVersion(TARGET)).toBe("1.0.0");
+      expect(await readManifestVersion(VICTIM)).toBe("1.0.0");
+      expect(recordedHash(TARGET)).toBe(targetHash);
+      expect(recordedHash(VICTIM)).toBe(victimHash);
+      expect(consentMock.revokeAllForPlugin).not.toHaveBeenCalled();
+      expect(capConsentMock.revokeAllForPlugin).not.toHaveBeenCalled();
+      const leftovers = (await fs.readdir(pluginsRoot)).filter(
+        (e) => e.startsWith(".install-tmp-") || e.includes(".old-")
+      );
+      expect(leftovers).toHaveLength(0);
+    } finally {
+      extractSpy.mockRestore();
+      service.dispose();
+    }
+  });
+
+  it("installs the reviewed archive when the second download returns the same bytes", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const { reviewed, expected } = await reviewUpdate(service);
+
+    const result = await service.installPlugin(reviewed, {
+      source: "url",
+      originalUrl: TARGET_URL,
+      expected,
+    });
+
+    expect(result).toEqual({ status: "installed", pluginId: TARGET });
+    expect(await readManifestVersion(TARGET)).toBe("2.0.0");
+    expect(recordedHash(TARGET)).toBe(expected.archiveHash);
+    expect(await readManifestVersion(VICTIM)).toBe("1.0.0");
+
     service.dispose();
   });
 });

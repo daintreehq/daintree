@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createHash } from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import os from "os";
@@ -1221,6 +1222,114 @@ describe("installPlugin — blocklist interaction (#10891)", () => {
     expect(info?.blocklisted).toBe(false);
     expect(info?.manifest.version).toBe("1.0.0");
     expect(info?.loadedAt).toBeGreaterThan(0);
+
+    service.dispose();
+  });
+});
+
+// #12612: a confirmed update re-downloads its URL, so the installer is handed the
+// reviewed archive's identity + digest and must refuse anything else — before
+// extraction for the digest, before any destination is touched for the name.
+describe("installPlugin — reviewed-update binding (#12612)", () => {
+  async function sha256(file: string): Promise<string> {
+    return createHash("sha256")
+      .update(await fs.readFile(file))
+      .digest("hex");
+  }
+
+  function recordedHash(pluginId: string): string | null {
+    const plugins = storeState.get("plugins") as {
+      installed: Record<string, { archiveHash: string | null }>;
+    };
+    return plugins.installed[pluginId]?.archiveHash ?? null;
+  }
+
+  async function stagingLeftovers(): Promise<string[]> {
+    const entries = await fs.readdir(pluginsRoot);
+    return entries.filter((e) => e.startsWith(".install-tmp-") || e.includes(".old-"));
+  }
+
+  it("installs an archive whose digest and name match the expectation", async () => {
+    const archive = await makeArchive({ name: "acme.bound", version: "2.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const archiveHash = await sha256(archive);
+
+    const result = await service.installPlugin(archive, {
+      source: "url",
+      originalUrl: "https://example.com/bound.dntr",
+      expected: { pluginId: "acme.bound", archiveHash },
+    });
+
+    expect(result).toEqual({ status: "installed", pluginId: "acme.bound" });
+    expect(recordedHash("acme.bound")).toBe(archiveHash);
+
+    service.dispose();
+  });
+
+  it("refuses a digest mismatch before extracting a single entry", async () => {
+    const archive = await makeArchive(
+      { name: "acme.swapped", version: "2.0.0" },
+      { "dist/index.js": "module.exports = {};" }
+    );
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const extractSpy = vi.spyOn(PluginArchive, "extractPluginArchive");
+
+    try {
+      const result = await service.installPlugin(archive, {
+        source: "url",
+        expected: { pluginId: "acme.swapped", archiveHash: "0".repeat(64) },
+      });
+
+      expect(result.status).toBe("failed");
+      if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
+      expect(extractSpy).not.toHaveBeenCalled();
+      expect(await exists(path.join(pluginsRoot, "acme.swapped"))).toBe(false);
+      expect(await stagingLeftovers()).toHaveLength(0);
+    } finally {
+      extractSpy.mockRestore();
+      service.dispose();
+    }
+  });
+
+  it("refuses an archive naming another installed plugin even when its digest matches", async () => {
+    // The digest check alone would pass here — the renderer's binding named the
+    // wrong plugin — so the name check is what keeps `acme.victim` in place.
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const victim = await makeArchive({ name: "acme.victim", version: "1.0.0" }, { "v1.txt": "1" });
+    expect((await service.installPlugin(victim)).status).toBe("installed");
+    const victimHash = recordedHash("acme.victim");
+
+    const hostile = await makeArchive({ name: "acme.victim", version: "6.6.6" }, { "v6.txt": "6" });
+    const result = await service.installPlugin(hostile, {
+      source: "url",
+      expected: { pluginId: "acme.target", archiveHash: await sha256(hostile) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") {
+      expect(result.errors[0]?.code).toBe("archive_mismatch");
+      expect(result.errors[0]?.message).toContain("acme.victim");
+    }
+    expect(await exists(path.join(pluginsRoot, "acme.victim", "v1.txt"))).toBe(true);
+    expect(await exists(path.join(pluginsRoot, "acme.victim", "v6.txt"))).toBe(false);
+    expect(recordedHash("acme.victim")).toBe(victimHash);
+    expect(await stagingLeftovers()).toHaveLength(0);
+
+    service.dispose();
+  });
+
+  it("refuses a directory source, which has no digest to verify", async () => {
+    const src = await makeSourceDir({ name: "acme.dir-bound", version: "1.0.0" });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    const result = await service.installPlugin(src, {
+      expected: { pluginId: "acme.dir-bound", archiveHash: "0".repeat(64) },
+    });
+
+    expect(result.status).toBe("failed");
+    if (result.status === "failed") expect(result.errors[0]?.code).toBe("archive_mismatch");
+    expect(await exists(path.join(pluginsRoot, "acme.dir-bound"))).toBe(false);
+    expect(await stagingLeftovers()).toHaveLength(0);
 
     service.dispose();
   });
