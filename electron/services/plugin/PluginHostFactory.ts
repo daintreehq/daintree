@@ -1,4 +1,5 @@
-import fs from "fs/promises";
+import fs, { type FileHandle } from "fs/promises";
+import type { BigIntStats } from "fs";
 import path from "path";
 import { createHash } from "node:crypto";
 import { resilientAtomicWriteFile } from "../../utils/fs.js";
@@ -2082,14 +2083,75 @@ function sha256Hex(bytes: Uint8Array): string {
 }
 
 /**
- * A checked-write refusal (#12323). The code rides on the error object for
+ * A `host.fs` target refusal (#12323). The code rides on the error object for
  * in-process callers and prefixes the message for callers behind a boundary
  * that keeps only the message.
  */
-function fsWriteError(code: PluginFsWriteErrorCode, message: string): Error & { code: string } {
+function fsTargetError(code: PluginFsWriteErrorCode, message: string): Error & { code: string } {
   const error = new Error(`${code}: ${message}`) as Error & { code: string };
   error.code = code;
   return error;
+}
+
+/**
+ * Open a contained leaf for reading and prove the descriptor is the entry
+ * containment approved before a byte is read (#12618). O_NOFOLLOW refuses a
+ * leaf swapped for a symlink after containment realpathed it, but only on
+ * POSIX — Windows has no such flag. So the descriptor is also compared with
+ * whatever now stands at the path: a symlink there, or a different file, means
+ * the open may have followed something containment never saw. A legitimate
+ * replace landing between the open and the compare is refused too; the caller
+ * reads again.
+ *
+ * Ancestor directories stay out of scope, as for every other read here: the
+ * open is by pathname, and O_NOFOLLOW and the compare both cover only the leaf.
+ */
+async function withVerifiedReadHandle<T>(
+  pluginId: string,
+  op: string,
+  resolved: string,
+  extraFlags: number,
+  read: (handle: FileHandle, opened: BigIntStats) => Promise<T>
+): Promise<T> {
+  let handle: FileHandle;
+  try {
+    handle = await fs.open(
+      resolved,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | extraFlags
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ELOOP") {
+      throw fsTargetError(
+        "TARGET_IS_SYMLINK",
+        `Plugin "${pluginId}" fs.${op}: refusing to follow a symlink at the target`
+      );
+    }
+    throw error;
+  }
+  try {
+    const [opened, entry] = await Promise.all([
+      handle.stat({ bigint: true }),
+      fs.lstat(resolved, { bigint: true }).catch((error: NodeJS.ErrnoException) => {
+        if (error.code === "ENOENT") return null;
+        throw error;
+      }),
+    ]);
+    if (entry?.isSymbolicLink()) {
+      throw fsTargetError(
+        "TARGET_IS_SYMLINK",
+        `Plugin "${pluginId}" fs.${op}: refusing to follow a symlink at the target`
+      );
+    }
+    if (entry === null || entry.dev !== opened.dev || entry.ino !== opened.ino) {
+      throw fsTargetError(
+        "TARGET_UNAVAILABLE",
+        `Plugin "${pluginId}" fs.${op}: the target changed while it was being opened`
+      );
+    }
+    return await read(handle, opened);
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
@@ -2172,7 +2234,9 @@ function buildFsApi(
       // Deliberately no 500KB / binary cap — this is a sanctioned plugin API,
       // not the size-limited files.read preview path. The signal cancels the
       // read itself (Node honors it) as well as the boundary checks above.
-      return fs.readFile(resolved, { encoding: "utf-8", signal: options?.signal });
+      return withVerifiedReadHandle(pluginId, "readFile", resolved, 0, (handle) =>
+        handle.readFile({ encoding: "utf-8", signal: options?.signal })
+      );
     },
     readFileBytes: async (filePath, options) => {
       options?.signal?.throwIfAborted();
@@ -2181,7 +2245,13 @@ function buildFsApi(
       const { resolved, rootClass } = await containWithClass(filePath);
       requireLoaded("readFileBytes");
       requireReadCapForClass("readFileBytes", rootClass);
-      const buffer = await fs.readFile(resolved, { signal: options?.signal });
+      const buffer = await withVerifiedReadHandle(
+        pluginId,
+        "readFileBytes",
+        resolved,
+        0,
+        (handle) => handle.readFile({ signal: options?.signal })
+      );
       // Copy out of Node's pooled Buffer allocator: a small read shares its
       // backing ArrayBuffer with unrelated reads, so handing the view straight
       // to a plugin would expose whatever else the pool holds.
@@ -2202,43 +2272,39 @@ function buildFsApi(
       requireLoaded("readFileBounded");
       requireReadCapForClass("readFileBounded", rootClass);
       // O_NONBLOCK (undefined on Windows) so a FIFO standing where a regular
-      // file was cannot leave the open pending with no writer, and O_NOFOLLOW
-      // so the leaf cannot be swapped for a symlink after containment
-      // realpathed it. The regular-file check below is on the descriptor this
-      // open returned, not on a path that could since have become something
-      // else — a path stat is evidence about a name, not about an fd.
+      // file was cannot leave the open pending with no writer. The
+      // regular-file check below is on the descriptor this open returned, not
+      // on a path that could since have become something else — a path stat
+      // is evidence about a name, not about an fd.
       //
       // What this does not close, and neither does any other read here: the
       // open is still by pathname, so an ANCESTOR directory swapped for a
-      // symlink between containment and this line resolves somewhere else —
-      // O_NOFOLLOW covers only the last component. Closing that needs the
-      // whole walk opened directory by directory, which is a change to
-      // containment rather than to one read. On Windows neither flag exists,
-      // so the descriptor check is the only guard there.
-      const handle = await fs.open(
+      // symlink between containment and this line resolves somewhere else.
+      // Closing that needs the whole walk opened directory by directory,
+      // which is a change to containment rather than to one read.
+      return withVerifiedReadHandle(
+        pluginId,
+        "readFileBounded",
         resolved,
-        fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0) | (fs.constants.O_NONBLOCK ?? 0)
-      );
-      try {
-        const opened = await handle.stat();
-        if (!opened.isFile()) return { status: "not-a-file" as const };
-        // limit + 1: the extra byte is how an oversized file is recognised
-        // without ever holding more than the cap plus one byte of it.
-        const buffer = Buffer.allocUnsafe(limit + 1);
-        let filled = 0;
-        while (filled <= limit) {
-          options?.signal?.throwIfAborted();
-          const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
-          if (bytesRead === 0) break;
-          filled += bytesRead;
+        fs.constants.O_NONBLOCK ?? 0,
+        async (handle, opened) => {
+          if (!opened.isFile()) return { status: "not-a-file" as const };
+          // limit + 1: the extra byte is how an oversized file is recognised
+          // without ever holding more than the cap plus one byte of it.
+          const buffer = Buffer.allocUnsafe(limit + 1);
+          let filled = 0;
+          while (filled <= limit) {
+            options?.signal?.throwIfAborted();
+            const { bytesRead } = await handle.read(buffer, filled, buffer.length - filled, null);
+            if (bytesRead === 0) break;
+            filled += bytesRead;
+          }
+          if (filled > limit) return { status: "too-large" as const };
+          // Copied out of the pooled allocator for the same reason
+          // `readFileBytes` copies: the pool's backing store holds other reads.
+          return { status: "ok" as const, bytes: new Uint8Array(buffer.subarray(0, filled)) };
         }
-        if (filled > limit) return { status: "too-large" as const };
-        // Copied out of the pooled allocator for the same reason
-        // `readFileBytes` copies: the pool's backing store holds other reads.
-        return { status: "ok" as const, bytes: new Uint8Array(buffer.subarray(0, filled)) };
-      } finally {
-        await handle.close();
-      }
+      );
     },
     writeFile: async (filePath, contents, options) => {
       requireLoaded("writeFile");
@@ -2246,20 +2312,17 @@ function buildFsApi(
       if (typeof contents !== "string") {
         throw new Error(`Plugin "${pluginId}" fs.writeFile: contents must be a string`);
       }
-      // The presence of an options object — even `{}` — selects the checked
-      // write (#12323); a malformed one is an authoring error, not a plain
-      // write in disguise.
-      const checked = options !== undefined;
-      if (checked) {
-        if (options === null || typeof options !== "object") {
-          throw new Error(`Plugin "${pluginId}" fs.writeFile: options must be an object`);
-        }
-        const expected = options.expectedRevision;
-        if (expected !== undefined && expected !== null && !/^[0-9a-f]{64}$/.test(expected)) {
-          throw new Error(
-            `Plugin "${pluginId}" fs.writeFile: expectedRevision must be a sha256 hex string or null`
-          );
-        }
+      // Omitted options is the same write as `{}` (#12618): every call shape
+      // gets the recheck, the symlink refusal and the atomic replace. A
+      // malformed options value is an authoring error, never read as absent.
+      if (options !== undefined && (options === null || typeof options !== "object")) {
+        throw new Error(`Plugin "${pluginId}" fs.writeFile: options must be an object`);
+      }
+      const expected = options?.expectedRevision;
+      if (expected !== undefined && expected !== null && !/^[0-9a-f]{64}$/.test(expected)) {
+        throw new Error(
+          `Plugin "${pluginId}" fs.writeFile: expectedRevision must be a sha256 hex string or null`
+        );
       }
       // Lazily materialize the implicit per-plugin data dir before containment
       // when the target (lexically) lands inside it — resolveContainedPath
@@ -2295,31 +2358,36 @@ function buildFsApi(
       // anyway never banks a grant (#10524). Re-check liveness after the await.
       await ensureCapabilityConsent(deps, pluginId, writeCap);
       requireLoaded("writeFile");
-      // One writer per resolved path at a time, plain and checked alike, so a
-      // checked write's hash-compare-and-replace cannot interleave with any
-      // other host-mediated writer to the same file. Distinct paths never wait
-      // on each other.
+      // One writer per resolved path at a time, so a hash-compare-and-replace
+      // cannot interleave with any other host-mediated writer to the same
+      // file. Distinct paths never wait on each other.
       const revision = await runExclusive(resolved, async () => {
-        if (!checked) {
-          // The plain write, exactly as before: no further liveness check, so
-          // a plugin unloading while its write was queued still lands it, as
-          // it did when the write started immediately after consent.
-          await fs.writeFile(resolved, contents, "utf-8");
-          return sha256Hex(Buffer.from(contents, "utf-8"));
-        }
+        // A write queued behind another can outlive its plugin; say so before
+        // the recheck below misreports an unloaded plugin's roots as scope.
+        requireLoaded("writeFile");
         // Containment resolved before the consent prompt and the queue wait;
         // both can take long enough for the path to change underneath, so the
-        // checked path proves it again inside the critical section.
-        const recheck = await containWithClass(filePath);
+        // write proves it again inside the critical section. A target that has
+        // since left scope moved while waiting, the same as one that moved
+        // within it.
+        const recheck = await containWithClass(filePath).catch((error: unknown) => {
+          if (error instanceof PluginPathNotAllowedError) {
+            throw fsTargetError(
+              "TARGET_UNAVAILABLE",
+              `Plugin "${pluginId}" fs.writeFile: the target moved while the write was waiting`
+            );
+          }
+          throw error;
+        });
         if (recheck.resolved !== resolved) {
-          throw fsWriteError(
+          throw fsTargetError(
             "TARGET_UNAVAILABLE",
             `Plugin "${pluginId}" fs.writeFile: the target moved while the write was waiting`
           );
         }
-        // Symlinks are refused on the checked path: containment realpaths the
-        // leaf, so `resolved` is already the link's destination and a bare
-        // lstat there sees a regular file. Inspect the requested leaf itself.
+        // A symlink leaf is refused: containment realpaths the leaf, so
+        // `resolved` is already the link's destination and a bare lstat there
+        // sees a regular file. Inspect the requested leaf itself.
         // Every ancestor was validated by containment; only the leaf can be a
         // link the caller did not ask to write through.
         const requestedLeaf = path.resolve(filePath);
@@ -2328,12 +2396,11 @@ function buildFsApi(
           throw error;
         });
         if (leafStat?.isSymbolicLink()) {
-          throw fsWriteError(
+          throw fsTargetError(
             "TARGET_IS_SYMLINK",
             `Plugin "${pluginId}" fs.writeFile: refusing to write through a symlink`
           );
         }
-        const expected = options.expectedRevision;
         const bytes = Buffer.from(contents, "utf-8");
         if (expected === null) {
           // Create-new is an exclusive create at the filesystem, not a check
@@ -2342,7 +2409,7 @@ function buildFsApi(
           // a case-insensitive volume. A directory or any other entry at the
           // leaf reads as "exists" without being opened.
           if (leafStat !== null) {
-            throw fsWriteError(
+            throw fsTargetError(
               "TARGET_EXISTS",
               `Plugin "${pluginId}" fs.writeFile: the target already exists`
             );
@@ -2352,7 +2419,7 @@ function buildFsApi(
             await fs.writeFile(resolved, bytes, { flag: "wx" });
           } catch (error) {
             if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-              throw fsWriteError(
+              throw fsTargetError(
                 "TARGET_EXISTS",
                 `Plugin "${pluginId}" fs.writeFile: the target already exists`
               );
@@ -2362,15 +2429,23 @@ function buildFsApi(
           return sha256Hex(bytes);
         }
         if (expected !== undefined) {
-          // Only a revision compare needs the current bytes; a bare `{}`
-          // never reads the target, so an unreadable or oversized file still
-          // gets its atomic replace.
-          const current = await fs.readFile(resolved).catch((error: NodeJS.ErrnoException) => {
+          // Only a revision compare needs the current bytes; a write without
+          // one never reads the target, so an unreadable or oversized file
+          // still gets its atomic replace. The read is verified like any
+          // other, so the hash a mismatch hands back is never the hash of a
+          // file a swapped-in symlink pointed at.
+          const current = await withVerifiedReadHandle(
+            pluginId,
+            "writeFile",
+            resolved,
+            0,
+            (handle) => handle.readFile()
+          ).catch((error: NodeJS.ErrnoException) => {
             if (error.code === "ENOENT") return null;
             throw error;
           });
           if (current === null) {
-            throw fsWriteError(
+            throw fsTargetError(
               "TARGET_UNAVAILABLE",
               `Plugin "${pluginId}" fs.writeFile: the target no longer exists`
             );
@@ -2378,7 +2453,7 @@ function buildFsApi(
           const currentRevision = sha256Hex(current);
           if (currentRevision !== expected) {
             throw Object.assign(
-              fsWriteError(
+              fsTargetError(
                 "REVISION_MISMATCH",
                 `Plugin "${pluginId}" fs.writeFile: the file changed since it was read`
               ),
