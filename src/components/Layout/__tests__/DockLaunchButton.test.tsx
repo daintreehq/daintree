@@ -117,7 +117,8 @@ vi.mock("@/services/ActionService", () => ({
 // Pin state. `dispatchToolbarVisibility` is deliberately NOT mocked — it is the
 // seam Settings → Toolbar shares, and mocking it would let the launcher write
 // the pin any way it liked while the suite still passed.
-let mockAgentSettings: { agents?: Record<string, { pinned?: boolean }> } | null = { agents: {} };
+let mockAgentSettings: { agents?: Record<string, { pinned?: boolean; presetId?: string }> } | null =
+  { agents: {} };
 let mockAgentAvailability: Record<string, string> = {};
 let mockToolbarLayout: {
   pinnedButtons: Record<string, boolean>;
@@ -2269,11 +2270,11 @@ describe("DockLaunchButton", () => {
         expect([band, signatures.size]).toEqual([band, 1]);
       }
 
-      // Every launchable row reserves both, so revealing one on hover moves
-      // nothing. The recipe band joined them in #12217 — it now carries a pin,
-      // and withholding the slot would leave that control nowhere to appear.
+      // An agent reserves the shortcut recorder's slot and the pin; a recipe
+      // (like a panel) can never record a shortcut, so it keeps only the pin
+      // rather than spending 28px of a narrow column on a control it cannot hold.
       expect(slotsOf(rowFor(container, "Claude"))).toBe("disclosure,shortcut,pin");
-      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure,shortcut,pin");
+      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure,pin");
       expect(pinControl(rowFor(container, "My recipe"))).toBeTruthy();
     });
 
@@ -2432,6 +2433,37 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
         { id: "fast", name: "Fast" },
         { id: "slow", name: "Slow" },
       ];
+    });
+
+    it("speaks each preset with its name first and its agent, heading or not", () => {
+      const { container } = renderButton({ agents: READY });
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+
+      const labels = presetRows(container).map((row) => row.getAttribute("aria-label") ?? "");
+      expect(labels).toHaveLength(3);
+      for (const label of labels) {
+        expect(label).toMatch(/^[^,]+, Claude preset/);
+        expect(label).toContain("Press Left Arrow to close presets");
+      }
+    });
+
+    it("names what Enter launches when a named preset is saved", () => {
+      mockAgentSettings = { agents: { claude: { presetId: "fast" } } };
+      const dock = renderButton({ agents: READY });
+      expect(qualifierTextOf(rowByName(dock.container, "Claude"))).toBe("Fast");
+      dock.unmount();
+
+      // The toolbar's parent row launches Default whatever is saved.
+      const toolbar = renderButton({ agents: READY, placement: "toolbar" });
+      expect(qualifierTextOf(rowByName(toolbar.container, "Claude"))).toBe("Default");
+      expect(rowByName(toolbar.container, "Claude").getAttribute("aria-label")).toContain(
+        "Launches Default"
+      );
+    });
+
+    it("states no outcome when nothing named is saved", () => {
+      const { container } = renderButton({ agents: READY });
+      expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("");
     });
 
     it("does not expand until asked, and keeps presets out of the flat list", () => {
@@ -2950,16 +2982,27 @@ describe("panel origin marker", () => {
 
     fireEvent.change(searchInput(container), { target: { value: "dash" } });
 
-    expect(qualifierTextOf(rowNamed(container, "Dashboard"))).toBe("Panel · Plugin");
-    expect(qualifierTextOf(rowNamed(container, "Dashnotes"))).toBe("Panel · Project plugin");
+    // The dock can land a panel in either place, so its search names where.
+    expect(qualifierTextOf(rowNamed(container, "Dashboard"))).toBe("Panel · Grid · Plugin");
+    expect(qualifierTextOf(rowNamed(container, "Dashnotes"))).toBe("Panel · Grid · Project plugin");
   });
 
-  it("keeps a built-in row's search qualifier at the bare category", () => {
-    const { container } = renderButton();
+  it("keeps a built-in row's toolbar search qualifier at the bare category", () => {
+    // Every toolbar panel opens in the grid, so the destination would end
+    // every row with the same word.
+    const { container } = renderButton({ placement: "toolbar" });
 
     fireEvent.change(searchInput(container), { target: { value: "review" } });
 
     expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("Panel");
+  });
+
+  it("names the destination in dock search, where panels land in either place", () => {
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "review" } });
+
+    expect(qualifierTextOf(rowNamed(container, "Review"))).toMatch(/^Panel · (Dock|Grid)$/);
   });
 
   it("speaks both tiers while searching, not just in browse", () => {

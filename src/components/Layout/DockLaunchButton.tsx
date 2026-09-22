@@ -68,6 +68,7 @@ import {
   DOCK_LAUNCH_BAND_LABELS,
   DOCK_LAUNCH_CATEGORY_LABELS,
   DOCK_LAUNCH_CUE_LABELS,
+  DOCK_LAUNCH_PRESET_GROUP_LABELS,
   type DockLaunchAgent,
   type DockLaunchCueId,
   type DockLaunchInventoryState,
@@ -857,6 +858,7 @@ export function DockLaunchButton({
           onTogglePin={togglePin}
           onStartCapture={setCapturingRowKey}
           onToggleExpanded={toggleExpanded}
+          placement={placement}
         />
       )}
     </Fragment>
@@ -1004,6 +1006,10 @@ export function DockLaunchButton({
         </AppPaletteDialog.Header>
 
         <AppPaletteDialog.Body
+          // Anchored, so the budget is the room Radix reports on the opening
+          // side, less the header, rather than the centred dialog's 60vh — which
+          // clipped the footer in a short window with space still below it.
+          maxHeight="max-h-[min(40rem,calc(var(--radix-popover-content-available-height)-5.5rem))]"
           ariaLabel="Launcher results"
           activeDescendant={activeDescendant}
           onNavigationKeyDown={handleNavigationKeyDown}
@@ -1235,6 +1241,7 @@ interface DockLaunchOptionProps {
   onTogglePin: (target: DockLaunchPinTarget) => void;
   onStartCapture: (rowKey: string) => void;
   onToggleExpanded: (rowKey: string) => void;
+  placement: DockLaunchPlacement;
 }
 
 function DockLaunchOption({
@@ -1249,6 +1256,7 @@ function DockLaunchOption({
   onTogglePin,
   onStartCapture,
   onToggleExpanded,
+  placement,
 }: DockLaunchOptionProps) {
   const item = row.kind === "cue" ? undefined : row.item;
   const agent = item?.category === "agent" ? item.agent : undefined;
@@ -1301,6 +1309,24 @@ function DockLaunchOption({
   // Every item row qualifies since #12217 — all three categories are pinnable —
   // so this is now the same question as "is this a launchable row".
   const reservesControlSlots = row.band === "results" || row.kind === "item";
+  // The shortcut recorder exists only for agents, so only the agent column (and
+  // the mixed search list, which needs one rail for every row) holds its slot.
+  const reservesShortcutSlot =
+    row.band === "results" || (row.kind === "item" && item?.category === "agent");
+
+  // What Enter does on an agent that has a saved named preset, because the two
+  // placements disagree: the toolbar launches Default (and clears the saved
+  // choice), the dock launches the saved preset. The expansion's "Current" names
+  // the saved state; this names the action.
+  const savedPreset =
+    row.kind === "item" && rowHasPresets(row)
+      ? agent?.presetChoices?.find((choice) => choice.isSelected && choice.presetId !== null)
+      : undefined;
+  const launchOutcome = savedPreset
+    ? placement === "toolbar"
+      ? "Default"
+      : savedPreset.label
+    : undefined;
 
   // The one flag that separates the two modes. Browse keeps its per-band rows;
   // search collapses everything into a single `results` band.
@@ -1317,9 +1343,15 @@ function DockLaunchOption({
     row.kind === "cue"
       ? undefined
       : row.kind === "preset"
-        ? [row.groupLabel, row.preset.isSelected ? "Current" : undefined]
+        ? // From the preset's own data, never from whether a heading happened to
+          // render above it: only the first row of a named group carries one.
+          [
+            `${row.item.agent.name} preset`,
+            DOCK_LAUNCH_PRESET_GROUP_LABELS[row.preset.group] || undefined,
+            row.preset.isSelected ? "Current" : undefined,
+          ]
             .filter(Boolean)
-            .join(" · ") || undefined
+            .join(" · ")
         : disabledReason !== undefined
           ? disabledReason
           : item!.category === "panel"
@@ -1367,8 +1399,10 @@ function DockLaunchOption({
               ? // Setup rows share the agent column and its one heading now, so
                 // the row states it in both modes.
                 "Setup"
-              : item!.category === "agent" && row.band === "recent"
-                ? "Recent"
+              : item!.category === "agent" && (row.band === "recent" || launchOutcome)
+                ? [row.band === "recent" ? "Recent" : undefined, launchOutcome]
+                    .filter(Boolean)
+                    .join(" · ")
                 : item!.category === "panel"
                   ? // Provenance is the panel row's only metadata, and in browse it
                     // has the column to itself — the band heading already said
@@ -1378,7 +1412,18 @@ function DockLaunchOption({
                     // Review), so the two stack rather than one displacing the
                     // other. Built-in contributes nothing to either mode, which
                     // is what leaves the browse slot empty on most rows.
-                    [isSearchResult ? DOCK_LAUNCH_CATEGORY_LABELS.panel : undefined, originLabel]
+                    [
+                      isSearchResult ? DOCK_LAUNCH_CATEGORY_LABELS.panel : undefined,
+                      // Only the dock can land a panel in either place; in the
+                      // toolbar every panel opens in the grid and the word would
+                      // end every row.
+                      isSearchResult && placement === "dock"
+                        ? item!.location === "dock"
+                          ? "Dock"
+                          : "Grid"
+                        : undefined,
+                      originLabel,
+                    ]
                       .filter(Boolean)
                       .join(" · ") || undefined
                   : isSearchResult
@@ -1416,6 +1461,9 @@ function DockLaunchOption({
     // `e2e/helpers/panels.ts` matches rows by, and states provenance for a
     // listener who never sees the trailing span.
     originLabel,
+    row.kind === "item" && row.band === "recent" ? "Recent" : undefined,
+    launchOutcome ? `Launches ${launchOutcome}` : undefined,
+    displayCombo ? `Shortcut ${displayCombo}` : undefined,
     agent?.isNew ? "New" : undefined,
     // Stated only where it applies, so the phrase never advertises a key that
     // would do nothing on this row.
@@ -1423,7 +1471,9 @@ function DockLaunchOption({
       ? isExpanded
         ? "Press Left Arrow to close presets"
         : "Press Right Arrow for presets"
-      : undefined,
+      : row.kind === "preset"
+        ? "Press Left Arrow to close presets"
+        : undefined,
     pinTarget
       ? `Press Alt+P to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
       : undefined,
@@ -1501,38 +1551,40 @@ function DockLaunchOption({
             palette is driven from the keyboard, and an affordance that only a
             pointer can discover tells a keyboard user nothing about a key that
             would work right now. */}
-        <span className="mr-0.5 w-3 shrink-0" data-launcher-slot="disclosure">
-          {row.kind === "item" && rowHasPresets(row) && (
-            <span
-              // A chevron that launches the agent is worse than no chevron: it
-              // advertises the one thing it does not do, and the row it sits on
-              // starts a terminal. Presentational rather than a button — an
-              // option's descendants are presentational anyway, so a real button
-              // here would claim semantics the listbox flattens.
-              role="presentation"
-              data-launcher-disclosure=""
-              // The pointer target is bigger than the 12px column it draws in:
-              // negative margins let it cover a comfortable 20px without moving
-              // the icon that follows it.
-              className="-m-1.5 inline-flex size-6 items-center justify-center p-1.5"
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onToggleExpanded(row.rowKey);
-              }}
-            >
-              <ChevronRight
-                aria-hidden
-                className={cn(
-                  "h-3 w-3 text-text-secondary transition-transform duration-150 ease-out",
-                  "motion-reduce:transition-none",
-                  isExpanded && "rotate-90"
-                )}
-              />
-            </span>
-          )}
-        </span>
+        {row.band !== "actions" && (
+          <span className="mr-0.5 w-3 shrink-0" data-launcher-slot="disclosure">
+            {row.kind === "item" && rowHasPresets(row) && (
+              <span
+                // A chevron that launches the agent is worse than no chevron: it
+                // advertises the one thing it does not do, and the row it sits on
+                // starts a terminal. Presentational rather than a button — an
+                // option's descendants are presentational anyway, so a real button
+                // here would claim semantics the listbox flattens.
+                role="presentation"
+                data-launcher-disclosure=""
+                // The pointer target is bigger than the 12px column it draws in:
+                // negative margins let it cover a comfortable 20px without moving
+                // the icon that follows it.
+                className="-m-1.5 inline-flex size-6 items-center justify-center p-1.5"
+                onPointerDown={(event) => event.preventDefault()}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onToggleExpanded(row.rowKey);
+                }}
+              >
+                <ChevronRight
+                  aria-hidden
+                  className={cn(
+                    "h-3 w-3 text-text-secondary transition-transform duration-150 ease-out",
+                    "motion-reduce:transition-none",
+                    isExpanded && "rotate-90"
+                  )}
+                />
+              </span>
+            )}
+          </span>
+        )}
         <DockLaunchOptionIcon row={row} />
         {/* `min-w-0 flex-1`: the name is the query the user came here with, and
             it takes the width the row can spare rather than yielding to whatever
@@ -1612,36 +1664,38 @@ function DockLaunchOption({
             a band on the same edge. */}
         {reservesControlSlots && (
           <>
-            <span className="ml-1 w-6 shrink-0" data-launcher-slot="shortcut">
-              {shortcutAgentId && (
-                <span
-                  // `role="presentation"`, not a `<button>`. These sit inside
-                  // `role="option"`, where ARIA treats children as presentational
-                  // and a real button trips `nested-interactive`. They were
-                  // already `tabIndex={-1}`, so no keyboard path is lost — focus
-                  // stays on the search box and rows are driven by
-                  // `aria-activedescendant`. Mirrors `ActionPaletteItem`, which
-                  // fixed the same thing on the sibling palette.
-                  role="presentation"
-                  data-testid={`launcher-shortcut-edit-${shortcutAgentId}`}
-                  title={displayCombo ? "Change keyboard shortcut" : "Assign keyboard shortcut"}
-                  onPointerDown={(event) => event.preventDefault()}
-                  onClick={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    onStartCapture(row.rowKey);
-                  }}
-                  className={cn(
-                    "inline-flex size-6 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
-                    "text-text-secondary opacity-0 transition-[opacity,color,background-color]",
-                    "hover:bg-overlay-soft hover:text-text-primary",
-                    "group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
-                  )}
-                >
-                  <Keyboard className="h-3 w-3" aria-hidden />
-                </span>
-              )}
-            </span>
+            {reservesShortcutSlot && (
+              <span className="ml-1 w-6 shrink-0" data-launcher-slot="shortcut">
+                {shortcutAgentId && (
+                  <span
+                    // `role="presentation"`, not a `<button>`. These sit inside
+                    // `role="option"`, where ARIA treats children as presentational
+                    // and a real button trips `nested-interactive`. They were
+                    // already `tabIndex={-1}`, so no keyboard path is lost — focus
+                    // stays on the search box and rows are driven by
+                    // `aria-activedescendant`. Mirrors `ActionPaletteItem`, which
+                    // fixed the same thing on the sibling palette.
+                    role="presentation"
+                    data-testid={`launcher-shortcut-edit-${shortcutAgentId}`}
+                    title={displayCombo ? "Change keyboard shortcut" : "Assign keyboard shortcut"}
+                    onPointerDown={(event) => event.preventDefault()}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      onStartCapture(row.rowKey);
+                    }}
+                    className={cn(
+                      "inline-flex size-6 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
+                      "text-text-secondary opacity-0 transition-[opacity,color,background-color]",
+                      "hover:bg-overlay-soft hover:text-text-primary",
+                      "group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
+                    )}
+                  >
+                    <Keyboard className="h-3 w-3" aria-hidden />
+                  </span>
+                )}
+              </span>
+            )}
 
             <span className="ml-0.5 w-6 shrink-0" data-launcher-slot="pin">
               {pinTarget && (
