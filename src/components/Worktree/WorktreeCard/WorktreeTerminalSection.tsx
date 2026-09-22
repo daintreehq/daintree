@@ -46,9 +46,11 @@ interface MarqueeBox {
 interface TerminalRowProps {
   term: PtyPanelData;
   onClick: (term: PtyPanelData) => void;
+  /** Vertical padding of the row's button — `CardDensity.sessionRowY`. */
+  padY: string;
 }
 
-function TerminalRow({ term, onClick }: TerminalRowProps) {
+function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
   const { ref, isTruncated } = useTruncationDetection();
   const dragHandle = useDragHandle();
   const isArmed = useFleetArmingStore((s) => s.armedIds.has(term.id));
@@ -65,6 +67,8 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
   // border color so multiple accents never render at once. The arm-position
   // badge stays accent-colored as the secondary signal.
   const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
+  const isArmable = isFleetArmEligible(term);
+  const StateIcon = agentState ? getEffectiveStateIcon(agentState) : null;
 
   return (
     <div
@@ -72,32 +76,55 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
       data-terminal-runtime-kind={chrome.runtimeKind}
       data-terminal-agent-id={chrome.agentId || undefined}
       data-terminal-agent-state={agentState || undefined}
+      data-session-row=""
       className={cn(
-        "rounded-[var(--radius-md)]",
+        "rounded-[var(--radius-lg)]",
         isArmed && "outline outline-2 outline-offset-[-2px]",
         isArmed && isPrimary && "outline-solid outline-accent-primary",
         isArmed && !isPrimary && "outline-dashed outline-border-strong"
       )}
     >
-      {/* pl-6 puts a session's own glyph under the trigger's glyph and its
-          name under the trigger's label. At 18px the children sat 6px LEFT of
-          the row that owns them, so two identical rows read as loose peers
-          rather than as the contents of the disclosure above them. */}
-      <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 py-2 pl-6 pr-1 transition-colors">
+      {/* One row, the same height as the disclosure row that owns it. It used
+          to be 40px against that row's 26 — 8px of padding around a 24px grip
+          box — so two sessions spent more height than the rest of the card's
+          body, and children read heavier than their parent.
+
+          The grip lives in the leading gutter, which the row already spent on
+          indentation: it lands under the trigger's chevron, and the agent
+          glyph still lands under the trigger's label. Trailing, it was a
+          fourth mark in a cluster of three, 34px of permanent chrome taken
+          from the title. */}
+      <div className="worktree-section-button group/termrow flex items-center rounded-[var(--radius-lg)] border border-transparent">
+        <button
+          ref={dragHandle?.setActivatorNodeRef}
+          type="button"
+          data-drag-handle
+          data-session-grip=""
+          className="flex h-6 w-6 shrink-0 items-center justify-center cursor-grab rounded-[var(--radius-md)] text-text-secondary hover:text-text-primary focus-visible:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] active:cursor-grabbing"
+          aria-label="Drag to move terminal"
+          {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
+        >
+          <GripVertical className="w-3 h-3" aria-hidden="true" />
+        </button>
+
         <TruncatedTooltip content={term.title} isTruncated={isTruncated}>
+          {/* The whole rest of the row is the button, trailing marks
+              included: the hover fill paints the full row, so the full row is
+              what a click has to answer to. */}
           <button
             type="button"
             onClick={(e) => {
               e.stopPropagation();
               onClick(term);
             }}
-            aria-selected={isArmed}
-            className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] rounded-[var(--radius-md)]"
+            aria-pressed={isArmable ? isArmed : undefined}
+            className={cn(
+              "flex min-w-0 flex-1 items-center gap-2 self-stretch pr-2.5 text-left cursor-pointer rounded-[var(--radius-lg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+              padY
+            )}
           >
-            <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
-              <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3" />
-            </div>
-            <div className="flex flex-col min-w-0">
+            <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3 shrink-0" />
+            <span className="flex min-w-0 flex-1 flex-col">
               <span
                 ref={ref}
                 className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-text-primary"
@@ -107,69 +134,53 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
               {!chrome.isAgent && term.activityStatus === "working" && term.lastCommand && (
                 <Tooltip autoDismiss={false}>
                   <TooltipTrigger asChild>
-                    <span className="truncate text-2xs font-mono text-text-muted">
+                    <span className="truncate text-2xs font-mono text-text-secondary">
                       {term.lastCommand}
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">{term.lastCommand}</TooltipContent>
                 </Tooltip>
               )}
-            </div>
+            </span>
+
+            <span className="flex shrink-0 items-center gap-1.5">
+              {isArmed && armBadge !== undefined && (
+                <span
+                  className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
+                  aria-label={`Armed position ${armBadge}`}
+                >
+                  {armBadge}
+                </span>
+              )}
+
+              {StateIcon && agentState && (
+                <StateIcon
+                  className={cn(
+                    "w-3 h-3",
+                    getEffectiveStateColor(agentState),
+                    agentState === "working" && "animate-spin-slow motion-reduce:animate-none"
+                  )}
+                  aria-label={STATE_LABELS[agentState]}
+                />
+              )}
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="text-text-secondary">
+                    {term.location === "dock" ? (
+                      <PanelBottom className="w-3 h-3" aria-hidden="true" />
+                    ) : (
+                      <PanelTopClose className="w-3 h-3" aria-hidden="true" />
+                    )}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {term.location === "dock" ? "Docked" : "On grid"}
+                </TooltipContent>
+              </Tooltip>
+            </span>
           </button>
         </TruncatedTooltip>
-
-        <div className="flex items-center gap-2.5 shrink-0">
-          {isArmed && armBadge !== undefined && (
-            <span
-              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
-              aria-label={`Armed position ${armBadge}`}
-            >
-              {armBadge}
-            </span>
-          )}
-
-          {(() => {
-            const displayAgentState = getTerminalAgentDisplayState(chrome, agentState);
-            if (!displayAgentState) return null;
-            const Icon = getEffectiveStateIcon(displayAgentState);
-            return (
-              <Icon
-                className={cn(
-                  "w-3 h-3",
-                  getEffectiveStateColor(displayAgentState),
-                  displayAgentState === "working" && "animate-spin-slow motion-reduce:animate-none"
-                )}
-                aria-label={STATE_LABELS[displayAgentState]}
-              />
-            );
-          })()}
-
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <div className="text-text-muted transition-colors group-hover/termrow:text-text-secondary">
-                {term.location === "dock" ? (
-                  <PanelBottom className="w-3 h-3" />
-                ) : (
-                  <PanelTopClose className="w-3 h-3" />
-                )}
-              </div>
-            </TooltipTrigger>
-            <TooltipContent side="bottom">
-              {term.location === "dock" ? "Docked" : "On grid"}
-            </TooltipContent>
-          </Tooltip>
-
-          <button
-            ref={dragHandle?.setActivatorNodeRef}
-            type="button"
-            data-drag-handle
-            className="flex min-h-6 min-w-6 shrink-0 items-center justify-center cursor-grab rounded-[var(--radius-md)] text-text-muted group-hover/termrow:text-text-secondary transition-colors hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1 active:cursor-grabbing"
-            aria-label="Drag to move terminal"
-            {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
-          >
-            <GripVertical className="w-3.5 h-3.5" />
-          </button>
-        </div>
       </div>
     </div>
   );
@@ -484,12 +495,11 @@ export function WorktreeTerminalSection({
             strategy={verticalListSortingStrategy}
           >
             {eligibleTerminals.length >= 2 && armedIdsSize === 0 && !hintDismissed && (
-              <div
-                className={cn(
-                  "flex items-center justify-between px-3 py-1.5 text-2xs text-text-secondary"
-                )}
-              >
-                <span>Drag to select multiple, ⇧-click to add</span>
+              <div className="flex items-center justify-between gap-2 py-1 pl-6 pr-2.5 text-2xs text-text-secondary">
+                {/* Every click toggles, modifier or not, so the hint names the
+                    two gestures that exist rather than a Shift variant that
+                    does the same thing as a plain click. */}
+                <span>Click or drag across sessions to select</span>
                 <button
                   type="button"
                   className="ml-2 rounded-sm text-text-muted hover:text-text-secondary transition-colors"
@@ -511,7 +521,6 @@ export function WorktreeTerminalSection({
               ref={scrollRef}
               role="list"
               aria-labelledby={`${terminalsId}-button`}
-              aria-multiselectable="true"
               onPointerDown={handlePointerDown}
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
@@ -525,7 +534,11 @@ export function WorktreeTerminalSection({
                   worktreeId={worktreeId}
                   sourceIndex={index}
                 >
-                  <TerminalRow term={term} onClick={handleTerminalClick} />
+                  <TerminalRow
+                    term={term}
+                    onClick={handleTerminalClick}
+                    padY={density.sessionRowY}
+                  />
                 </SortableWorktreeTerminal>
               ))}
               {marqueeBox && (

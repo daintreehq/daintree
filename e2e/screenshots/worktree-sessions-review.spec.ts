@@ -70,6 +70,9 @@ async function open(
   await page.setViewportSize({ width: 560, height: 600 });
   const q = new URLSearchParams({ theme, fixture, variant: opts.variant ?? "sidebar" });
   if (opts.width) q.set("width", String(opts.width));
+  // The pointer survives navigation; park it off the card so a previous
+  // capture's hover does not ride into this one.
+  await page.mouse.move(0, 0);
   await page.goto(`${baseURL}/worktree-sessions-preview.html?${q}`);
   const card = page.locator("[data-preview-card]");
   await expect(card, `fixture "${fixture}" rendered no card`).toBeVisible();

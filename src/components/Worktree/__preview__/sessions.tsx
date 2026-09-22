@@ -2,7 +2,6 @@ import "@/components/Panel/__preview__/installShims";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { DndContext } from "@dnd-kit/core";
-import { LazyMotion, domAnimation } from "framer-motion";
 import { GitBranch, Sprout } from "lucide-react";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { PtyPanelData } from "@shared/types/panel";
@@ -14,6 +13,11 @@ import { WorktreeDetailsSection } from "../WorktreeCard/WorktreeDetailsSection";
 import { WorktreeTerminalSection } from "../WorktreeCard/WorktreeTerminalSection";
 import type { WorktreeTerminalCounts } from "@/hooks/useWorktreeTerminals";
 import "@/index.css";
+
+// Dynamic rather than static so the harness entry obeys the app's lazy-load rule
+// (#7659). Each row sits in the sortable wrapper's `m.div`, which needs a feature
+// provider to render as it does in the app.
+const { LazyMotion, domAnimation } = await import("framer-motion");
 
 /**
  * Standalone visual-review harness for the expanded Active sessions list on a
@@ -113,11 +117,12 @@ const FIXTURES: Record<string, Fixture> = {
       { id: "s3", title: "Claude", agentId: "claude", agentState: "idle", location: "dock" },
     ],
   },
+  // Only grid sessions are fleet-eligible, and the hint needs two of them.
   hint: {
     expanded: true,
     showHint: true,
     sessions: [
-      { id: "s1", title: "Claude", agentId: "claude", agentState: "waiting", location: "dock" },
+      { id: "s1", title: "Claude", agentId: "claude", agentState: "waiting", location: "grid" },
       { id: "s2", title: "Claude", agentId: "claude", agentState: "working", location: "grid" },
     ],
   },
@@ -138,8 +143,10 @@ if (!fixture.showHint) {
   localStorage.setItem("daintree:fleet-selection-hint-dismissed", "1");
 }
 
+// Inert fixtures: only the fields the row and the chrome read are filled in.
 const terminals: PtyPanelData[] = fixture.sessions.map(
   (s) =>
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- inert fixture, see above
     ({
       id: s.id,
       kind: "terminal",
@@ -171,6 +178,7 @@ const byState = {
 for (const s of fixture.sessions) if (s.agentState) byState[s.agentState] += 1;
 const counts = { total: fixture.sessions.length, byState } as WorktreeTerminalCounts;
 
+// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- inert fixture
 const worktree = {
   id: WORKTREE_ID,
   worktreeId: WORKTREE_ID,

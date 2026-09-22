@@ -389,7 +389,9 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     expect(onSelect).not.toHaveBeenCalled();
   });
 
-  it("armed tile gets aria-selected=true", () => {
+  it("an armable row exposes its fleet membership as a pressed state", () => {
+    // A row's button toggles membership, which is `aria-pressed` on a button.
+    // `aria-selected` is not a button attribute, so it was never announced.
     const term = makeTerminal({
       id: "a1",
       detectedAgentId: "claude",
@@ -401,15 +403,29 @@ describe("WorktreeTerminalSection arming click handlers", () => {
       terminals: [term],
       counts: { ...baseCounts, total: 1 },
     });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
+    expect(button.getAttribute("aria-pressed")).toBe("false");
     act(() => {
       useFleetArmingStore.getState().armId("a1");
     });
-
-    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
-    expect(button.getAttribute("aria-selected")).toBe("true");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    expect(button.hasAttribute("aria-selected")).toBe(false);
   });
 
-  it("scroll container has aria-multiselectable", () => {
+  it("a row that opens rather than toggles claims no pressed state", () => {
+    const docked = makeTerminal({ id: "d1", kind: "terminal", hasPty: true, location: "dock" });
+    renderSection({
+      isExpanded: true,
+      terminals: [docked],
+      counts: { ...baseCounts, total: 1 },
+    });
+
+    const button = screen.getAllByRole("button", { name: /Test Terminal/i })[0]!;
+    expect(button.hasAttribute("aria-pressed")).toBe(false);
+  });
+
+  it("only claims multi-selection on a role that supports it", () => {
     const term = makeTerminal({
       id: "a1",
       detectedAgentId: "claude",
@@ -422,8 +438,9 @@ describe("WorktreeTerminalSection arming click handlers", () => {
       counts: { ...baseCounts, total: 1 },
     });
 
-    const scrollContainer = container.querySelector('[aria-multiselectable="true"]');
-    expect(scrollContainer).toBeTruthy();
+    for (const el of container.querySelectorAll("[aria-multiselectable]")) {
+      expect(["listbox", "grid", "tree", "treegrid", "tablist"]).toContain(el.getAttribute("role"));
+    }
   });
 });
 
