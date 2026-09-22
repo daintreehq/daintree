@@ -9,6 +9,12 @@ import { menuRowPointerMove } from "./menu-row-hover-focus";
 import { armTooltipFocusSuppression } from "@/lib/tooltipFocusSuppression";
 
 const SelectIntentContext = React.createContext<((next: boolean) => void) | null>(null);
+/**
+ * The root's `disabled`, for the pre-Radix trigger. Radix reads it off the root,
+ * but the stand-in trigger is a plain button that would otherwise stay clickable
+ * and queue an open that fires, options and all, once Radix arrives.
+ */
+const SelectDisabledContext = React.createContext(false);
 
 type SelectRootProps = React.ComponentProps<typeof SelectPrimitiveType.Root>;
 
@@ -16,10 +22,12 @@ const Select = ({ children, open, defaultOpen, onOpenChange, ...rest }: SelectRo
   const radix = useRadixPrimitives();
   const [pendingOpen, setPendingOpen] = React.useState<boolean | undefined>(undefined);
   const isControlled = open !== undefined;
+  const disabled = rest.disabled === true;
 
   const requestOpen = React.useCallback(
     (next: boolean) => {
       primeOnEvent();
+      if (next && disabled) return;
       if (isControlled) {
         onOpenChange?.(next);
         return;
@@ -27,12 +35,14 @@ const Select = ({ children, open, defaultOpen, onOpenChange, ...rest }: SelectRo
       setPendingOpen(next);
       onOpenChange?.(next);
     },
-    [isControlled, onOpenChange]
+    [isControlled, onOpenChange, disabled]
   );
 
   if (!radix) {
     return (
-      <SelectIntentContext.Provider value={requestOpen}>{children}</SelectIntentContext.Provider>
+      <SelectDisabledContext.Provider value={disabled}>
+        <SelectIntentContext.Provider value={requestOpen}>{children}</SelectIntentContext.Provider>
+      </SelectDisabledContext.Provider>
     );
   }
 
@@ -87,6 +97,7 @@ const SelectTrigger = React.forwardRef<
 >(({ className, children, ...props }, ref) => {
   const radix = useRadixPrimitives();
   const requestOpen = React.useContext(SelectIntentContext);
+  const rootDisabled = React.useContext(SelectDisabledContext);
 
   const primingHandlers = {
     onPointerEnter: composeHandlers(primeOnEvent, props.onPointerEnter),
@@ -115,6 +126,7 @@ const SelectTrigger = React.forwardRef<
         )}
         {...(props as React.ButtonHTMLAttributes<HTMLButtonElement>)}
         {...primingHandlers}
+        disabled={props.disabled === true || rootDisabled}
         onClick={intentClick}
       >
         {children}

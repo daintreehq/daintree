@@ -1,10 +1,15 @@
 // @vitest-environment jsdom
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import type { ActionDispatchResult } from "@shared/types/actions";
 
-const { dispatchMock } = vi.hoisted(() => ({
+const { dispatchMock, selectHandle } = vi.hoisted(() => ({
   dispatchMock: vi.fn<(id: string, args?: unknown, opts?: unknown) => Promise<unknown>>(),
+  // The last `onValueChange` the select received. The real trigger can still
+  // deliver a pick while it looks disabled (a deferred Radix open), so the
+  // component's own guards are driven through this rather than the DOM.
+  selectHandle: { onValueChange: null as ((v: string) => void) | null },
 }));
 
 vi.mock("@/services/ActionService", () => ({
@@ -26,30 +31,38 @@ interface SelectStubOption {
 vi.mock("@/components/Settings/SettingsSelect", () => ({
   SettingsSelect: ({
     label,
+    description,
     value,
     onValueChange,
     options,
     disabled,
   }: {
     label: string;
+    description?: string;
     value: string;
     onValueChange: (v: string) => void;
     options: SelectStubOption[];
     disabled?: boolean;
-  }) => (
-    <select
-      aria-label={label}
-      value={value}
-      disabled={disabled}
-      onChange={(e) => onValueChange(e.target.value)}
-    >
-      {options.map((o) => (
-        <option key={o.value} value={o.value} title={o.description}>
-          {o.label}
-        </option>
-      ))}
-    </select>
-  ),
+  }) => {
+    selectHandle.onValueChange = onValueChange;
+    return (
+      <div>
+        <select
+          aria-label={label}
+          value={value}
+          disabled={disabled}
+          onChange={(e) => onValueChange(e.target.value)}
+        >
+          {options.map((o) => (
+            <option key={o.value} value={o.value} title={o.description}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        {description && <p data-testid="select-description">{description}</p>}
+      </div>
+    );
+  },
 }));
 
 import { WindowOpeningSection } from "../WindowOpeningSection";
@@ -103,7 +116,22 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  selectHandle.onValueChange = null;
 });
+
+function pick(value: string) {
+  const onValueChange = selectHandle.onValueChange;
+  if (!onValueChange) throw new Error("select not rendered");
+  onValueChange(value);
+}
+
+function describedMode(container: HTMLElement): string | null | undefined {
+  return container.querySelector('[data-testid="select-description"]')?.textContent;
+}
+
+function optionDescription(container: HTMLElement, value: string): string | undefined {
+  return selectIn(container).querySelector<HTMLOptionElement>(`option[value="${value}"]`)?.title;
+}
 
 describe("WindowOpeningSection", () => {
   it("keeps its search anchor mounted and the select locked until the saved value lands", async () => {
@@ -162,6 +190,105 @@ describe("WindowOpeningSection", () => {
     expect(selectIn(container).value).toBe("on");
     expect(selectIn(container).disabled).toBe(false);
     expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
+
+  it("describes the selected mode beneath the select, following the pick", async () => {
+    const save = deferred<ActionDispatchResult>();
+    const { container } = render(<WindowOpeningSection />);
+    await flush();
+
+    expect(describedMode(container)).toBe(optionDescription(container, "off"));
+
+    dispatchMock.mockImplementationOnce(() => save.promise);
+    fireEvent.change(selectIn(container), { target: { value: "on" } });
+    expect(describedMode(container)).toBe(optionDescription(container, "on"));
+
+    await act(async () => {
+      save.resolve(ok("on"));
+    });
+    expect(describedMode(container)).toBe(optionDescription(container, "on"));
+  });
+
+  it("ignores a pick that arrives before the saved value has loaded", async () => {
+    const load = deferred<ActionDispatchResult>();
+    dispatchMock.mockImplementationOnce(() => load.promise);
+    const { container } = render(<WindowOpeningSection />);
+
+    act(() => pick("on"));
+    expect(updateCalls()).toHaveLength(0);
+
+    await act(async () => {
+      load.resolve(ok("off"));
+    });
+    expect(selectIn(container).value).toBe("off");
+    expect(selectIn(container).disabled).toBe(false);
+  });
+
+  it("ignores a second pick while a save is in flight", async () => {
+    const save = deferred<ActionDispatchResult>();
+    const { container } = render(<WindowOpeningSection />);
+    await flush();
+    dispatchMock.mockImplementationOnce(() => save.promise);
+
+    act(() => pick("on"));
+    act(() => pick("default"));
+
+    expect(updateCalls()).toHaveLength(1);
+    await act(async () => {
+      save.resolve(ok("on"));
+    });
+    expect(selectIn(container).value).toBe("on");
+  });
+
+  it("ignores a value that isn't a mode", async () => {
+    render(<WindowOpeningSection />);
+    await flush();
+
+    act(() => pick(""));
+    act(() => pick("sometimes"));
+
+    expect(updateCalls()).toHaveLength(0);
+  });
+
+  it("releases the lock and reports a save whose result isn't a recognized mode", async () => {
+    const { container } = render(<WindowOpeningSection />);
+    await flush();
+    dispatchMock.mockImplementationOnce(async () => ok(undefined));
+
+    fireEvent.change(selectIn(container), { target: { value: "on" } });
+    await flush();
+
+    expect(selectIn(container).value).toBe("off");
+    expect(selectIn(container).disabled).toBe(false);
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Couldn't save window setting"
+    );
+  });
+
+  it("keeps a StrictMode remount's read when the discarded first read settles last", async () => {
+    const reads: Array<ReturnType<typeof deferred<ActionDispatchResult>>> = [];
+    dispatchMock.mockImplementation(async (id) => {
+      if (id !== "windowOpening.getConfig") throw new Error(`unexpected dispatch ${id}`);
+      const read = deferred<ActionDispatchResult>();
+      reads.push(read);
+      return read.promise;
+    });
+
+    const { container } = render(
+      <StrictMode>
+        <WindowOpeningSection />
+      </StrictMode>
+    );
+    expect(reads).toHaveLength(2);
+
+    await act(async () => {
+      reads[1]!.resolve(ok("on"));
+    });
+    await act(async () => {
+      reads[0]!.resolve(ok("off"));
+    });
+
+    expect(selectIn(container).value).toBe("on");
   });
 
   it("does not write when the current value is picked again", async () => {

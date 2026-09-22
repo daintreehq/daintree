@@ -1240,6 +1240,30 @@ describe("preferences action hardening", () => {
     expect(mocks.windowOpeningClient.updateConfig).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["a misspelt field", { openFolderInNewWindow: "on" }],
+    ["a known field alongside an unknown one", { openFoldersInNewWindow: "on", extra: true }],
+  ])("rejects %s instead of reporting an empty patch as success", async (_label, args) => {
+    const { service } = buildService(registerPreferencesActions);
+
+    const result = await service.dispatch("windowOpening.updateConfig", args);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("VALIDATION_ERROR");
+    expect(mocks.windowOpeningClient.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("passes an empty window opening patch through as a read-back", async () => {
+    mocks.windowOpeningClient.updateConfig.mockResolvedValueOnce({ openFoldersInNewWindow: "off" });
+    const { service } = buildService(registerPreferencesActions);
+
+    await expect(service.dispatch("windowOpening.updateConfig", {})).resolves.toEqual({
+      ok: true,
+      result: { openFoldersInNewWindow: "off" },
+    });
+    expect(mocks.windowOpeningClient.updateConfig).toHaveBeenCalledWith({});
+  });
+
   it("surfaces a window opening write failure as { ok: false }", async () => {
     mocks.windowOpeningClient.updateConfig.mockRejectedValueOnce(new Error("disk full"));
     const { service } = buildService(registerPreferencesActions);

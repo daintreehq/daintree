@@ -23,9 +23,13 @@ const SessionRestoreConfigPatchSchema = z.object({ enabled: z.boolean().optional
 const OpenFoldersInNewWindowSchema = z.enum(OPEN_FOLDERS_IN_NEW_WINDOW_MODES);
 
 /** Shared by `windowOpening.updateConfig`'s declared schema and its body. */
-const WindowOpeningConfigPatchSchema = z.object({
-  openFoldersInNewWindow: OpenFoldersInNewWindowSchema.optional(),
-});
+// Strict so a misspelt field fails validation instead of reaching main as an
+// empty patch and reporting success — the handler rejects unknown keys too.
+const WindowOpeningConfigPatchSchema = z
+  .object({
+    openFoldersInNewWindow: OpenFoldersInNewWindowSchema.optional(),
+  })
+  .strict();
 
 export function registerAppConfigActions(
   actions: ActionRegistry,
@@ -160,7 +164,7 @@ export function registerAppConfigActions(
     id: "windowOpening.getConfig",
     title: "Get window opening config",
     description:
-      "Read whether opening a folder uses the current window or a new one. No arguments. Returns { openFoldersInNewWindow }: `default` gives a folder opened from outside Daintree (Dock, Finder, command line) a new window and lets a folder picked inside Daintree replace the current window's project; `on` always opens a new window; `off` always uses the current window. Default `default`. Switching to a known project, project history, focusing a waiting agent and session restore keep their assigned window whatever the value.",
+      "Read the stored preference for whether opening a folder uses the current window or a new one. No arguments. Returns { openFoldersInNewWindow }: `default` asks for a new window only for folders opened from outside Daintree (Dock, Finder, command line); `on` asks for one every time; `off` never does. Switching between known projects isn't governed by it.",
     category: "settings",
     kind: "query",
     danger: "safe",
@@ -176,7 +180,8 @@ export function registerAppConfigActions(
   actions.set("windowOpening.updateConfig", () => ({
     id: "windowOpening.updateConfig",
     title: "Update window opening config",
-    description: "Update whether opening a folder uses the current window or a new one",
+    description:
+      "Update the stored preference for whether opening a folder uses the current window or a new one",
     category: "settings",
     kind: "command",
     danger: "safe",

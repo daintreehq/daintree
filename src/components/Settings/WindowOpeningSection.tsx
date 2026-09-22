@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { AppWindow } from "lucide-react";
+import { AppWindow } from "@/components/icons";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSelect, type SettingsSelectOption } from "@/components/Settings/SettingsSelect";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
@@ -48,7 +48,7 @@ function modeFromResult(result: ActionDispatchResult): OpenFoldersInNewWindowMod
       ? config.openFoldersInNewWindow
       : undefined;
   if (!isOpenFoldersInNewWindowMode(mode)) {
-    throw new Error("The stored value isn't one Daintree recognises.");
+    throw new Error("The stored value isn't one Daintree recognizes.");
   }
   return mode;
 }
@@ -92,7 +92,9 @@ export function WindowOpeningSection() {
   // so a retry resends exactly what failed. Promise chaining rather than
   // try/finally, which the React Compiler can't lower.
   const save = (next: OpenFoldersInNewWindowMode): Promise<void> => {
-    if (savingRef.current) return Promise.resolve();
+    // Nothing to change until the saved value is known — a write racing the
+    // initial read could be overwritten by it on screen.
+    if (savingRef.current || mode === null) return Promise.resolve();
     savingRef.current = true;
     setPendingMode(next);
     setSaveFailure(null);
@@ -139,6 +141,7 @@ export function WindowOpeningSection() {
         <>
           <SettingsSelect
             label="Open folders in a new window"
+            description={MODE_COPY[value].description}
             options={MODE_OPTIONS}
             value={value}
             onValueChange={(next) => {
