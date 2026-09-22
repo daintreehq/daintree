@@ -28,7 +28,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, writeFileSync } from "fs";
 import path from "path";
-import { startPreviewServer, stubViteHmrClient, type PreviewServer } from "../helpers/previewHarness";
+import {
+  startPreviewServer,
+  stubViteHmrClient,
+  type PreviewServer,
+} from "../helpers/previewHarness";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_LAUNCHER;
 const OUT_DIR = process.env.DAINTREE_SHOT_DIR ?? "";
@@ -204,6 +208,10 @@ async function measureHoverTracking(page: Page) {
 }
 
 test("launcher layout review", async ({ page }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_LAUNCHER is required for the launcher layout capture",
+  });
   test.skip(!ENABLED, "Set DAINTREE_SHOT_LAUNCHER to run the launcher layout capture");
   test.setTimeout(240_000);
   await stubViteHmrClient(page);

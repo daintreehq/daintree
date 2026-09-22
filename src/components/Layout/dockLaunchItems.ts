@@ -153,13 +153,13 @@ export type DockLaunchBandId =
   | "results";
 
 export const DOCK_LAUNCH_BAND_LABELS: Record<DockLaunchBandId, string> = {
-  recent: "Recently launched",
+  recent: "Recent",
   pinned: "Pinned",
   other: "Other",
-  agents: "Launch agent",
+  agents: "Agents",
   "dock-panels": "Open in dock",
   "grid-panels": "Open in grid",
-  recipes: "Launch recipe",
+  recipes: "Recipes",
   "needs-setup": "Needs setup",
   "available-agents": "Available agents",
   presets: "Presets",
@@ -478,10 +478,10 @@ export function selectRecentAgents(
  * because `useDockLaunchModel` derives the band outside its memo (see there) and
  * has to splice it back onto a `browseRows` built without it.
  *
- * The band repeats agents that are listed again under Pinned/Other. That
- * duplication is deliberate — a quick-reach shortcut — so the rows are keyed
- * apart rather than de-duplicated: dropping an agent from Pinned because it was
- * recently launched would make that heading lie.
+ * These rows lead the agent column and the agent list below skips them, so
+ * each agent is listed once. Pinned state is carried by the row's own pin glyph,
+ * not by which heading it sits under, so moving a pinned agent up into the
+ * recent group states nothing false.
  */
 export function buildRecentBrowseRows(
   agentItems: ReadonlyArray<DockLaunchAgentItem>,
@@ -610,20 +610,35 @@ export function buildDockLaunchModel({
     }
   };
 
-  browseRows.push(
-    ...buildRecentBrowseRows(
-      agentItems,
-      recentAgents.map((agent) => agent.id)
-    )
+  const recentRows = buildRecentBrowseRows(
+    agentItems,
+    recentAgents.map((agent) => agent.id)
   );
+  browseRows.push(...recentRows);
+  const recentKeys = new Set(recentRows.map((row) => (row.kind === "item" ? row.item.key : "")));
 
-  if (launchAgents.length > 0) {
-    if (showAgentGroups) {
-      pushRows("pinned", launchAgents.slice(0, pinnedCount));
-      pushRows("other", launchAgents.slice(pinnedCount));
-    } else {
-      pushRows("agents", launchAgents);
-    }
+  // One agent list, pinned first (the host already sorted them). Pinning is
+  // row state — the pin glyph stays lit on a pinned row — so it no longer buys
+  // a heading of its own, and the whole agent inventory reads as one column.
+  const listedAgents = launchAgents.filter((item) => !recentKeys.has(item.key));
+  if (listedAgents.length > 0) pushRows("agents", listedAgents);
+
+  // Setup and discovery rows follow the launchable agents rather than trailing
+  // the recipes: they are agents too, and the launcher lays agents out as one
+  // column beside the panels and recipes, so the navigation order has to match.
+  if (needsSetupAgents.length > 0) pushRows("needs-setup", needsSetupAgents);
+
+  if (availableAgents.length > 0) {
+    pushRows("available-agents", availableAgents);
+    // Setup belongs to the empty state, not the footer (#11681): it only helps
+    // when nothing is installed, and as a permanent row it competed with
+    // Manage agents, which already reaches the same settings.
+    browseRows.push({
+      kind: "cue",
+      rowKey: "setup-agents",
+      band: "available-agents",
+      cue: "setup-agents",
+    });
   }
 
   // Always banded by destination, even when only one destination is present.
@@ -643,21 +658,6 @@ export function buildDockLaunchModel({
       rowKey: CREATE_RECIPE_ROW_KEY,
       band: "recipes",
       cue: "create-recipe",
-    });
-  }
-
-  if (needsSetupAgents.length > 0) pushRows("needs-setup", needsSetupAgents);
-
-  if (availableAgents.length > 0) {
-    pushRows("available-agents", availableAgents);
-    // Setup belongs to the empty state, not the footer (#11681): it only helps
-    // when nothing is installed, and as a permanent row it competed with
-    // Manage agents, which already reaches the same settings.
-    browseRows.push({
-      kind: "cue",
-      rowKey: "setup-agents",
-      band: "available-agents",
-      cue: "setup-agents",
     });
   }
 
@@ -795,7 +795,14 @@ export function useDockLaunchModel(options: {
       (item): item is DockLaunchAgentItem => item.category === "agent"
     );
     const recentIds = recentSignature ? recentSignature.split(",") : [];
-    return [...buildRecentBrowseRows(agentItems, recentIds), ...stable.browseRows];
+    const recentRows = buildRecentBrowseRows(agentItems, recentIds);
+    // Each agent is listed once. A recently launched agent moves to the top of
+    // the agent column and wears "Recent", rather than appearing twice.
+    const recentKeys = new Set(recentRows.map((row) => (row.kind === "item" ? row.item.key : "")));
+    const rest = stable.browseRows.filter(
+      (row) => !(row.kind === "item" && row.band === "agents" && recentKeys.has(row.item.key))
+    );
+    return [...recentRows, ...rest];
   }, [stable, recentSignature]);
 
   return { ...stable, recentAgents, browseRows };

@@ -423,52 +423,35 @@ function qualifierTextOf(row: HTMLElement): string {
   return row.querySelector("[data-launcher-qualifier]")?.textContent?.trim() ?? "";
 }
 
+/** Rows wearing the "Recent" mark — the recency group at the head of the agents. */
+function recentRows(container: HTMLElement): HTMLElement[] {
+  return options(container).filter((row) => qualifierTextOf(row) === "Recent");
+}
+
 function listbox(container: HTMLElement): HTMLElement {
   const node = container.querySelector<HTMLElement>('[role="listbox"]');
   if (!node) throw new Error("listbox not found");
   return node;
 }
 
-const POINTER_FACTORIES = {
-  pointermove: createEvent.pointerMove,
-  pointerleave: createEvent.pointerLeave,
-  pointerover: createEvent.pointerOver,
-} as const;
-
 /**
- * jsdom defaults `pointerType` to "" and offers no way to set `timeStamp`
- * through the init dict, so a plain `fireEvent.pointerMove` exercises neither
- * the mouse-only guard nor the velocity sampler — it just passes through.
+ * A mouse move over `target`. jsdom has no `movementX`/`movementY` on its
+ * pointer events, so they are stamped on — the platform's own "this was real
+ * movement" signal, which the selection hook reads before it has a reference
+ * point of its own.
  */
-function firePointer(
+function movePointer(
   target: Element,
-  type: keyof typeof POINTER_FACTORIES,
-  sample: { x: number; y: number; t: number }
+  { x, y, movement = 1 }: { x: number; y: number; movement?: number }
 ): void {
-  const event = POINTER_FACTORIES[type](target, {
+  const event = createEvent.pointerMove(target, {
     pointerType: "mouse",
-    clientX: sample.x,
-    clientY: sample.y,
+    clientX: x,
+    clientY: y,
   });
-  Object.defineProperty(event, "timeStamp", { value: sample.t, configurable: true });
+  Object.defineProperty(event, "movementX", { value: 0, configurable: true });
+  Object.defineProperty(event, "movementY", { value: movement, configurable: true });
   fireEvent(target, event);
-}
-
-/**
- * A row's `onPointerEnter` is synthesised by React from `pointerover`, so a
- * real `pointerenter` never reaches it — which is why react-testing-library
- * aliases `fireEvent.pointerEnter` to `pointerOver`. The gate's own listeners
- * are native and take the real thing.
- */
-function fireRowEnter(row: Element, sample: { x: number; y: number; t: number }): void {
-  firePointer(row, "pointerover", sample);
-}
-
-/** Two samples 30px apart in 10ms — well past the sweep threshold. */
-function startSweep(container: HTMLElement): void {
-  const list = listbox(container);
-  firePointer(list, "pointermove", { x: 0, y: 0, t: 0 });
-  firePointer(list, "pointermove", { x: 0, y: 30, t: 10 });
 }
 
 // jsdom implements no layout, so it ships no scrollIntoView at all. The
@@ -582,21 +565,13 @@ describe("DockLaunchButton", () => {
     const { getAllByTestId } = renderButton();
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-    // Gemini is blocked in the fixture, so it lands under its own setup band
-    // rather than being offered as a launch; "More" carries the footer cue.
-    expect(labels).toEqual([
-      "Launch agent",
-      "Open in dock",
-      "Open in grid",
-      "Launch recipe",
-      "Needs setup",
-      "More",
-    ]);
+    // Gemini is blocked in the fixture; it stays in the agent column under the
+    // one "Agents" heading and says "Setup" on its own row. The footer actions
+    // are placed, not headed.
+    expect(labels).toEqual(["Agents", "Open in dock", "Open in grid", "Recipes"]);
   });
 
-  it("splits agents into Pinned/Other groups when pinnedCount is a strict subset", () => {
-    // Two LAUNCHABLE agents: the split is counted against the launchable group,
-    // so a blocked second agent would leave "Other" describing nothing.
+  it("lists pinned and unpinned agents under one Agents heading, pinned first", () => {
     const { getAllByTestId, container } = renderButton({
       pinnedCount: 1,
       agents: [
@@ -606,20 +581,14 @@ describe("DockLaunchButton", () => {
     });
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-    expect(labels.slice(0, 2)).toEqual(["Pinned", "Other"]);
-
-    // Assert document order so a regression that puts both agents under one
-    // group (or swaps them) is caught: Pinned → Claude → Other → Codex.
-    const text = container.textContent ?? "";
-    expect(text.indexOf("Pinned")).toBeLessThan(text.indexOf("Claude"));
-    expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Other"));
-    expect(text.indexOf("Other")).toBeLessThan(text.indexOf("Codex"));
-  });
-
-  it("keeps a flat Launch agent group when all agents are pinned", () => {
-    const { getAllByTestId } = renderButton({ pinnedCount: AGENTS.length });
-    const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-    expect(labels[0]).toBe("Launch agent");
+    expect(labels.filter((label) => label === "Agents")).toHaveLength(1);
+    expect(labels).not.toContain("Pinned");
+    expect(labels).not.toContain("Other");
+    const names = options(container).map((row) => row.getAttribute("aria-label") ?? "");
+    const claude = names.findIndex((name) => name.startsWith("Claude,"));
+    const codex = names.findIndex((name) => name.startsWith("Codex,"));
+    expect(claude).toBeGreaterThanOrEqual(0);
+    expect(claude).toBeLessThan(codex);
   });
 
   it("invokes onLaunchAgent for a launchable agent", () => {
@@ -967,16 +936,15 @@ describe("DockLaunchButton", () => {
       expect(onLaunchAgent).toHaveBeenCalledWith("claude", undefined);
     });
 
-    it("keeps the recency band navigable without highlighting its twin", () => {
-      // The band repeats agents listed again below, so the two rows must be
-      // keyed apart — sharing an id would light both up at once.
+    it("lists a recently launched agent once, first, and marked Recent", () => {
       mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
       const { container } = renderButton();
 
       const rows = options(container);
       const claudeRows = rows.filter((row) => row.textContent?.includes("Claude"));
-      expect(claudeRows).toHaveLength(2);
-      expect(claudeRows[0]!.id).not.toBe(claudeRows[1]!.id);
+      expect(claudeRows).toHaveLength(1);
+      expect(rows[0]).toBe(claudeRows[0]);
+      expect(qualifierTextOf(claudeRows[0]!)).toBe("Recent");
       expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
     });
 
@@ -1192,7 +1160,7 @@ describe("DockLaunchButton", () => {
       expect(input.value).toBe("");
     });
 
-    it("mirrors pointer hover into selection and keeps focus off the row", () => {
+    it("mirrors pointer movement into selection and keeps focus off the row", () => {
       const { container } = renderButton();
       fireEvent.change(searchInput(container), { target: { value: "e" } });
 
@@ -1200,7 +1168,7 @@ describe("DockLaunchButton", () => {
       expect(rows.length).toBeGreaterThan(1);
 
       const second = rows[1]!;
-      fireEvent.pointerEnter(second);
+      movePointer(second, { x: 10, y: 40 });
       expect(second.getAttribute("aria-selected")).toBe("true");
       expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
 
@@ -1209,185 +1177,73 @@ describe("DockLaunchButton", () => {
       expect(fireEvent.pointerDown(second)).toBe(false);
     });
 
-    it("hovering an unfiltered band row also moves the selection", () => {
-      // The state the user is in the instant the launcher opens — the browse
-      // rows were the ones left unguarded against pointer focus-steal.
+    it("moving over an unfiltered band row also moves the selection", () => {
       const { container } = renderButton();
 
       const rows = options(container);
       expect(rows.length).toBeGreaterThan(1);
 
-      fireEvent.pointerEnter(rows[1]!);
+      movePointer(rows[1]!, { x: 10, y: 40 });
       expect(selectedOption(container)).toBe(rows[1]);
       expect(fireEvent.pointerDown(rows[1]!)).toBe(false);
     });
 
-    describe("pointer transit is not a choice of row (#11919)", () => {
-      afterEach(() => {
-        vi.useRealTimers();
-      });
-
-      /** The gate only watches an open launcher, and this mock renders rows regardless. */
-      function openLauncher(): void {
-        act(() => popoverOpenChangeSpy!(true));
-      }
-
-      it("leaves the selection alone while a sweep crosses rows to reach a lower one", () => {
+    describe("the highlight tracks real pointer movement only (#11919)", () => {
+      it("follows every row the pointer moves across, with no delay", () => {
         const { container } = renderButton();
-        openLauncher();
-        const input = searchInput(container);
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        const chosen = selectedOption(container);
-        expect(chosen).not.toBeNull();
-
-        startSweep(container);
-
-        // Every row the sweep passes announces itself; none of them was picked.
         const rows = options(container);
-        expect(rows.length).toBeGreaterThan(2);
-        rows.slice(1).forEach((row, offset) => {
-          fireRowEnter(row, { x: 0, y: 32 + offset * 32, t: 12 + offset });
-          expect(selectedOption(container)).toBe(chosen);
+        expect(rows.length).toBeGreaterThan(3);
+
+        rows.slice(0, 4).forEach((row, offset) => {
+          movePointer(row, { x: 10, y: 10 + offset * 32 });
+          expect(selectedOption(container)).toBe(row);
         });
       });
 
-      it("selects immediately on an ordinary mouse hover", () => {
-        // The two bare-pointerEnter tests above carry no pointerType, so they
-        // only prove the non-mouse bypass. This is the path a real mouse takes.
+      it("does not select on enter alone", () => {
+        // A row that slides under a resting cursor gets an enter and nothing
+        // else, so enter is not a choice.
         const { container } = renderButton();
-        openLauncher();
-        const rows = options(container);
-        const target = rows[1]!;
+        const input = searchInput(container);
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        const chosen = selectedOption(container);
+        const other = options(container).find((row) => row !== chosen)!;
 
-        fireRowEnter(target, { x: 0, y: 32, t: 0 });
-        expect(selectedOption(container)).toBe(target);
-      });
-
-      it("settles onto the row the sweep stopped on", () => {
-        const { container } = renderButton();
-        openLauncher();
-        const rows = options(container);
-        expect(rows.length).toBeGreaterThan(2);
-        const target = rows[2]!;
-
-        startSweep(container);
-        fireRowEnter(target, { x: 0, y: 30, t: 12 });
-        expect(selectedOption(container)).not.toBe(target);
-
-        // The pointer comes to rest: same position, far enough past the
-        // minimum-suppression floor for the gesture to read as finished.
-        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 200 });
-        expect(selectedOption(container)).toBe(target);
+        fireEvent.pointerEnter(other);
+        fireEvent.pointerOver(other);
+        expect(selectedOption(container)).toBe(chosen);
       });
 
       it("keeps the keyboard's row when the list scrolls under a resting cursor", () => {
         const { container } = renderButton();
-        openLauncher();
-        const input = searchInput(container);
-        const list = listbox(container);
-
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        const chosen = selectedOption(container);
-        expect(chosen).not.toBeNull();
-
-        vi.useFakeTimers();
-        // What scrollIntoView does to a stationary pointer: the list moves, and
-        // a row it never chose slides underneath.
-        fireEvent.scroll(list);
-        const slidUnder = options(container).find((row) => row !== chosen)!;
-        fireRowEnter(slidUnder, { x: 0, y: 0, t: 200 });
-        expect(selectedOption(container)).toBe(chosen);
-
-        // And it must still be the keyboard's row once the list stops moving —
-        // a scroll settling says nothing about where the user is pointing.
-        act(() => {
-          vi.advanceTimersByTime(500);
-        });
-        expect(selectedOption(container)).toBe(chosen);
-      });
-
-      it("drops the row it was tracking rather than settling on whatever replaced it", () => {
-        const { container } = renderButton();
-        openLauncher();
-        const rows = options(container);
-        expect(rows.length).toBeGreaterThan(2);
-        const trackedLabel = rows[2]!.textContent;
-
-        startSweep(container);
-        fireRowEnter(rows[2]!, { x: 0, y: 30, t: 12 });
-        // Without this the test passes whether or not hover is gated at all.
-        expect(selectedOption(container)).not.toBe(rows[2]!);
-
-        fireEvent.change(searchInput(container), { target: { value: "claude" } });
-        const filtered = options(container);
-        expect(filtered.length).toBeGreaterThan(0);
-        expect(filtered.map((row) => row.textContent)).not.toContain(trackedLabel);
-        const before = selectedOption(container);
-
-        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 200 });
-        expect(selectedOption(container)).toBe(before);
-      });
-
-      it("does not settle a sweep that left the list", () => {
-        const { container } = renderButton();
-        openLauncher();
-        const input = searchInput(container);
-        fireEvent.keyDown(input, { key: "ArrowDown" });
-        const chosen = selectedOption(container);
-        const target = options(container).find((row) => row !== chosen)!;
-
-        vi.useFakeTimers();
-        startSweep(container);
-        fireRowEnter(target, { x: 0, y: 30, t: 12 });
-        firePointer(listbox(container), "pointerleave", { x: 0, y: 400, t: 20 });
-
-        act(() => {
-          vi.advanceTimersByTime(500);
-        });
-        expect(selectedOption(container)).toBe(chosen);
-      });
-
-      it("lets a keystroke override a sweep that has not settled yet", () => {
-        const { container } = renderButton();
-        openLauncher();
         const input = searchInput(container);
         const rows = options(container);
-        const swept = rows[2]!;
+        expect(rows.length).toBeGreaterThan(3);
 
-        vi.useFakeTimers();
-        startSweep(container);
-        fireRowEnter(swept, { x: 0, y: 30, t: 12 });
-
-        // The keyboard makes a choice mid-gesture. The sweep's row is now an
-        // older opinion and must not come back when the gesture settles.
+        movePointer(rows[1]!, { x: 10, y: 40 });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
         fireEvent.keyDown(input, { key: "ArrowDown" });
         const chosen = selectedOption(container);
-        expect(chosen).not.toBe(swept);
+        expect(chosen).toBe(rows[3]);
 
-        act(() => {
-          vi.advanceTimersByTime(500);
-        });
+        // What the browser does after scrollIntoView moves the list under a
+        // stationary pointer: it re-hit-tests at the same coordinates.
+        movePointer(rows[2]!, { x: 10, y: 40, movement: 0 });
         expect(selectedOption(container)).toBe(chosen);
+
+        // The next genuine movement hands the highlight straight back.
+        movePointer(rows[2]!, { x: 10, y: 41 });
+        expect(selectedOption(container)).toBe(rows[2]);
       });
 
-      it("re-arms after the list empties and comes back", () => {
+      it("ignores a first move the platform does not report as movement", () => {
         const { container } = renderButton();
-        openLauncher();
         const input = searchInput(container);
-
-        // Zero results tears the listbox out entirely, taking the gate with it.
-        fireEvent.change(input, { target: { value: "zzzznotarealrow" } });
-        expect(container.querySelector('[role="listbox"]')).toBeNull();
-        fireEvent.change(input, { target: { value: "" } });
-
         fireEvent.keyDown(input, { key: "ArrowDown" });
         const chosen = selectedOption(container);
-        expect(chosen).not.toBeNull();
+        const other = options(container).find((row) => row !== chosen)!;
 
-        startSweep(container);
-        const target = options(container).find((row) => row !== chosen)!;
-        fireRowEnter(target, { x: 0, y: 32, t: 12 });
+        movePointer(other, { x: 10, y: 40, movement: 0 });
         expect(selectedOption(container)).toBe(chosen);
       });
     });
@@ -1396,7 +1252,7 @@ describe("DockLaunchButton", () => {
   it("shows a Create a recipe cue when no recipes match the active worktree", () => {
     mockRecipes = [];
     const { getByText } = renderButton({ activeWorktreeId: "wt-1" });
-    expect(getByText("Launch recipe")).toBeTruthy();
+    expect(getByText("Recipes")).toBeTruthy();
     expect(getByText("Create a recipe")).toBeTruthy();
   });
 
@@ -1428,32 +1284,21 @@ describe("DockLaunchButton", () => {
     );
   });
 
-  it("footers the More band with both action cues under one heading", () => {
-    const { container, getAllByTestId } = renderButton();
+  it("places both action cues in the footer, last in navigation order", () => {
+    const { container } = renderButton();
 
-    // Walk the listbox in DOM order and file each option under the heading
-    // above it. Counting headings alone would not do: a row that drifted into
-    // another band leaves exactly one "More" behind and still renders its label
-    // somewhere on screen, which is all a `getByText` pair can see.
-    const under = new Map<string, string[]>();
-    let heading = "";
-    for (const node of listbox(container).querySelectorAll<HTMLElement>(
-      '[data-testid="dock-launcher-band"], [role="option"]'
-    )) {
-      if (node.getAttribute("data-testid") === "dock-launcher-band") {
-        heading = node.textContent ?? "";
-        continue;
-      }
-      under.set(heading, [...(under.get(heading) ?? []), node.textContent ?? ""]);
-    }
+    const footer = listbox(container).querySelector('[data-launcher-column="footer"]');
+    expect(footer).not.toBeNull();
+    const cues = Array.from(footer!.querySelectorAll('[role="option"]')).map(
+      (row) => row.textContent ?? ""
+    );
+    expect(cues).toHaveLength(2);
+    expect(cues[0]).toContain("Manage agents");
+    expect(cues[1]).toContain(TOOLBAR_CUSTOMIZE_LABEL);
 
-    expect(
-      getAllByTestId("dock-launcher-band").filter((el) => el.textContent === "More")
-    ).toHaveLength(1);
-    const more = under.get("More") ?? [];
-    expect(more).toHaveLength(2);
-    expect(more[0]).toContain("Manage agents");
-    expect(more[1]).toContain(TOOLBAR_CUSTOMIZE_LABEL);
+    // The footer is the tail of the flat navigation order, so End lands on it.
+    const rows = options(container);
+    expect(rows.slice(-2).every((row) => footer!.contains(row))).toBe(true);
   });
 
   it("draws the Customize toolbar cue with a glyph of its own", () => {
@@ -1793,10 +1638,10 @@ describe("DockLaunchButton", () => {
       { id: "cursor", name: "Cursor", availability: "ready" },
     ];
 
-    it("hides the band when the MRU is empty", () => {
+    it("marks nothing Recent when the MRU is empty", () => {
       mockMruEntries = [];
-      const { queryByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
     });
 
     it("renders recent agents in frecency order, capped at 3", () => {
@@ -1809,43 +1654,37 @@ describe("DockLaunchButton", () => {
         { id: "agent.gemini", score: 1, lastAccessedAt: 1000 },
       ];
 
-      const { getByText, getAllByText, getAllByTestId, container } = renderButton({
-        agents: MANY,
-      });
+      const { getAllByText, container } = renderButton({ agents: MANY });
 
-      const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
-      expect(labels[0]).toBe("Recently launched");
-      expect(getByText("Recently launched")).toBeTruthy();
-
-      // Band entries are duplicated below in the flat agent group — the band is
-      // a shortcut, not a replacement grouping. Capped entries appear twice;
-      // the dropped 4th appears only once (in the group).
-      expect(getAllByText("Claude").length).toBe(2);
-      expect(getAllByText("Codex").length).toBe(2);
-      expect(getAllByText("Cursor").length).toBe(2);
-      expect(getAllByText("Gemini").length).toBe(1);
-
-      const text = container.textContent ?? "";
-      expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Codex"));
-      expect(text.indexOf("Codex")).toBeLessThan(text.indexOf("Cursor"));
+      // Recent agents lead the agent column and are not repeated below it; the
+      // dropped 4th keeps its ordinary place with no mark.
+      expect(recentRows(container).map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Claude"),
+        expect.stringContaining("Codex"),
+        expect.stringContaining("Cursor"),
+      ]);
+      expect(options(container).slice(0, 3)).toEqual(recentRows(container));
+      for (const name of ["Claude", "Codex", "Cursor", "Gemini"]) {
+        expect(getAllByText(name)).toHaveLength(1);
+      }
     });
 
     it("excludes never-launched cold-start entries (lastAccessedAt === 0)", () => {
       mockMruEntries = [{ id: "agent.claude", score: 5, lastAccessedAt: 0 }];
-      const { queryByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
     });
 
     it("ignores non-agent MRU entries", () => {
       mockMruEntries = [{ id: "recipe.editor.open", score: 5, lastAccessedAt: 5000 }];
-      const { queryByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
     });
 
     it("drops stale MRU entries for agents no longer present", () => {
       mockMruEntries = [{ id: "agent.ghost", score: 5, lastAccessedAt: 5000 }];
-      const { queryByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
     });
 
     it("launching a band row records MRU and invokes onLaunchAgent", () => {
@@ -1853,7 +1692,7 @@ describe("DockLaunchButton", () => {
       const onLaunchAgent = vi.fn();
       const { getAllByText } = renderButton({ agents: MANY, onLaunchAgent });
 
-      // First "Codex" is the band row.
+      // The one "Codex" row is the recent one.
       const codexElement = getAllByText("Codex")[0];
       expect(codexElement).toBeDefined();
       fireEvent.click(codexElement!);
@@ -1867,8 +1706,8 @@ describe("DockLaunchButton", () => {
       // re-render. Memoizing the band on it froze the pre-launch order — launch
       // an agent, reopen, and it was still missing.
       mockMruEntries = [];
-      const { queryByText, getByText } = renderButton({ agents: MANY });
-      expect(queryByText("Recently launched")).toBeNull();
+      const { container } = renderButton({ agents: MANY });
+      expect(recentRows(container)).toHaveLength(0);
 
       // A launch elsewhere records MRU while this component stays mounted.
       mockMruEntries = [{ id: "agent.codex", score: 1, lastAccessedAt: 7000 }];
@@ -1876,7 +1715,9 @@ describe("DockLaunchButton", () => {
       act(() => popoverOpenChangeSpy!(false));
       act(() => popoverOpenChangeSpy!(true));
 
-      expect(getByText("Recently launched")).toBeTruthy();
+      expect(recentRows(container).map((row) => row.textContent)).toEqual([
+        expect.stringContaining("Codex"),
+      ]);
     });
 
     it("anchors the reopened selection to a row the recency band inserted while closed", () => {
@@ -1900,14 +1741,14 @@ describe("DockLaunchButton", () => {
 
     it("survives an unfiltered reopen after a search is cleared", () => {
       mockMruEntries = [{ id: "agent.codex", score: 3, lastAccessedAt: 3000 }];
-      const { container, queryByText, getByText } = renderButton({ agents: MANY });
+      const { container } = renderButton({ agents: MANY });
       const input = searchInput(container);
 
       fireEvent.change(input, { target: { value: "codex" } });
-      expect(queryByText("Recently launched")).toBeNull();
+      expect(recentRows(container)).toHaveLength(0);
 
       fireEvent.change(input, { target: { value: "" } });
-      expect(getByText("Recently launched")).toBeTruthy();
+      expect(recentRows(container)).toHaveLength(1);
     });
 
     it("re-anchors the selection to the top row on reopen", () => {
@@ -2758,6 +2599,29 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       fireEvent.click(edit!);
     };
 
+    it("opens the recorder from the keyboard with F2 on the selected agent", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      expect(selectedOption(container)?.getAttribute("aria-label")).toMatch(/^Claude,/);
+      expect(selectedOption(container)?.getAttribute("aria-label")).toContain(
+        "Press F2 to edit shortcut"
+      );
+
+      fireEvent.keyDown(input, { key: "F2" });
+      expect(container.querySelector('[data-testid="capture-widget-claude"]')).toBeTruthy();
+    });
+
+    it("does nothing on F2 for a row with no shortcut to edit", () => {
+      const { container } = renderButton({ agents: READY });
+      const input = searchInput(container);
+      fireEvent.change(input, { target: { value: "terminal" } });
+      const selected = selectedOption(container);
+      expect(selected?.getAttribute("aria-label")).not.toContain("F2");
+
+      fireEvent.keyDown(input, { key: "F2" });
+      expect(container.querySelector('[data-testid^="capture-widget-"]')).toBeNull();
+    });
+
     it("replaces the row with a recorder that is not an option", () => {
       const { container } = renderButton({ agents: READY });
       openCapture(container);
@@ -3059,6 +2923,21 @@ describe("panel origin marker", () => {
     // The rule this follows: provenance earns a marker only where it differs
     // from the default, so the majority of rows stay exactly as they were.
     expect(qualifierTextOf(rowNamed(container, "Review"))).toBe("");
+  });
+
+  it("tells two same-named recipes apart by scope in search", () => {
+    mockRecipes = [
+      { id: "r-global", name: "Work", worktreeId: undefined },
+      { id: "r-team", name: "Work", projectId: "p-1", scope: "inrepo", worktreeId: undefined },
+    ];
+    const { container } = renderButton();
+
+    fireEvent.change(searchInput(container), { target: { value: "work" } });
+    const qualifiers = options(container)
+      .filter((row) => row.getAttribute("aria-label")?.startsWith("Work,"))
+      .map(qualifierTextOf);
+    expect(qualifiers).toHaveLength(2);
+    expect(new Set(qualifiers).size).toBe(2);
   });
 
   it("stacks origin behind the category in search rather than displacing it", () => {

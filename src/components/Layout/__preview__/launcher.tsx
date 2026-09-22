@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
 import type { AgentAvailabilityState } from "@shared/types/ipc/system";
 import type { TerminalRecipe } from "@shared/types";
+import type { AnyToolbarButtonId } from "@shared/types/toolbar";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { initBuiltInPanelKinds } from "@/panels/registry";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -86,29 +87,25 @@ const RECIPES: TerminalRecipe[] = [
 function seedStores(): void {
   initBuiltInPanelKinds();
   const availability = availabilityFor();
-  useCliAvailabilityStore.setState({
-    availability,
-    hasRealData: true,
-    refresh: async () => {},
-  } as never);
-  const pinned = fixture === "few" ? ["claude"] : [...PINNED];
+  useCliAvailabilityStore.setState({ availability, hasRealData: true });
+  const pinned: AnyToolbarButtonId[] = fixture === "few" ? ["claude"] : [...PINNED];
   useAgentSettingsStore.setState({
     settings: {
       agents: Object.fromEntries(pinned.map((id) => [id, { pinned: true }])),
     },
-  } as never);
+  });
   const layout = useToolbarPreferencesStore.getState().layout;
   useToolbarPreferencesStore.setState({
     layout: {
       ...layout,
       leftButtons: [...pinned, ...layout.leftButtons.filter((id) => !pinned.includes(id))],
     },
-  } as never);
+  });
   useRecipeStore.setState({
     recipes: fixture === "few" ? [] : RECIPES,
     currentProjectId: "preview-project",
     isLoading: false,
-  } as never);
+  });
   // Two shared presets on Claude, so the row carries its disclosure and the
   // expansion has a provenance heading and a non-current choice to show.
   useProjectPresetsStore.setState({
@@ -118,7 +115,7 @@ function seedStores(): void {
         { id: "team-sonnet", name: "Sonnet" },
       ],
     },
-  } as never);
+  });
   if (fixture !== "few") useActionMruStore.getState().recordActionMru("agent.opencode");
 }
 

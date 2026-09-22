@@ -389,7 +389,11 @@ describe("buildDockLaunchModel — browse rows", () => {
   const mru = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
 
   it("orders rows exactly as the launcher renders its bands", () => {
-    const model = build({ mruEntries: mru, recipes: [recipe({ id: "r-1", name: "Deploy" })] });
+    const model = build({
+      mruEntries: mru,
+      agents: [...LAUNCHABLE_AGENTS, { id: "gemini", name: "Gemini", availability: "blocked" }],
+      recipes: [recipe({ id: "r-1", name: "Deploy" })],
+    });
 
     // The launcher navigates this array with a single selectedIndex, so a band
     // ordering that drifts from the render order would move the highlight to a
@@ -398,25 +402,29 @@ describe("buildDockLaunchModel — browse rows", () => {
     for (const row of model.browseRows) {
       if (bands[bands.length - 1] !== row.band) bands.push(row.band);
     }
+    // Every agent band comes first: the launcher lays them out as one column
+    // beside the panels and recipes, and ArrowDown reads down that column
+    // before crossing to the next one.
     expect(bands).toEqual([
       "recent",
       "agents",
+      "needs-setup",
       "dock-panels",
       "grid-panels",
       "recipes",
-      "needs-setup",
       "actions",
     ]);
   });
 
-  it("keys a recency row apart from its twin in the agent group", () => {
+  it("lists a recently launched agent once, at the head of the agents", () => {
     const model = build({ mruEntries: mru });
 
     const claudeRows = model.browseRows.filter(
       (row) => getDockLaunchRowItem(row)?.key === "agent:claude"
     );
-    expect(claudeRows).toHaveLength(2);
-    expect(new Set(claudeRows.map((row) => row.rowKey)).size).toBe(2);
+    expect(claudeRows).toHaveLength(1);
+    expect(claudeRows[0]!.band).toBe("recent");
+    expect(model.browseRows[0]).toBe(claudeRows[0]);
   });
 
   it("gives every row a unique key so selection can never light two at once", () => {
@@ -430,11 +438,16 @@ describe("buildDockLaunchModel — browse rows", () => {
     expect(new Set(keys).size).toBe(keys.length);
   });
 
-  it("splits the agent bands the same way the Pinned/Other groups do", () => {
+  it("keeps pinned and unpinned agents in one band, in the host's pinned-first order", () => {
     const model = build({ agents: LAUNCHABLE_AGENTS, pinnedCount: 1 });
-    const bands = model.browseRows.filter((row) => getDockLaunchRowItem(row)?.category === "agent");
+    const agentRows = model.browseRows.filter(
+      (row) => getDockLaunchRowItem(row)?.category === "agent"
+    );
 
-    expect(bands.map((row) => row.band)).toEqual(["pinned", "other"]);
+    expect(new Set(agentRows.map((row) => row.band))).toEqual(new Set(["agents"]));
+    expect(agentRows.map((row) => getDockLaunchRowItem(row)?.name)).toEqual(
+      LAUNCHABLE_AGENTS.map((agent) => agent.name)
+    );
   });
 
   it("bands panels by destination even when every panel shares one", () => {
@@ -669,7 +682,7 @@ describe("preset rows", () => {
     expect(choices.find((c) => c.presetId === "ccr-team")?.label).toBe("CCR: Team");
   });
 
-  it("keys preset rows to the parent ROW so a duplicated agent expands once", () => {
+  it("keys preset rows to the parent ROW they expand from", () => {
     const agent: DockLaunchAgent = {
       id: "claude",
       name: "Claude",
@@ -683,7 +696,7 @@ describe("preset rows", () => {
     const claudeRows = model.browseRows.filter(
       (row) => getDockLaunchRowItem(row)?.key === "agent:claude"
     );
-    expect(claudeRows).toHaveLength(2);
+    expect(claudeRows).toHaveLength(1);
 
     const expanded = insertExpandedPresetRows(model.browseRows, claudeRows[0]!.rowKey);
     const presetRows = expanded.filter((row) => row.kind === "preset");

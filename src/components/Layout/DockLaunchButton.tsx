@@ -16,7 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
-import { useDockLaunchHoverSelection } from "./useDockLaunchHoverSelection";
+import { useDockLaunchPointerSelection } from "./useDockLaunchPointerSelection";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { KbdChord } from "@/components/ui/Kbd";
@@ -72,6 +72,7 @@ import {
   type DockLaunchCueId,
   type DockLaunchInventoryState,
   type DockLaunchItem,
+  type DockLaunchBandId,
   type DockLaunchRow,
 } from "./dockLaunchItems";
 import { unavailableAgentHint } from "@/utils/agentAvailabilityCopy";
@@ -473,14 +474,18 @@ export function DockLaunchButton({
     selectedRow && !capturingRowKey ? getOptionId(selectedRow.rowKey) : undefined;
   const selectedPinTarget = selectedRow ? resolvePinTarget(selectedRow) : null;
 
-  // Pointer transit must not be read as a choice of row: sweeping past rows to
-  // reach a lower one, and the scrollIntoView below sliding a row under a
-  // resting cursor, are both movement rather than intent (#11919).
-  const { listboxRef, onHover: handleRowHover } = useDockLaunchHoverSelection({
-    open,
-    results,
+  // The highlight tracks the pointer on genuine movement only, so the
+  // scrollIntoView below sliding a row under a resting cursor is not a choice.
+  // A row the pointer is on is already on screen, so a pointer-driven move must
+  // not scroll: `block: "nearest"` would still nudge a half-visible edge row,
+  // sliding the list under the very cursor that chose it.
+  const pointerSelectedRef = useRef(false);
+  const handleRowPointerMove = useDockLaunchPointerSelection({
     selectedIndex: activeIndex,
-    setSelectedIndex,
+    setSelectedIndex: (index) => {
+      pointerSelectedRef.current = true;
+      setSelectedIndex(index);
+    },
   });
 
   // Set when ArrowRight expands a row, spent once the preset children actually
@@ -535,6 +540,10 @@ export function DockLaunchButton({
   // which are illegal in a CSS id selector.
   useEffect(() => {
     if (!activeDescendant) return;
+    if (pointerSelectedRef.current) {
+      pointerSelectedRef.current = false;
+      return;
+    }
     document.getElementById(activeDescendant)?.scrollIntoView({ block: "nearest" });
   }, [activeDescendant]);
 
@@ -656,6 +665,12 @@ export function DockLaunchButton({
     [activeWorktreeId, closeLauncher, cwd, launchAgent, placement, recipeContext]
   );
 
+  // The recorder took DOM focus; typing has to land back in the search box.
+  const finishCapture = useCallback(() => {
+    setCapturingRowKey(null);
+    requestAnimationFrame(() => inputRef.current?.focus({ preventScroll: true }));
+  }, []);
+
   const collapsePresets = useCallback(
     (row: DockLaunchRow) => {
       const parentKey = row.kind === "preset" ? row.parentRowKey : row.rowKey;
@@ -747,6 +762,15 @@ export function DockLaunchButton({
 
       if (event.key === "Tab") return;
 
+      // F2 is the platform's "edit the selected thing" key, and the shortcut
+      // recorder otherwise had only a pointer route.
+      if (event.key === "F2" && selectedRow && rowShortcutAgentId(selectedRow)) {
+        event.preventDefault();
+        event.stopPropagation();
+        setCapturingRowKey(selectedRow.rowKey);
+        return;
+      }
+
       // Alt+P pins the selected row. It has to be modified: this is a type-ahead
       // search box, so a bare "P" is the second letter of "python". Exactly Alt
       // — Cmd+P, Cmd+Shift+P and Cmd+Alt+P are all taken in
@@ -790,6 +814,52 @@ export function DockLaunchButton({
       setSelectedIndex,
       togglePin,
     ]
+  );
+
+  // Browse lays the list out as an agent column beside a panels-and-recipes
+  // column, with the two management actions as a footer, so everything a user
+  // can launch is on screen at once instead of in one window-height list. The
+  // flat `results` array stays the navigation space: the columns are cut from
+  // it in order, so ArrowDown reads down the agents, then down the panels and
+  // recipes, then along the footer — the same order the eye reads them in.
+  const isBrowsing = results.length > 0 && results[0]!.band !== "results";
+  const columns = splitIntoColumns(results);
+
+  const renderRow = ({ row, index }: { row: DockLaunchRow; index: number }) => (
+    // The band heading is a sibling of the row, not a child of it. It used to
+    // live inside `DockLaunchOption`, which meant the capture row — a different
+    // component that replaces the option outright — rendered no heading, and
+    // recording a shortcut on the first agent silently deleted the heading.
+    <Fragment key={row.rowKey}>
+      {shouldShowBandLabel(results, index) && (
+        <div
+          // Decorative inside the listbox — the band is conveyed by the row's
+          // own accessible name, and an extra child would break option counting.
+          aria-hidden="true"
+          data-testid="dock-launcher-band"
+          className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 first:pt-0")}
+        >
+          {DOCK_LAUNCH_BAND_LABELS[headingBand(row.band)]}
+        </div>
+      )}
+      {capturingRowKey === row.rowKey ? (
+        <DockLaunchCaptureRow row={row} onDone={finishCapture} />
+      ) : (
+        <DockLaunchOption
+          row={row}
+          index={index}
+          isSelected={index === activeIndex}
+          optionId={getOptionId(row.rowKey)}
+          pinTarget={resolvePinTarget(row)}
+          isExpanded={expandedPresetParentKey === row.rowKey}
+          onPointerMove={handleRowPointerMove}
+          onActivate={activateRow}
+          onTogglePin={togglePin}
+          onStartCapture={setCapturingRowKey}
+          onToggleExpanded={toggleExpanded}
+        />
+      )}
+    </Fragment>
   );
 
   const trigger = (
@@ -888,11 +958,13 @@ export function DockLaunchButton({
         onInteractOutside={(event) => {
           if (capturingRowKey !== null) event.preventDefault();
         }}
-        // Width comes from the shell's anchored tier, so the launcher can't
-        // drift away from the other menus it sits next to in the same keyboard
-        // reflex — and doesn't wear a command palette's box for a list of
-        // agents and panels.
-        className="p-0"
+        // Wider than the anchored tier on purpose: at 484px the launcher could
+        // only be one window-height column with its middle empty. At the
+        // overview width the agents and the panels/recipes sit side by side, so
+        // every launch category is visible without scrolling. The shell's
+        // `max-w-[calc(100vw-2rem)]` still caps it, and below ~560px of content
+        // the columns fold back into one.
+        className="p-0 w-[672px]"
         // Catch-all behind the input's own handler, for the frame before the
         // shell's refocus lands and for focus legitimately sitting on the
         // results region. Bubble phase, so the input and body still get first
@@ -950,51 +1022,97 @@ export function DockLaunchButton({
           {results.length === 0 ? (
             <AppPaletteDialog.Empty query={query} emptyMessage="Nothing to launch" />
           ) : (
-            <div ref={listboxRef} id={listboxId} role="listbox" aria-label="Launcher results">
-              {results.map((row, index) => (
-                // The band heading is a sibling of the row, not a child of it.
-                // It used to live inside `DockLaunchOption`, which meant the
-                // capture row — a different component that replaces the option
-                // outright — rendered no heading, and recording a shortcut on
-                // the first agent silently deleted "Launch agent" from the list.
-                <Fragment key={row.rowKey}>
-                  {shouldShowBandLabel(results, index) && (
-                    <div
-                      // Decorative inside the listbox — the band is conveyed by
-                      // the row's own accessible name, and an extra child would
-                      // break option counting.
-                      aria-hidden="true"
-                      data-testid="dock-launcher-band"
-                      className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 first:pt-0")}
-                    >
-                      {DOCK_LAUNCH_BAND_LABELS[row.band]}
+            // The container, not the viewport, decides whether the columns fit:
+            // the popover is capped at the window width minus its gutters.
+            <div className="@container">
+              <div
+                id={listboxId}
+                role="listbox"
+                aria-label="Launcher results"
+                data-launcher-layout={isBrowsing ? "columns" : "list"}
+                className={cn(
+                  isBrowsing &&
+                    "grid gap-x-3 @min-[560px]:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]"
+                )}
+              >
+                {isBrowsing ? (
+                  <>
+                    <div role="none" data-launcher-column="agents" className="min-w-0">
+                      {columns.agents.map(renderRow)}
                     </div>
-                  )}
-                  {capturingRowKey === row.rowKey ? (
-                    <DockLaunchCaptureRow row={row} onDone={() => setCapturingRowKey(null)} />
-                  ) : (
-                    <DockLaunchOption
-                      row={row}
-                      index={index}
-                      isSelected={index === activeIndex}
-                      optionId={getOptionId(row.rowKey)}
-                      pinTarget={resolvePinTarget(row)}
-                      isExpanded={expandedPresetParentKey === row.rowKey}
-                      onHover={handleRowHover}
-                      onActivate={activateRow}
-                      onTogglePin={togglePin}
-                      onStartCapture={setCapturingRowKey}
-                      onToggleExpanded={toggleExpanded}
-                    />
-                  )}
-                </Fragment>
-              ))}
+                    <div role="none" data-launcher-column="launch" className="min-w-0">
+                      {columns.launch.map(renderRow)}
+                    </div>
+                    {columns.footer.length > 0 && (
+                      <div
+                        role="none"
+                        data-launcher-column="footer"
+                        className="col-span-full mt-1 flex flex-wrap gap-1 border-t border-divider pt-1"
+                      >
+                        {columns.footer.map(renderRow)}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  results.map((row, index) => renderRow({ row, index }))
+                )}
+              </div>
             </div>
           )}
         </AppPaletteDialog.Body>
       </AppPalettePopover.Content>
     </AppPalettePopover>
   );
+}
+
+/** Every agent band renders under the one "Agents" heading. */
+const AGENT_BANDS: ReadonlySet<DockLaunchBandId> = new Set([
+  "recent",
+  "pinned",
+  "other",
+  "agents",
+  "needs-setup",
+  "available-agents",
+  "presets",
+]);
+
+/**
+ * The band whose label heads this row. Recency, pinning and setup are row
+ * state now — a trailing "Recent" or "Setup", a lit pin — so every agent band
+ * shares one heading instead of each spending a full-width label on one to
+ * four rows.
+ */
+function headingBand(band: DockLaunchBandId): DockLaunchBandId {
+  return AGENT_BANDS.has(band) && band !== "presets" ? "agents" : band;
+}
+
+interface IndexedRow {
+  row: DockLaunchRow;
+  index: number;
+}
+
+/** Cut the browse rows into the agent column, the launch column and the footer. */
+function splitIntoColumns(rows: ReadonlyArray<DockLaunchRow>): {
+  agents: IndexedRow[];
+  launch: IndexedRow[];
+  footer: IndexedRow[];
+} {
+  const agents: IndexedRow[] = [];
+  const launch: IndexedRow[] = [];
+  const footer: IndexedRow[] = [];
+  rows.forEach((row, index) => {
+    if (row.band === "actions") footer.push({ row, index });
+    else if (AGENT_BANDS.has(row.band)) agents.push({ row, index });
+    else launch.push({ row, index });
+  });
+  return { agents, launch, footer };
+}
+
+/** The built-in agent whose `agent.<id>` binding a row can edit, if any. */
+function rowShortcutAgentId(row: DockLaunchRow): BuiltInAgentId | null {
+  if (row.kind !== "item" || row.item.category !== "agent") return null;
+  const { id } = row.item.agent;
+  return isBuiltInAgentId(id) ? id : null;
 }
 
 /**
@@ -1013,9 +1131,12 @@ function shouldShowBandLabel(rows: ReadonlyArray<DockLaunchRow>, index: number):
   if (!row) return false;
   // The presets block gets exactly one heading, on its first row.
   if (row.kind === "preset") return rows[index - 1]?.kind !== "preset";
+  // The footer's two actions are labelled by where they sit, not by a heading.
+  if (row.band === "actions") return false;
   let previous = index - 1;
   while (previous >= 0 && rows[previous]?.kind === "preset") previous -= 1;
-  return previous < 0 || rows[previous]?.band !== row.band;
+  const prior = rows[previous];
+  return previous < 0 || !prior || headingBand(prior.band) !== headingBand(row.band);
 }
 
 /**
@@ -1109,7 +1230,7 @@ interface DockLaunchOptionProps {
   /** Null for rows with no toolbar button to pin — the slot is still reserved. */
   pinTarget: DockLaunchPinTarget | null;
   isExpanded: boolean;
-  onHover: (index: number, rowKey: string, pointerType: string) => void;
+  onPointerMove: (index: number, event: React.PointerEvent) => void;
   onActivate: (row: DockLaunchRow) => void;
   onTogglePin: (target: DockLaunchPinTarget) => void;
   onStartCapture: (rowKey: string) => void;
@@ -1123,7 +1244,7 @@ function DockLaunchOption({
   optionId,
   pinTarget,
   isExpanded,
-  onHover,
+  onPointerMove,
   onActivate,
   onTogglePin,
   onStartCapture,
@@ -1133,8 +1254,7 @@ function DockLaunchOption({
   const agent = item?.category === "agent" ? item.agent : undefined;
   // Only a built-in agent's own row: presets share the agent's binding, and a
   // plugin agent has no `agent.<id>` action to bind at all.
-  const shortcutAgentId =
-    row.kind === "item" && agent && isBuiltInAgentId(agent.id) ? agent.id : null;
+  const shortcutAgentId = rowShortcutAgentId(row);
   // Panels have bindings too, and the old menu showed them. Resolved through the
   // kind→button map and the fixed panel list, which is where that action id
   // lives — a launcher row is keyed by panel KIND, and the binding is on the
@@ -1244,34 +1364,39 @@ function DockLaunchOption({
           : item!.category === "recipe" && item!.isShadowed
             ? `${item!.scopeLabel} · Overridden by Team`
             : item!.category === "agent" && item!.agentBand !== "launch"
-              ? // In browse, "Needs setup" and "Available agents" already say it.
-                isSearchResult
-                ? "Setup"
-                : undefined
-              : item!.category === "panel"
-                ? // Provenance is the panel row's only metadata, and in browse it
-                  // has the column to itself — the band heading already said
-                  // "Open in dock", so nothing else is competing for it. In
-                  // search the category still has to come first (a query for
-                  // "re" returns a recipe named Review and a panel named
-                  // Review), so the two stack rather than one displacing the
-                  // other. Built-in contributes nothing to either mode, which
-                  // is what leaves the browse slot empty on most rows.
-                  [isSearchResult ? DOCK_LAUNCH_CATEGORY_LABELS.panel : undefined, originLabel]
-                    .filter(Boolean)
-                    .join(" · ") || undefined
-                : isSearchResult
-                  ? // One axis for the whole result list. Giving the recipe its
-                    // scope and the panel its category put two different kinds of
-                    // answer in one column, so the two rows a query for "re"
-                    // returns — a recipe named Review and a panel named Review —
-                    // still had to be compared across "Team" and "Panel". Scope is
-                    // a browsing nicety; which of the two things this IS is the
-                    // question search has to answer.
-                    DOCK_LAUNCH_CATEGORY_LABELS[item!.category]
-                  : item!.category === "recipe"
-                    ? item!.scopeLabel
-                    : undefined;
+              ? // Setup rows share the agent column and its one heading now, so
+                // the row states it in both modes.
+                "Setup"
+              : item!.category === "agent" && row.band === "recent"
+                ? "Recent"
+                : item!.category === "panel"
+                  ? // Provenance is the panel row's only metadata, and in browse it
+                    // has the column to itself — the band heading already said
+                    // "Open in dock", so nothing else is competing for it. In
+                    // search the category still has to come first (a query for
+                    // "re" returns a recipe named Review and a panel named
+                    // Review), so the two stack rather than one displacing the
+                    // other. Built-in contributes nothing to either mode, which
+                    // is what leaves the browse slot empty on most rows.
+                    [isSearchResult ? DOCK_LAUNCH_CATEGORY_LABELS.panel : undefined, originLabel]
+                      .filter(Boolean)
+                      .join(" · ") || undefined
+                  : isSearchResult
+                    ? // One axis for the whole result list. Giving the recipe its
+                      // scope and the panel its category put two different kinds of
+                      // answer in one column, so the two rows a query for "re"
+                      // returns — a recipe named Review and a panel named Review —
+                      // still had to be compared across "Team" and "Panel". Scope is
+                      // a browsing nicety; which of the two things this IS is the
+                      // question search has to answer.
+                      // A recipe keeps its scope beside the category: two recipes
+                      // named Work are otherwise indistinguishable in results.
+                      item!.category === "recipe"
+                      ? `${DOCK_LAUNCH_CATEGORY_LABELS.recipe} · ${item!.scopeLabel}`
+                      : DOCK_LAUNCH_CATEGORY_LABELS[item!.category]
+                    : item!.category === "recipe"
+                      ? item!.scopeLabel
+                      : undefined;
 
   // What the row conveys visually, in one string — the option is what
   // `aria-activedescendant` points at, and its children (the trailing qualifier,
@@ -1295,11 +1420,14 @@ function DockLaunchOption({
     // Stated only where it applies, so the phrase never advertises a key that
     // would do nothing on this row.
     row.kind === "item" && rowHasPresets(row)
-      ? `Press Right Arrow ${isExpanded ? "to close" : "for"} presets`
+      ? isExpanded
+        ? "Press Left Arrow to close presets"
+        : "Press Right Arrow for presets"
       : undefined,
     pinTarget
       ? `Press Alt+P to ${pinTarget.onToolbar ? "unpin from" : "pin to"} toolbar`
       : undefined,
+    shortcutAgentId ? "Press F2 to edit shortcut" : undefined,
   ]
     .filter(Boolean)
     .join(". ");
@@ -1348,15 +1476,16 @@ function DockLaunchOption({
         // DismissableLayer, which needs to see it to classify the next outside
         // click as a dismissal.
         onPointerDown={(event) => event.preventDefault()}
-        onPointerEnter={(event) => onHover(index, row.rowKey, event.pointerType)}
+        onPointerMove={(event) => onPointerMove(index, event)}
         onClick={() => onActivate(row)}
         className={cn(
           PALETTE_ROW_CLASS,
-          "group relative w-full flex items-center px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm cursor-pointer select-none aria-disabled:cursor-default",
-          "hover:bg-overlay-subtle",
+          "group relative flex items-center px-2 py-1.5 rounded-[var(--radius-md)] text-left text-sm cursor-pointer select-none aria-disabled:cursor-default",
           // Preset children are indented so the expansion reads as belonging to
           // the agent above it rather than as another top-level row.
           row.kind === "preset" && "pl-7",
+          // Footer actions sit side by side; every other row spans its column.
+          row.band === "actions" ? "w-auto" : "w-full",
           // Deliberately NOT a whole-row `opacity-70`. Dimming the row dimmed
           // the qualifier with it, so "Needs a project" — the reason Enter will
           // not do the ordinary thing — ended up the faintest text on the row,
@@ -1385,7 +1514,7 @@ function DockLaunchOption({
               // The pointer target is bigger than the 12px column it draws in:
               // negative margins let it cover a comfortable 20px without moving
               // the icon that follows it.
-              className="-m-1 inline-flex size-5 items-center justify-center p-1"
+              className="-m-1.5 inline-flex size-6 items-center justify-center p-1.5"
               onPointerDown={(event) => event.preventDefault()}
               onClick={(event) => {
                 event.preventDefault();
@@ -1483,7 +1612,7 @@ function DockLaunchOption({
             a band on the same edge. */}
         {reservesControlSlots && (
           <>
-            <span className="ml-1 w-5 shrink-0" data-launcher-slot="shortcut">
+            <span className="ml-1 w-6 shrink-0" data-launcher-slot="shortcut">
               {shortcutAgentId && (
                 <span
                   // `role="presentation"`, not a `<button>`. These sit inside
@@ -1503,8 +1632,8 @@ function DockLaunchOption({
                     onStartCapture(row.rowKey);
                   }}
                   className={cn(
-                    "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
-                    "text-daintree-text/40 opacity-0 transition-[opacity,color,background-color]",
+                    "inline-flex size-6 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
+                    "text-text-secondary opacity-0 transition-[opacity,color,background-color]",
                     "hover:bg-overlay-soft hover:text-text-primary",
                     "group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
                   )}
@@ -1514,7 +1643,7 @@ function DockLaunchOption({
               )}
             </span>
 
-            <span className="ml-1 w-5 shrink-0" data-launcher-slot="pin">
+            <span className="ml-0.5 w-6 shrink-0" data-launcher-slot="pin">
               {pinTarget && (
                 <span
                   role="presentation"
@@ -1539,14 +1668,14 @@ function DockLaunchOption({
                     onTogglePin(pinTarget);
                   }}
                   className={cn(
-                    "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
+                    "inline-flex size-6 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0 cursor-pointer",
                     "transition-[opacity,color,background-color] hover:bg-overlay-soft hover:text-text-primary",
                     // Pinned rows read as state markers and stay visible; unpinned
                     // ones are controls that only appear once the row is under the
                     // pointer or the selection.
                     pinTarget.onToolbar
-                      ? "text-daintree-text/70 opacity-100"
-                      : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
+                      ? "text-text-secondary opacity-100"
+                      : "text-text-secondary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 group-aria-selected:opacity-100"
                   )}
                 >
                   {/* `Pin`, filled, for the pinned state — never `PinOff`. A pin
