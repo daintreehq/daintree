@@ -25,7 +25,11 @@ import {
 import type { ActionId } from "@shared/types/actions";
 import { useKeybindingDisplay } from "@/hooks/useKeybinding";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
-import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
+import {
+  consultPanelCloseGuards,
+  hasPanelCloseGuard,
+  isPanelClosePending,
+} from "@/services/panelCloseGuard";
 import {
   isBrowserPanel,
   isDevPreviewPanel,
@@ -668,7 +672,10 @@ export function TerminalContextMenu({
             return;
           }
           if (hasPanelCloseGuard(terminalId)) {
-            // Removing skips the trash, not the unsaved-work prompt (#12323).
+            // Removing skips the trash, not the unsaved-work prompt (#12323). A
+            // second pick while that prompt is up waits on it; it must not
+            // queue a second removal behind the same answer.
+            if (isPanelClosePending(terminalId)) return;
             const source = sourceRef.current;
             void consultPanelCloseGuards([terminalId]).then((proceed) => {
               if (!proceed) return;

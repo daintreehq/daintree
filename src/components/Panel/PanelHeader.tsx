@@ -107,7 +107,11 @@ import {
   subscribeToPanelKindRegistry,
 } from "@shared/config/panelKindRegistry";
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
-import { consultPanelCloseGuards, hasPanelCloseGuard } from "@/services/panelCloseGuard";
+import {
+  consultPanelCloseGuards,
+  hasPanelCloseGuard,
+  isPanelClosePending,
+} from "@/services/panelCloseGuard";
 import { isPtyPanel } from "@shared/types/panel";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
@@ -484,7 +488,10 @@ function PanelHeaderComponent({
       return;
     }
     if (commandId === "kill" && hasPanelCloseGuard(id)) {
-      // Removing skips the trash, not the unsaved-work prompt (#12323).
+      // Removing skips the trash, not the unsaved-work prompt (#12323). A
+      // second pick while that prompt is up waits on it; it must not queue a
+      // second removal behind the same answer.
+      if (isPanelClosePending(id)) return;
       const panelId = id;
       void consultPanelCloseGuards([panelId]).then((proceed) => {
         if (!proceed) return;

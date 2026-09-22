@@ -1185,6 +1185,22 @@ describe("PanelHeader", () => {
       );
     });
 
+    it("removes once when Remove is picked again while the prompt is up", async () => {
+      registerPluginKind(PLUGIN_KIND);
+      let answer: (verdict: "proceed" | "cancel") => void = () => {};
+      const guard = vi.fn(() => new Promise<"proceed" | "cancel">((resolve) => (answer = resolve)));
+      registerPanelCloseGuard("test-panel", guard);
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      findMenuButton("Remove panel")!.click();
+      await act(async () => {});
+      findMenuButton("Remove panel")!.click();
+      await act(async () => answer("proceed"));
+
+      expect(guard).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+    });
+
     it("keeps a PTY-backed plugin panel on the terminal menu, without a dead Duplicate", () => {
       // TerminalPane hands the header "terminal"; the store keeps the real kind.
       registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true });

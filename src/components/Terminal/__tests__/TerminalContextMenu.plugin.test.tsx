@@ -424,6 +424,22 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     );
   });
 
+  it("removes once when Remove is picked again while the prompt is up", async () => {
+    let answer: (verdict: "proceed" | "cancel") => void = () => {};
+    const guard = vi.fn(() => new Promise<"proceed" | "cancel">((resolve) => (answer = resolve)));
+    registerPanelCloseGuard("panel-1", guard);
+    renderMenuFor(pluginPanel);
+    const remove = findRow(commandLabel({}, "kill"))!;
+
+    remove.click();
+    await act(async () => {});
+    remove.click();
+    await act(async () => answer("proceed"));
+
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledTimes(1);
+  });
+
   it("still gives a built-in terminal the terminal menu", () => {
     // Guards the discriminator: keying off `pluginId` must not drag an ordinary
     // terminal into the generic branch.
