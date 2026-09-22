@@ -5,9 +5,12 @@ import {
   installOpenDirConsumer,
   drainPendingOpenDirs,
   routeExternalOpen,
+  routeProjectOpen,
   _resetOpenDirConsumerForTest,
   type OpenDirHandlerDeps,
+  type ProjectOpenRouting,
 } from "../openDirHandler.js";
+import { openFolderInNewWindow } from "../newWindowOpen.js";
 import {
   holdWindowForOpen,
   isWindowBound,
@@ -425,6 +428,237 @@ describe("routeExternalOpen — owners and the picker", () => {
     await routeExternalOpen("/work/next", deps);
     expect(deps.openDirectory).toHaveBeenLastCalledWith("/work/next", empty.win);
     expect(deps.createWindowForPath).not.toHaveBeenCalled();
+  });
+});
+
+describe("routeProjectOpen — an explicit new window (#12594)", () => {
+  const newWindowFrom = (initiatingWindowId: number): ProjectOpenRouting => ({
+    source: "in-app",
+    disposition: "new",
+    initiatingWindowId,
+  });
+
+  it("never lands in the window that asked, even when that window is empty", async () => {
+    const world = makeWorld();
+    const asking = world.add();
+    const deps = makeDeps(world);
+
+    const outcome = await routeProjectOpen("/work/new", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "created", windowId: asking.id + 1 });
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/new");
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+    expect(asking.active).toBeNull();
+  });
+
+  it("reuses an empty window other than the one that asked, and leaves the asker as it was", async () => {
+    const world = makeWorld();
+    const empty = world.add();
+    const asking = world.add({ active: "running-agents" });
+    const deps = makeDeps(world);
+
+    const outcome = await routeProjectOpen("/work/new", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: empty.id });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/new", empty.win);
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+    expect(asking.active).toBe("running-agents");
+    expect(getProjectHistory(asking.id).current()).toBeNull();
+  });
+
+  it("still brings forward the window already showing the project instead", async () => {
+    const world = makeWorld();
+    const owner = world.add({ active: idFor("/work/known") });
+    const asking = world.add({ active: "other" });
+    world.add();
+    const deps = makeDeps(world);
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "focused", windowId: owner.id });
+    expect(owner.win.focus).toHaveBeenCalled();
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+  });
+
+  it("hands a live owner to the owner redirect, which focuses its project view", async () => {
+    const world = makeWorld();
+    const owner = world.add({ active: idFor("/work/known") });
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "focused", windowId: owner.id });
+    expect(deps.redirectToOwner).toHaveBeenCalledExactlyOnceWith(
+      { id: idFor("/work/known"), path: "/work/known" },
+      owner.id
+    );
+    // The redirect did the revealing; the router didn't switch anything itself.
+    expect(owner.win.focus).not.toHaveBeenCalled();
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+  });
+
+  it("lets the owner's own renderer switch to a view it holds cached", async () => {
+    const world = makeWorld();
+    const owner = world.add({ active: "front" });
+    owner.views.push(idFor("/work/known"));
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: owner.id });
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+    expect(owner.active).toBe("front");
+  });
+
+  it("keeps a window still behind its paint gate on the router's own gated reveal", async () => {
+    const world = makeWorld();
+    const booting = world.add({ active: idFor("/work/known"), visible: false, ready: false });
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "focused", windowId: booting.id });
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
+    expect(booting.win.show).not.toHaveBeenCalled();
+    booting.paint();
+    expect(booting.win.focus).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a picker window claimed while its owner renderer switches to the cached project", async () => {
+    const world = makeWorld();
+    // Closed back to the picker, still holding a live background view of P.
+    const picker = world.add({ active: "was-open" });
+    world.closed.add("was-open");
+    picker.views.push(idFor("/work/p"));
+    const asking = world.add({ active: "busy" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    const outcome = await routeProjectOpen("/work/p", newWindowFrom(asking.id), deps);
+    expect(outcome).toEqual({ kind: "activated", windowId: picker.id });
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+
+    // The renderer hasn't switched yet, so the window still reads as the
+    // picker: the next folder must not take it out from under that switch.
+    await routeExternalOpen("/work/r", deps);
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/r");
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+  });
+
+  it("opens the project itself when the owner redirect declines, as for a closed project", async () => {
+    const world = makeWorld();
+    const picker = world.add({ active: idFor("/work/known") });
+    world.closed.add(idFor("/work/known"));
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => false) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: picker.id });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/known", picker.win);
+  });
+
+  it("leaves external opens on the router's own owner handling", async () => {
+    const world = makeWorld();
+    const owner = world.add({ active: idFor("/work/known") });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    await routeExternalOpen("/work/known", deps);
+
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
+    expect(owner.win.focus).toHaveBeenCalled();
+  });
+
+  it("gives a folder with no repository its own window, where git init is offered", async () => {
+    const world = makeWorld();
+    const asking = world.add({ active: "busy" });
+    const deps = makeDeps(world);
+    deps.resolveProject.mockRejectedValueOnce(new Error("NOT_A_GIT_REPO"));
+
+    await routeProjectOpen("/work/plain", newWindowFrom(asking.id), deps);
+
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/plain");
+    expect(asking.active).toBe("busy");
+  });
+});
+
+describe("openFolderInNewWindow", () => {
+  it("holds a request made before any window has installed the router, then routes it", async () => {
+    const world = makeWorld();
+    const asking = world.add({ active: "busy" });
+    const deps = makeDeps(world);
+
+    const early = openFolderInNewWindow("/work/early", asking.id);
+    await Promise.resolve();
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+
+    installOpenDirConsumer(deps);
+
+    await expect(early).resolves.toEqual({ kind: "created", windowId: asking.id + 1 });
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/early");
+    expect(asking.active).toBe("busy");
+  });
+
+  it("fails a held request cleanly if routing is torn down before it arrives", async () => {
+    const early = openFolderInNewWindow("/work/early", 1);
+
+    _resetOpenDirConsumerForTest();
+
+    await expect(early).rejects.toThrow("shut down");
+  });
+
+  it("routes as an explicit new window once installed", async () => {
+    const world = makeWorld();
+    const asking = world.add();
+    const deps = makeDeps(world);
+    installOpenDirConsumer(deps);
+
+    const outcome = await openFolderInNewWindow("/work/a", asking.id);
+
+    expect(outcome.kind).toBe("created");
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/a");
+    expect(asking.active).toBeNull();
+  });
+
+  it("waits behind an external open already on the chain, so both can't claim one empty window", async () => {
+    const world = makeWorld();
+    const empty = world.add();
+    const asking = world.add({ active: "busy" });
+    const deps = makeDeps(world);
+    let finishFirst: (() => void) | null = null;
+    deps.openDirectory.mockImplementationOnce(async (dirPath, win) => {
+      await new Promise<void>((resolve) => (finishFirst = resolve));
+      world.byWin(win).active = idFor(dirPath);
+    });
+    const drop = captureConsumer();
+    installOpenDirConsumer(deps);
+
+    drop("/work/dropped");
+    const inApp = openFolderInNewWindow("/work/mine", asking.id);
+    await vi.waitFor(() => expect(deps.openDirectory).toHaveBeenCalledTimes(1));
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+
+    finishFirst!();
+    await expect(inApp).resolves.toEqual({ kind: "created", windowId: asking.id + 1 });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/dropped", empty.win);
+  });
+
+  it("rejects to its caller when the open fails, and the chain keeps going", async () => {
+    const world = makeWorld();
+    const asking = world.add({ active: "busy" });
+    const deps = makeDeps(world);
+    deps.createWindowForPath.mockRejectedValueOnce(new Error("boom"));
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    installOpenDirConsumer(deps);
+
+    await expect(openFolderInNewWindow("/work/a", asking.id)).rejects.toThrow("boom");
+    await expect(openFolderInNewWindow("/work/b", asking.id)).resolves.toMatchObject({
+      kind: "created",
+    });
+    errSpy.mockRestore();
   });
 });
 

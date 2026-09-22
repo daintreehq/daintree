@@ -98,6 +98,11 @@ describe("projectStore addProject", () => {
       gitInitDialogOpen: false,
       gitInitDirectoryPath: null,
       gitInitIdentity: null,
+      gitInitDisposition: "default",
+      // A happy-path switch in one case never clears these (the outgoing view
+      // is replaced in production), so they'd leak into the next.
+      isSwitching: false,
+      switchingToProjectId: null,
       addProjectByPath: originalAddProjectByPath,
       addProject: originalAddProject,
     });
@@ -196,7 +201,10 @@ describe("projectStore addProject", () => {
 
     await useProjectStore.getState().handleGitInitSuccess();
 
-    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", { identity: undefined });
+    expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", {
+      identity: undefined,
+      disposition: "default",
+    });
     expect(useProjectStore.getState().gitInitDialogOpen).toBe(false);
     expect(useProjectStore.getState().gitInitDirectoryPath).toBeNull();
   });
@@ -213,6 +221,7 @@ describe("projectStore addProject", () => {
 
     expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", {
       identity: { name: "Edited", emoji: "🚀" },
+      disposition: "default",
     });
   });
 
@@ -229,6 +238,7 @@ describe("projectStore addProject", () => {
 
     expect(addProjectByPathMock).toHaveBeenCalledWith("/tmp/repo", {
       identity: { name: "Carried", emoji: "📦" },
+      disposition: "default",
     });
   });
 
@@ -248,6 +258,190 @@ describe("projectStore addProject", () => {
     useProjectStore.getState().openGitInitDialog("/tmp/plain-folder");
 
     expect(useProjectStore.getState().gitInitIdentity).toBeNull();
+  });
+
+  describe("opening in a new window (#12594)", () => {
+    const REPO = { id: "p-new", path: "/tmp/repo" };
+
+    /** Runs a toast's primary action, read without trusting the mock's `any`. */
+    function clickToastAction(toastIndex = 0): void {
+      const payload: unknown = notifyMock.mock.calls[toastIndex]?.[0];
+      if (typeof payload !== "object" || payload === null) throw new Error("expected a toast");
+      const actions: unknown = Reflect.get(payload, "actions");
+      const first: unknown = Array.isArray(actions) ? actions[0] : undefined;
+      const onClick: unknown =
+        typeof first === "object" && first !== null ? Reflect.get(first, "onClick") : undefined;
+      if (typeof onClick !== "function") throw new Error("expected a toast action");
+      Reflect.apply(onClick, undefined, []);
+    }
+
+    it("registers the folder here, then hands it to main without switching this window", async () => {
+      const here = { id: "p-here", path: "/tmp/here", name: "here", emoji: "🌳", lastOpened: 1 };
+      useProjectStore.setState({ projects: [here], currentProject: here });
+      projectClientMock.getAll.mockResolvedValueOnce([here, { ...REPO, name: "repo" }]);
+      projectClientMock.add.mockResolvedValueOnce(REPO);
+      const switchSpy = vi.spyOn(useProjectStore.getState(), "switchProject");
+      // Every intermediate state, not just the last: a switch that started and
+      // was undone would still have flashed this window's switching overlay.
+      const seenSwitching: boolean[] = [];
+      const unsubscribe = useProjectStore.subscribe((state) => {
+        seenSwitching.push(state.isSwitching);
+      });
+
+      await useProjectStore.getState().addProjectByPath("/tmp/repo", { disposition: "new" });
+      unsubscribe();
+
+      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/repo", undefined);
+      expect(actionServiceDispatchMock).toHaveBeenCalledExactlyOnceWith(
+        "app.newWindow",
+        { projectPath: "/tmp/repo" },
+        { source: "user" }
+      );
+      expect(switchSpy).not.toHaveBeenCalled();
+      expect(projectClientMock.switch).not.toHaveBeenCalled();
+      expect(seenSwitching.length).toBeGreaterThan(0);
+      expect(seenSwitching.every((switching) => !switching)).toBe(true);
+      expect(useProjectStore.getState().currentProject?.id).toBe("p-here");
+      expect(useProjectStore.getState().isLoading).toBe(false);
+      switchSpy.mockRestore();
+    });
+
+    it("hands main the registered path, not the one that was picked", async () => {
+      projectClientMock.openDialog.mockResolvedValueOnce("/tmp/repo/child");
+      projectClientMock.add.mockResolvedValueOnce(REPO);
+
+      await useProjectStore.getState().addProjectByPath("", { disposition: "new" });
+
+      expect(actionServiceDispatchMock).toHaveBeenCalledWith(
+        "app.newWindow",
+        { projectPath: "/tmp/repo" },
+        { source: "user" }
+      );
+    });
+
+    it("says so, with a retry, when the new window can't be opened", async () => {
+      projectClientMock.add.mockResolvedValueOnce(REPO);
+      actionServiceDispatchMock.mockResolvedValueOnce({
+        ok: false,
+        error: { code: "EXECUTION_ERROR", message: "Window opening isn't ready yet" },
+      });
+
+      await useProjectStore.getState().addProjectByPath("/tmp/repo", { disposition: "new" });
+
+      expect(notifyMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          title: "Couldn't open a new window",
+          priority: "high",
+          // The inbox keeps only serializable actions; without these the
+          // retry would vanish from a toast that went straight to history.
+          actions: [
+            expect.objectContaining({
+              label: "Try again",
+              actionId: "app.newWindow",
+              actionArgs: { projectPath: "/tmp/repo" },
+            }),
+          ],
+        })
+      );
+      actionServiceDispatchMock.mockClear();
+      clickToastAction();
+      expect(actionServiceDispatchMock).toHaveBeenCalledWith(
+        "app.newWindow",
+        { projectPath: "/tmp/repo" },
+        { source: "user" }
+      );
+    });
+
+    it("keeps the choice through the git-init prompt a new folder chains into", async () => {
+      projectClientMock.createFolder.mockResolvedValueOnce("/tmp/new-folder");
+      projectClientMock.add.mockRejectedValueOnce(
+        new Error("Not a git repository: /tmp/new-folder")
+      );
+
+      await useProjectStore
+        .getState()
+        .createProjectFolder("/tmp", "new-folder", "🚀", { disposition: "new" });
+
+      expect(useProjectStore.getState().gitInitDialogOpen).toBe(true);
+      expect(useProjectStore.getState().gitInitDisposition).toBe("new");
+      expect(actionServiceDispatchMock).not.toHaveBeenCalled();
+
+      projectClientMock.add.mockResolvedValueOnce({ id: "p-folder", path: "/tmp/new-folder" });
+      await useProjectStore.getState().handleGitInitSuccess();
+
+      expect(projectClientMock.add).toHaveBeenLastCalledWith("/tmp/new-folder", {
+        identity: { name: "new-folder", emoji: "🚀" },
+      });
+      expect(actionServiceDispatchMock).toHaveBeenCalledWith(
+        "app.newWindow",
+        { projectPath: "/tmp/new-folder" },
+        { source: "user" }
+      );
+      expect(projectClientMock.switch).not.toHaveBeenCalled();
+      expect(useProjectStore.getState().gitInitDisposition).toBe("default");
+    });
+
+    it("keeps the choice when the user opens the folder without git instead", async () => {
+      useProjectStore.getState().openGitInitDialog("/tmp/downloads", { disposition: "new" });
+      projectClientMock.add.mockResolvedValueOnce({ id: "p-light", path: "/tmp/downloads" });
+
+      await useProjectStore.getState().openWithoutGit();
+
+      expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/downloads", { gitBacked: false });
+      expect(actionServiceDispatchMock).toHaveBeenCalledWith(
+        "app.newWindow",
+        { projectPath: "/tmp/downloads" },
+        { source: "user" }
+      );
+      expect(projectClientMock.switch).not.toHaveBeenCalled();
+    });
+
+    it("opens a finished clone in a new window when the dialog was told to", async () => {
+      projectClientMock.add.mockResolvedValueOnce({ id: "p-clone", path: "/tmp/cloned" });
+
+      await useProjectStore
+        .getState()
+        .handleCloneSuccess("/tmp/cloned", undefined, { disposition: "new" });
+
+      expect(actionServiceDispatchMock).toHaveBeenCalledWith(
+        "app.newWindow",
+        { projectPath: "/tmp/cloned" },
+        { source: "user" }
+      );
+      expect(projectClientMock.switch).not.toHaveBeenCalled();
+    });
+
+    it("clears the carried choice together with the path on close", () => {
+      useProjectStore.getState().openGitInitDialog("/tmp/repo", { disposition: "new" });
+
+      useProjectStore.getState().closeGitInitDialog();
+
+      expect(useProjectStore.getState().gitInitDisposition).toBe("default");
+    });
+
+    it("sends a failed open's recovery back to a new window too", async () => {
+      // As the preload delivers it: the code rides in the message prefix.
+      projectClientMock.add
+        .mockRejectedValueOnce(new Error("[AppError|NOT_FOUND] gone"))
+        .mockRejectedValueOnce(new Error("[AppError|PERMISSION] denied"));
+
+      await useProjectStore.getState().addProjectByPath("/tmp/gone", { disposition: "new" });
+      await useProjectStore.getState().addProjectByPath("/tmp/locked", { disposition: "new" });
+
+      const addProjectByPathMock = vi.fn<AddProjectByPath>().mockResolvedValue(undefined);
+      useProjectStore.setState({ addProjectByPath: addProjectByPathMock });
+      clickToastAction(0);
+      clickToastAction(1);
+
+      // Choose another folder goes back to the picker, and retry to the same folder.
+      expect(addProjectByPathMock).toHaveBeenNthCalledWith(1, "", { disposition: "new" });
+      expect(addProjectByPathMock).toHaveBeenNthCalledWith(2, "/tmp/locked", {
+        identity: undefined,
+        disposition: "new",
+      });
+      expect(projectClientMock.switch).not.toHaveBeenCalled();
+    });
   });
 
   describe("dubious ownership handling", () => {

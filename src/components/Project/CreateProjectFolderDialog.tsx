@@ -15,7 +15,9 @@ import {
   FIELD_READONLY_INPUT_CLASS,
   FIELD_BROWSE_BUTTON_CLASS,
   FIELD_EMOJI_ROW_INDENT,
+  OpenDestinationField,
   PathCaption,
+  type ProjectOpenDestination,
 } from "./projectDialogFields";
 
 interface CreateProjectFolderDialogProps {
@@ -29,6 +31,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
   // Until the user opens the picker, the emoji tracks the folder name. After an
   // explicit pick it stops moving — typing shouldn't undo a deliberate choice.
   const [pickedEmoji, setPickedEmoji] = useState<string | null>(null);
+  const [destination, setDestination] = useState<ProjectOpenDestination>("current");
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const folderNameInputRef = useRef<HTMLInputElement>(null);
@@ -41,6 +44,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     if (!isOpen) {
       setFolderName("");
       setPickedEmoji(null);
+      setDestination("current");
       setParentPath("");
       setError(null);
       setIsCreating(false);
@@ -104,7 +108,9 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     setError(null);
 
     try {
-      await createProjectFolder(parentPath, folderName.trim(), effectiveEmoji);
+      await createProjectFolder(parentPath, folderName.trim(), effectiveEmoji, {
+        disposition: destination,
+      });
       // Close only after the folder is created (but addProjectByPath runs in the background)
       onClose();
     } catch (err) {
@@ -113,7 +119,7 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     } finally {
       setIsCreating(false);
     }
-  }, [parentPath, folderName, effectiveEmoji, createProjectFolder, onClose]);
+  }, [parentPath, folderName, effectiveEmoji, destination, createProjectFolder, onClose]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -210,6 +216,8 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
             <PathCaption path={previewPath} className={FIELD_EMOJI_ROW_INDENT} />
           )}
         </div>
+
+        <OpenDestinationField value={destination} onChange={setDestination} disabled={isCreating} />
       </AppDialog.Body>
 
       <AppDialog.Footer>

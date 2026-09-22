@@ -25,6 +25,7 @@ import { getAutoUpdaterServiceRef } from "./window/serviceRefs.js";
 import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
+import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import {
   claimProjectActivation,
   findOtherProjectOwner,
@@ -245,6 +246,17 @@ export function createApplicationMenu(
             const win = getTargetBrowserWindow(browserWindow);
             if (!win) return;
             await promptForDirectoryOpen(win, cliAvailabilityService);
+          },
+        },
+        {
+          // Same picker, but the folder lands in an empty or new window and the
+          // window this was chosen from is left exactly as it was (#12594).
+          label: "Open Project in New Window…",
+          accelerator: rendererMenuAccelerator("project.openInNewWindow"),
+          click: async (_item, browserWindow) => {
+            const win = getTargetBrowserWindow(browserWindow);
+            if (!win) return;
+            await promptForDirectoryOpen(win, cliAvailabilityService, { newWindow: true });
           },
         },
         {
@@ -798,14 +810,54 @@ function buildRecentProjectsMenu(
 
   const menuItems: Electron.MenuItemConstructorOptions[] = sortedProjects.map((project) => ({
     label: `${project.emoji || "📁"} ${project.name} - ${project.path}`,
-    click: async (_item: Electron.MenuItem, browserWindow: Electron.BaseWindow | undefined) => {
+    click: async (
+      _item: Electron.MenuItem,
+      browserWindow: Electron.BaseWindow | undefined,
+      event: Electron.KeyboardEvent | undefined
+    ) => {
       const targetWindow = getTarget(browserWindow);
       if (!targetWindow) return;
+      if (isNewWindowClick(event)) {
+        await openInNewWindow(project.path, targetWindow);
+        return;
+      }
       await handleDirectoryOpen(project.path, targetWindow, cliAvailabilityService);
     },
   }));
 
   return menuItems;
+}
+
+/**
+ * Cmd-click (Ctrl-click off macOS) on an Open Recent entry opens it in a new
+ * window, as in VS Code and the project switcher. Option is deliberately not
+ * the modifier: the switcher already treats Alt+Enter as a plain switch.
+ */
+function isNewWindowClick(event: Electron.KeyboardEvent | undefined): boolean {
+  return process.platform === "darwin" ? event?.metaKey === true : event?.ctrlKey === true;
+}
+
+async function openInNewWindow(directoryPath: string, targetWindow: BrowserWindow): Promise<void> {
+  try {
+    await openFolderInNewWindow(directoryPath, targetWindow.id);
+  } catch (error) {
+    console.error("Failed to open project in a new window:", error);
+    if (targetWindow.isDestroyed()) return;
+    // Its own retry, never showProjectOpenFailure's: that one reopens the
+    // folder in this window, which is exactly what the user asked not to do.
+    const { response } = await dialog.showMessageBox(targetWindow, {
+      type: "error",
+      title: "Couldn't open a new window",
+      message: "Couldn't open a new window",
+      detail: `No window opened for "${directoryPath}". This window was left as it was.`,
+      buttons: ["Try again", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (response === 0 && !targetWindow.isDestroyed()) {
+      await openInNewWindow(directoryPath, targetWindow);
+    }
+  }
 }
 
 /**
@@ -815,7 +867,8 @@ function buildRecentProjectsMenu(
  */
 async function promptForDirectoryOpen(
   targetWindow: BrowserWindow,
-  cliAvailabilityService?: CliAvailabilityService
+  cliAvailabilityService?: CliAvailabilityService,
+  options?: { newWindow?: boolean }
 ): Promise<void> {
   if (targetWindow.isDestroyed()) return;
 
@@ -827,6 +880,10 @@ async function promptForDirectoryOpen(
   });
 
   if (result.canceled || result.filePaths.length === 0) return;
+  if (options?.newWindow) {
+    await openInNewWindow(result.filePaths[0], targetWindow);
+    return;
+  }
   await handleDirectoryOpen(result.filePaths[0], targetWindow, cliAvailabilityService);
 }
 

@@ -20,7 +20,9 @@ import {
   FIELD_CHECKBOX_CLASS,
   FIELD_BROWSE_BUTTON_CLASS,
   FIELD_EMOJI_ROW_INDENT,
+  OpenDestinationField,
   PathCaption,
+  type ProjectOpenDestination,
 } from "./projectDialogFields";
 import { join as joinPath } from "@shared/utils/path";
 import { matchProviderForRemoteUrl } from "@shared/utils/forgeHostnames";
@@ -44,7 +46,11 @@ interface CloneForgeProvider {
 
 interface CloneRepoDialogProps {
   isOpen: boolean;
-  onSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => void;
+  onSuccess: (
+    clonedPath: string,
+    identity: ProjectCreationIdentity | undefined,
+    options: { disposition: ProjectOpenDestination }
+  ) => void;
   onCancel: () => void;
 }
 
@@ -123,6 +129,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   // typed) until the user picks explicitly; after that the pick sticks.
   const [pickedEmoji, setPickedEmoji] = useState<string | null>(null);
   const [shallowClone, setShallowClone] = useState(false);
+  const [destination, setDestination] = useState<ProjectOpenDestination>("current");
+  // Where this run's project opens, pinned when the clone launches: success
+  // finalizes on a timer, so the answer has to be the one given up front.
+  const [launchedDestination, setLaunchedDestination] = useState<ProjectOpenDestination>("current");
   // Stages in first-seen order, plus which one is live. Git's clone phases run
   // strictly in sequence and each one counts 0→100% of *itself*, so a lone bar
   // would fill and reset four times and read as the operation going backwards.
@@ -170,8 +180,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     if (hasFinalizedRef.current || !clonedPath) return;
     hasFinalizedRef.current = true;
     const trimmedName = folderName.trim();
-    onSuccess(clonedPath, trimmedName ? { name: trimmedName, emoji: effectiveEmoji } : undefined);
-  }, [onSuccess, clonedPath, folderName, effectiveEmoji]);
+    onSuccess(clonedPath, trimmedName ? { name: trimmedName, emoji: effectiveEmoji } : undefined, {
+      disposition: launchedDestination,
+    });
+  }, [onSuccess, clonedPath, folderName, effectiveEmoji, launchedDestination]);
 
   // Reset state when dialog opens/closes
   useEffect(() => {
@@ -182,6 +194,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       setFolderNameEdited(false);
       setPickedEmoji(null);
       setShallowClone(false);
+      setDestination("current");
+      setLaunchedDestination("current");
       setStages([]);
       setCurrentStageKey(null);
       setIsCloning(false);
@@ -291,6 +305,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     // Pin the destination this run is launched against, from the very values
     // handed to the main process, before the form becomes editable again.
     setStrandedPath(joinPath(parentPath, targetFolder));
+    setLaunchedDestination(destination);
     hasFinalizedRef.current = false;
 
     try {
@@ -765,6 +780,12 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               )}
             </div>
 
+            <OpenDestinationField
+              value={destination}
+              onChange={setDestination}
+              disabled={isCloning}
+            />
+
             {/* Shallow Clone */}
             <div className="space-y-1">
               <label className="flex items-center gap-2 cursor-pointer">
@@ -790,7 +811,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
         {mode === "complete" ? (
           <Button ref={footerActionRef} variant="contrast" onClick={handleClose} className="gap-2">
             <Check className="h-4 w-4" />
-            Open project
+            {launchedDestination === "new" ? "Open in new window" : "Open project"}
           </Button>
         ) : mode === "running" ? (
           <Button ref={footerActionRef} variant="outline" onClick={stopClone} loading={isStopping}>

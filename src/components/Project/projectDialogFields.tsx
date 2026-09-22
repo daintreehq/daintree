@@ -1,5 +1,9 @@
 import { basename, normalize } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 
 /**
  * Shared form conventions for the project-entry dialogs (clone, create folder,
@@ -70,5 +74,41 @@ export function PathCaption({ path, className }: { path: string; className?: str
         {leaf}
       </span>
     </p>
+  );
+}
+
+/** Where a project from the clone or create dialog opens (#12594). */
+export type ProjectOpenDestination = "current" | "new";
+
+const OPEN_DESTINATION_OPTIONS: SegmentedRadioOption<ProjectOpenDestination>[] = [
+  { value: "current", label: "This window" },
+  { value: "new", label: "New window" },
+];
+
+/**
+ * Asked before the work starts rather than at the end: the clone dialog closes
+ * itself on success, and both flows can chain into the git-init prompt, so a
+ * choice offered afterwards would come too late.
+ */
+export function OpenDestinationField({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: ProjectOpenDestination;
+  onChange: (value: ProjectOpenDestination) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <p className={FIELD_LABEL_CLASS}>Open in</p>
+      <SegmentedRadioGroup
+        options={OPEN_DESTINATION_OPTIONS}
+        value={value}
+        onChange={onChange}
+        aria-label="Open in"
+        disabled={disabled}
+      />
+    </div>
   );
 }

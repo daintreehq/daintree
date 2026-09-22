@@ -909,6 +909,15 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
+    // Unbound by default; here so it can be bound (#12594).
+    actionId: "project.openInNewWindow",
+    combo: "",
+    scope: "global",
+    priority: 0,
+    description: "Open project in new window",
+    category: "Project",
+  },
+  {
     actionId: "app.theme.pick",
     combo: "Cmd+K Cmd+T",
     scope: "global",

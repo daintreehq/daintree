@@ -146,7 +146,9 @@ describe("CreateProjectFolderDialog identity", () => {
       fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
     });
 
-    expect(createProjectFolderMock).toHaveBeenCalledWith("/Users/test", "my-api", "🦄");
+    expect(createProjectFolderMock).toHaveBeenCalledWith("/Users/test", "my-api", "🦄", {
+      disposition: "current",
+    });
   });
 
   it("submits the suggested emoji when the user leaves it alone", async () => {
@@ -161,7 +163,65 @@ describe("CreateProjectFolderDialog identity", () => {
     expect(createProjectFolderMock).toHaveBeenCalledWith(
       "/Users/test",
       "my-api",
-      suggestProjectEmoji("my-api")
+      suggestProjectEmoji("my-api"),
+      { disposition: "current" }
+    );
+  });
+});
+
+describe("CreateProjectFolderDialog destination (#12594)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getHomeDirMock.mockResolvedValue("/Users/test");
+    createProjectFolderMock.mockResolvedValue(undefined);
+    Object.defineProperty(window, "electron", {
+      configurable: true,
+      writable: true,
+      value: { system: { getHomeDir: getHomeDirMock } },
+    });
+  });
+
+  it("asks where the project opens before creating it, defaulting to this window", async () => {
+    await renderDialog();
+
+    const group = screen.getByRole("radiogroup", { name: "Open in" });
+    const thisWindow = screen.getByRole("radio", { name: "This window" });
+    expect(group.contains(thisWindow)).toBe(true);
+    expect(thisWindow.getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByRole("radio", { name: "New window" }).getAttribute("aria-checked")).toBe(
+      "false"
+    );
+  });
+
+  it("carries a New window choice into the create call", async () => {
+    await renderDialog();
+
+    fireEvent.change(folderInput(), { target: { value: "my-api" } });
+    fireEvent.click(screen.getByRole("radio", { name: "New window" }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /^create folder$/i }));
+    });
+
+    expect(createProjectFolderMock).toHaveBeenCalledWith(
+      "/Users/test",
+      "my-api",
+      suggestProjectEmoji("my-api"),
+      { disposition: "new" }
+    );
+  });
+
+  it("starts the next open back on this window", async () => {
+    const { rerender } = await renderDialog();
+    fireEvent.click(screen.getByRole("radio", { name: "New window" }));
+
+    rerender(<CreateProjectFolderDialog isOpen={false} onClose={vi.fn()} />);
+    rerender(<CreateProjectFolderDialog isOpen={true} onClose={vi.fn()} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole("radio", { name: "This window" }).getAttribute("aria-checked")).toBe(
+        "true"
+      )
     );
   });
 });

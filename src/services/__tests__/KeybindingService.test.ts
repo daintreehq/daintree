@@ -1719,6 +1719,18 @@ describe("KeybindingService", () => {
       expect(service.getEffectiveCombo("terminal.close")).toBe("Cmd+Shift+W");
     });
 
+    it("loads a user binding for Open project in new window, which ships unbound (#12594)", async () => {
+      setPlatform("MacIntel");
+      mockElectronOverrides({ "project.openInNewWindow": ["Cmd+Shift+F9"] });
+      const service = new KeybindingService();
+      expect(service.getEffectiveCombo("project.openInNewWindow")).toBe("");
+
+      await service.loadOverrides();
+
+      const event = createKeyboardEvent({ key: "F9", code: "F9", metaKey: true, shiftKey: true });
+      expect(service.findMatchingAction(event)?.actionId).toBe("project.openInNewWindow");
+    });
+
     it("drops unknown actionId with warning", async () => {
       setPlatform("MacIntel");
       mockElectronOverrides({ "terminal.clearr": ["Cmd+X"] });

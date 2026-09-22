@@ -1,18 +1,33 @@
 // @vitest-environment jsdom
 import { render, screen, fireEvent, act } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+
+// The app root supplies the TooltipProvider; render tooltips inline here.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
 
 const { dispatchMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(() => Promise.resolve()),
 }));
 
-const { addProjectMock, openCreateFolderDialogMock, openCloneRepoDialogMock, switchProjectMock } =
-  vi.hoisted(() => ({
-    addProjectMock: vi.fn(() => Promise.resolve()),
-    openCreateFolderDialogMock: vi.fn(),
-    openCloneRepoDialogMock: vi.fn(),
-    switchProjectMock: vi.fn(() => Promise.resolve()),
-  }));
+const {
+  addProjectMock,
+  addProjectByPathMock,
+  openCreateFolderDialogMock,
+  openCloneRepoDialogMock,
+  switchProjectMock,
+} = vi.hoisted(() => ({
+  addProjectMock: vi.fn(() => Promise.resolve()),
+  addProjectByPathMock: vi.fn((_path: string, _options?: unknown) => Promise.resolve()),
+  openCreateFolderDialogMock: vi.fn(),
+  openCloneRepoDialogMock: vi.fn(),
+  switchProjectMock: vi.fn(() => Promise.resolve()),
+}));
 
 const { getDisplayComboMock } = vi.hoisted(() => ({
   getDisplayComboMock: vi.fn((actionId: string) => {
@@ -185,6 +200,7 @@ let storeState = {
   projects: mockProjects,
   isLoading: false,
   addProject: addProjectMock,
+  addProjectByPath: addProjectByPathMock,
   openCreateFolderDialog: openCreateFolderDialogMock,
   openCloneRepoDialog: openCloneRepoDialogMock,
   switchProject: switchProjectMock,
@@ -286,6 +302,7 @@ describe("WelcomeScreen", () => {
       projects: mockProjects,
       isLoading: false,
       addProject: addProjectMock,
+      addProjectByPath: addProjectByPathMock,
       openCreateFolderDialog: openCreateFolderDialogMock,
       openCloneRepoDialog: openCloneRepoDialogMock,
       switchProject: switchProjectMock,
@@ -812,6 +829,20 @@ describe("WelcomeScreen", () => {
 
     fireEvent.click(screen.getByText("Open project"));
     expect(addProjectMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Open project in a new window as a secondary action (#12594)", () => {
+    render(<WelcomeScreen gettingStarted={makeGettingStarted()} />);
+
+    const secondary = screen.getByRole("button", { name: "Open in new window…" });
+    // A sibling of the card, never nested inside its button.
+    expect(secondary.parentElement?.closest("button")).toBeNull();
+    expect(screen.getByText("Open project").closest("button")!.contains(secondary)).toBe(false);
+
+    fireEvent.click(secondary);
+
+    expect(addProjectByPathMock).toHaveBeenCalledExactlyOnceWith("", { disposition: "new" });
+    expect(addProjectMock).not.toHaveBeenCalled();
   });
 
   it("calls openCreateFolderDialog when Create project is clicked", () => {

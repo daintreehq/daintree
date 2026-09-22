@@ -12,9 +12,11 @@ import {
   Plug,
   Pin,
   Sparkles,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { BrandMark, DaintreeIcon } from "@/components/icons";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { AppWindow, BrandMark, DaintreeIcon } from "@/components/icons";
 import { useProjectStore } from "@/store/projectStore";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
 import { useCliAvailabilityStore } from "@/store/cliAvailabilityStore";
@@ -41,6 +43,17 @@ interface WelcomeScreenProps {
   gettingStarted: GettingStartedChecklistState;
 }
 
+interface QuickAction {
+  id: string;
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  onClick: () => void;
+  /** A second way in, beside the card rather than inside it. */
+  secondary?: { label: string; onClick: () => void };
+  primary: boolean;
+}
+
 const SHORTCUT_TIPS: { label: string; actionId: string }[] = [
   { label: "New Panel", actionId: "panel.palette" },
   { label: "Quick Switcher", actionId: "nav.quickSwitcher" },
@@ -52,6 +65,7 @@ const SHORTCUT_TIPS: { label: string; actionId: string }[] = [
 
 export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   const addProject = useProjectStore((state) => state.addProject);
+  const addProjectByPath = useProjectStore((state) => state.addProjectByPath);
   const openCreateFolderDialog = useProjectStore((state) => state.openCreateFolderDialog);
   const openCloneRepoDialog = useProjectStore((state) => state.openCloneRepoDialog);
 
@@ -96,13 +110,19 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   );
 
   const quickActions = useMemo(
-    () => [
+    (): QuickAction[] => [
       {
         id: "open-folder",
         icon: FolderOpen,
         title: "Open project",
         description: "Open an existing project on your machine",
         onClick: () => void addProject(),
+        // Same picker, but the folder lands in an empty or new window and this
+        // one stays on the welcome screen (#12594).
+        secondary: {
+          label: "Open in new window…",
+          onClick: () => void addProjectByPath("", { disposition: "new" }),
+        },
         primary: true,
       },
       {
@@ -130,7 +150,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         primary: false,
       },
     ],
-    [addProject, openCreateFolderDialog, openCloneRepoDialog]
+    [addProject, addProjectByPath, openCreateFolderDialog, openCloneRepoDialog]
   );
 
   const completedCount = checklist ? Object.values(checklist.items).filter(Boolean).length : 0;
@@ -200,52 +220,81 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
               data-testid="quick-actions"
               className="grid grid-cols-2 gap-3 @min-[1800px]/welcome:gap-4"
             >
-              {quickActions.map(({ id, icon: Icon, title, description, onClick, primary }) => {
-                // Subtle surface lift marks the recommended first step for new
-                // users only; once recents exist the list owns the primary path,
-                // so every card drops to equal, demoted weight. Not the accent
-                // color — that load-bearing signal is owned by the checklist.
-                const lifted = primary && !hasProjects;
-                return (
-                  <button
-                    key={id}
-                    type="button"
-                    onClick={onClick}
-                    // Title is the accessible name; the description is announced
-                    // once via aria-describedby. aria-label keeps the name clean
-                    // so the in-button description text isn't double-announced.
-                    aria-label={title}
-                    aria-describedby={`qa-desc-${id}`}
-                    className={cn(
-                      "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1800px]/welcome:p-4",
-                      "transition-colors duration-150",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
-                      lifted
-                        ? // Correct elevate-to-select inversion (ring-border-strong
-                          // + elevated fill). Dark keeps its /95 wash; on light the
-                          // alpha makes the elevated lift translucency-inert (RC-9),
-                          // so .light forces the fully opaque elevated surface to
-                          // preserve the real ~0.03-0.04 dL lift over the panel.
-                          "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
-                        : // Idle hover: overlay-soft already clears the JND on dark
-                          // but composites sub-JND over the light panel, so .light
-                          // steps it up to overlay-medium.
-                          "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
-                    )}
-                  >
-                    <span className="flex items-center gap-2 text-sm font-medium text-text-primary @min-[1920px]/welcome:text-base">
-                      <Icon className="h-4 w-4 shrink-0 text-daintree-text/70 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5" />
-                      {title}
-                    </span>
-                    <span
-                      id={`qa-desc-${id}`}
-                      className="text-xs text-text-secondary leading-relaxed @min-[1920px]/welcome:text-sm"
+              {quickActions.map(
+                ({ id, icon: Icon, title, description, onClick, primary, secondary }) => {
+                  // Subtle surface lift marks the recommended first step for new
+                  // users only; once recents exist the list owns the primary path,
+                  // so every card drops to equal, demoted weight. Not the accent
+                  // color — that load-bearing signal is owned by the checklist.
+                  const lifted = primary && !hasProjects;
+                  const card = (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={onClick}
+                      // Title is the accessible name; the description is announced
+                      // once via aria-describedby. aria-label keeps the name clean
+                      // so the in-button description text isn't double-announced.
+                      aria-label={title}
+                      aria-describedby={`qa-desc-${id}`}
+                      className={cn(
+                        "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left @min-[1800px]/welcome:p-4",
+                        // Room for the secondary action pinned in the corner.
+                        secondary && "h-full w-full pr-10 @min-[1800px]/welcome:pr-11",
+                        "transition-colors duration-150",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
+                        lifted
+                          ? // Correct elevate-to-select inversion (ring-border-strong
+                            // + elevated fill). Dark keeps its /95 wash; on light the
+                            // alpha makes the elevated lift translucency-inert (RC-9),
+                            // so .light forces the fully opaque elevated surface to
+                            // preserve the real ~0.03-0.04 dL lift over the panel.
+                            "ring-1 ring-border-strong bg-surface-panel-elevated/95 [.light_&]:bg-surface-panel-elevated hover:bg-surface-panel-elevated"
+                          : // Idle hover: overlay-soft already clears the JND on dark
+                            // but composites sub-JND over the light panel, so .light
+                            // steps it up to overlay-medium.
+                            "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
+                      )}
                     >
-                      {description}
-                    </span>
-                  </button>
-                );
-              })}
+                      <span className="flex items-center gap-2 text-sm font-medium text-text-primary @min-[1920px]/welcome:text-base">
+                        <Icon className="h-4 w-4 shrink-0 text-daintree-text/70 @min-[1920px]/welcome:h-5 @min-[1920px]/welcome:w-5" />
+                        {title}
+                      </span>
+                      <span
+                        id={`qa-desc-${id}`}
+                        className="text-xs text-text-secondary leading-relaxed @min-[1920px]/welcome:text-sm"
+                      >
+                        {description}
+                      </span>
+                    </button>
+                  );
+                  if (!secondary) return card;
+                  // A sibling of the card rather than a child: a button can't
+                  // nest inside another.
+                  return (
+                    <div key={id} className="relative">
+                      {card}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <button
+                            type="button"
+                            onClick={secondary.onClick}
+                            aria-label={secondary.label}
+                            className={cn(
+                              "absolute right-2 top-2 flex h-7 w-7 items-center justify-center rounded-[var(--radius-sm)] text-text-secondary",
+                              "transition-colors duration-150 hover:bg-overlay-medium hover:text-text-primary",
+                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                            )}
+                          >
+                            <AppWindow className="h-4 w-4" aria-hidden="true" />
+                          </button>
+                        </TooltipTrigger>
+                        <TooltipContent side="bottom">{secondary.label}</TooltipContent>
+                      </Tooltip>
+                    </div>
+                  );
+                }
+              )}
             </div>
           </div>
 

@@ -205,32 +205,3 @@ function requestOwnerSwitch(appWebContents: WebContents, projectId: string): voi
     send();
   }
 }
-
-/**
- * Send a request to open `projectPath` in a new window to the window that
- * already owns that project, if one does (#12596). Runs before any window is
- * created, so the redirect doesn't leave an empty picker window behind. Every
- * window counts as a possible owner here, the one the request came from
- * included: asking for a new window never opens a second view of a project.
- *
- * Only a folder already registered as a project can have an owner. Anything
- * else — or a lookup that fails — opens its window as before, and the redirect
- * in `handleDirectoryOpen` still stands behind it.
- */
-export async function redirectNewWindowToOwner(
-  registry: WindowRegistry | undefined,
-  projectPath: string,
-  getProjectByPath: (projectPath: string) => Promise<Project | null>
-): Promise<boolean> {
-  let project: Project | null;
-  try {
-    project = await getProjectByPath(projectPath);
-  } catch {
-    return false;
-  }
-  if (!project) return false;
-  const owner = findOtherProjectOwner(registry, project.id, {});
-  if (!owner) return false;
-  redirectToProjectOwner(owner, project);
-  return true;
-}

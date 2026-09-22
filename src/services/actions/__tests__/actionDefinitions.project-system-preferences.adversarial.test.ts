@@ -330,6 +330,7 @@ describe("project action hardening", () => {
       "pilot.openRun",
       "project.mruCycleOlder",
       "project.add",
+      "project.openInNewWindow",
       "project.openDialog",
       "project.switch",
       "project.update",
@@ -361,6 +362,45 @@ describe("project action hardening", () => {
     const trimmedResult = await service.dispatch("project.add", { path: "   /tmp/repo   " });
     expect(trimmedResult).toEqual({ ok: true, result: undefined });
     expect(state.addProjectByPath).toHaveBeenCalledWith("/tmp/repo");
+  });
+
+  it("opens project.add in a new window only when asked to (#12594)", async () => {
+    const { service } = buildService(registerProjectActions);
+    const state = useProjectStore.getState();
+
+    await service.dispatch("project.add", { path: " /tmp/repo ", destination: "new" });
+    expect(state.addProjectByPath).toHaveBeenLastCalledWith("/tmp/repo", { disposition: "new" });
+
+    await service.dispatch("project.add", { destination: "new" });
+    expect(state.addProjectByPath).toHaveBeenLastCalledWith("", { disposition: "new" });
+
+    await service.dispatch("project.add", { path: "/tmp/repo", destination: "current" });
+    expect(state.addProjectByPath).toHaveBeenLastCalledWith("/tmp/repo");
+
+    await service.dispatch("project.add", { destination: "current" });
+    expect(state.addProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects a destination project.add doesn't know", async () => {
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch("project.add", { destination: "elsewhere" });
+
+    expect(result.ok).toBe(false);
+    expect(useProjectStore.getState().addProjectByPath).not.toHaveBeenCalled();
+  });
+
+  it("gives the new-window open an argument-free action a keybinding can dispatch", async () => {
+    const { service } = buildService(registerProjectActions);
+
+    const result = await service.dispatch("project.openInNewWindow", undefined, {
+      source: "keybinding",
+    });
+
+    expect(result).toEqual({ ok: true, result: undefined });
+    expect(useProjectStore.getState().addProjectByPath).toHaveBeenCalledExactlyOnceWith("", {
+      disposition: "new",
+    });
   });
 
   it("routes project.close for the active project through the confirm callback", async () => {
