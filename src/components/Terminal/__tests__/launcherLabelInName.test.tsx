@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, fireEvent } from "@testing-library/react";
 
 /**
  * WCAG 2.2 SC 2.5.3 (Label in Name): when a control carries an explicit
@@ -87,42 +87,115 @@ describe("Label in Name on the canvas-home context rows", () => {
  * `title` is hover-only in every browser, and both of these controls are
  * ordinary tab stops whose names are `truncate`d — so a keyboard user arrowing
  * across "Migrate remaining J…" had no way to tell two long recipes apart
- * before launching one. Asserted at source level, like the other launcher
- * contracts: the rule is "not title-alone", so any focus-capable disclosure
- * satisfies it and swapping Tooltip for something better will not churn this.
+ * before launching one. Rendered against the REAL overlay primitives
+ * (`vitest.setup.ts` primes the deferred Radix chunk), and driven by `focus`,
+ * never by pointer events: a disclosure that only a hover can open is exactly
+ * the bug. An earlier version of this guard scanned the source for the word
+ * `TooltipTrigger`, which the import line satisfied on its own.
  */
-describe("truncating launcher controls disclose on focus, not hover alone", () => {
-  const FILES = [
-    "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
-    "src/components/Terminal/ResumeSessionLine.tsx",
-  ];
+describe("truncating launcher controls disclose their full label on focus", () => {
+  it("the resume line opens a tooltip with the full name and description", async () => {
+    vi.resetModules();
+    const name = "Wire the OAuth device-flow refresh path end to end";
+    const description = "feature/oauth-device-flow · Opus";
+    vi.doMock("@/hooks/useWorktreeStore", () => ({ useWorktreeStore: () => new Map() }));
+    vi.doMock("@/store/projectStore", () => ({ useProjectStore: () => "p1" }));
+    vi.doMock("@/hooks/useResumeAgentSession", () => ({ useResumeAgentSession: () => vi.fn() }));
+    vi.doMock("@/hooks/useAgentSessionRecords", () => ({
+      useAgentSessionRecords: () => ({ sessions: [], hasLoaded: true }),
+    }));
+    vi.doMock("@/services/resumeSessionItems", () => ({
+      buildResumeSessionItems: () => [
+        { session: { sessionId: "a" }, name, description, agentName: "Claude", isStale: false },
+      ],
+    }));
+    vi.doMock("@/components/PanelPalette/PanelKindIcon", () => ({ PanelKindIcon: () => <span /> }));
+    // Same module registry for the provider and the component, or the two
+    // resolve different context objects and the provider check throws.
+    const [{ ResumeSessionLine }, { TooltipProvider }, { primeRadix }] = await Promise.all([
+      import("../ResumeSessionLine"),
+      import("@/components/ui/tooltip"),
+      import("@/components/ui/radix-loader"),
+    ]);
+    // `vi.resetModules()` above discarded the loader `vitest.setup.ts` primed,
+    // and an unprimed wrapper renders its no-Radix passthrough — no tooltip at
+    // all, which would fail this test for the wrong reason.
+    await primeRadix();
 
-  it("gives each one a focus-capable disclosure", async () => {
-    const { readFileSync } = await import("fs");
-    const { resolve } = await import("path");
-    for (const file of FILES) {
-      const source = readFileSync(resolve(process.cwd(), file), "utf-8");
-      // The control's own name is truncated somewhere in this file...
-      expect(source, `${file} should still truncate a label`).toContain("truncate");
-      // ...so it must import a disclosure that Radix opens on focus as well as
-      // hover. A bare `title=` attribute does not count.
-      expect(source, `${file} must disclose on focus, not only on hover`).toMatch(/TooltipTrigger/);
-    }
+    render(
+      <TooltipProvider delayDuration={0}>
+        <ResumeSessionLine />
+      </TooltipProvider>
+    );
+    const button = screen.getByRole("button", { name: new RegExp(name) });
+    expect(screen.queryByRole("tooltip"), "closed before focus").toBeNull();
+
+    fireEvent.focus(button);
+
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.textContent).toContain(name);
+    // Below the narrow breakpoint the row drops the description entirely, so
+    // the tooltip is the only place it survives.
+    expect(tip.textContent).toContain(description);
   });
 
-  it("does not leave a hover-only title as the sole disclosure", async () => {
-    const { readFileSync } = await import("fs");
-    const { resolve } = await import("path");
-    for (const file of FILES) {
-      const source = readFileSync(resolve(process.cwd(), file), "utf-8");
-      const titleAttrs = [...source.matchAll(/(?<![A-Za-z])title=\{/g)].length;
-      const tooltips = [...source.matchAll(/<TooltipContent/g)].length;
-      // Either there is no native title at all, or there is at least as much
-      // tooltip disclosure as there is title — never title on its own.
-      expect(
-        titleAttrs === 0 || tooltips >= titleAttrs,
-        `${file}: ${titleAttrs} title= vs ${tooltips} TooltipContent`
-      ).toBe(true);
-    }
+  it("a recipe card opens a tooltip on focus, through both composed triggers", async () => {
+    vi.resetModules();
+    const [{ RecipeRunnerItem }, { TooltipProvider }, { primeRadix }] = await Promise.all([
+      import("../RecipeRunner/RecipeRunnerItem"),
+      import("@/components/ui/tooltip"),
+      import("@/components/ui/radix-loader"),
+    ]);
+    await primeRadix();
+    const name = "Migrate remaining JavaScript modules to TypeScript";
+    const recipe = {
+      id: "migrate-ts",
+      name,
+      terminals: [{ type: "claude", title: "Claude", env: {} }],
+      createdAt: 0,
+    } as unknown as import("@/types").TerminalRecipe;
+    const noop = () => {};
+    let refTarget: HTMLButtonElement | null = null;
+
+    render(
+      <TooltipProvider delayDuration={0}>
+        <RecipeRunnerItem
+          recipe={recipe}
+          isFocused={false}
+          mode="grid"
+          id="recipe-option-migrate-ts"
+          tabIndex={0}
+          buttonRef={(el) => {
+            refTarget = el;
+          }}
+          onRun={noop}
+          onEdit={noop}
+          onDuplicate={noop}
+          onPin={noop}
+          onUnpin={noop}
+          onDelete={noop}
+        />
+      </TooltipProvider>
+    );
+
+    const option = screen.getByRole("option", { name: new RegExp(name) });
+    // Both `asChild` slots — ContextMenuTrigger outside, TooltipTrigger inside —
+    // must compose down onto the ONE button the grid's roving tab stop holds a
+    // ref to. If either wrapper swallowed the ref or the element, the grid
+    // could not move focus here at all.
+    expect(refTarget, "buttonRef must reach the real button").toBe(option);
+    expect(option.getAttribute("data-state"), "ContextMenuTrigger is on the same node").toBe(
+      "closed"
+    );
+    expect(screen.queryByRole("tooltip"), "closed before focus").toBeNull();
+
+    fireEvent.focus(option);
+
+    const tip = await screen.findByRole("tooltip");
+    // The button's own text is already the accessible NAME, so the tooltip's
+    // announced text is the summary only — the part the name lacks — rather
+    // than the name a second time.
+    expect(tip.textContent).not.toContain(name);
+    expect(tip.textContent?.trim().length).toBeGreaterThan(0);
   });
 });

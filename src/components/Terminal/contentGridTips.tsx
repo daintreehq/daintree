@@ -94,11 +94,11 @@ export const TIPS: TipEntry[] = [
     // binding that does something else, and the button under it launched a
     // bare shell. Both now point at the action the sentence names.
     //
-    // `agent.claude` ships with no default combo, and `requiresShortcut`
-    // filters a tip whose binding is missing, so this tip simply does not
-    // appear until the user binds it. That is the right outcome: a teaching
-    // surface should stay quiet rather than teach a key that does something
-    // other than what it claims.
+    // `agent.claude` is bound by default (⌘⌥C, the same chord the launcher
+    // chip prints), so the tip stays eligible whenever the Claude CLI is
+    // available and now teaches the key that actually does what it says. If a
+    // user unbinds it, `requiresShortcut` hides the tip rather than letting it
+    // fall back to a chord for a different action.
     actionId: "agent.claude",
     actionLabel: "Launch agent",
     requiresShortcut: true,

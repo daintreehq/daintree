@@ -48,7 +48,13 @@ export function ResumeSessionLine() {
     // from the session it extends. The width cap now comes from the launcher
     // column, which owns the single measure every band shares.
     <div className="flex w-full items-center justify-center gap-1">
-      <Tooltip>
+      {/* Persistent and hoverable: this discloses clipped content rather than
+          a transient hint, so the app-wide 2.5s auto-dismiss and the
+          non-hoverable default would take it away mid-read (WCAG 2.2
+          SC 1.4.13). Uncontrolled per the overlay-focus rule; a launch moves
+          focus away for good, and the shared suppression covers overlay
+          closes, so nothing here needs an `open` ref. */}
+      <Tooltip autoDismiss={false} disableHoverableContent={false}>
         <TooltipTrigger asChild>
           <button
             type="button"

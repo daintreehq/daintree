@@ -6,6 +6,7 @@ import { Activity } from "@/components/icons";
 import { ProjectPulseCard } from "./ProjectPulseCard";
 import { getPulseHeatLevelBackground } from "./PulseHeatmap";
 import { StreakFlame } from "./StreakFlame";
+import { cn } from "@/lib/utils";
 
 interface ProjectPulseStripProps {
   worktreeId: string;
@@ -48,15 +49,23 @@ function MiniRibbon({ cells }: { cells: HeatCell[] }) {
       {cells.map((cell) => {
         const active = cell.count > 0 && cell.level > 0;
         return (
+          // The quiet border is a CLASS, never an inline style: an inline
+          // `border` outranks the `.pulse-heat-cell` rules in `index.css` that
+          // `prefers-contrast: more` uses to lift every cell's boundary to the
+          // text colour, so quiet days would have stayed on the weaker theme
+          // border there. Only the active fill is inline, because its value is
+          // a per-level token the heatmap resolves at render.
           <span
             key={cell.date}
-            className="pulse-heat-cell relative overflow-hidden rounded-[1px] shrink-0"
+            className={cn(
+              "pulse-heat-cell relative overflow-hidden rounded-[1px] shrink-0",
+              !active && "border border-border-strong bg-transparent"
+            )}
             data-heat-level={active ? Math.min(4, cell.level) : undefined}
             style={{
               width: MINI_CELL_PX,
               height: MINI_CELL_PX,
-              background: active ? getPulseHeatLevelBackground(cell.level) : "transparent",
-              border: active ? undefined : "1px solid var(--theme-border-strong)",
+              background: active ? getPulseHeatLevelBackground(cell.level) : undefined,
             }}
           >
             {active && <span aria-hidden="true" className="pulse-heat-cell-shape" />}

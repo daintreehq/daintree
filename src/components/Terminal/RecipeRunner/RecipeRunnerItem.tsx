@@ -58,7 +58,12 @@ export function RecipeRunnerItem({
       // stop, so a keyboard user arrowing across "Migrate remaining J…" had no
       // way to tell two long recipes apart before launching one. The tooltip
       // replaces `title` rather than joining it — both would fire on hover.
-      <Tooltip>
+      //
+      // Persistent and hoverable, unlike the app default: this discloses
+      // clipped content, not a transient hint, so it must not vanish after the
+      // 2.5s auto-dismiss or close when the pointer moves onto it (WCAG 2.2
+      // SC 1.4.13). Still uncontrolled — no `open` state, no restore ref.
+      <Tooltip autoDismiss={false} disableHoverableContent={false}>
         <ContextMenu>
           {/* Tooltip OUTSIDE ContextMenu, TooltipTrigger INSIDE ContextMenuTrigger:
             both are `asChild`, so they compose down onto the one <button>. The
@@ -66,9 +71,12 @@ export function RecipeRunnerItem({
             KEYBOARD, since `title` never opens on focus and these cards are a
             roving tab stop — a keyboard user arrowing across "Migrate remaining
             J…" could not tell two long recipes apart before launching one.
-            Uncontrolled, per the overlay-focus rule: the shared suppression in
-            `tooltipFocusSuppression` already handles focus coming back after a
-            launch, and hand-rolling a controlled tooltip here is a violation. */}
+            Uncontrolled, per the overlay-focus rule. Nothing restores focus to
+            this card after a launch (a grid launch unmounts the surface), and
+            the shared `tooltipFocusSuppression` covers the one case that would
+            matter — focus handed back by a closing overlay — so there is no
+            justification for a controlled tooltip here, which the rule names
+            as a violation anyway. */}
           <ContextMenuTrigger asChild>
             <TooltipTrigger asChild>
               <button
@@ -146,11 +154,14 @@ export function RecipeRunnerItem({
             onDelete={onDelete}
           />
         </ContextMenu>
-        {/* No `aria-describedby` wiring is wanted here: the button's own text
-          already names the recipe to assistive tech, and a tooltip that
-          repeats it would double the announcement. This is a visual
-          disclosure for the ellipsis, nothing more. */}
-        <TooltipContent side="top">
+        {/* Radix wires `aria-describedby` to this content while it is open.
+          The button's own text is already the accessible NAME, so a
+          description that repeats the name gets announced twice; when there
+          is a summary, describe with only that — the part the name lacks. */}
+        <TooltipContent
+          side="top"
+          aria-label={recipeSummary && recipeSummary !== recipe.name ? recipeSummary : undefined}
+        >
           <span className="font-medium">{recipe.name}</span>
           {recipeSummary && recipeSummary !== recipe.name && (
             <span className="ml-1 text-text-secondary">{recipeSummary}</span>
