@@ -80,7 +80,7 @@ export const TIPS: TipEntry[] = [
     id: "launch-claude",
     message: (
       <>
-        Press <Kbd>⌘⌥N</Kbd> to launch a Claude agent in this worktree
+        Press <Kbd>⌘⌥C</Kbd> to launch a Claude agent in this worktree
       </>
     ),
     messageWithShortcut: (shortcut) => (
@@ -108,7 +108,7 @@ export const TIPS: TipEntry[] = [
     id: "launch-gemini",
     message: (
       <>
-        Press <Kbd>⌘⌥N</Kbd> to launch a Gemini agent in this worktree
+        Press <Kbd>⌘⌥G</Kbd> to launch a Gemini agent in this worktree
       </>
     ),
     messageWithShortcut: (shortcut) => (

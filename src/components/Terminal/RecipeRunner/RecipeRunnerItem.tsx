@@ -66,11 +66,7 @@ export function RecipeRunnerItem({
       <Tooltip autoDismiss={false} disableHoverableContent={false}>
         <ContextMenu>
           {/* Tooltip OUTSIDE ContextMenu, TooltipTrigger INSIDE ContextMenuTrigger:
-            both are `asChild`, so they compose down onto the one <button>. The
-            native `title` below covers the pointer; this is what covers the
-            KEYBOARD, since `title` never opens on focus and these cards are a
-            roving tab stop — a keyboard user arrowing across "Migrate remaining
-            J…" could not tell two long recipes apart before launching one.
+            both are `asChild`, so they compose down onto the one <button>.
             Uncontrolled, per the overlay-focus rule. Nothing restores focus to
             this card after a launch (a grid launch unmounts the surface), and
             the shared `tooltipFocusSuppression` covers the one case that would
