@@ -162,7 +162,6 @@ const { closeAndAnnounce: realCloseAndAnnounce } =
 import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
 import type { SearchableScratch } from "../useProjectSwitcherPalette";
 import { projectClient } from "@/clients";
-import { usePaletteStore } from "@/store/paletteStore";
 
 /** Pulls the "Try again" handler out of the last error notification. */
 function lastRetryAction(): () => Promise<void> {
@@ -179,10 +178,6 @@ beforeEach(() => {
   // Shared across the whole file, so a spec that seeds stats would otherwise
   // hand them to every spec that runs after it.
   projectStatsState.stats = {};
-  // App-global, so a spec that ends with the palette open would otherwise
-  // start the next one open — running its open-time stats seed and presence
-  // pull against whatever mocks the last spec left behind.
-  usePaletteStore.setState({ activePaletteId: null });
   scratchState.createScratch.mockResolvedValue({ id: "scratch-1" });
   scratchState.switchScratch.mockResolvedValue(undefined);
   scratchState.renameScratch.mockResolvedValue(undefined);

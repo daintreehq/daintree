@@ -2475,10 +2475,24 @@ describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => 
     render(
       <ProjectSwitcherPalette
         {...modalProps}
-        results={[makeProject({ name: "Payments", openInOtherWindow: "cached" })]}
+        results={[
+          makeProject({
+            name: "Payments",
+            openInOtherWindow: "cached",
+            lastOpened: Date.now() - 2 * 3600000,
+            resumableAgentCount: 2,
+          }),
+        ]}
       />
     );
 
+    // Every marker present, in order, each separated from the one before — a
+    // dropped label or a fused pair ("windowNotifications") both fail here.
+    expect(
+      screen.getByRole("option", {
+        name: /Payments, 2 agents will resume,\s*Open in another window,\s*Notifications muted/,
+      })
+    ).toBeTruthy();
     expect(screen.queryByRole("option", { name: /[A-Za-z]Open in another window/ })).toBeNull();
     expect(screen.queryByRole("option", { name: /[A-Za-z]Notifications muted/ })).toBeNull();
   });

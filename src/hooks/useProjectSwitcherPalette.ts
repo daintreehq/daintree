@@ -857,6 +857,22 @@ const PROJECT_HOVER_PREFETCH_DELAY_MS = 150;
  */
 const PROJECT_PREFETCH_FRESHNESS_MS = 15_000;
 
+/**
+ * Whether two presence answers mark the same rows. No answer and an empty one
+ * mark nothing either way, which is the whole single-window case.
+ */
+function isSamePresence(
+  a: ProjectPresenceSnapshot | null,
+  b: ProjectPresenceSnapshot | null
+): boolean {
+  const key = (snapshot: ProjectPresenceSnapshot | null): string =>
+    JSON.stringify([
+      (snapshot?.thisWindow ?? []).map((e) => e.projectId).sort(),
+      (snapshot?.otherWindows ?? []).map((e) => `${e.projectId}:${e.state}`).sort(),
+    ]);
+  return key(a) === key(b);
+}
+
 export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const modalIsOpen = usePaletteStore((state) => state.activePaletteId === "project-switcher");
   const [dropdownIsOpen, setDropdownIsOpen] = useState(false);
@@ -1011,21 +1027,34 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   // gets its own read. Only the newest request may land: an older one can
   // resolve last and would put back what it saw. Cleared on close, so a reopen
   // never shows the previous session's owners before its own pull lands.
+  //
+  // An answer that changes nothing sets nothing, so it rebuilds no rows —
+  // every rebuild re-runs the list's scroll-into-view. A failed read clears
+  // rather than keeps: labels describing a world that has since moved are
+  // worse than none, and main routes the pick either way.
   const [presence, setPresence] = useState<ProjectPresenceSnapshot | null>(null);
   useEffect(() => {
     if (!isOpen) return;
     let disposed = false;
     let latestRequest = 0;
+    // What this session last applied. Starts empty because a closed palette
+    // cleared the state on its way out.
+    let applied: ProjectPresenceSnapshot | null = null;
+    const apply = (next: ProjectPresenceSnapshot | null): void => {
+      if (isSamePresence(applied, next)) return;
+      applied = next;
+      setPresence(next);
+    };
     const pull = (): void => {
       const request = ++latestRequest;
+      const isStale = (): boolean => disposed || request !== latestRequest;
       projectPresenceClient
         .getSnapshot()
         .then((snapshot) => {
-          if (disposed || request !== latestRequest) return;
-          setPresence(snapshot);
+          if (!isStale()) apply(snapshot);
         })
         .catch(() => {
-          // Advisory: rows just go unmarked, and main routes the pick either way.
+          if (!isStale()) apply(null);
         });
     };
     const unsubscribe = projectPresenceClient.onChanged(pull);

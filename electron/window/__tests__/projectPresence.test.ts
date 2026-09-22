@@ -111,6 +111,25 @@ describe("buildProjectPresence", () => {
     expect(byId.get("q")).toEqual({ projectId: "q", windowId: 2, state: "foreground" });
   });
 
+  it("exempts a project only for a live view here, as a switch does", () => {
+    // A claim or a bare pointer here doesn't stop the pick going to the window
+    // holding the live view (`findOwnerElsewhere`), so the row still says so.
+    releases.push(claimProjectActivation("claimed", 1));
+    const own = makeContext(1, makePvm("pointer", []));
+    const other = makeContext(2, makePvm("claimed", ["claimed", "pointer"]));
+
+    const snapshot = buildProjectPresence(registryOf([own, other]), { windowId: 1 });
+
+    expect(snapshot.thisWindow).toEqual([
+      { projectId: "pointer", windowId: 1, state: "foreground" },
+      { projectId: "claimed", windowId: 1, state: "activating" },
+    ]);
+    expect(snapshot.otherWindows).toEqual([
+      { projectId: "claimed", windowId: 2, state: "foreground" },
+      { projectId: "pointer", windowId: 2, state: "cached" },
+    ]);
+  });
+
   it("never reports as elsewhere a project the requester holds a view of", () => {
     // It switches in place, whoever else has it (`findOwnerElsewhere`).
     const own = makeContext(1, makePvm("a", ["a", "p"]));
@@ -122,23 +141,56 @@ describe("buildProjectPresence", () => {
     expect(snapshot.thisWindow).toContainEqual({ projectId: "p", windowId: 1, state: "cached" });
   });
 
-  it("drops dead views, destroyed windows, missing managers and throwing ones", () => {
+  it("drops dead views, destroyed windows, missing managers and unreadable ones", () => {
     const deadView = makeContext(2, makePvm(null, [["p", { destroyed: true }]]));
     const destroyed = makeContext(3, makePvm("q", ["q"]), { destroyed: true });
     const bare = makeContext(4, undefined);
-    const throwingPvm = makePvm("r", ["r"]);
-    throwingPvm.getAllViews.mockImplementation(() => {
+    const unreadablePvm = makePvm("r", ["r"]);
+    unreadablePvm.getActiveProjectId.mockImplementation(() => {
       throw new Error("disposed");
     });
-    const throwing = makeContext(5, throwingPvm);
+    const unreadable = makeContext(5, unreadablePvm);
     const healthy = makeContext(6, makePvm("s", ["s"]));
 
     const snapshot = buildProjectPresence(
-      registryOf([deadView, destroyed, bare, throwing, healthy]),
+      registryOf([deadView, destroyed, bare, unreadable, healthy]),
       { windowId: 1 }
     );
 
     expect(snapshot.otherWindows).toEqual([{ projectId: "s", windowId: 6, state: "foreground" }]);
+  });
+
+  it("lets a view that can't be read cost only itself", () => {
+    // The owner lookup reads the active pointer before any view, so a switch
+    // still goes to this window's foreground project.
+    const throwingInventory = makePvm("r", ["r", "t"]);
+    throwingInventory.getAllViews.mockImplementation(() => {
+      throw new Error("disposed");
+    });
+    const brokenView = makePvm("u", ["u", "v"]);
+    brokenView.getAllViews.mockReturnValue([
+      { projectId: "u", view: { webContents: { isDestroyed: () => false } } },
+      {
+        projectId: "v",
+        view: {
+          webContents: {
+            isDestroyed: () => {
+              throw new Error("gone");
+            },
+          },
+        },
+      },
+    ]);
+
+    const snapshot = buildProjectPresence(
+      registryOf([makeContext(2, throwingInventory), makeContext(3, brokenView)]),
+      { windowId: 1 }
+    );
+
+    expect(snapshot.otherWindows).toEqual([
+      { projectId: "r", windowId: 2, state: "foreground" },
+      { projectId: "u", windowId: 3, state: "foreground" },
+    ]);
   });
 
   it("leaves scratches out — a scratch switch never goes looking for an owner", () => {

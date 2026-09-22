@@ -1360,6 +1360,7 @@ describe("ProjectViewManager — presence change signal (#12597)", () => {
   let observed: Array<{ active: string | null; views: string[] }>;
   let watched: ProjectViewManager | null;
   let unsubscribe: () => void;
+  const created: ProjectViewManager[] = [];
 
   beforeEach(() => {
     nextWebContentsId = 500;
@@ -1380,18 +1381,28 @@ describe("ProjectViewManager — presence change signal (#12597)", () => {
 
   afterEach(() => {
     unsubscribe();
+    // A live manager keeps its cached-view memory sampler scheduled.
+    for (const manager of created.splice(0)) {
+      if (!manager.disposed) manager.dispose();
+    }
     wcQueue.length = 0;
   });
 
-  function watch(): ManagerSetup {
+  function track(): ManagerSetup {
     const setup = createManager();
+    created.push(setup.manager);
+    return setup;
+  }
+
+  function watch(): ManagerSetup {
+    const setup = track();
     watched = setup.manager;
     observed = [];
     return setup;
   }
 
   it("reports the initial view", () => {
-    createManager();
+    track();
     expect(observed.length).toBeGreaterThan(0);
   });
 

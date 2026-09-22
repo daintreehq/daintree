@@ -36,26 +36,29 @@ export function buildProjectPresence(
 ): ProjectPresenceSnapshot {
   const thisWindow: ProjectPresenceEntry[] = [];
   const others = new Map<string, ProjectPresenceEntry>();
+  const heldHere = new Set<string>();
   if (!registry) return { thisWindow, otherWindows: [] };
 
   for (const context of registry.all()) {
-    let entries: ProjectPresenceEntry[];
+    let presence: WindowPresence;
     let pvm: ProjectViewManager | undefined;
     try {
       if (context.browserWindow.isDestroyed()) continue;
       pvm = context.services.projectViewManager;
       if (!pvm) continue;
-      entries = collectWindowPresence(pvm, context.windowId);
+      presence = collectWindowPresence(pvm, context.windowId);
     } catch {
       // A window tearing down can throw from any of these reads, and a switch
       // can't be sent to it either.
       continue;
     }
+    const { entries, liveViewIds } = presence;
 
     const isRequester =
       context.windowId === requester.windowId || pvm === requester.projectViewManager;
     if (isRequester) {
       thisWindow.push(...entries);
+      for (const projectId of liveViewIds) heldHere.add(projectId);
       continue;
     }
     for (const entry of entries) {
@@ -66,15 +69,23 @@ export function buildProjectPresence(
     }
   }
 
-  // A project the requester holds a view of switches in place, whoever else
-  // holds one too (`findOwnerElsewhere`), so it is never "elsewhere".
-  const local = new Set(thisWindow.map((entry) => entry.projectId));
-  const otherWindows = [...others.values()].filter((entry) => !local.has(entry.projectId));
+  // A project the requester holds a live view of switches in place, whoever
+  // else holds one too, so it is never "elsewhere". Only a live view exempts
+  // it — the same test `findOwnerElsewhere` applies — since a bare pointer or
+  // a claim here still leaves the pick to go to the other window.
+  const otherWindows = [...others.values()].filter((entry) => !heldHere.has(entry.projectId));
   return { thisWindow, otherWindows };
 }
 
-function collectWindowPresence(pvm: ProjectViewManager, windowId: number): ProjectPresenceEntry[] {
+interface WindowPresence {
+  entries: ProjectPresenceEntry[];
+  /** Projects with a view whose renderer is still alive, scratches included. */
+  liveViewIds: Set<string>;
+}
+
+function collectWindowPresence(pvm: ProjectViewManager, windowId: number): WindowPresence {
   const entries: ProjectPresenceEntry[] = [];
+  const liveViewIds = new Set<string>();
   const seen = new Set<string>();
   const add = (projectId: string, state: ProjectPresenceState): void => {
     if (seen.has(projectId) || isScratchWorkspaceId(projectId)) return;
@@ -82,14 +93,32 @@ function collectWindowPresence(pvm: ProjectViewManager, windowId: number): Proje
     entries.push({ projectId, windowId, state });
   };
 
+  // Read before the inventory, so a view that can't be read costs only itself:
+  // the owner lookup counts the active pointer as showing the project without
+  // ever touching the views.
   const activeProjectId = pvm.getActiveProjectId();
   if (activeProjectId) add(activeProjectId, "foreground");
-  for (const entry of pvm.getAllViews()) {
-    if (entry.view.webContents.isDestroyed()) continue;
+  let views: ReturnType<ProjectViewManager["getAllViews"]>;
+  try {
+    views = pvm.getAllViews();
+  } catch {
+    views = [];
+  }
+  for (const entry of views) {
+    if (!isLiveView(entry)) continue;
+    liveViewIds.add(entry.projectId);
     add(entry.projectId, "cached");
   }
   for (const projectId of getPendingActivationProjectIds(windowId)) {
     add(projectId, "activating");
   }
-  return entries;
+  return { entries, liveViewIds };
+}
+
+function isLiveView(entry: ReturnType<ProjectViewManager["getAllViews"]>[number]): boolean {
+  try {
+    return !entry.view.webContents.isDestroyed();
+  } catch {
+    return false;
+  }
 }

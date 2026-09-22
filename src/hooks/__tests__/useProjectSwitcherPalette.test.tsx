@@ -4120,6 +4120,114 @@ describe("useProjectSwitcherPalette window presence (#12597)", () => {
     expect(getPresenceSnapshotMock).toHaveBeenCalledTimes(2);
   });
 
+  it("drops a response that lands after the palette closed", async () => {
+    let resolveFirst: (value: ProjectPresenceSnapshot) => void = () => {};
+    getPresenceSnapshotMock.mockImplementationOnce(
+      () =>
+        new Promise<ProjectPresenceSnapshot>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    act(() => {
+      result.current.close();
+    });
+    getPresenceSnapshotMock.mockImplementationOnce(() => new Promise(() => {}));
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(result.current.results.length).toBeGreaterThan(0);
+    });
+
+    // The first session's read describes a world the second never asked about.
+    await act(async () => {
+      resolveFirst(snapshot([{ projectId: "elsewhere", windowId: 2, state: "foreground" }]));
+    });
+    expect(rowFor(result, "elsewhere").openInOtherWindow).toBeUndefined();
+  });
+
+  it("rebuilds nothing for an answer that changes nothing", async () => {
+    const owned = snapshot([{ projectId: "elsewhere", windowId: 2, state: "cached" }]);
+    getPresenceSnapshotMock.mockImplementation(() => Promise.resolve(owned));
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("cached");
+    });
+    // Let the open-time stats seed and the layout freeze it resolves settle
+    // first — those rebuild the rows on their own.
+    await waitFor(() => {
+      expect(setStatsMock).toHaveBeenCalled();
+    });
+    await act(async () => {});
+    await act(async () => {});
+    const before = result.current.results;
+
+    // Same owners under a fresh object: every rebuild re-runs the list's
+    // scroll-into-view, so a no-op answer must not cause one.
+    getPresenceSnapshotMock.mockImplementation(() =>
+      Promise.resolve(snapshot([{ projectId: "elsewhere", windowId: 2, state: "cached" }]))
+    );
+    emitPresenceChanged();
+    await act(async () => {});
+
+    expect(getPresenceSnapshotMock).toHaveBeenCalledTimes(2);
+    expect(result.current.results).toBe(before);
+  });
+
+  it("clears the labels when a later read fails", async () => {
+    getPresenceSnapshotMock.mockImplementationOnce(() =>
+      Promise.resolve(snapshot([{ projectId: "elsewhere", windowId: 2, state: "foreground" }]))
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
+    });
+
+    // Something moved and the re-read failed: what the row says may be wrong.
+    getPresenceSnapshotMock.mockImplementationOnce(() => Promise.reject(new Error("gone")));
+    emitPresenceChanged();
+
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBeUndefined();
+    });
+  });
+
+  it("never lets an older failure clear a newer answer", async () => {
+    let rejectFirst: (error: Error) => void = () => {};
+    getPresenceSnapshotMock.mockImplementationOnce(
+      () =>
+        new Promise<ProjectPresenceSnapshot>((_resolve, reject) => {
+          rejectFirst = reject;
+        })
+    );
+    getPresenceSnapshotMock.mockImplementationOnce(() =>
+      Promise.resolve(snapshot([{ projectId: "elsewhere", windowId: 2, state: "foreground" }]))
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    emitPresenceChanged();
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
+    });
+
+    await act(async () => {
+      rejectFirst(new Error("late"));
+    });
+    expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
+  });
+
   it("leaves rows unmarked when the read fails", async () => {
     getPresenceSnapshotMock.mockImplementationOnce(() => Promise.reject(new Error("gone")));
     const { result } = renderHook(() => useProjectSwitcherPalette());
