@@ -1346,6 +1346,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("../project.js").TerminalRecipe[];
   };
+  "plugin:report-panel-inventory": {
+    args: [nonPluginPanelIds: string[]];
+    result: void;
+  };
   "plugin:report-panel-lifecycle": {
     args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
     result: void;

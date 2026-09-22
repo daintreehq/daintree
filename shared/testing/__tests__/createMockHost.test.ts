@@ -323,6 +323,44 @@ describe("createMockHost", () => {
     ]);
   });
 
+  it("records reloadPanel calls and answers from simulated lifecycle phases (#12610)", async () => {
+    const host = createMockHost({ pluginId: "acme" });
+    await expect(host.reloadPanel("p1")).resolves.toBe("not-mounted");
+
+    host.simulatePanelLifecycleChange({
+      panelId: "p1",
+      panelKindId: "acme.dash",
+      pluginId: "acme",
+      phase: "mounted",
+    });
+    await expect(host.reloadPanel("p1")).resolves.toBe("scheduled");
+
+    host.simulatePanelLifecycleChange({
+      panelId: "p1",
+      panelKindId: "acme.dash",
+      pluginId: "acme",
+      phase: "hidden",
+    });
+    await expect(host.reloadPanel("p1")).resolves.toBe("not-mounted");
+
+    host.simulatePanelLifecycleChange({
+      panelId: "p2",
+      panelKindId: "other.dash",
+      pluginId: "other",
+      phase: "mounted",
+    });
+    await expect(host.reloadPanel("p2")).rejects.toThrow(/belongs to another plugin/);
+
+    await expect(host.reloadPanel("")).rejects.toThrow(/panelId must be a non-empty string/);
+    expect(host.reloadPanelCalls).toEqual(["p1", "p1", "p1", "p2"]);
+  });
+
+  it("lets a test decide the reloadPanel outcome", async () => {
+    const host = createMockHost({ reloadPanel: () => "rate-limited" });
+    await expect(host.reloadPanel("p1")).resolves.toBe("rate-limited");
+    expect(host.reloadPanelCalls).toEqual(["p1"]);
+  });
+
   it("returns initial worktree snapshots", async () => {
     const host = createMockHost({
       activeWorktree: sampleSnapshot,

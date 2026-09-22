@@ -6,6 +6,7 @@ import type {
   PluginActionManifestEntry,
 } from "@shared/types/actions";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { handlePanelReloadRequest } from "@/services/plugin/pluginPanelReload";
 
 /**
  * Project an internal {@link ActionManifestEntry} onto the slim, IPC-safe
@@ -44,6 +45,8 @@ function toPluginManifestEntry(entry: ActionManifestEntry): PluginActionManifest
  *   `ActionService.list()`/`get()` to the slim {@link PluginActionManifestEntry}.
  *   `get()` additionally filters out `danger:"restricted"` so a single lookup
  *   matches `list()`'s "restricted is invisible to plugins" contract.
+ * - `host.reloadPanel()` (#12610) → the panel's registered view, after
+ *   re-validating the target against this renderer's live panel record.
  *
  * The dispatch success send sits inside the try block so a non-serializable
  * action result (a DataCloneError on `ipcRenderer.send`) is caught and replaced
@@ -111,11 +114,19 @@ export function usePluginBridge(): void {
       }
     );
 
+    const cleanupPanelReload = window.electron.pluginBridge.onPanelReloadRequest?.((request) => {
+      void handlePanelReloadRequest(request).then((response) => {
+        if (disposed) return;
+        window.electron.pluginBridge.sendPanelReloadResponse(response);
+      });
+    });
+
     return () => {
       disposed = true;
       cleanupDispatch();
       cleanupActionsList();
       cleanupActionsGet();
+      cleanupPanelReload?.();
     };
   }, []);
 }

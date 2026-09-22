@@ -982,3 +982,32 @@ describe("PluginDevWorkerHostProxy manifest commands (#12274)", () => {
     expect(result.error).toMatch(/only parameter/);
   });
 });
+
+describe("PluginDevWorkerHostProxy reloadPanel (#12610)", () => {
+  beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.restoreAllMocks());
+
+  it("relays only the panel id and resolves with the host's acknowledgment", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.reloadPanel("p1");
+    const call = sent.find((m) => m.type === "host-call" && m.method === "reloadPanel");
+    expect(call?.params).toEqual({ panelId: "p1" });
+    resolveCall(proxy, sent, "reloadPanel", "scheduled");
+    await expect(promise).resolves.toBe("scheduled");
+  });
+
+  it("rejects an empty panel id without crossing the port", async () => {
+    const { proxy, sent } = makeProxy();
+    await expect(proxy.host.reloadPanel("  ")).rejects.toThrow(
+      /panelId must be a non-empty string/
+    );
+    expect(sent.find((m) => m.type === "host-call")).toBeUndefined();
+  });
+
+  it("resolves unavailable once the proxy is disposed", async () => {
+    const { proxy } = makeProxy();
+    const promise = proxy.host.reloadPanel("p1");
+    proxy.dispose();
+    await expect(promise).resolves.toBe("unavailable");
+  });
+});

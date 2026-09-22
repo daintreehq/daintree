@@ -254,3 +254,83 @@ describe("teardown", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+describe("locate (#12610)", () => {
+  it("finds the renderer holding the plugin's own mounted panel", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event()]);
+    expect(broker.locate("p1", "acme")).toEqual({ kind: "located", sourceId: 7 });
+  });
+
+  it("routes a render-failed panel to its renderer, which decides the outcome", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event({ phase: "render-failed" })]);
+    expect(broker.locate("p1", "acme")).toEqual({ kind: "located", sourceId: 7 });
+  });
+
+  it.each(["hidden", "backgrounded", "trashed"] as const)(
+    "reports a %s panel as not mounted",
+    (phase) => {
+      const broker = makeBroker();
+      broker.ingest(7, [event({ phase })]);
+      expect(broker.locate("p1", "acme")).toEqual({ kind: "not-mounted" });
+    }
+  );
+
+  it("rejects another plugin's panel as foreign rather than missing", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event({ panelKindId: "other.panel" })]);
+    expect(broker.locate("p1", "acme")).toEqual({ kind: "foreign" });
+  });
+
+  it("judges ownership from the registry, not the renderer-claimed pluginId", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event({ panelKindId: "other.panel", pluginId: "acme" })]);
+    expect(broker.locate("p1", "acme")).toEqual({ kind: "foreign" });
+  });
+
+  it("will not authorize from a remembered owner once the kind is unregistered", () => {
+    const owners: Record<string, string | undefined> = { "acme.dash": "acme" };
+    const broker = new PluginPanelLifecycleBroker((kindId) => owners[kindId]);
+    broker.ingest(7, [event()]);
+    owners["acme.dash"] = undefined;
+    expect(broker.locate("p1", "acme")).toEqual({ kind: "unavailable" });
+  });
+
+  it("refuses to pick when two renderers both hold a view of the panel", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event()]);
+    broker.ingest(8, [event()]);
+    expect(broker.locate("p1", "acme")).toEqual({ kind: "unavailable" });
+  });
+
+  it("prefers the renderer with the mounted view over one holding it hidden", () => {
+    const broker = makeBroker();
+    broker.ingest(7, [event({ phase: "hidden" })]);
+    broker.ingest(8, [event()]);
+    expect(broker.locate("p1", "acme")).toEqual({ kind: "located", sourceId: 8 });
+  });
+
+  it("names a reported non-plugin panel, and forgets it with its renderer", () => {
+    const broker = makeBroker();
+    broker.setNonPluginPanels(7, ["term-1", "", 42]);
+    expect(broker.locate("term-1", "acme")).toEqual({ kind: "non-plugin" });
+    broker.clearSource(7);
+    expect(broker.locate("term-1", "acme")).toEqual({ kind: "missing" });
+  });
+
+  it("replaces a renderer's inventory wholesale", () => {
+    const broker = makeBroker();
+    broker.setNonPluginPanels(7, ["term-1"]);
+    broker.setNonPluginPanels(7, ["term-2"]);
+    expect(broker.locate("term-1", "acme")).toEqual({ kind: "missing" });
+    expect(broker.locate("term-2", "acme")).toEqual({ kind: "non-plugin" });
+  });
+
+  it("reports an unknown id as missing and a removed panel as gone", () => {
+    const broker = makeBroker();
+    expect(broker.locate("nope", "acme")).toEqual({ kind: "missing" });
+    broker.ingest(7, [event(), event({ phase: "removed" })]);
+    expect(broker.locate("p1", "acme")).toEqual({ kind: "missing" });
+  });
+});

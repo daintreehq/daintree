@@ -37,6 +37,7 @@ export const PLUGIN_METHOD_CHANNELS = {
   setPluginVisibilityDefault: "plugin:visibility-default-set",
   activateForView: "plugin:activate-for-view",
   reportPanelLifecycle: "plugin:report-panel-lifecycle",
+  reportPanelInventory: "plugin:report-panel-inventory",
   getRuntimeStatuses: "plugin:runtime-statuses-get",
   restartWorker: "plugin:restart-worker",
   getAgents: "plugin:agents-get",

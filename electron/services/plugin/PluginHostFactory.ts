@@ -23,6 +23,7 @@ import { PLUGIN_PTY_DEFAULT_COLS, PLUGIN_PTY_DEFAULT_ROWS } from "./PluginProces
 import type { PluginContributionBroadcaster } from "./PluginContributionBroadcaster.js";
 import type { PluginPanelLifecycleBroker } from "./PluginPanelLifecycleBroker.js";
 import type { PluginRendererDispatcher } from "./PluginRendererDispatcher.js";
+import type { PluginPanelReloadDispatcher } from "./PluginPanelReloadDispatcher.js";
 import type { PluginUIPromptDispatcher } from "./PluginUIPromptDispatcher.js";
 import { assertSettingsKey, type PluginSettingsManager } from "./PluginSettingsManager.js";
 import {
@@ -293,6 +294,7 @@ export interface PluginHostFactoryDeps {
   broadcaster: PluginContributionBroadcaster;
   panelLifecycleBroker: PluginPanelLifecycleBroker;
   dispatcher: PluginRendererDispatcher;
+  panelReloadDispatcher: PluginPanelReloadDispatcher;
   promptDispatcher: PluginUIPromptDispatcher;
   settings: PluginSettingsManager;
   storage: PluginStorageManager;
@@ -1434,6 +1436,18 @@ export function createHost(
         payload: { pluginId, badges: deps.serializePluginBadges(pluginId) },
       });
       return Promise.resolve();
+    },
+    // NOT revoke-guarded: a worker reloads a view when its own work finishes,
+    // long after activate() returned. No capability gate — the target must be
+    // a panel of a kind this exact instance contributed, which the broker
+    // resolves from main's kind registry; the caller is identified by this
+    // closure's `pluginId`, never by an argument (#12610).
+    reloadPanel: async (panelId) => {
+      if (typeof panelId !== "string" || panelId.trim().length === 0) {
+        throw new Error(`Plugin "${pluginId}" reloadPanel: panelId must be a non-empty string`);
+      }
+      if (!isBound()) return "unavailable";
+      return deps.panelReloadDispatcher.reload(pluginId, panelId, boundProjectId);
     },
     // NOT revoke-guarded for the same reason as invalidateFileDecorations:
     // plugins fire toasts from post-activation callbacks and timers. Liveness

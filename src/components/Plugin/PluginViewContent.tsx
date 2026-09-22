@@ -12,7 +12,7 @@ import {
   type ComponentType,
   type LazyExoticComponent,
 } from "react";
-import type { PanelViewProps } from "@shared/types/plugin";
+import type { PanelReloadResult, PanelViewProps } from "@shared/types/plugin";
 import { pluginManifestIdFromInstanceKey } from "@shared/types/plugin";
 import {
   admitViewReload,
@@ -23,6 +23,7 @@ import {
   reportViewRenderFailed,
   resetViewReloadBudget,
 } from "@/services/plugin/pluginPanelLifecycle";
+import { registerPanelReloadHandler } from "@/services/plugin/pluginPanelReload";
 import { Package } from "lucide-react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { ErrorFallbackProps } from "@/components/ErrorBoundary/ErrorFallback";
@@ -852,27 +853,45 @@ export function makePluginViewContent(
     }, [worker, replaceAttempt]);
 
     /**
-     * A view's reload request, bound to the attempt that made it (#12609).
+     * A plugin-initiated reload request, bound to the attempt it targets —
+     * from the view's own `requestReload` (#12609) or from its backend through
+     * `host.reloadPanel` (#12610), which passes `settle` to learn the outcome.
      *
      * Plugin-initiated, so it is the one replacement that is rationed: user
      * retries and backend rebinds call `replaceAttempt` directly and are never
-     * charged, while this one passes the panel's budget first.
+     * charged, while this one passes the panel's budget first. Both sources
+     * share that one budget.
      */
     const requestReloadFor = useCallback(
-      (attempt: number): void => {
+      (attempt: number, settle?: (result: PanelReloadResult) => void): void => {
         // Stale the moment its attempt is retired — including by a replacement
         // still waiting to commit — so a callback that outlived its view can
         // never reload the view that replaced it.
-        if (attempt !== attemptRef.current) return;
+        if (attempt !== attemptRef.current) {
+          settle?.("unavailable");
+          return;
+        }
         // Never acted on inline. A view may call this while rendering, where
         // setting this component's state or aborting a signal is illegal. The
         // deferral is also what merges a burst: the first queued request to act
         // retires the attempt, and the rest find it stale.
         queueMicrotask(() => {
-          if (!aliveRef.current || attempt !== attemptRef.current) return;
+          if (!aliveRef.current) {
+            settle?.("unavailable");
+            return;
+          }
+          if (attempt !== attemptRef.current) {
+            // Merged into a request that already acted on this attempt: a fresh
+            // one is on its way unless that request is what tripped the block.
+            settle?.(isViewReloadBlocked(panelId) ? "rate-limited" : "scheduled");
+            return;
+          }
           // A failed view recovers through the user's Try again, not through a
           // timer the dead attempt left running.
-          if (boundaryShowingError.current) return;
+          if (boundaryShowingError.current) {
+            settle?.("unavailable");
+            return;
+          }
           // A backend that is restarting, or already replaced but not yet
           // rebound, owns this panel's next attempt: the rebind it ends in
           // replaces the view anyway. Reloading first would spend the budget on
@@ -880,10 +899,14 @@ export function makePluginViewContent(
           const bound = boundWorkerGeneration.current;
           const live = usePluginRuntimeStatusStore.getState().statusById.get(pluginId)?.worker;
           if (bound !== null && live && (live.state !== "ready" || live.generation !== bound)) {
+            settle?.("unavailable");
             return;
           }
           const admission = admitViewReload(panelId);
-          if (admission === "refused") return;
+          if (admission === "refused") {
+            settle?.("unavailable");
+            return;
+          }
           if (admission === "blocked") {
             // Discard the view it asked to discard, but mount nothing in its
             // place: retire the attempt so nothing it still holds can act, and
@@ -891,9 +914,11 @@ export function makePluginViewContent(
             attemptRef.current += 1;
             controllerRef.current.abort();
             setReloadBlocked(true);
+            settle?.("rate-limited");
             return;
           }
           replaceAttempt(false);
+          settle?.("scheduled");
         });
       },
       // `pluginId` is a factory-scope constant, not a reactive value.
@@ -905,6 +930,21 @@ export function makePluginViewContent(
       () => (offerRequestReload ? () => requestReloadFor(retryCount) : undefined),
       [offerRequestReload, requestReloadFor, retryCount]
     );
+
+    // The backend's way in (#12610): only where the view itself is offered
+    // reloads, so a host that opted out of `requestReload` is not reloadable
+    // from the worker either. Always aimed at the attempt current when the
+    // request lands, never the one current when this effect ran.
+    useEffect(() => {
+      if (!offerRequestReload || builtinDisabled) return;
+      return registerPanelReloadHandler(
+        panelId,
+        () =>
+          new Promise<PanelReloadResult>((resolve) => {
+            requestReloadFor(attemptRef.current, resolve);
+          })
+      );
+    }, [offerRequestReload, builtinDisabled, panelId, requestReloadFor]);
 
     // Stale content stays visible behind a terminal failure — it is the last
     // thing the plugin actually produced, and blanking it loses context the user

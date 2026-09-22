@@ -17,6 +17,24 @@ export interface PanelLifecycleSourceHandle {
 /** Resolves a panel kind id to its owning plugin, or `undefined` if unknown. */
 export type PanelKindOwnerResolver = (panelKindId: string) => string | undefined;
 
+/**
+ * Where a `host.reloadPanel()` target lives, as far as main knows (#12610).
+ *
+ * - `located` — exactly one renderer holds a view attempt for the panel.
+ * - `not-mounted` — the plugin's panel is known but has no view attempt.
+ * - `missing` — no renderer reported the id at all.
+ * - `foreign` / `non-plugin` — the id names someone else's panel.
+ * - `unavailable` — ownership cannot be established right now (the kind is
+ *   unregistered mid-upgrade) or more than one renderer claims the view.
+ */
+export type PanelReloadTarget =
+  | { kind: "located"; sourceId: number }
+  | { kind: "not-mounted" }
+  | { kind: "missing" }
+  | { kind: "foreign" }
+  | { kind: "non-plugin" }
+  | { kind: "unavailable" };
+
 const VALID_PHASES = new Set<PluginPanelLifecyclePhase>([
   "mounted",
   "hidden",
@@ -58,6 +76,12 @@ export class PluginPanelLifecycleBroker {
   /** sourceId (webContents id) → panelId → current event. */
   private readonly bySource = new Map<number, Map<string, PluginPanelLifecycleEvent>>();
   private readonly listeners = new Map<string, Set<PluginPanelLifecycleListener>>();
+  /**
+   * sourceId → ids of the live panels that renderer holds whose kind belongs to
+   * no plugin. Consulted only to reject a reload target, never to authorize one,
+   * so a renderer misreporting it can at worst cause a refusal.
+   */
+  private readonly nonPluginBySource = new Map<number, Set<string>>();
 
   constructor(private readonly resolveOwner: PanelKindOwnerResolver) {}
 
@@ -127,6 +151,60 @@ export class PluginPanelLifecycleBroker {
    */
   clearSource(sourceId: number): void {
     this.bySource.delete(sourceId);
+    this.nonPluginBySource.delete(sourceId);
+  }
+
+  /** Replace a renderer's set of live non-plugin panel ids (#12610). */
+  setNonPluginPanels(sourceId: number, panelIds: readonly unknown[]): void {
+    if (!Array.isArray(panelIds)) return;
+    const ids = new Set<string>();
+    for (const id of panelIds) {
+      if (typeof id === "string" && id.length > 0) ids.add(id);
+    }
+    if (ids.size === 0) this.nonPluginBySource.delete(sourceId);
+    else this.nonPluginBySource.set(sourceId, ids);
+  }
+
+  /**
+   * Resolve a `host.reloadPanel()` target for `pluginId` (#12610).
+   *
+   * Ownership is re-resolved against the live kind registry rather than the
+   * owner recorded at ingest: the remembered-owner fallback exists to keep
+   * lifecycle phases honest while a plugin is mid-upgrade, and must not
+   * authorize an action while the kind has no registered owner at all.
+   */
+  locate(panelId: string, pluginId: string): PanelReloadTarget {
+    const viewSources: number[] = [];
+    let known = false;
+    let ownerless = false;
+    for (const [sourceId, panels] of this.bySource) {
+      const event = panels.get(panelId);
+      if (!event) continue;
+      const owner = this.resolveOwner(event.panelKindId);
+      if (owner === undefined) {
+        ownerless = true;
+        continue;
+      }
+      if (owner !== pluginId) return { kind: "foreign" };
+      known = true;
+      // `render-failed` still has a view attempt the renderer can speak for —
+      // it is also how a panel stopped for reloading too often reads — so the
+      // renderer decides between "unavailable" and "rate-limited".
+      if (event.phase === "mounted" || event.phase === "render-failed") {
+        viewSources.push(sourceId);
+      }
+    }
+    if (viewSources.length === 1) return { kind: "located", sourceId: viewSources[0]! };
+    // Two renderers both holding a view of one panel id should not happen; if
+    // it does, picking one by focus or insertion order could reload a view the
+    // plugin never meant.
+    if (viewSources.length > 1) return { kind: "unavailable" };
+    if (known) return { kind: "not-mounted" };
+    if (ownerless) return { kind: "unavailable" };
+    for (const ids of this.nonPluginBySource.values()) {
+      if (ids.has(panelId)) return { kind: "non-plugin" };
+    }
+    return { kind: "missing" };
   }
 
   /** Drop every listener a plugin registered (unload / worker teardown). */
@@ -136,6 +214,7 @@ export class PluginPanelLifecycleBroker {
 
   dispose(): void {
     this.bySource.clear();
+    this.nonPluginBySource.clear();
     this.listeners.clear();
   }
 

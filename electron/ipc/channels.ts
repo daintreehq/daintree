@@ -1072,6 +1072,8 @@ export const CHANNELS = {
   PLUGIN_ACTIVATE_FOR_VIEW: "plugin:activate-for-view",
   /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
+  /** Renderer reports its live non-plugin panel ids, so `host.reloadPanel` can refuse them (#12610). */
+  PLUGIN_REPORT_PANEL_INVENTORY: "plugin:report-panel-inventory",
   /** Per-instance runtime health snapshot, for a renderer store hydrating after it subscribed. */
   PLUGIN_RUNTIME_STATUSES_GET: "plugin:runtime-statuses-get",
   /** Retire a plugin's backend generation and start a fresh one (panel recovery). */
@@ -1128,6 +1130,10 @@ export const CHANNELS = {
   PLUGIN_UI_PROMPT_RESPONSE: "plugin:ui-prompt-response",
   /** Bridge: main process tells the renderer to drop a plugin's pending UI prompts on unload. */
   PLUGIN_UI_PROMPT_CANCEL: "plugin:ui-prompt-cancel",
+  /** Bridge: main process asks the renderer holding a plugin panel to reload its view (#12610). */
+  PLUGIN_PANEL_RELOAD_REQUEST: "plugin:panel-reload-request",
+  /** Bridge: renderer acknowledges (or refuses) a plugin panel reload request. */
+  PLUGIN_PANEL_RELOAD_RESPONSE: "plugin:panel-reload-response",
 
   // Plugin MCP supervisor channels (#9233) — stdio MCP servers contributed by
   // plugin manifests, supervised in the main process via execa. Distinct from

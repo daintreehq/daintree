@@ -632,6 +632,9 @@ export interface GeneratedElectronAPI {
     reloadProjectPlugins(
       ...args: IpcInvokeMap["plugin:project-reload"]["args"]
     ): Promise<IpcInvokeMap["plugin:project-reload"]["result"]>;
+    reportPanelInventory(
+      ...args: IpcInvokeMap["plugin:report-panel-inventory"]["args"]
+    ): Promise<IpcInvokeMap["plugin:report-panel-inventory"]["result"]>;
     reportPanelLifecycle(
       ...args: IpcInvokeMap["plugin:report-panel-lifecycle"]["args"]
     ): Promise<IpcInvokeMap["plugin:report-panel-lifecycle"]["result"]>;

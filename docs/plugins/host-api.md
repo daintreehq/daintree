@@ -127,6 +127,9 @@ interface PluginHostApi {
   // Panel title-chrome badge
   setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
 
+  // Remount one of your own panels' views
+  reloadPanel(panelId: string): Promise<PanelReloadResult>;
+
   // Action dispatch + catalog
   dispatch(actionId: ActionId, args?: unknown): Promise<ActionDispatchResult>;
   readonly actions: PluginHostActionsApi;
@@ -174,7 +177,7 @@ Two option bags recur. `PluginHostCallOptions` is the trailing argument on long-
 
 Nearly every host method now returns a Promise — the API became fully async in the move to the out-of-process worker model, so `registerAction`, `postToPanel`, `setPanelBadge`, and the rest resolve `Promise<void>`, and the subscription methods resolve `Promise<() => void>`. Always `await` a registration before assuming it took effect, and `await` the subscription methods to get the disposer. The synchronous `logger` accessor is the lone exception — its `info`/`warn`/`error` calls return `void`.
 
-The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
+The revoke-guarded methods — `registerAction`, `registerHandler`, `broadcastToRenderer`, `registerForgeProvider`, `registerFileDecorationProvider`, `mcp.registerTools`, `onDidChangeActiveWorktree`, `onDidChangeWorktrees`, `onDidChangeAgentState`, `onDidChangePanelLifecycle`, `onDidWake`, and `settings.onDidChange` — must be called during `activate()` and throw once the host is revoked. Subscribing counts as an activation-window operation even though the callback fires later: register all your subscriptions during `activate()`, then react to them for the plugin's lifetime. `postToPanel`, `setPanelBadge`, `reloadPanel`, `getActiveWorktree`, `getWorktrees`, `getWorktreesResult`, `getWorktreeStatus`, `getAgentState`, `invalidateFileDecorations`, `showToast`, `showQuickPick`, `showInputBox`, `showConfirm`, `dispatch`, `actions.*`, `sendToActiveAgent`, `process.spawn`, `fs.*`, `git.*`, `clipboard.*`, `system.*`, `settings.get`/`settings.set`, `storage.get`/`set`/`delete`, and `logger` are deliberately NOT revoke-guarded: plugins call them from post-activation subscription callbacks and timers, so they stay callable for the plugin's lifetime and become a silent no-op (or, for `process.spawn`/`fs.*`/`git.*`, a rejection) after unload. This split is the load-bearing distinction between the activation-window registration surface and the live runtime surface — `postToPanel` is the canonical post-activation push: a plugin's `activate()` subscribes once (revoke-guarded `registerHandler`/worktree subscriptions), then streams live data into its panels with `postToPanel` for the rest of its lifetime.
 
 **Where validation errors surface.** The two groups report errors differently. A revoke-guarded activation-window method (`registerAction`, `registerHandler`, the subscriptions) throws synchronously at the call site on a bad descriptor or a revoked host — wrap the `activate()` body in `try`/`catch` if you want to handle it. The post-activation runtime-surface methods (`postToPanel`, `setPanelBadge`, `invalidateFileDecorations`, `broadcastToRenderer` on an invalid channel) instead reject the returned Promise rather than throwing synchronously, so handle their validation errors with `await` + `.catch()`:
 
@@ -640,6 +643,29 @@ In a worker plugin — every installed and project plugin — only the revoked-h
 **What the agent receives.** The return value is `JSON.stringify`-ed — `undefined` becomes `null`, and `toJSON` is honoured — and sent as the tool's text content. A worker plugin's result is serialized in the worker, before it crosses to main. A result over 256 KiB serialized, or one that cannot be serialized, becomes a tool error. With an `outputSchema`, the result must also serialize to a JSON object that matches the schema, which is sent as `structuredContent` as well; anything else is a tool error. A thrown error becomes a tool error carrying its message, truncated past 2,000 characters. A session may have at most 16 calls in flight; past that the agent gets a tool error asking it to retry.
 
 The mock host records rosters in `registeredMcpTools`, but it has no manifest model, so it skips the `mcp:expose` and declared-endpoint checks and leaves the roster limits to the real host.
+
+## `reloadPanel`
+
+Ask the host to throw away one of your panels' views and mount a fresh one — the backend-side twin of a view's [`requestReload`](./views.md). Use it when the worker has finished work whose view should start clean, instead of restarting the worker, which rebinds every panel it owns and drops in-flight work. Panel ids come from [`onDidChangePanelLifecycle`](#ondidchangepanellifecycle).
+
+```ts
+await host.onDidChangePanelLifecycle(async (event) => {
+  if (event.phase !== "mounted") return;
+  // …later, when a heavy job for this panel finishes:
+  const result = await host.reloadPanel(event.panelId);
+});
+```
+
+It resolves with a `PanelReloadResult`, an acknowledgment of scheduling and nothing more: it never tells you the new view rendered or that memory was freed.
+
+| Result | Meaning |
+| --- | --- |
+| `scheduled` | The view was mounted and a fresh attempt is queued. |
+| `not-mounted` | The panel has no mounted view (hidden, backgrounded, trashed), or the host knows no such panel. Nothing is opened or focused; its next ordinary mount is already fresh. |
+| `rate-limited` | The panel's reload budget is spent, or its view is already stopped for reloading too often. |
+| `unavailable` | The host could not act: the panel's project view is cached, closed or unresponsive, the view is showing an error, your backend is restarting, or your plugin has unloaded. |
+
+No capability is needed. You can only reach panels of kinds your plugin instance contributed — for a project plugin, only in its own project — and the host identifies you by your binding, never by an argument. An empty `panelId` rejects, and so does a panel that belongs to another plugin or to no plugin. Reloads share the per-panel budget of `requestReload`: three in any rolling 30 seconds, after which the view is stopped until the user reloads it. There is no kind-wide variant. `createMockHost` records calls in `reloadPanelCalls` and answers from the phases you push through `simulatePanelLifecycleChange`, or from a `reloadPanel` option you supply.
 
 ## `setPanelBadge`
 

@@ -39,6 +39,7 @@ import type {
   LoggerParams,
   PluginWorkerToHostMessage,
   PostToPanelParams,
+  ReloadPanelParams,
   SetPanelBadgeParams,
   RegisterActionParams,
   RegisterFileDecorationProviderParams,
@@ -782,6 +783,10 @@ export class PluginDevWorkerMainBridge {
       case "dispatch": {
         const p = params as DispatchParams;
         return this.host.dispatch(p.actionId, p.args);
+      }
+      case "reloadPanel": {
+        const p = params as ReloadPanelParams;
+        return this.host.reloadPanel(p.panelId);
       }
       case "actions.list":
         return this.host.actions.list();

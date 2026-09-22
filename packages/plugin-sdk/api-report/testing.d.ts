@@ -1608,10 +1608,31 @@ interface PluginPanelLifecycleEvent {
     readonly panelId: string;
     /** Namespaced panel kind, i.e. `${pluginId}.${panel.id}`. */
     readonly panelKindId: string;
-    /** Owning plugin's manifest `name`. Always this plugin's own id. */
+    /**
+     * Owning plugin's runtime id — the manifest `name` for an installed or
+     * builtin plugin, the project-qualified instance key for a project plugin.
+     * Always this plugin's own id.
+     */
     readonly pluginId: string;
     readonly phase: PluginPanelLifecyclePhase;
 }
+/**
+ * What the host did with a `host.reloadPanel()` request (#12610). An
+ * acknowledgment of scheduling only — never proof that the fresh view
+ * rendered, and never a statement about memory.
+ *
+ * - `"scheduled"` — the panel's view was mounted and a fresh attempt is queued.
+ * - `"not-mounted"` — the panel exists but has no mounted view (hidden,
+ *   backgrounded, trashed), or the host knows no such panel. Nothing is opened
+ *   or focused; the panel's next ordinary mount is already fresh.
+ * - `"rate-limited"` — the panel's reload budget is spent or its view is
+ *   already stopped for reloading too often. Shared with the view's own
+ *   `requestReload`.
+ * - `"unavailable"` — the host could not act right now: the panel's window is
+ *   cached, closed, or unresponsive, its view is showing an error, or its
+ *   backend is restarting.
+ */
+type PanelReloadResult = "scheduled" | "not-mounted" | "rate-limited" | "unavailable";
 /**
  * One machine wake observation delivered to a plugin (#12175). Frozen before
  * delivery, and carries only timing — never what the machine was doing while
@@ -3282,6 +3303,31 @@ interface PluginHostApi extends PluginActivationApi {
      */
     setPanelBadge(panelId: string, badge: PluginPanelBadge | null): Promise<void>;
     /**
+     * Ask the host to discard one of this plugin's own panel views and mount a
+     * fresh one (#12610) — the backend-side twin of the view's
+     * `PanelViewProps.requestReload`. Use it when the worker has finished work
+     * whose view should start clean, without restarting the worker and rebinding
+     * every panel it owns. Panel ids come from {@link onDidChangePanelLifecycle}.
+     *
+     * No capability is required: only panels of kinds this plugin instance
+     * contributed can be targeted, and the caller's identity comes from this
+     * host, never from an argument. A project plugin reaches only its own
+     * project's panels.
+     *
+     * Resolves with a {@link PanelReloadResult} — a scheduling acknowledgment,
+     * never confirmation of a render. Reloads draw on the same per-panel budget
+     * as `requestReload` (three per rolling 30 seconds, after which the view is
+     * stopped until the user reloads it). A panel that is not mounted resolves
+     * `"not-mounted"` and is not opened or focused.
+     *
+     * Like {@link setPanelBadge} this is NOT revoke-guarded, and resolves
+     * `"unavailable"` once the plugin is unloaded.
+     *
+     * @throws {Error} (as a rejection) if `panelId` is not a non-empty string,
+     *   names another plugin's panel, or names a panel that belongs to no plugin.
+     */
+    reloadPanel(panelId: string): Promise<PanelReloadResult>;
+    /**
      * Surface a toast notification. The host namespaces the message as
      * `{pluginId}: {message}` for provenance — a plugin cannot spoof another
      * plugin's id since `pluginId` is bound to the host at activation. Routes
@@ -3624,6 +3670,11 @@ interface MockHostState {
     readonly registeredMcpTools: ReadonlyArray<RegisteredMcpToolsRecord>;
     readonly invalidationCalls: ReadonlyArray<InvalidationRecord>;
     readonly setPanelBadgeCalls: ReadonlyArray<SetPanelBadgeRecord>;
+    /**
+     * Panel ids passed to `host.reloadPanel(panelId)`, in order (#12610). Only
+     * calls that got past argument validation are recorded.
+     */
+    readonly reloadPanelCalls: ReadonlyArray<string>;
     readonly showQuickPickCalls: ReadonlyArray<ShowQuickPickRecord>;
     readonly showInputBoxCalls: ReadonlyArray<ShowInputBoxRecord>;
     readonly showConfirmCalls: ReadonlyArray<ShowConfirmRecord>;
@@ -3762,6 +3813,14 @@ interface CreateMockHostOptions {
      * mirrors `ActionService.dispatch` closely enough for activation-time tests.
      */
     dispatch?: (actionId: ActionId, args?: unknown) => Promise<ActionDispatchResult>;
+    /**
+     * Custom resolver for `host.reloadPanel` (#12610). The default answers from
+     * the phases pushed through `simulatePanelLifecycleChange`, like the real
+     * host answers from its lifecycle broker: `"mounted"` → `"scheduled"`,
+     * `"render-failed"` → `"unavailable"`, any other known phase or an unknown
+     * id → `"not-mounted"`, and a panel reported for another plugin rejects.
+     */
+    reloadPanel?: (panelId: string) => PanelReloadResult | Promise<PanelReloadResult>;
     /**
      * Declared plugin capabilities (`manifest.capabilities`), gating the agent
      * APIs the way production does (#10617). `getAgentState` requires `agent:read`
