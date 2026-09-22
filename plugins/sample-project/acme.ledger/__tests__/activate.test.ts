@@ -106,6 +106,19 @@ describe("acme.ledger — activation", () => {
     dispose();
   });
 
+  it("advertises schemas the host enforces without refusing what the tools normalize", async () => {
+    const { roster, dispose } = await activated();
+    const add = validateAgentMcpTools(roster.tools).find((t) => t.name === "add_transaction")!;
+    const valid = { date: "2026-09-01", amount_cents: -1, category: "misc" };
+
+    expect(add.checkInput(valid)).toBeNull();
+    expect(add.checkInput({ ...valid, category: " Groceries " })).toBeNull();
+    expect(add.checkInput({ ...valid, category: "9lives" })).toMatch(/\/category must match/);
+    expect(add.checkInput({ ...valid, where: "1=1" })).toMatch(/additional properties/);
+    expect(add.checkInput({ amount_cents: -1, category: "misc" })).toMatch(/'date'/);
+    dispose();
+  });
+
   it("does not create the database until a tool is called", async () => {
     const { call, dispose } = await activated();
     expect(existsSync(join(projectRoot, ".daintree"))).toBe(false);
@@ -306,7 +319,7 @@ describe("acme.ledger — row ids past 2^53", () => {
   });
 });
 
-describe("acme.ledger — argument validation is the plugin's job", () => {
+describe("acme.ledger — the tools check their own arguments too", () => {
   it.each([
     ["add_transaction", { amount_cents: -1, category: "misc" }, /date is required/],
     [

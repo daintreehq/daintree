@@ -6,7 +6,8 @@ import {
   type PluginMcpJsonSchema,
 } from "../../../shared/types/plugin.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
-import type { AgentMcpToolDescriptor } from "./types.js";
+import { compileAgentMcpSchema, type AgentMcpSchemaCheck } from "./schemaValidation.js";
+import type { AgentMcpRegisteredTool, AgentMcpToolDescriptor } from "./types.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
@@ -63,18 +64,52 @@ function snapshotSchema(toolName: string, field: string, schema: unknown): Plugi
   return deepFreeze(snapshot as PluginMcpJsonSchema);
 }
 
+function compileSchema(
+  toolName: string,
+  field: string,
+  schema: PluginMcpJsonSchema
+): AgentMcpSchemaCheck {
+  try {
+    return compileAgentMcpSchema(schema);
+  } catch (err) {
+    throw new Error(
+      `tool "${toolName}" ${field} ${formatErrorMessage(err, "cannot be compiled")}`,
+      {
+        cause: err,
+      }
+    );
+  }
+}
+
+/**
+ * Compile a descriptor's schemas into the checks dispatch runs on every call
+ * and every structured result. Throws when a schema cannot be enforced as
+ * written — invalid, referring outside itself, async, or naming an unknown
+ * format — because advertising a contract the host would not keep is worse
+ * than refusing the roster.
+ */
+export function compileAgentMcpTool(descriptor: AgentMcpToolDescriptor): AgentMcpRegisteredTool {
+  const { name, description, inputSchema, outputSchema } = descriptor;
+  const checkInput = compileSchema(name, "inputSchema", inputSchema);
+  if (outputSchema === undefined) {
+    return Object.freeze({ name, description, inputSchema, checkInput });
+  }
+  const checkOutput = compileSchema(name, "outputSchema", outputSchema);
+  return Object.freeze({ name, description, inputSchema, outputSchema, checkInput, checkOutput });
+}
+
 /**
  * Check a `host.mcp.registerTools` roster against the endpoint budget and
  * return the agent-facing descriptors, frozen and detached from the plugin's
- * objects. Throws on the first violation — a roster is accepted or rejected
- * whole, never trimmed, so an agent is never shown a partial inventory the
- * plugin did not intend.
+ * objects, with their schemas compiled. Throws on the first violation — a
+ * roster is accepted or rejected whole, never trimmed, so an agent is never
+ * shown a partial inventory the plugin did not intend.
  *
  * Only what an agent sees is checked here. The manifest gates (`mcp:expose`,
  * the endpoint declared in `contributes.agentMcp`) belong to the host that knows
  * which plugin is registering.
  */
-export function validateAgentMcpTools(tools: unknown): readonly AgentMcpToolDescriptor[] {
+export function validateAgentMcpTools(tools: unknown): readonly AgentMcpRegisteredTool[] {
   if (!isPlainObject(tools)) {
     throw new Error("tools must be a plain object keyed by tool name");
   }
@@ -118,14 +153,14 @@ export function validateAgentMcpTools(tools: unknown): readonly AgentMcpToolDesc
       definition.outputSchema === undefined
         ? undefined
         : snapshotSchema(name, "outputSchema", definition.outputSchema);
-    descriptors.push(
-      Object.freeze({
-        name,
-        description,
-        inputSchema,
-        ...(outputSchema !== undefined ? { outputSchema } : {}),
-      })
-    );
+    descriptors.push({
+      name,
+      description,
+      inputSchema,
+      ...(outputSchema !== undefined ? { outputSchema } : {}),
+    });
   }
-  return Object.freeze(descriptors);
+  // Compiled only once every cheap check has passed, so a roster that is
+  // rejected anyway costs no compilation.
+  return Object.freeze(descriptors.map(compileAgentMcpTool));
 }

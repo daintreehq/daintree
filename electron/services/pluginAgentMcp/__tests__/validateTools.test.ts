@@ -166,6 +166,64 @@ describe("validateAgentMcpTools", () => {
     expect(Object.isFrozen(validateAgentMcpTools({ list: tool() }))).toBe(true);
   });
 
+  it("compiles each schema into the check dispatch runs", () => {
+    const [plain, structured] = validateAgentMcpTools({
+      plain: tool({
+        inputSchema: { type: "object", properties: { limit: { type: "integer" } } },
+      }),
+      structured: tool({
+        outputSchema: { type: "object", properties: { total: { type: "number" } } },
+      }),
+    });
+
+    expect(plain.checkInput({ limit: 5 })).toBeNull();
+    expect(plain.checkInput({ limit: "5" })).toBe("/limit must be integer");
+    expect(plain.checkOutput).toBeUndefined();
+    expect(structured.checkOutput?.({ total: "3" })).toBe("/total must be number");
+  });
+
+  it.each([
+    [
+      "an invalid schema",
+      { type: "object", properties: { a: { type: "strng" } } },
+      /is not a valid JSON Schema/,
+    ],
+    [
+      "a remote reference",
+      { type: "object", properties: { a: { $ref: "https://example.com/a.json" } } },
+      /references "https:\/\/example.com\/a.json", which is outside the schema/,
+    ],
+    ["an async schema", { type: "object", $async: true }, /is an async \(\$async\) schema/],
+    [
+      "an unknown format",
+      { type: "object", properties: { a: { type: "string", format: "bogus" } } },
+      /cannot be compiled: unknown format "bogus"/,
+    ],
+    [
+      "an unsupported dialect",
+      { type: "object", $schema: "http://json-schema.org/draft-04/schema#" },
+      /declares \$schema .*; only JSON Schema 2020-12/,
+    ],
+  ])("rejects a roster with %s, naming the tool and field", (_label, schema, why) => {
+    expect(() =>
+      validateAgentMcpTools({ ok: tool(), list: tool({ inputSchema: schema }) })
+    ).toThrow(new RegExp(`^tool "list" inputSchema ${why.source}`));
+    expect(() =>
+      validateAgentMcpTools({ ok: tool(), list: tool({ outputSchema: schema }) })
+    ).toThrow(new RegExp(`^tool "list" outputSchema ${why.source}`));
+  });
+
+  it("runs every cheap check before compiling anything", () => {
+    // The first tool's schema would fail to compile, but the roster is refused
+    // for the second tool's name before compilation starts.
+    expect(() =>
+      validateAgentMcpTools({
+        list: tool({ inputSchema: { type: "object", $async: true } }),
+        Bad: tool(),
+      })
+    ).toThrow(/must match/);
+  });
+
   it("rejects a schema that cannot be serialized", () => {
     const circular: Record<string, unknown> = { type: "object" };
     circular.self = circular;

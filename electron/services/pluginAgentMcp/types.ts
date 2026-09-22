@@ -1,5 +1,6 @@
 import type http from "node:http";
 import type { PluginMcpCaller, PluginMcpJsonSchema } from "../../../shared/types/plugin.js";
+import type { AgentMcpSchemaCheck } from "./schemaValidation.js";
 
 /** Path prefix of the plugin-only MCP surface on the host's loopback listener. */
 export const PLUGIN_MCP_ROUTE_PREFIX = "/mcp/plugin/";
@@ -18,6 +19,18 @@ export interface AgentMcpToolDescriptor {
 }
 
 /**
+ * A tool as dispatch holds it: the descriptor plus its schemas compiled at
+ * registration, so a call is checked without compiling anything and a tool
+ * cannot be registered without the checks its schemas promise.
+ */
+export type AgentMcpRegisteredTool = AgentMcpToolDescriptor & {
+  readonly checkInput: AgentMcpSchemaCheck;
+} & (
+    | { readonly outputSchema?: undefined; readonly checkOutput?: undefined }
+    | { readonly outputSchema: PluginMcpJsonSchema; readonly checkOutput: AgentMcpSchemaCheck }
+  );
+
+/**
  * Runs one tool of a registered endpoint. For a worker plugin this crosses the
  * worker message port; for a builtin it is the plugin's own closure. Rejects
  * when the signal aborts.
@@ -33,7 +46,7 @@ export interface AgentMcpEndpointRegistration {
   /** Plugin instance key — the manifest id for installed plugins, `project__{projectId}__{id}` for project plugins. */
   readonly pluginInstanceId: string;
   readonly endpointId: string;
-  readonly tools: readonly AgentMcpToolDescriptor[];
+  readonly tools: readonly AgentMcpRegisteredTool[];
   readonly invoke: AgentMcpToolInvoker;
 }
 

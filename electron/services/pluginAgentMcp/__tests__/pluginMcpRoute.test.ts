@@ -27,12 +27,8 @@ import {
   parsePluginMcpRoute,
   type PluginMcpRouteDeps,
 } from "../pluginMcpRoute.js";
-import {
-  PLUGIN_MCP_ROUTE_PREFIX,
-  pluginMcpRoutePath,
-  type AgentMcpToolDescriptor,
-  type AgentMcpToolInvoker,
-} from "../types.js";
+import { PLUGIN_MCP_ROUTE_PREFIX, pluginMcpRoutePath, type AgentMcpToolInvoker } from "../types.js";
+import { compileAgentMcpTool } from "../validateTools.js";
 
 const PROJECT_A = "a".repeat(64);
 const PROJECT_B = "b".repeat(64);
@@ -40,16 +36,16 @@ const INSTANCE = "acme.ledger";
 const OTHER_INSTANCE = "acme.crm";
 const ENDPOINT = "data";
 
-const LOOKUP: AgentMcpToolDescriptor = {
+const LOOKUP = compileAgentMcpTool({
   name: "lookup",
   description: "Look a record up.",
   inputSchema: { type: "object", properties: { id: { type: "string" } } },
-};
-const SUMMARY: AgentMcpToolDescriptor = {
+});
+const SUMMARY = compileAgentMcpTool({
   name: "summary",
   description: "Summarise the ledger.",
   inputSchema: { type: "object" },
-};
+});
 
 const INIT_BODY = {
   jsonrpc: "2.0",
