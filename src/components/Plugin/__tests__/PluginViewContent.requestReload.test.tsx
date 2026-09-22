@@ -23,19 +23,21 @@ vi.mock("@/components/ui/Skeleton", () => ({
   Skeleton: ({ label }: { label?: string }) => <div data-testid="skeleton">{label}</div>,
   SkeletonHint: () => null,
 }));
-// Forwards the focus handlers: they are how the content learns focus was inside
-// the view, which decides whether a reload block moves focus to the host.
+// Forwards the focus handlers and the ref: they are how the content learns focus
+// was inside the view, which decides whether a reload moves focus to the host.
 vi.mock("@/components/ui/ContentFadeIn", () => ({
   ContentFadeIn: ({
     children,
     onFocus,
     onBlur,
+    ref,
   }: {
     children: React.ReactNode;
     onFocus?: React.FocusEventHandler<HTMLDivElement>;
     onBlur?: React.FocusEventHandler<HTMLDivElement>;
+    ref?: React.Ref<HTMLDivElement>;
   }) => (
-    <div data-testid="plugin-content" onFocus={onFocus} onBlur={onBlur}>
+    <div data-testid="plugin-content" onFocus={onFocus} onBlur={onBlur} ref={ref}>
       {children}
     </div>
   ),
@@ -783,5 +785,168 @@ describe("host.reloadPanel reaching a mounted view (#12610)", () => {
     await waitFor(() => expect(h.mounts).toHaveLength(2));
     expect(document.activeElement).toBe(outside);
     outside.remove();
+  });
+});
+
+describe("the user's Reload panel (#12611)", () => {
+  async function userReload(lifecycle: Awaited<ReturnType<typeof loadContent>>["lifecycle"]) {
+    let handled = false;
+    await act(async () => {
+      handled = lifecycle.requestUserViewReload("panel-1");
+    });
+    return handled;
+  }
+
+  it("remounts a healthy view, uncharged, with the latest accepted state", async () => {
+    const { lifecycle } = await mountContent({
+      initialArgs: { page: 1 },
+      readRecoveryState: () => ({ state: { page: 7 } }),
+    });
+    const first = latest();
+
+    expect(await userReload(lifecycle)).toBe(true);
+
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    expect(first.disposeSignal.aborted).toBe(true);
+    expect(latest().initialArgs).toEqual({ page: 7 });
+    // Free: the whole budget is still there afterwards.
+    for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await requestReload();
+    }
+    expect(blockedBanner()).toBeNull();
+  });
+
+  it("re-arms a view the loop breaker stopped", async () => {
+    const { lifecycle } = await mountContent();
+    for (let i = 0; i <= lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await requestReload();
+    }
+    expect(blockedBanner()).not.toBeNull();
+
+    await userReload(lifecycle);
+
+    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+    expect(blockedBanner()).toBeNull();
+    expect(lifecycle.isViewReloadBlocked("panel-1")).toBe(false);
+  });
+
+  it("is not offered by a host that offers no reload", async () => {
+    const { Content, lifecycle } = await loadContent();
+    render(<Content panelId="panel-1" />);
+    await waitFor(() => expect(screen.getByTestId("plugin-view")).toBeTruthy());
+
+    expect(await userReload(lifecycle)).toBe(false);
+    expect(h.mounts).toHaveLength(1);
+    expect(latest().setHasUnsavedChanges).toBeUndefined();
+  });
+
+  it("stops being reachable once the content unmounts", async () => {
+    const { lifecycle, unmount } = await mountContent();
+    unmount();
+    await act(async () => {});
+
+    expect(lifecycle.requestUserViewReload("panel-1")).toBe(false);
+  });
+
+  it("brings focus back to the host when it was inside the discarded view", async () => {
+    const { lifecycle } = await mountContent();
+    act(() => {
+      screen.getByRole("button", { name: "Inside the view" }).focus();
+    });
+    const content = screen.getByTestId("plugin-content");
+
+    await userReload(lifecycle);
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+
+    expect(document.activeElement).not.toBe(document.body);
+    expect(content.contains(document.activeElement)).toBe(false);
+    expect(document.activeElement?.getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("leaves focus alone when it was somewhere else", async () => {
+    const { lifecycle } = await mountContent();
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+    try {
+      elsewhere.focus();
+
+      await userReload(lifecycle);
+      await waitFor(() => expect(h.mounts).toHaveLength(2));
+
+      expect(document.activeElement).toBe(elsewhere);
+    } finally {
+      elsewhere.remove();
+    }
+  });
+});
+
+describe("setHasUnsavedChanges (#12611)", () => {
+  it("raises and lowers the panel's unsaved-work flag", async () => {
+    const { lifecycle } = await mountContent();
+
+    act(() => latest().setHasUnsavedChanges?.(true));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(true);
+
+    act(() => latest().setHasUnsavedChanges?.(false));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+  });
+
+  it("keeps one setter per attempt", async () => {
+    const { rerender, Content } = await mountContent();
+    const first = latest().setHasUnsavedChanges;
+    rerender(<Content panelId="panel-1" offerRequestReload />);
+    expect(latest().setHasUnsavedChanges).toBe(first);
+  });
+
+  it("starts a new attempt clean, and ignores the old attempt's setter", async () => {
+    const { lifecycle } = await mountContent();
+    const stale = latest();
+    act(() => stale.setHasUnsavedChanges?.(true));
+
+    await requestReload();
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+
+    const current = latest();
+    expect(current.setHasUnsavedChanges).not.toBe(stale.setHasUnsavedChanges);
+    act(() => current.setHasUnsavedChanges?.(true));
+    // The torn-down attempt can neither clear the replacement's flag nor raise
+    // one of its own.
+    act(() => stale.setHasUnsavedChanges?.(false));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(true);
+    act(() => current.setHasUnsavedChanges?.(false));
+    act(() => stale.setHasUnsavedChanges?.(true));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+  });
+
+  it("does not hold up the view's own reload", async () => {
+    await mountContent();
+    act(() => latest().setHasUnsavedChanges?.(true));
+
+    await requestReload();
+
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+  });
+
+  it("is lowered when the backend's host.reloadPanel replaces the view", async () => {
+    const { lifecycle } = await mountContent();
+    const { reloadRegisteredPanel } = await import("@/services/plugin/pluginPanelReload");
+    act(() => latest().setHasUnsavedChanges?.(true));
+
+    await act(async () => {
+      await reloadRegisteredPanel("panel-1");
+    });
+
+    await waitFor(() => expect(h.mounts).toHaveLength(2));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+  });
+
+  it("is lowered when the content unmounts", async () => {
+    const { lifecycle, unmount } = await mountContent();
+    act(() => latest().setHasUnsavedChanges?.(true));
+
+    unmount();
+
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
   });
 });

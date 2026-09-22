@@ -1012,6 +1012,7 @@ describe("PanelHeader", () => {
         isMaximized: false,
         isDockable: true,
         canMoveToWorktree: false,
+        canReload: true,
         ...input,
       }).flatMap((group, index) => [
         ...(index > 0 ? ["---" as const] : []),
@@ -1058,7 +1059,9 @@ describe("PanelHeader", () => {
     it.each(["file", "file-browser", "diff"])("gives %s panels the same list", async (kind) => {
       render(<PanelHeader {...makeProps({ kind })} />);
 
-      expect(menuRows()).toEqual(sharedRows({ isDockable: await isDockableInRegistry(kind) }));
+      expect(menuRows()).toEqual(
+        sharedRows({ isDockable: await isDockableInRegistry(kind), canReload: false })
+      );
     });
 
     it.each(["Duplicate", "Rename", "Trash"])("never offers the generic %s", (label) => {
@@ -1080,6 +1083,7 @@ describe("PanelHeader", () => {
         isMaximized: false,
         isDockable: true,
         canMoveToWorktree: true,
+        canReload: true,
       })
         .flat()
         .find((command) => command.id === "move-to-worktree")!.label;
@@ -1115,6 +1119,7 @@ describe("PanelHeader", () => {
         isMaximized: false,
         isDockable: true,
         canMoveToWorktree: false,
+        canReload: true,
       })
         .flat()
         .find((command) => command.shortcutActionId === "terminal.maximize")!;
@@ -1146,6 +1151,7 @@ describe("PanelHeader", () => {
         isMaximized: false,
         isDockable: true,
         canMoveToWorktree: false,
+        canReload: true,
       })
         .flat()
         .find((entry) => entry.id === commandId)!;

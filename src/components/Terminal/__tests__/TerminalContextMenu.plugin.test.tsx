@@ -144,6 +144,7 @@ import {
 import type { PanelLocation } from "@/types";
 import { TerminalContextMenu } from "../TerminalContextMenu";
 import {
+  canReloadPanelKind,
   getGenericPanelMenuGroups,
   type GenericPanelMenuInput,
 } from "@/components/Panel/genericPanelMenu";
@@ -205,6 +206,7 @@ function sharedRows(input: Partial<GenericPanelMenuInput> = {}): Row[] {
     isMaximized: false,
     isDockable: true,
     canMoveToWorktree: false,
+    canReload: true,
     ...input,
   }).flatMap((group, index) => [
     ...(index > 0 ? ["---" as const] : []),
@@ -222,6 +224,7 @@ function commandLabel(input: Partial<GenericPanelMenuInput>, id: string): string
     isMaximized: false,
     isDockable: true,
     canMoveToWorktree: false,
+    canReload: true,
     ...input,
   })
     .flat()
@@ -331,7 +334,12 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
   ] as const)("draws the shared list for %s panels", (_label, fields) => {
     renderMenuFor({ ...pluginPanel, pluginId: undefined, ...fields });
 
-    expect(menuRows()).toEqual(sharedRows({ isDockable: panelKindIsDockable(fields.kind) }));
+    expect(menuRows()).toEqual(
+      sharedRows({
+        isDockable: panelKindIsDockable(fields.kind),
+        canReload: canReloadPanelKind(fields.kind),
+      })
+    );
   });
 
   it("offers the worktree move to a panel whose worktree has gone", () => {

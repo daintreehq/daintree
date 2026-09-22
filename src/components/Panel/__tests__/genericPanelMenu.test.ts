@@ -9,6 +9,8 @@ import {
 import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import {
   GENERIC_PANEL_MENU_ACTION_IDS,
+  GENERIC_PANEL_RELOAD_ACTION_ID,
+  canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
   readPanelKindMenuCapabilities,
@@ -39,6 +41,7 @@ function groups(input: Partial<GenericPanelMenuInput> = {}) {
     isMaximized: false,
     isDockable: true,
     canMoveToWorktree: true,
+    canReload: true,
     ...input,
   });
 }
@@ -198,12 +201,35 @@ describe("getGenericPanelMenuGroups", () => {
     }
   });
 
-  it("gives every command but the worktree move an action to dispatch", () => {
+  it("gives every command but the worktree move and reload an action to dispatch", () => {
     for (const input of LAYOUT_INPUTS) {
       for (const command of groups(input).flat()) {
-        if (command.id === "move-to-worktree") continue;
+        if (command.id === "move-to-worktree" || command.id === "reload") continue;
         expect(GENERIC_PANEL_MENU_ACTION_IDS[command.id]).toBeDefined();
       }
     }
+  });
+
+  it("offers Reload panel beside Rename only for a kind that can reload (#12611)", () => {
+    expect(ids({ canReload: true })[1]).toEqual(["rename", "reload"]);
+    expect(ids({ canReload: false }).flat()).not.toContain("reload");
+    const reload = groups({ canReload: true })
+      .flat()
+      .find((command) => command.id === "reload")!;
+    expect(reload.label).toBe("Reload panel");
+    expect(reload.destructive).toBeUndefined();
+    expect(GENERIC_PANEL_RELOAD_ACTION_ID).toBe("plugin.reloadPanel");
+  });
+});
+
+describe("canReloadPanelKind (#12611)", () => {
+  it("offers reload to plugin kinds, registered or gone missing", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND);
+    expect(canReloadPanelKind(VIEW_PLUGIN_KIND)).toBe(true);
+    expect(canReloadPanelKind("acme.missing")).toBe(true);
+  });
+
+  it.each(["file", "file-browser", "diff"])("withholds it from the built-in %s kind", (kind) => {
+    expect(canReloadPanelKind(kind)).toBe(false);
   });
 });

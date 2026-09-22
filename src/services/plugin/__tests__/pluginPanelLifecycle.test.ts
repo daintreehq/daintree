@@ -6,11 +6,15 @@ import {
   admitViewReload,
   clearViewRenderFailure,
   getPanelRemovedSignal,
+  hasViewUnsavedChanges,
   isViewReloadBlocked,
+  registerUserViewReload,
   reportViewMounted,
   reportViewRenderFailed,
   resetPluginPanelLifecycleForTests,
   resetViewReloadBudget,
+  requestUserViewReload,
+  setViewUnsavedChanges,
   syncPluginPanels,
   type PluginPanelSnapshotEntry,
 } from "@/services/plugin/pluginPanelLifecycle";
@@ -334,5 +338,82 @@ describe("view reload budget (#12609)", () => {
     syncPluginPanels([panel()]);
     expect(isViewReloadBlocked("p1")).toBe(false);
     expect(admitViewReload("p1", WINDOW)).toBe("accepted");
+  });
+});
+
+describe("the user's reload (#12611)", () => {
+  it("hands it to the newest mounted host and reports that one took it", () => {
+    const older = vi.fn();
+    const newer = vi.fn();
+    registerUserViewReload("p1", older);
+    registerUserViewReload("p1", newer);
+
+    expect(requestUserViewReload("p1")).toBe(true);
+    expect(newer).toHaveBeenCalledTimes(1);
+    expect(older).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the remaining host when the newest unregisters", () => {
+    const older = vi.fn();
+    registerUserViewReload("p1", older);
+    const release = registerUserViewReload("p1", vi.fn());
+    release();
+
+    expect(requestUserViewReload("p1")).toBe(true);
+    expect(older).toHaveBeenCalledTimes(1);
+  });
+
+  it("releases only its own registration, even when called twice", () => {
+    const kept = vi.fn();
+    const release = registerUserViewReload("p1", vi.fn());
+    registerUserViewReload("p1", kept);
+    release();
+    release();
+
+    requestUserViewReload("p1");
+    expect(kept).toHaveBeenCalledTimes(1);
+  });
+
+  it("lifts a block when no view is mounted, so the next mount starts fresh", () => {
+    syncPluginPanels([panel()]);
+    for (let i = 0; i <= VIEW_RELOAD_LIMIT; i += 1) admitViewReload("p1", i);
+    expect(isViewReloadBlocked("p1")).toBe(true);
+
+    expect(requestUserViewReload("p1")).toBe(false);
+    expect(isViewReloadBlocked("p1")).toBe(false);
+  });
+});
+
+describe("unsaved changes (#12611)", () => {
+  it("is raised and lowered by the attempt that owns it", () => {
+    const owner = {};
+    expect(hasViewUnsavedChanges("p1")).toBe(false);
+    setViewUnsavedChanges("p1", owner, true);
+    expect(hasViewUnsavedChanges("p1")).toBe(true);
+    setViewUnsavedChanges("p1", owner, false);
+    expect(hasViewUnsavedChanges("p1")).toBe(false);
+  });
+
+  it("cannot be lowered by a stale attempt's token", () => {
+    const stale = {};
+    const current = {};
+    setViewUnsavedChanges("p1", stale, true);
+    setViewUnsavedChanges("p1", current, true);
+    setViewUnsavedChanges("p1", stale, false);
+
+    expect(hasViewUnsavedChanges("p1")).toBe(true);
+  });
+
+  it("is per panel", () => {
+    setViewUnsavedChanges("p1", {}, true);
+    expect(hasViewUnsavedChanges("p2")).toBe(false);
+  });
+
+  it("goes with the panel when it is removed", () => {
+    syncPluginPanels([panel()]);
+    setViewUnsavedChanges("p1", {}, true);
+    syncPluginPanels([], new Set());
+
+    expect(hasViewUnsavedChanges("p1")).toBe(false);
   });
 });

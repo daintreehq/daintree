@@ -94,6 +94,8 @@ import { SortableTabButton } from "./SortableTabButton";
 import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
 import {
   GENERIC_PANEL_MENU_ACTION_IDS,
+  GENERIC_PANEL_RELOAD_ACTION_ID,
+  canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
   readPanelKindMenuCapabilities,
@@ -480,11 +482,20 @@ function PanelHeaderComponent({
         isMaximized,
         isDockable: kindCapabilities.isDockable,
         canMoveToWorktree,
+        canReload: canReloadPanelKind(kind),
       })
     : null;
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
     if (commandId === "move-to-worktree") {
       handleMoveToWorktreeSelect();
+      return;
+    }
+    if (commandId === "reload") {
+      void actionService.dispatch(
+        GENERIC_PANEL_RELOAD_ACTION_ID,
+        { panelId: id },
+        { source: "menu" }
+      );
       return;
     }
     if (commandId === "kill" && hasPanelCloseGuard(id)) {

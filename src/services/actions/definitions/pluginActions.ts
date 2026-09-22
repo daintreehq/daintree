@@ -4,6 +4,15 @@ import { z } from "zod";
 import { pluginClient } from "@/clients/pluginClient";
 import { parseProjectPluginInstanceKey } from "@shared/types/plugin";
 import { pluginDocumentRuntime } from "@/services/plugin/pluginDocumentRuntime";
+import {
+  hasViewUnsavedChanges,
+  requestUserViewReload,
+} from "@/services/plugin/pluginPanelLifecycle";
+import { usePanelStore } from "@/store/panelStore";
+import { usePluginPanelReloadConfirmStore } from "@/store/pluginPanelReloadConfirmStore";
+import { isBuiltInPanelKind } from "@shared/types/panel";
+import { panelKindHasPty } from "@shared/config/panelKindRegistry";
+import { ConfirmationStagedError, confirmationStagedMessage } from "../confirmationStaged";
 
 /**
  * The plugin-authoring feedback loop (#12214). An agent writing a plugin into a
@@ -46,6 +55,66 @@ export function registerPluginActions(actions: ActionRegistry, _callbacks: Actio
         ) {
           await window.electron.window.reload();
         }
+      },
+    })
+  );
+  actions.set("plugin.reloadPanel", () =>
+    defineAction({
+      id: "plugin.reloadPanel",
+      title: "Reload panel",
+      description:
+        "Discard a plugin panel's view and mount a fresh one, keeping its backend and the state it persisted. View state it has not persisted is lost. A view that reports unsaved work is left alone, a confirmation is staged for the user, and the call fails rather than reporting success.",
+      category: "plugins",
+      kind: "command",
+      // No confirmation by default, following browser Reload: what the view
+      // persisted comes back, so for most views nothing is lost. It is not
+      // strictly D0 — a reload has no inverse — which is why a view holding
+      // unsaved work can opt into the D1 dialog through `setHasUnsavedChanges`.
+      danger: "safe",
+      // Plugins reload their own views through `requestReload`, which the host
+      // rations; this would be an unrationed side door onto any panel.
+      denyPluginDispatch: true,
+      nonRepeatable: true,
+      // No focused-panel fallback, so the palette has nothing to act on.
+      palette: { mode: "hidden" },
+      scope: "renderer",
+      argsSchema: z.object({
+        panelId: z
+          .string()
+          .min(1)
+          .describe("The plugin panel to reload. Required: the focused panel is never assumed."),
+      }),
+      resultSchema: z.object({
+        panelId: z.string(),
+        // `scheduled`: a mounted view was handed the reload; nothing reports
+        // when the new attempt mounts. `not-mounted`: no view was mounted, so
+        // there was nothing to discard and the next mount starts fresh.
+        outcome: z.enum(["scheduled", "not-mounted"]),
+      }),
+      mcpOutputSchema: true,
+      mcpAnnotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+        idempotentHint: false,
+        openWorldHint: false,
+      },
+      run: async ({ panelId }) => {
+        const confirm = usePluginPanelReloadConfirmStore.getState();
+        const approved = confirm.consumeApproval(panelId);
+        const panel = usePanelStore.getState().panelsById[panelId];
+        if (!panel) throw new Error(`No panel with id "${panelId}"`);
+        const kind = panel.kind ?? "terminal";
+        if (isBuiltInPanelKind(kind) || panelKindHasPty(kind)) {
+          throw new Error(`Panel "${panelId}" is not a plugin panel`);
+        }
+        if (!approved && hasViewUnsavedChanges(panelId)) {
+          confirm.request({ panelId, panelTitle: panel.title });
+          throw new ConfirmationStagedError(confirmationStagedMessage("Reloading this panel"));
+        }
+        const outcome: "scheduled" | "not-mounted" = requestUserViewReload(panelId)
+          ? "scheduled"
+          : "not-mounted";
+        return { panelId, outcome };
       },
     })
   );

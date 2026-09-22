@@ -103,6 +103,8 @@ import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { PopoverAnchor } from "@/components/ui/popover";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
 import {
+  GENERIC_PANEL_RELOAD_ACTION_ID,
+  canReloadPanelKind,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
   readPanelKindMenuCapabilities,
@@ -689,6 +691,13 @@ export function TerminalContextMenu({
             { source: sourceRef.current }
           );
           break;
+        case "reload":
+          void actionService.dispatch(
+            GENERIC_PANEL_RELOAD_ACTION_ID,
+            { panelId: terminalId },
+            { source: sourceRef.current }
+          );
+          break;
         case "reload-browser":
           void actionService.dispatch(
             "browser.reload",
@@ -1113,6 +1122,7 @@ export function TerminalContextMenu({
             isMaximized,
             isDockable: kindCapabilities.isDockable,
             canMoveToWorktree,
+            canReload: canReloadPanelKind(kind),
           }).map((group, groupIndex) => (
             <Fragment key={group[0]?.id ?? groupIndex}>
               {groupIndex > 0 && <ContextMenuSeparator />}

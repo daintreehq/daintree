@@ -7,6 +7,7 @@ import {
   PanelBottomClose,
   PanelTopClose,
   Pencil,
+  RotateCw,
   Trash2,
 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
@@ -20,6 +21,7 @@ export type GenericPanelMenuCommandId =
   | "move-to-grid"
   | "toggle-maximize"
   | "rename"
+  | "reload"
   | "background"
   | "trash"
   | "kill";
@@ -39,6 +41,8 @@ export interface GenericPanelMenuInput {
   isMaximized: boolean;
   isDockable: boolean;
   canMoveToWorktree: boolean;
+  /** Whether the panel is a plugin's, whose view the host can remount. */
+  canReload: boolean;
 }
 
 export interface PanelKindMenuCapabilities {
@@ -79,6 +83,15 @@ export function hasGenericPanelMenu(kind: PanelKind, hasPty: boolean): boolean {
 }
 
 /**
+ * Whether a generic-menu kind offers Reload panel (#12611): only a plugin's
+ * view can be remounted, so the file, file browser and diff kinds that share
+ * the menu do not. Callers have already ruled out PTY kinds.
+ */
+export function canReloadPanelKind(kind: PanelKind): boolean {
+  return !isBuiltInPanelKind(kind);
+}
+
+/**
  * The panel-level commands of the generic panel menu, in groups a separator
  * divides. The header's overflow menu and the right-click menu both render
  * this list verbatim, so the two cannot disagree on what a panel offers, in
@@ -93,6 +106,7 @@ export function getGenericPanelMenuGroups({
   isMaximized,
   isDockable,
   canMoveToWorktree,
+  canReload,
 }: GenericPanelMenuInput): GenericPanelMenuCommand[][] {
   const layout: GenericPanelMenuCommand[] = [];
   if (canMoveToWorktree) {
@@ -119,7 +133,10 @@ export function getGenericPanelMenuGroups({
 
   return [
     layout,
-    [{ id: "rename", label: "Rename panel", icon: Pencil }],
+    [
+      { id: "rename", label: "Rename panel", icon: Pencil },
+      ...(canReload ? [{ id: "reload" as const, label: "Reload panel", icon: RotateCw }] : []),
+    ],
     [
       { id: "background", label: "Send to background", icon: ArrowDownFromLine },
       { id: "trash", label: "Trash panel", icon: Trash2 },
@@ -129,11 +146,13 @@ export function getGenericPanelMenuGroups({
 }
 
 /**
- * The action each command dispatches for the panel it was opened on.
- * "move-to-worktree" has none of its own: it picks a destination first.
+ * The action each command dispatches for the panel it was opened on, as
+ * `{ terminalId }`. "move-to-worktree" has none of its own: it picks a
+ * destination first. "reload" names its panel as `{ panelId }` — see
+ * {@link GENERIC_PANEL_RELOAD_ACTION_ID}.
  */
 export const GENERIC_PANEL_MENU_ACTION_IDS: Readonly<
-  Record<Exclude<GenericPanelMenuCommandId, "move-to-worktree">, ActionId>
+  Record<Exclude<GenericPanelMenuCommandId, "move-to-worktree" | "reload">, ActionId>
 > = {
   "move-to-dock": "terminal.moveToDock",
   "move-to-grid": "terminal.moveToGrid",
@@ -143,3 +162,9 @@ export const GENERIC_PANEL_MENU_ACTION_IDS: Readonly<
   trash: "terminal.trash",
   kill: "terminal.kill",
 };
+
+/**
+ * The action "reload" dispatches, as `{ panelId }`: it is also an MCP tool, so
+ * its argument has no focused-panel fallback to share with the others.
+ */
+export const GENERIC_PANEL_RELOAD_ACTION_ID = "plugin.reloadPanel" satisfies ActionId;

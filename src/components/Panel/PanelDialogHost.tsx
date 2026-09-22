@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
-import { PanelTop } from "lucide-react";
+import { PanelTop, RotateCw } from "lucide-react";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
 import {
@@ -10,6 +10,11 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { buildPanelProps } from "@/utils/panelProps";
+import { actionService } from "@/services/ActionService";
+import {
+  GENERIC_PANEL_RELOAD_ACTION_ID,
+  canReloadPanelKind,
+} from "@/components/Panel/genericPanelMenu";
 
 /**
  * Presents panels as modal dialogs — the third presentation alongside
@@ -114,12 +119,20 @@ function PanelDialogFrame({
     });
   }, [panel, isTop, handleClose]);
 
+  const handleReload = useCallback(() => {
+    void actionService.dispatch(GENERIC_PANEL_RELOAD_ACTION_ID, { panelId }, { source: "user" });
+  }, [panelId]);
+
   if (!panel || !panelProps) return null;
 
-  const definition = definitions[panel.kind ?? "terminal"];
+  const kind = panel.kind ?? "terminal";
+  const definition = definitions[kind];
   if (!definition) return null;
 
   const PanelComponent = definition.component;
+  // The dialog has no overflow menu, so the one panel command a hosted plugin
+  // view needs from its header sits here directly (#12611).
+  const canReload = !definition.hasPty && canReloadPanelKind(kind);
 
   return (
     <AppDialog
@@ -138,6 +151,17 @@ function PanelDialogFrame({
         <div className="flex items-center gap-1">
           {/* Promotion always targets the topmost dialog, so it is only offered
               there — a suspended parent's button would move the wrong panel. */}
+          {canReload && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleReload}
+              data-testid="panel-dialog-reload"
+            >
+              <RotateCw className="h-3.5 w-3.5" />
+              Reload panel
+            </Button>
+          )}
           {isTop && (
             <Button
               variant="ghost"
