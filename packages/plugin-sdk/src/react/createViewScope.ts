@@ -149,11 +149,15 @@ function loseContext(gl: WebGLRenderingContext | WebGL2RenderingContext): void {
  * ```
  *
  * Create a fresh scope in each effect setup; a disposed scope cannot be
- * reopened. The scope drops everything it captured once disposed, so holding a
- * stale scope or cancel function retains nothing but its counters.
+ * reopened. The scope drops everything it captured once disposed: a stale
+ * cancel function retains nothing but the scope's counters, and a stale scope
+ * adds only its aborted `signal`, with that signal's reason and listeners.
  */
 export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions): ViewScope {
-  const controller = new AbortController();
+  // Cleared on teardown so a retained cancel function, which reaches this
+  // context, does not keep the aborted signal's listeners and reason alive.
+  let controller: AbortController | null = new AbortController();
+  const scopeSignal = controller.signal;
   let entries: Set<Entry> | null = new Set();
   let upstream: AbortSignal | null = signal;
   let onReport = options?.onReport;
@@ -262,7 +266,9 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
     entries = null;
     upstream?.removeEventListener("abort", onUpstreamAbort);
     upstream = null;
-    controller.abort(reason);
+    const aborting = controller;
+    controller = null;
+    aborting?.abort(reason);
 
     const pending = [...drained].reverse();
     drained.clear();
@@ -353,7 +359,7 @@ export function createViewScope(signal: AbortSignal, options?: ViewScopeOptions)
     get disposed() {
       return entries === null;
     },
-    signal: controller.signal,
+    signal: scopeSignal,
     listen: listen as ViewScope["listen"],
     setTimeout: (callback, ms, ...args) => timer(false, callback, ms, args),
     setInterval: (callback, ms, ...args) => timer(true, callback, ms, args),

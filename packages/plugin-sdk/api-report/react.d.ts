@@ -212,8 +212,9 @@ interface ViewScope {
  * ```
  *
  * Create a fresh scope in each effect setup; a disposed scope cannot be
- * reopened. The scope drops everything it captured once disposed, so holding a
- * stale scope or cancel function retains nothing but its counters.
+ * reopened. The scope drops everything it captured once disposed: a stale
+ * cancel function retains nothing but the scope's counters, and a stale scope
+ * adds only its aborted `signal`, with that signal's reason and listeners.
  */
 declare function createViewScope(signal: AbortSignal, options?: ViewScopeOptions): ViewScope;
 
