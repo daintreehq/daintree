@@ -36,6 +36,13 @@ import { dismissBlockingPalette } from "../helpers/overlays";
 import { isToolbarButtonReachable, openDevPreview } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
+import {
+  findLiveClaudeTrustPrompt,
+  isAgentStartupExited,
+  type AgentStartupInfo,
+  type ClaudeTrustPrompt,
+} from "../helpers/agentStartup";
+import { formatTerminalTail } from "../helpers/opencodeReady";
 import { writeTerminalInput, getTerminalText } from "../helpers/terminal";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import {
@@ -168,21 +175,31 @@ async function snap(page: Page, slug: string): Promise<string> {
   return filePath;
 }
 
+/**
+ * Rebind a freshly launched agent panel to its panel id. The agent-labelled
+ * selector stops matching once the pane is demoted to a plain terminal, which
+ * is exactly when a startup failure needs to read it.
+ */
+async function pinPanel(page: Page, launched: Locator): Promise<Locator> {
+  await expect(launched).toBeVisible({ timeout: 60_000 });
+  const panelId = await launched.evaluate(
+    (element) => element.closest("[data-panel-id]")?.getAttribute("data-panel-id") ?? ""
+  );
+  if (!panelId) throw new Error("Launched agent panel has no data-panel-id");
+  return page.locator(`[data-panel-id="${panelId}"]`);
+}
+
 async function launchClaude(app: ElectronApplication, page: Page): Promise<Locator> {
   await page.locator(SEL.agent.trayButton).click();
   await page.locator(SEL.agent.launcherRow("Claude")).first().click();
-  const panel = page.locator(SEL.agent.panel).first();
-  await expect(panel).toBeVisible({ timeout: 60_000 });
   void app;
-  return panel;
+  return pinPanel(page, page.locator(SEL.agent.panel).first());
 }
 
 async function launchOpenCode(page: Page): Promise<Locator> {
   await page.locator(SEL.agent.trayButton).click();
   await page.locator(SEL.agent.launcherRow("OpenCode")).first().click();
-  const panel = page.locator(SEL.opencodeAgent.panel).first();
-  await expect(panel).toBeVisible({ timeout: 60_000 });
-  return panel;
+  return pinPanel(page, page.locator(SEL.opencodeAgent.panel).first());
 }
 
 /**
@@ -201,13 +218,60 @@ async function sendPrompt(page: Page, panel: Locator, prompt: string): Promise<v
   await writeTerminalInput(page, panel, `${prompt}\r`);
 }
 
+async function readAgentStartupInfo(page: Page, panel: Locator): Promise<AgentStartupInfo> {
+  const panelId = await panel.getAttribute("data-panel-id", { timeout: T_SHORT }).catch(() => null);
+  if (!panelId) return null;
+  return page
+    .evaluate(async (id) => {
+      const info = await window.electron.terminal.getInfo(id);
+      return info ? { hasPty: info.hasPty, agentState: info.agentState } : null;
+    }, panelId)
+    .catch(() => null);
+}
+
+// Alternate directions so the answer does not depend on whether the CLI's
+// select list wraps: ArrowUp off the first option is a no-op in a list that
+// doesn't, and ArrowDown then reaches the next one.
+const TRUST_NAVIGATION_KEYS = ["\x1b[A", "\x1b[B", "\x1b[A", "\x1b[B"];
+
+/**
+ * Move Claude's trust dialog off "No, exit" and confirm, but only once an
+ * affirmative option is visibly selected — the CLI is installed unpinned, so
+ * neither the default nor the option order is assumed.
+ */
+async function answerClaudeTrustPrompt(
+  page: Page,
+  panel: Locator,
+  prompt: ClaudeTrustPrompt
+): Promise<"answered" | "unreadable" | "stuck"> {
+  let current: ClaudeTrustPrompt | null = prompt;
+  for (const key of TRUST_NAVIGATION_KEYS) {
+    if (!current?.rejectionSelected) break;
+    await writeTerminalInput(page, panel, key);
+    await page.waitForTimeout(500);
+    current = findLiveClaudeTrustPrompt(await getTerminalText(panel).catch(() => ""));
+  }
+  // The dialog redrew into something else while navigating; the next poll decides.
+  if (!current) return "answered";
+  if (current.rejectionSelected) return "stuck";
+  if (!current.acceptanceSelected) return "unreadable";
+  await writeTerminalInput(page, panel, "\r");
+  return "answered";
+}
+
+// A dialog with no readable selection is either mid-render or a prompt format
+// this driver does not know. Give the former a few polls, then fail with the
+// screen attached instead of burning the rest of the budget.
+const UNREADABLE_TRUST_PROMPT_POLLS = 5;
+
 /**
  * Wait for the agent panel to reach a ready/welcome state.
  *
- * Handles common boot prompts: Claude's "trust" + "api key" dialogs and
+ * Handles common boot prompts: Claude's trust + "api key" dialogs and
  * OpenCode's "/connect" provider setup. Caller passes the regex set that
  * indicates ready — typically [/welcome/i] for Claude, or the OpenCode-
- * specific banners.
+ * specific banners. Fails as soon as the agent exits, with the terminal tail
+ * in the error, rather than waiting out the budget against a dead CLI.
  */
 async function waitForAgentReady(
   panel: Locator,
@@ -216,17 +280,49 @@ async function waitForAgentReady(
   options: { kind?: "claude" | "opencode" } = {}
 ): Promise<void> {
   const kind = options.kind ?? "claude";
+  const label = kind === "opencode" ? "OpenCode" : "Claude";
   const budget = kind === "opencode" ? 360_000 : 270_000;
-  const deadline = Date.now() + (process.platform === "win32" ? budget : 120_000);
-  while (Date.now() < deadline) {
+  const startedAt = Date.now();
+  let text = "";
+  let unreadableTrustPolls = 0;
+
+  const fail = (reason: string): never => {
+    const elapsed = Math.round((Date.now() - startedAt) / 1000);
+    const header = `${label} ${reason} (after ${elapsed}s of a ${budget / 1000}s budget)`;
+    const tail = formatTerminalTail(text);
+    throw new Error(tail ? `${header}\n\nTerminal tail:\n${tail}` : header);
+  };
+
+  while (Date.now() - startedAt < budget) {
     await dismissTelemetryConsent(page);
-    const text = await getTerminalText(panel).catch(() => "");
+    text = await getTerminalText(panel).catch(() => "");
+    if (isAgentStartupExited(await readAgentStartupInfo(page, panel))) {
+      fail("exited before reaching its ready screen");
+    }
+
+    // A live dialog outranks ready text: the scrollback can hold a banner
+    // drawn before the dialog appeared.
+    const trustPrompt = kind === "claude" ? findLiveClaudeTrustPrompt(text) : null;
+    if (trustPrompt) {
+      const outcome = await answerClaudeTrustPrompt(page, panel, trustPrompt);
+      if (outcome === "stuck") {
+        text = await getTerminalText(panel).catch(() => text);
+        fail("trust prompt did not move off the rejection option");
+      }
+      if (outcome === "answered") {
+        unreadableTrustPolls = 0;
+        await page.waitForTimeout(2000);
+      } else if (++unreadableTrustPolls >= UNREADABLE_TRUST_PROMPT_POLLS) {
+        fail("showed a trust prompt with no recognizable selection");
+      } else {
+        await page.waitForTimeout(1000);
+      }
+      continue;
+    }
+
     if (matches.some((re) => re.test(text))) return;
     const lower = text.toLowerCase();
-    if (lower.includes("trust")) {
-      await writeTerminalInput(page, panel, "\r");
-      await page.waitForTimeout(2000);
-    } else if (lower.includes("api key")) {
+    if (lower.includes("api key")) {
       await writeTerminalInput(page, panel, "\x1b[A\r");
       await page.waitForTimeout(2000);
     } else if (kind === "opencode" && (lower.includes("/connect") || lower.includes("provider"))) {
@@ -236,7 +332,7 @@ async function waitForAgentReady(
       await page.waitForTimeout(1000);
     }
   }
-  throw new Error("Agent never reached ready state");
+  fail("never reached its ready screen");
 }
 
 /**
