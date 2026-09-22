@@ -36,17 +36,21 @@ const FILTER_VISUALS: Record<
   { Icon: React.ComponentType<{ className?: string }>; color: string; colorFaded: string }
 > = {
   // colorFaded must stay a complete class literal — Tailwind's scanner can't
-  // see dynamically assembled `${color}/40` strings.
+  // see dynamically assembled `${color}/60` strings. /60 rather than the old
+  // /40: at /40 an empty segment's glyph fell to about 2:1 on the dark themes
+  // and the Finished check all but vanished, which left an icon-only segment
+  // with no visible identity. /60 keeps it recognisable while still sitting at
+  // half the contrast of a populated one, so the zero still reads at a glance.
   working: {
     Icon: SpinnerCircle,
     color: STATE_COLORS.working,
-    colorFaded: "text-state-working/40",
+    colorFaded: "text-state-working/60",
   },
-  waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting, colorFaded: "text-state-waiting/40" },
+  waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting, colorFaded: "text-state-waiting/60" },
   finished: {
     Icon: CheckCircle2,
     color: "text-category-blue",
-    colorFaded: "text-category-blue/40",
+    colorFaded: "text-category-blue/60",
   },
 };
 
@@ -108,10 +112,11 @@ export function QuickStateFilterBar({
                 className={cn(
                   "inline-flex items-center justify-center gap-1 min-w-0 px-2 py-1.5 transition-colors",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
-                  // "All" is the only labelled segment and always carries the
-                  // total — give it the lion's share; the icon-only status
-                  // segments split the rest equally.
-                  option.value === "all" ? "flex-[2]" : "flex-1",
+                  // "All" is the only labelled segment, so it gets a little
+                  // more room — but only a little. At double width it left the
+                  // three counts that answer the bar's real question pinched
+                  // against their dividers at the 200px sidebar floor.
+                  option.value === "all" ? "flex-[1.25]" : "flex-1",
                   idx > 0 && "border-l border-border-default",
                   isActive
                     ? // Fallback keeps themes without the var byte-identical.

@@ -26,7 +26,7 @@ export function QuickStateArmButton({ label, disabled, onArm }: QuickStateArmBut
             if (disabled) return;
             onArm();
           }}
-          className="inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-daintree-text/60"
+          className="inline-flex items-center justify-center self-stretch px-1.5 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary text-text-secondary hover:text-text-primary hover:bg-tint/[0.06] aria-disabled:opacity-40 aria-disabled:cursor-not-allowed aria-disabled:hover:bg-transparent aria-disabled:hover:text-text-secondary"
           aria-label={label}
         >
           <Zap className="w-3 h-3" aria-hidden="true" />
