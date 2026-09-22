@@ -1502,6 +1502,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: import("./project.js").ProjectHistoryTarget | null;
   };
+  "project-presence:get-snapshot": {
+    args: [];
+    result: import("./projectPresence.js").ProjectPresenceSnapshot;
+  };
   "project-relocation:apply": {
     args: [request: import("../projectRelocation.js").RelocationRequest];
     result: import("../project.js").Project;

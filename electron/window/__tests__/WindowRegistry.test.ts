@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { WindowRegistry } from "../WindowRegistry.js";
 import { toDisposable } from "../../utils/lifecycle.js";
+import { onProjectPresenceChanged } from "../projectPresenceChanges.js";
 import type { BrowserWindow } from "electron";
 
 const { mockRevokeByWindowId } = vi.hoisted(() => ({
@@ -779,5 +780,35 @@ describe("WindowRegistry", () => {
 
       expect(registry.focusOrder()[0]).toBe(ctx);
     });
+  });
+});
+
+describe("WindowRegistry presence change signal (#12597)", () => {
+  it("reports a window registering", () => {
+    const registry = new WindowRegistry();
+    const listener = vi.fn();
+    const unsubscribe = onProjectPresenceChanged(listener);
+
+    registry.register(makeMockWindow(1, 100));
+
+    unsubscribe();
+    expect(listener).toHaveBeenCalled();
+  });
+
+  it("reports a window closing only once it is gone from the registry", () => {
+    const registry = new WindowRegistry();
+    const win = makeMockWindow(1, 100);
+    registry.register(win);
+    const stillRegistered: boolean[] = [];
+    const unsubscribe = onProjectPresenceChanged(() => {
+      stillRegistered.push(registry.getByWindowId(1) !== undefined);
+    });
+
+    win._fireClosed();
+    // Teardown can reach unregister twice (closed, then destroyed).
+    win._fireDestroyed();
+
+    unsubscribe();
+    expect(stillRegistered).toEqual([false]);
   });
 });

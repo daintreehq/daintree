@@ -2401,3 +2401,99 @@ describe("ProjectSwitcherPalette band collapse", () => {
     );
   });
 });
+
+describe("ProjectSwitcherPalette open-in-another-window marker (#12597)", () => {
+  beforeEach(() => {
+    useProjectSettingsStore.setState({ notificationOverridesByProjectId: {} });
+  });
+
+  it("marks a project another window owns, in its accessible name", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[makeProject({ name: "Payments", openInOtherWindow: "foreground" })]}
+      />
+    );
+
+    const marker = screen.getByTestId("project-open-elsewhere-marker");
+    expect(marker.getAttribute("aria-label")).toBe("Open in another window");
+    // Neutral, never accent — it appears on several rows at once.
+    expect(marker.getAttribute("class") ?? "").not.toMatch(/accent/);
+    // The name-computation polyfill trims each node, so the separator survives
+    // as the comma alone (see the muted-bell spec above).
+    expect(screen.getByRole("option", { name: /Payments,\s*Open in another window/ })).toBeTruthy();
+  });
+
+  it("marks cached and still-activating owners the same way", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[
+          makeProject({ id: "a", name: "Alpha", openInOtherWindow: "cached" }),
+          makeProject({ id: "b", name: "Beta", openInOtherWindow: "activating" }),
+        ]}
+      />
+    );
+
+    expect(screen.getAllByTestId("project-open-elsewhere-marker")).toHaveLength(2);
+  });
+
+  it("leaves unowned, locally held, current and missing rows unmarked", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[
+          makeProject({ id: "free", name: "Free" }),
+          makeProject({ id: "local", name: "Local", isOpenInThisWindow: true }),
+          makeProject({
+            id: "current",
+            name: "Current",
+            isActive: true,
+            section: "current",
+            openInOtherWindow: "foreground",
+          }),
+          makeProject({
+            id: "gone",
+            name: "Gone",
+            isMissing: true,
+            openInOtherWindow: "cached",
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.queryByTestId("project-open-elsewhere-marker")).toBeNull();
+  });
+
+  it("keeps the name readable next to the muted bell", () => {
+    useProjectSettingsStore.setState({
+      notificationOverridesByProjectId: {
+        "proj-1": { completedEnabled: false, waitingEnabled: false },
+      },
+    });
+
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={[
+          makeProject({
+            name: "Payments",
+            openInOtherWindow: "cached",
+            lastOpened: Date.now() - 2 * 3600000,
+            resumableAgentCount: 2,
+          }),
+        ]}
+      />
+    );
+
+    // Every marker present, in order, each separated from the one before — a
+    // dropped label or a fused pair ("windowNotifications") both fail here.
+    expect(
+      screen.getByRole("option", {
+        name: /Payments, 2 agents will resume,\s*Open in another window,\s*Notifications muted/,
+      })
+    ).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /[A-Za-z]Open in another window/ })).toBeNull();
+    expect(screen.queryByRole("option", { name: /[A-Za-z]Notifications muted/ })).toBeNull();
+  });
+});

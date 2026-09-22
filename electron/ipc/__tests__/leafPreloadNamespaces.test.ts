@@ -65,6 +65,10 @@ import {
   buildConnectivityPreloadBindings,
 } from "../handlers/connectivity.preload.js";
 import {
+  PROJECT_PRESENCE_METHOD_CHANNELS,
+  buildProjectPresencePreloadBindings,
+} from "../handlers/projectPresence.preload.js";
+import {
   PRIVACY_METHOD_CHANNELS,
   buildPrivacyPreloadBindings,
 } from "../handlers/privacy.preload.js";
@@ -249,6 +253,12 @@ describe("leaf preload namespace bindings", () => {
 
     it("connectivity matches", () => {
       expect(CONNECTIVITY_METHOD_CHANNELS.getState).toBe(CHANNELS.CONNECTIVITY_GET_STATE);
+    });
+
+    it("projectPresence matches", () => {
+      expect(PROJECT_PRESENCE_METHOD_CHANNELS.getSnapshot).toBe(
+        CHANNELS.PROJECT_PRESENCE_GET_SNAPSHOT
+      );
     });
 
     it("privacy matches", () => {
@@ -779,6 +789,18 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("connectivity:get-state");
+    });
+  });
+
+  describe("projectPresence", () => {
+    it("routes getSnapshot() to project-presence:get-snapshot with no args", async () => {
+      const invoke = vi.fn().mockResolvedValue({ thisWindow: [], otherWindows: [] });
+      const bindings = buildProjectPresencePreloadBindings(invoke);
+
+      await bindings.getSnapshot();
+
+      expect(invoke).toHaveBeenCalledTimes(1);
+      expect(invoke).toHaveBeenCalledWith("project-presence:get-snapshot");
     });
   });
 

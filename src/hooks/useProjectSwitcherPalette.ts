@@ -21,9 +21,13 @@ import { logError } from "@/utils/logger";
 import type { Project, Scratch } from "@shared/types";
 import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
+import type {
+  ProjectPresenceSnapshot,
+  ProjectPresenceState,
+} from "@shared/types/ipc/projectPresence";
 import { assistantNeedsAttention, classifyAssistantActivity } from "@/lib/projectAssistantActivity";
 import { decayFrecencyScore, FRECENCY_COLD_START } from "@shared/utils/frecency";
-import { projectClient, scratchClient } from "@/clients";
+import { projectClient, projectPresenceClient, scratchClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 export type ProjectSwitcherMode = "modal" | "dropdown";
@@ -216,6 +220,22 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   isBackground: boolean;
   isMissing: boolean;
   isPinned: boolean;
+  /**
+   * Another window owns this project, so picking it goes to that window rather
+   * than opening it here (#12597). Absent when no other window holds it, and
+   * until main has answered. Never set on the current project: `isActive`
+   * keeps meaning "current in this window", and this is its own field.
+   *
+   * Advisory — the switch re-checks ownership when it runs, so a stale value
+   * costs a wrong label, never a duplicate view.
+   */
+  openInOtherWindow?: ProjectPresenceState;
+  /**
+   * This window already holds a view of the project — the current one, or one
+   * it keeps cached. There is no second window to open it in: asking for one
+   * brings it up here instead.
+   */
+  isOpenInThisWindow?: boolean;
   /**
    * Effective (read-time decayed) frecency, computed against one shared `now`
    * per list build — never the raw persisted snapshot.
@@ -837,6 +857,22 @@ const PROJECT_HOVER_PREFETCH_DELAY_MS = 150;
  */
 const PROJECT_PREFETCH_FRESHNESS_MS = 15_000;
 
+/**
+ * Whether two presence answers mark the same rows. No answer and an empty one
+ * mark nothing either way, which is the whole single-window case.
+ */
+function isSamePresence(
+  a: ProjectPresenceSnapshot | null,
+  b: ProjectPresenceSnapshot | null
+): boolean {
+  const key = (snapshot: ProjectPresenceSnapshot | null): string =>
+    JSON.stringify([
+      (snapshot?.thisWindow ?? []).map((e) => e.projectId).sort(),
+      (snapshot?.otherWindows ?? []).map((e) => `${e.projectId}:${e.state}`).sort(),
+    ]);
+  return key(a) === key(b);
+}
+
 export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const modalIsOpen = usePaletteStore((state) => state.activePaletteId === "project-switcher");
   const [dropdownIsOpen, setDropdownIsOpen] = useState(false);
@@ -985,6 +1021,60 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       });
   }, [isOpen, loadProjects, loadScratches]);
 
+  // Where each project is open, relative to this window (#12597). Pulled on
+  // open and again whenever main reports a change while the palette is up —
+  // subscribed before the first pull, so a change that lands mid-request still
+  // gets its own read. Only the newest request may land: an older one can
+  // resolve last and would put back what it saw. Cleared on close, so a reopen
+  // never shows the previous session's owners before its own pull lands.
+  //
+  // An answer that changes nothing sets nothing, so it rebuilds no rows —
+  // every rebuild re-runs the list's scroll-into-view. A failed read clears
+  // rather than keeps: labels describing a world that has since moved are
+  // worse than none, and main routes the pick either way.
+  const [presence, setPresence] = useState<ProjectPresenceSnapshot | null>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    let disposed = false;
+    let latestRequest = 0;
+    // What this session last applied. Starts empty because a closed palette
+    // cleared the state on its way out.
+    let applied: ProjectPresenceSnapshot | null = null;
+    const apply = (next: ProjectPresenceSnapshot | null): void => {
+      if (isSamePresence(applied, next)) return;
+      applied = next;
+      setPresence(next);
+    };
+    const pull = (): void => {
+      const request = ++latestRequest;
+      const isStale = (): boolean => disposed || request !== latestRequest;
+      projectPresenceClient
+        .getSnapshot()
+        .then((snapshot) => {
+          if (!isStale()) apply(snapshot);
+        })
+        .catch(() => {
+          if (!isStale()) apply(null);
+        });
+    };
+    const unsubscribe = projectPresenceClient.onChanged(pull);
+    pull();
+    return () => {
+      disposed = true;
+      unsubscribe();
+      setPresence(null);
+    };
+  }, [isOpen]);
+
+  const presenceByProjectId = useMemo(() => {
+    const otherWindows = new Map<string, ProjectPresenceState>();
+    for (const entry of presence?.otherWindows ?? []) {
+      otherWindows.set(entry.projectId, entry.state);
+    }
+    const thisWindow = new Set((presence?.thisWindow ?? []).map((entry) => entry.projectId));
+    return { otherWindows, thisWindow };
+  }, [presence]);
+
   const displayPathById = useMemo(() => buildDisplayPaths(projects), [projects]);
 
   const searchableProjects = useMemo<SearchableProject[]>(() => {
@@ -1025,6 +1115,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         isBackground,
         isMissing,
         isPinned: p.pinned ?? false,
+        openInOtherWindow: isActive ? undefined : presenceByProjectId.otherWindows.get(p.id),
+        isOpenInThisWindow: presenceByProjectId.thisWindow.has(p.id),
         frecencyScore: decayFrecencyScore(
           p.frecencyScore ?? FRECENCY_COLD_START,
           p.lastAccessedAt ?? 0,
@@ -1052,7 +1144,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       project.section = sectionForProject(project);
       return project;
     });
-  }, [projects, projectStats, currentProject?.id, displayPathById]);
+  }, [projects, projectStats, currentProject?.id, displayPathById, presenceByProjectId]);
 
   useEffect(() => {
     if (!isOpen || searchableProjects.length === 0) return;

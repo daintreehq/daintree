@@ -100,6 +100,10 @@ vi.mock("@/clients", () => ({
   scratchClient: {
     saveAsProject: vi.fn().mockResolvedValue({ status: "cancelled" }),
   },
+  projectPresenceClient: {
+    getSnapshot: vi.fn(() => Promise.resolve({ thisWindow: [], otherWindows: [] })),
+    onChanged: vi.fn(() => () => {}),
+  },
 }));
 
 vi.mock("@/store/projectStore", () => ({ useProjectStore: useProjectStoreMock }));

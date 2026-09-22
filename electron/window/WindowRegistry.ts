@@ -7,6 +7,7 @@ import type { SurfaceViewManager } from "./SurfaceViewManager.js";
 import type { SurfacePortBroker } from "./SurfacePortBroker.js";
 import { DisposableStore } from "../utils/lifecycle.js";
 import { disposeProjectHistory, resetProjectHistory } from "../services/ProjectHistoryService.js";
+import { notifyProjectPresenceChanged } from "./projectPresenceChanges.js";
 
 /**
  * Narrow structural type for the Electron `app` module — exposes only the
@@ -119,6 +120,7 @@ export class WindowRegistry {
     win.once("closed", doUnregister);
     win.webContents.once("destroyed", doUnregister);
 
+    notifyProjectPresenceChanged();
     return ctx;
   }
 
@@ -208,6 +210,9 @@ export class WindowRegistry {
       this.appViewWebContentsIds.delete(windowId);
     }
     this.windows.delete(windowId);
+    // After the delete, so a snapshot read off this signal no longer finds the
+    // window. Covers a window whose manager held nothing to clear.
+    notifyProjectPresenceChanged();
 
     // Window ids are not guaranteed unique forever, so a stack left behind here
     // could resurface in an unrelated window that happens to be given the same
