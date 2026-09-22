@@ -202,6 +202,23 @@ describe("aggregateSubtreeMemory", () => {
     expect(agg.byKey["a"].topProcesses[1]).toMatchObject({ comm: "npm", memoryKb: 20000 });
   });
 
+  it("exposes process names, never the executable paths macOS ps reports", () => {
+    const processTree = createSeededCache();
+    const internals = processTree as unknown as { cache: Map<number, ProcessInfo> };
+    internals.cache.set(4, {
+      pid: 4,
+      ppid: 2,
+      comm: "/Users/someone/.nvm/versions/node/v22.23.2/bin/npm",
+      command: "npm test",
+      cpuPercent: 1.5,
+      rssKb: 20000,
+    });
+
+    const agg = processTree.aggregateSubtreeMemory([{ key: "a", rootPid: 2 }]);
+
+    expect(agg.byKey["a"].topProcesses.map((p) => p.comm)).toEqual(["node", "npm"]);
+  });
+
   it("deduplicates a pid reachable from two roots in the global total", () => {
     const processTree = createSeededCache();
     // Root 2 covers {2,4}; root 4 covers {4}. PID 4 must count once globally.

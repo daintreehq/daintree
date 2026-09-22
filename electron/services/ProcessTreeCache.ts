@@ -80,6 +80,12 @@ export interface LineageLedgerHook {
 type RefreshCallback = () => void;
 type RefreshOutcome = "changed" | "unchanged" | "error";
 
+/** Last path segment, for either separator; a bare name comes back unchanged. */
+function executableBasename(comm: string): string {
+  const cut = Math.max(comm.lastIndexOf("/"), comm.lastIndexOf("\\"));
+  return cut >= 0 && cut < comm.length - 1 ? comm.slice(cut + 1) : comm;
+}
+
 export class ProcessTreeCache {
   private cache: Map<number, ProcessInfo> = new Map();
   private childrenMap: Map<number, number[]> = new Map();
@@ -845,7 +851,11 @@ export class ProcessTreeCache {
         .slice(0, topPerKey)
         .map((p) => ({
           pid: p.pid,
-          comm: p.comm,
+          // macOS `ps -o comm` reports the executable's full path, not its
+          // name, so a basename has to be taken here for the promise above to
+          // hold — the raw value put the user's home directory in every
+          // consumer's label.
+          comm: executableBasename(p.comm),
           cpuPercent: p.cpuPercent,
           memoryKb: p.rssKb,
         }));
