@@ -12,6 +12,7 @@ import {
   Plug,
   Pin,
   Sparkles,
+  type LucideIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -40,6 +41,17 @@ import type { GettingStartedChecklistState } from "@/hooks/app/useGettingStarted
 
 interface WelcomeScreenProps {
   gettingStarted: GettingStartedChecklistState;
+}
+
+interface QuickAction {
+  id: string;
+  icon: LucideIcon;
+  title: string;
+  description: string;
+  onClick: () => void;
+  /** A second way in, beside the card rather than inside it. */
+  secondary?: { label: string; onClick: () => void };
+  primary: boolean;
 }
 
 const SHORTCUT_TIPS: { label: string; actionId: string }[] = [
@@ -98,7 +110,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
   );
 
   const quickActions = useMemo(
-    () => [
+    (): QuickAction[] => [
       {
         id: "open-folder",
         icon: FolderOpen,
