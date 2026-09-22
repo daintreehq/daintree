@@ -69,6 +69,8 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
   const isPrimary = useFleetArmingStore((s) => s.lastArmedId === term.id);
   const isArmable = isFleetArmEligible(term);
   const StateIcon = agentState ? getEffectiveStateIcon(agentState) : null;
+  const placementLabel = term.location === "dock" ? "Docked" : "On grid";
+  const placementId = `session-${term.id}-placement`;
 
   return (
     <div
@@ -79,7 +81,9 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
       data-session-row=""
       className={cn(
         "rounded-[var(--radius-lg)]",
-        isArmed && "outline outline-2 outline-offset-[-2px]",
+        // 4px in, not 2: at 2 the stroke sat 1px inside the well's border and
+        // met the next armed row's stroke edge to edge.
+        isArmed && "outline outline-2 outline-offset-[-4px]",
         isArmed && isPrimary && "outline-solid outline-accent-primary",
         isArmed && !isPrimary && "outline-dashed outline-border-strong"
       )}
@@ -118,8 +122,12 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
               onClick(term);
             }}
             aria-pressed={isArmable ? isArmed : undefined}
+            aria-describedby={placementId}
             className={cn(
-              "flex min-w-0 flex-1 items-center gap-2 self-stretch pr-2.5 text-left cursor-pointer rounded-[var(--radius-lg)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+              // The ring is drawn by a pseudo-element reaching back over the
+              // grip's gutter, so it outlines the row rather than clipping the
+              // agent glyph that starts this button.
+              "relative flex min-w-0 flex-1 items-center gap-2 self-stretch pr-2.5 text-left cursor-pointer focus-visible:outline-hidden before:pointer-events-none before:absolute before:inset-y-0 before:-left-6 before:right-0 before:rounded-[var(--radius-lg)] focus-visible:before:outline focus-visible:before:outline-2 focus-visible:before:outline-accent-primary focus-visible:before:outline-offset-[-2px]",
               padY
             )}
           >
@@ -167,6 +175,9 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span className="text-text-secondary">
+                    <span id={placementId} className="sr-only">
+                      {placementLabel}
+                    </span>
                     {term.location === "dock" ? (
                       <PanelBottom className="w-3 h-3" aria-hidden="true" />
                     ) : (
@@ -174,9 +185,7 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
                     )}
                   </span>
                 </TooltipTrigger>
-                <TooltipContent side="bottom">
-                  {term.location === "dock" ? "Docked" : "On grid"}
-                </TooltipContent>
+                <TooltipContent side="bottom">{placementLabel}</TooltipContent>
               </Tooltip>
             </span>
           </button>
@@ -502,7 +511,7 @@ export function WorktreeTerminalSection({
                 <span>Click or drag across sessions to select</span>
                 <button
                   type="button"
-                  className="ml-2 rounded-sm text-text-muted hover:text-text-secondary transition-colors"
+                  className="-my-1 -mr-1.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                   aria-label="Dismiss hint"
                   onClick={(e) => {
                     // Dismissing the hint must not double as selecting the

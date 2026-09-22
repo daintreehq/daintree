@@ -425,6 +425,25 @@ describe("WorktreeTerminalSection arming click handlers", () => {
     expect(button.hasAttribute("aria-pressed")).toBe(false);
   });
 
+  it("a row's button is described by where its session lives", () => {
+    // The placement mark is a glyph with a hover tooltip; without a
+    // description the keyboard and a screen reader never learn it, and two
+    // sessions with the same name differ only by it.
+    const docked = makeTerminal({ id: "d1", kind: "terminal", hasPty: true, location: "dock" });
+    const onGrid = makeTerminal({ id: "g1", kind: "terminal", hasPty: true, location: "grid" });
+    renderSection({
+      isExpanded: true,
+      terminals: [docked, onGrid],
+      counts: { ...baseCounts, total: 2 },
+    });
+
+    const descriptions = screen.getAllByRole("button", { name: /Test Terminal/i }).map((button) => {
+      const id = button.getAttribute("aria-describedby");
+      return id ? document.getElementById(id)?.textContent : null;
+    });
+    expect(descriptions).toEqual(["Docked", "On grid"]);
+  });
+
   it("only claims multi-selection on a role that supports it", () => {
     const term = makeTerminal({
       id: "a1",
