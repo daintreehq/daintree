@@ -1061,6 +1061,41 @@ describe("PluginManagerView", () => {
     );
   });
 
+  it("skips an http reinstall whose plugin was uninstalled while the warning was open", async () => {
+    let fireProvenance: (() => void) | undefined;
+    (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: () => void) => {
+        fireProvenance = cb;
+        return () => {};
+      }
+    );
+    const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
+    listMock.mockResolvedValue([urlPlugin({ originalUrl: "http://example.com/p.dntr" })]);
+    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+      status: "available",
+      name: "acme.demo",
+      version: "2.0.0",
+      capabilities: [],
+      archiveHash: REVIEWED_HASH,
+    });
+    renderDialog();
+    await selectPlugin();
+
+    fireEvent.click(await screen.findByRole("button", { name: "Check Acme Demo for updates" }));
+    await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
+    fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
+    await waitFor(() => expect(screen.getByText("Install over HTTP?")).toBeTruthy());
+
+    // Another window uninstalls it; the refreshed list no longer has it.
+    listMock.mockResolvedValue([]);
+    fireProvenance?.();
+    await waitFor(() => expect(screen.getByText("No plugins installed")).toBeTruthy());
+
+    fireEvent.click(screen.getByRole("button", { name: "Install over HTTP" }));
+    await waitFor(() => expect(screen.queryByText("Install over HTTP?")).toBeNull());
+    expect(window.electron.plugin.installFromUrl).not.toHaveBeenCalled();
+  });
+
   it("leaves a manual http install unbound after a cancelled http reinstall", async () => {
     (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
       urlPlugin({ originalUrl: "http://example.com/p.dntr" }),

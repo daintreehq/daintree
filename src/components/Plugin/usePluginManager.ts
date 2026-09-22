@@ -529,6 +529,14 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const fromReinstall = httpFromReinstallRef.current;
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
+    // The staleness check `confirmReinstall` makes before its own download: a
+    // plugin uninstalled (say, in another window) while this confirm was open
+    // has nothing left to update. Main refuses it anyway; this skips the
+    // download and the misleading "no longer matches" error it would surface.
+    if (expected && !plugins.some((p) => p.manifest.name === expected.pluginId)) {
+      if (fromReinstall && isBatchActiveRef.current) advanceUpdateQueue();
+      return;
+    }
     await performInstallFromUrl(url, expected);
     // A reinstall-over-http came from the update flow, not the manual install
     // dialog — advance the "Update all" queue if one is draining (#10893).
