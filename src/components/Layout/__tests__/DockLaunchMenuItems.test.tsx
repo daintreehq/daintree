@@ -130,22 +130,24 @@ describe("DockLaunchMenuItems", () => {
     mockRecipes = [{ id: "r-1", name: "My recipe" }];
     const { getAllByTestId } = renderItems();
 
+    // The launcher's own headings, so the right-click menus and the `+`
+    // palette describe one inventory the same way.
     expect(getAllByTestId("label").map((el) => el.textContent)).toEqual([
-      "Launch agent",
+      "Agents",
       "Open in dock",
       "Open in grid",
-      "Launch recipe",
+      "Recipes",
     ]);
   });
 
-  it("collapses to one panel heading on the grid surface, where nothing docks", () => {
+  it("names the one destination on the grid surface, where nothing docks", () => {
     const { getAllByTestId } = renderItems({ surface: "grid" });
-    expect(getAllByTestId("label").map((el) => el.textContent)).toContain("Launch panel");
+    const labels = getAllByTestId("label").map((el) => el.textContent);
+    expect(labels).toContain("Open in grid");
+    expect(labels).not.toContain("Open in dock");
   });
 
-  it("splits agents into Pinned/Other for a strict subset", () => {
-    // Two LAUNCHABLE agents: the split is counted against the launchable group,
-    // so a blocked second agent would leave nothing for "Other" to hold.
+  it("lists pinned and unpinned agents under one heading, in the host's order", () => {
     const { getAllByTestId, container } = renderItems({
       agents: [
         { id: "claude", name: "Claude", availability: "ready" },
@@ -154,23 +156,26 @@ describe("DockLaunchMenuItems", () => {
       pinnedCount: 1,
     });
 
-    expect(
-      getAllByTestId("label")
-        .map((el) => el.textContent)
-        .slice(0, 2)
-    ).toEqual(["Pinned", "Other"]);
+    const labels = getAllByTestId("label").map((el) => el.textContent);
+    expect(labels.filter((label) => label === "Agents")).toHaveLength(1);
+    expect(labels).not.toContain("Pinned");
     const text = container.textContent ?? "";
-    expect(text.indexOf("Pinned")).toBeLessThan(text.indexOf("Claude"));
-    expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Other"));
+    expect(text.indexOf("Claude")).toBeLessThan(text.indexOf("Codex"));
   });
 
-  it("keeps the recency band as a duplicate shortcut above the agent group", () => {
-    mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
-    const { getAllByText, getByText } = renderItems();
+  it("lists a recently launched agent once, first, marked Recent", () => {
+    mockMruEntries = [{ id: "agent.codex", score: 1, lastAccessedAt: 1000 }];
+    const { getAllByText, container } = renderItems({
+      agents: [
+        { id: "claude", name: "Claude", availability: "ready" },
+        { id: "codex", name: "Codex", availability: "ready" },
+      ],
+    });
 
-    expect(getByText("Recently launched")).toBeTruthy();
-    // Listed twice: once as the shortcut, once in the group it belongs to.
-    expect(getAllByText("Claude")).toHaveLength(2);
+    expect(getAllByText("Codex")).toHaveLength(1);
+    expect(getAllByText("Recent")).toHaveLength(1);
+    const text = container.textContent ?? "";
+    expect(text.indexOf("Codex")).toBeLessThan(text.indexOf("Claude"));
   });
 
   it("launches an agent through onSelect and records MRU", () => {
