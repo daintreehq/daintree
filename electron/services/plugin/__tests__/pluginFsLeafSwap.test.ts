@@ -165,15 +165,18 @@ describe.each<ReadName>(["readFile", "readFileBytes", "readFileBounded"])(
       });
     });
 
-    it("still honours an abort that lands after containment", async () => {
+    it("honours an abort that lands during containment without opening the target", async () => {
       const h = harness(root, path.join(base, "data"));
       const target = path.join(root, "notes.md");
       await fs.writeFile(target, "mine");
       const controller = new AbortController();
       h.afterContainment(() => controller.abort());
+      const openSpy = vi.spyOn(fs, "open");
       await expect(readAsText(h.api, name, target, controller.signal)).rejects.toMatchObject({
         name: "AbortError",
       });
+      // An open cannot be cancelled, so a cancelled read must never start one.
+      expect(openSpy.mock.calls.map((call) => call[0])).not.toContain(target);
     });
   }
 );

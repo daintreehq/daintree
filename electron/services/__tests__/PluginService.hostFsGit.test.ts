@@ -1276,16 +1276,18 @@ describe("host.fs.writeFile checked path (#12323)", () => {
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const target = join(allowed, "plain.txt");
     await fs.writeFile(target, "before");
-    const held = await fs.open(target, "r");
+    // Windows refuses to rename over a file held open, so the descriptor half
+    // of the proof is POSIX-only; the replace itself is checked everywhere.
+    const held = process.platform === "win32" ? null : await fs.open(target, "r");
     try {
       const result = await host.fs.writeFile(target, "after");
       expect(result).toEqual({ revision: sha("after") });
       expect(await fs.readFile(target, "utf-8")).toBe("after");
       // A rename, not a truncate-and-write: a descriptor opened before the
       // write still reads the file it opened.
-      expect(await held.readFile("utf-8")).toBe("before");
+      if (held) expect(await held.readFile("utf-8")).toBe("before");
     } finally {
-      await held.close();
+      await held?.close();
     }
     const siblings = await fs.readdir(allowed);
     expect(siblings.filter((name) => name.includes(".tmp"))).toEqual([]);

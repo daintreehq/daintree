@@ -2233,6 +2233,9 @@ function buildFsApi(
       const { resolved, rootClass } = await containWithClass(filePath);
       requireLoaded("readFile");
       requireReadCapForClass("readFile", rootClass);
+      // The open cannot be cancelled, so an abort during containment is
+      // honoured here, before a FIFO at the path could leave it pending.
+      options?.signal?.throwIfAborted();
       // Deliberately no 500KB / binary cap — this is a sanctioned plugin API,
       // not the size-limited files.read preview path. The signal cancels the
       // read itself (Node honors it) as well as the boundary checks above.
@@ -2247,6 +2250,8 @@ function buildFsApi(
       const { resolved, rootClass } = await containWithClass(filePath);
       requireLoaded("readFileBytes");
       requireReadCapForClass("readFileBytes", rootClass);
+      // Same as `readFile`: the open itself cannot be cancelled.
+      options?.signal?.throwIfAborted();
       const buffer = await withVerifiedReadHandle(
         pluginId,
         "readFileBytes",
@@ -2270,9 +2275,9 @@ function buildFsApi(
         );
       }
       const { resolved, rootClass } = await containWithClass(filePath);
-      options?.signal?.throwIfAborted();
       requireLoaded("readFileBounded");
       requireReadCapForClass("readFileBounded", rootClass);
+      options?.signal?.throwIfAborted();
       // O_NONBLOCK (undefined on Windows) so a FIFO standing where a regular
       // file was cannot leave the open pending with no writer. The
       // regular-file check below is on the descriptor this open returned, not
