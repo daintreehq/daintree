@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { PanelTop } from "lucide-react";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
@@ -9,6 +9,7 @@ import {
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { buildPanelProps } from "@/utils/panelProps";
 
 /**
  * Presents panels as modal dialogs — the third presentation alongside
@@ -96,7 +97,24 @@ function PanelDialogFrame({
     getPanelKindDefinitionsSnapshot
   );
 
-  if (!panel) return null;
+  // The same builder the grid and dock hosts use, so a field those hosts hand
+  // the kind's component can't be silently dropped here — the persisted
+  // `extensionState` and its version were, which mounted dialog-hosted plugin
+  // views on an empty bag and skipped their version refusal (#12608).
+  const panelProps = useMemo(() => {
+    if (!panel) return null;
+    return buildPanelProps({
+      terminal: panel,
+      isFocused: isTop,
+      overrides: {
+        location: "dialog" as const,
+        onFocus: noop,
+        onClose: handleClose,
+      },
+    });
+  }, [panel, isTop, handleClose]);
+
+  if (!panel || !panelProps) return null;
 
   const definition = definitions[panel.kind ?? "terminal"];
   if (!definition) return null;
@@ -146,15 +164,7 @@ function PanelDialogFrame({
           componentName={`PanelDialog:${panel.kind ?? "terminal"}`}
           resetKeys={[requestSeq]}
         >
-          <PanelComponent
-            id={panelId}
-            title={panel.title}
-            worktreeId={panel.worktreeId}
-            isFocused={isTop}
-            location="dialog"
-            onFocus={noop}
-            onClose={handleClose}
-          />
+          <PanelComponent {...panelProps} />
         </ErrorBoundary>
       </div>
     </AppDialog>
