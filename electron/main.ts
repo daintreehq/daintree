@@ -65,7 +65,7 @@ import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView } from "./window/portDistribution.js";
-import { redirectNewWindowToOwner } from "./window/projectOwnership.js";
+import { findOtherProjectOwner, redirectNewWindowToOwner } from "./window/projectOwnership.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
@@ -931,6 +931,8 @@ if (!gotTheLock) {
         onBackgroundWindowFailed: (reason) => {
           console.error("[MAIN] Restoring a background window failed:", reason);
         },
+        isProjectOwned: (projectId) =>
+          findOtherProjectOwner(windowRegistry, projectId, {}) !== null,
       });
     } catch (error) {
       console.error("[MAIN] Startup failed:", error);

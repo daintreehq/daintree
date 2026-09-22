@@ -249,6 +249,19 @@ describe("restoreWindowFleet", () => {
     });
   });
 
+  it("skips a saved window whose project was opened elsewhere before the fan-out began", async () => {
+    // The primary window is usable before the rest are created; a saved
+    // project the user opened there in the meantime must not get a second view.
+    h = harness({
+      records: [record("a"), record("b"), record(null), record("c")],
+      hadManifest: true,
+      isProjectOwned: (projectId) => projectId === "b",
+    });
+    await restoreWindowFleet(h.deps);
+    expect(h.openedProjects()).toEqual(["a", undefined, "c"]);
+    expect(h.persisted()).toBe(true);
+  });
+
   it("opens one picker window when every saved project was deleted", async () => {
     h = harness({ records: [], hadManifest: true, fallbackProjectId: "unrelated" });
     await restoreWindowFleet(h.deps);

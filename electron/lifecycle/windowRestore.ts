@@ -38,6 +38,12 @@ export interface RestoreWindowFleetDeps {
   suppressSaves: () => void;
   resumeSaves: (persistNow: boolean) => void;
   onBackgroundWindowFailed: (reason: unknown) => void;
+  /**
+   * Whether a live window already holds a view of the project. The primary
+   * window is usable before the rest of the fleet is created, and a saved
+   * project the user opens there in the meantime must not get a second window.
+   */
+  isProjectOwned?: (projectId: string) => boolean;
 }
 
 /**
@@ -151,11 +157,16 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
 
     let backgroundClean = true;
     if (records.length > 1) {
+      // Checked as the fan-out starts, not when the manifest was read: a window
+      // whose project is live already is one the user has since opened.
+      const pending = records
+        .slice(1)
+        .filter((record) => record.projectId === null || !deps.isProjectOwned?.(record.projectId));
       // Background windows reveal with showInactive(): they finish loading in
       // an unpredictable order, and a plain show() would hand focus to
       // whichever renderer parsed its skeleton last.
       const results = await Promise.allSettled(
-        records.slice(1).map((record) =>
+        pending.map((record) =>
           deps.createWindow(record.projectId ?? undefined, {
             revealMode: "showInactive",
             backgroundProjectIds: record.backgroundProjectIds,

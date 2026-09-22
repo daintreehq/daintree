@@ -149,18 +149,21 @@ export function revealWindow(browserWindow: BrowserWindow): void {
  *
  * On screen there: the window comes forward, and the project view itself takes
  * keyboard focus, which focusing the window doesn't hand to a WebContentsView.
+ * The focus intent goes straight to that view — unless the window is still in a
+ * cold switch to it, where `activeProjectId` has flipped before the view can
+ * listen, and the intent is parked for that switch to deliver instead.
  *
  * Still activating there: the window comes forward, but its active view may
  * still be the project it is leaving, so nothing is focused or told anything.
  * The focus intent is parked for the activation already under way to consume.
  *
  * Cached there: the owning window's own renderer runs the switch, exactly as if
- * the user had picked the project in that window. The switch has to start in
- * that renderer, because it is the one holding the layout of whatever it is
- * showing now, and a switch driven from main alone would drop that layout on
- * the floor. The focus intent is parked on the owner's manager first, where the
- * switch it triggers consumes it — and where any other switch discards it, so it
- * can't fire later against an unrelated activation.
+ * the user had picked the project in that window. The switch has to start in a
+ * renderer, because the renderer holds the layout of whatever it is showing, and
+ * a switch driven from main alone would drop that layout on the floor. The focus
+ * intent is parked on the owner's manager first, where the switch it triggers
+ * consumes it — and where any other switch discards it, so it can't fire later
+ * against an unrelated activation.
  */
 export function redirectToProjectOwner(
   owner: ProjectOwner,
@@ -173,12 +176,16 @@ export function redirectToProjectOwner(
 
   if (state === "foreground") {
     revealWindow(browserWindow);
+    const stillArriving = projectViewManager.getOutgoingBridgeProjectId() !== null;
     const webContents = projectViewManager.getActiveView()?.webContents;
     if (webContents && !webContents.isDestroyed()) {
       webContents.focus();
-      if (focusIntent) {
+      if (focusIntent && !stillArriving) {
         webContents.send(CHANNELS.PROJECT_FOCUS_ON_ACTIVATE, focusIntent);
       }
+    }
+    if (focusIntent && stillArriving) {
+      projectViewManager.setPendingFocusIntent(project.id, focusIntent);
     }
     return { outcome: "focused-elsewhere", project, targetWindowId };
   }
@@ -191,17 +198,40 @@ export function redirectToProjectOwner(
     return { outcome: "focused-elsewhere", project, targetWindowId };
   }
 
-  requestOwnerSwitch(getAppWebContents(browserWindow), project.id);
+  requestOwnerSwitch(ownerSwitchRenderer(projectViewManager, browserWindow), project.id);
   revealWindow(browserWindow);
   return { outcome: "activated-elsewhere", project, targetWindowId };
 }
 
 /**
- * Ask the owner's app view to switch. A view still loading — the owner can be
- * mid cold switch to a third project, whose fresh view is already the app view —
- * has no menu-action listener yet, and a send before `did-finish-load` is
- * dropped with no queue, so it waits for the load (`isLoadingMainFrame`, not
- * `isLoading`, which a loading subframe would hold open indefinitely).
+ * The renderer to hand the owner's switch to. Normally the window's app view.
+ * Mid cold switch, though, the app view is already the incoming project's fresh
+ * view, which has no menu-action listener until React is up and may yet fail to
+ * load. The outgoing view is still attached and fully booted, so it runs the
+ * switch instead: it saves its own layout as any switch would, and the manager
+ * queues the new activation behind the one in flight — or, if that one rolls
+ * back, lands it from the view the rollback restored.
+ */
+function ownerSwitchRenderer(
+  projectViewManager: ProjectViewManager,
+  browserWindow: BrowserWindow
+): WebContents {
+  const bridgeProjectId = projectViewManager.getOutgoingBridgeProjectId();
+  if (bridgeProjectId !== null) {
+    const bridge = projectViewManager
+      .getAllViews()
+      .find((entry) => entry.projectId === bridgeProjectId)?.view.webContents;
+    if (bridge && !bridge.isDestroyed()) return bridge;
+  }
+  return getAppWebContents(browserWindow);
+}
+
+/**
+ * Ask the chosen renderer to switch. A view still loading — a window whose only
+ * view is still booting — has no listener yet, and a send before
+ * `did-finish-load` is dropped with no queue, so it waits for the load
+ * (`isLoadingMainFrame`, not `isLoading`, which a loading subframe would hold
+ * open indefinitely).
  */
 function requestOwnerSwitch(appWebContents: WebContents, projectId: string): void {
   const send = (): void => {

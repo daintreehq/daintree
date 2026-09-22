@@ -35,6 +35,7 @@ function makePvm(active: string | null, views: Array<string | [string, { destroy
   });
   return {
     getActiveProjectId: vi.fn(() => active),
+    getOutgoingBridgeProjectId: vi.fn<() => string | null>(() => null),
     getAllViews: vi.fn(() => entries),
     getActiveView: vi.fn(() => entries.find((e) => e.projectId === active)?.view ?? null),
     setPendingFocusIntent: vi.fn(),
@@ -321,6 +322,40 @@ describe("redirectToProjectOwner", () => {
       actionId: "project.switch",
       args: { projectId: "p" },
     });
+  });
+
+  it("hands the switch to the outgoing view while the owner is mid cold switch", () => {
+    // The app view is already the incoming project's fresh renderer, which has
+    // no listener yet and may fail to load; the outgoing one is still booted.
+    const pvm = makePvm("r", ["o", "p", "r"]);
+    pvm.getOutgoingBridgeProjectId.mockReturnValue("o");
+    const appWebContents = makeWebContents(false, true);
+    getAppWebContentsMock.mockReturnValue(appWebContents);
+    const owner = { context: makeContext(2, pvm), projectViewManager: pvm, state: "cached" };
+
+    redirectToProjectOwner(owner as never, PROJECT);
+
+    const outgoing = pvm.getAllViews().find((e) => e.projectId === "o")!.view.webContents;
+    expect(outgoing.send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.switch",
+      args: { projectId: "p" },
+    });
+    expect(appWebContents.send).not.toHaveBeenCalled();
+    expect(appWebContents.once).not.toHaveBeenCalled();
+  });
+
+  it("parks the intent for a window whose cold switch to the project hasn't landed", () => {
+    // `activeProjectId` flips before the incoming view can listen, so a send
+    // now would be dropped; the switch in flight delivers what is parked.
+    const pvm = makePvm("p", ["o", "p"]);
+    pvm.getOutgoingBridgeProjectId.mockReturnValue("o");
+    const owner = { context: makeContext(2, pvm), projectViewManager: pvm, state: "foreground" };
+    const focusIntent = { intent: "focus-next-waiting" } as const;
+
+    redirectToProjectOwner(owner as never, PROJECT, focusIntent);
+
+    expect(pvm.getActiveView()!.webContents.send).not.toHaveBeenCalled();
+    expect(pvm.setPendingFocusIntent).toHaveBeenCalledWith("p", focusIntent);
   });
 
   it("only brings forward a window still activating the project, parking the intent", () => {

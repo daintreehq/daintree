@@ -2415,6 +2415,7 @@ describe("project switch/reopen redirects to the window that owns the project (#
       getProjectIdForWebContents: vi.fn(),
       setPendingFocusIntent: vi.fn(),
       getActiveProjectId: vi.fn(() => active),
+      getOutgoingBridgeProjectId: vi.fn(() => null),
       getAllViews: vi.fn(() =>
         views.map((projectId) => ({
           projectId,
