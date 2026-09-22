@@ -11,14 +11,13 @@ import { FIELD_SURFACE } from "@/components/Worktree/views/WorktreeFormLayout";
 
 /**
  * Shared form conventions for the project-entry dialogs (clone, create folder,
- * git init, move/rename). These five dialogs are near-identical twins that had
- * each hand-copied their field styling and drifted apart — different radii,
- * backgrounds, label tones, and control heights across dialogs a user hits back
- * to back. Import from here rather than re-typing a class string.
+ * git init, move/rename). These are near-identical twins a user hits back to
+ * back, and they drifted apart whenever each hand-copied its own field styling.
+ * Import from here rather than re-typing a class string.
  *
- * Heights are `min-h-9` so every control lines up with `ProjectEmojiButton`
- * (`h-9`) and the browse buttons, without clipping if the text ever outgrows the
- * box.
+ * Clone, create folder and git init sit on the create-worktree form's label
+ * rail and use the compound fields below. The stacked `FIELD_*` constants are
+ * what move/rename still uses inside its confirm dialog.
  */
 
 export const FIELD_LABEL_CLASS = "text-sm font-medium text-text-primary";
@@ -36,14 +35,8 @@ export const FIELD_INPUT_CLASS =
 export const FIELD_READONLY_INPUT_CLASS =
   "min-h-9 flex-1 truncate rounded-md border border-border-default bg-muted/50 px-3 py-1.5 text-sm font-mono text-text-secondary";
 
-export const FIELD_CHECKBOX_CLASS =
-  "h-4 w-4 shrink-0 rounded border-border-default accent-accent-primary";
-
 /** Sits beside a `FIELD_READONLY_INPUT_CLASS` input, matched to its height. */
 export const FIELD_BROWSE_BUTTON_CLASS = "min-h-9 shrink-0 gap-1.5";
-
-/** Aligns caption/error text under an input that shares its row with `ProjectEmojiButton` (h-9 + gap-2). */
-export const FIELD_EMOJI_ROW_INDENT = "ml-11";
 
 /**
  * One field-shaped box holding an input and an inline slot, on the label rail's
@@ -60,7 +53,7 @@ const COMPOUND_INPUT =
   "h-full min-w-0 flex-1 bg-transparent px-2.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden disabled:cursor-not-allowed disabled:opacity-50";
 
 /** A button that sits flush inside a {@link COMPOUND_FIELD}, separated by a hairline. */
-export const FIELD_SLOT_BUTTON = cn(
+const FIELD_SLOT_BUTTON = cn(
   "flex h-full w-8 shrink-0 items-center justify-center border-border-subtle",
   "text-text-secondary transition-colors duration-150 ease-out",
   "hover:bg-overlay-hover hover:text-text-primary",
@@ -222,7 +215,11 @@ const OPEN_DESTINATION_OPTIONS: SegmentedRadioOption<ProjectOpenDestination>[] =
   { value: "new", label: "New window" },
 ];
 
-/** The bare control, for forms that put "Open in" on a label rail. */
+/**
+ * Asked before the work starts rather than at the end: the clone dialog closes
+ * itself on success, and both flows can chain into the git-init prompt, so a
+ * choice offered afterwards would come too late.
+ */
 export function OpenDestinationControl({
   value,
   onChange,
@@ -240,27 +237,5 @@ export function OpenDestinationControl({
       aria-label="Open in"
       disabled={disabled}
     />
-  );
-}
-
-/**
- * Asked before the work starts rather than at the end: the clone dialog closes
- * itself on success, and both flows can chain into the git-init prompt, so a
- * choice offered afterwards would come too late.
- */
-export function OpenDestinationField({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: ProjectOpenDestination;
-  onChange: (value: ProjectOpenDestination) => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="space-y-1.5">
-      <p className={FIELD_LABEL_CLASS}>Open in</p>
-      <OpenDestinationControl value={value} onChange={onChange} disabled={disabled} />
-    </div>
   );
 }
