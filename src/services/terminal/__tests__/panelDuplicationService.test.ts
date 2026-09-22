@@ -964,16 +964,3 @@ describe("duplicating keeps the source pane's standing instruction", () => {
     expect(options?.systemPromptArgs).toEqual([]);
   });
 });
-
-describe("kinds on the generic panel menu (#12606)", () => {
-  it("has no kind that can be duplicated, which is why that menu offers no Duplicate", async () => {
-    const { canDuplicatePanelKind } = await import("../panelDuplicationService");
-    const { hasGenericPanelMenu } = await import("@/components/Panel/genericPanelMenu");
-
-    // An unregistered kind stands in for a plugin's: both menus treat it as one.
-    for (const kind of ["file", "file-browser", "diff", "acme.dashboard"]) {
-      expect(hasGenericPanelMenu(kind)).toBe(true);
-      expect(canDuplicatePanelKind(kind)).toBe(false);
-    }
-  });
-});

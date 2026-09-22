@@ -9,6 +9,7 @@ import { NoDndMouseSensor, NoDndTouchSensor } from "@/components/DragDrop/DndPro
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { deriveTerminalChrome } from "@/utils/terminalChrome";
 import { getGenericPanelMenuGroups, type GenericPanelMenuInput } from "../genericPanelMenu";
+import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -182,6 +183,7 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     </button>
   ),
   DropdownMenuSeparator: () => <hr />,
+  DropdownMenuShortcut: ({ children }: { children: React.ReactNode }) => <kbd>{children}</kbd>,
 }));
 
 // `null` stands for "no project view store mounted", which is where the
@@ -491,7 +493,7 @@ describe("PanelHeader", () => {
       expect(screen.getByLabelText("More panel actions")).toBeDefined();
     });
 
-    it("renders Rename and Duplicate for all panel kinds", () => {
+    it("renders Rename and Duplicate for a browser panel", () => {
       render(<PanelHeader {...makeProps({ kind: "browser" })} />);
       const menu = screen.getByTestId("overflow-menu");
       expect(findMenuButton(menu, "Rename")).toBeDefined();
@@ -937,6 +939,29 @@ describe("PanelHeader", () => {
 
   describe("generic panel menu (#12606)", () => {
     const PLUGIN_KIND = "acme.dashboard";
+    const PTY_PLUGIN_KIND = "acme.shell";
+
+    function registerPluginKind(
+      id: string,
+      options: { hasPty?: boolean; dockable?: boolean } = {}
+    ) {
+      registerPanelKind({
+        id,
+        name: id,
+        iconId: "terminal",
+        color: "#abcdef",
+        hasPty: options.hasPty ?? false,
+        canRestart: false,
+        canConvert: false,
+        extensionId: "acme",
+        ...(options.dockable !== undefined ? { dockable: options.dockable } : {}),
+      });
+    }
+
+    afterEach(() => {
+      unregisterPanelKind(PLUGIN_KIND);
+      unregisterPanelKind(PTY_PLUGIN_KIND);
+    });
 
     const menuLabels = () =>
       Array.from(screen.getByTestId("overflow-menu").querySelectorAll("button, hr")).map((node) =>
@@ -947,49 +972,50 @@ describe("PanelHeader", () => {
         (btn) => btn.textContent?.trim() === label
       );
 
-    /** The shared list, laid out the way the overflow menu draws it. */
-    function expectedLabels(input: Omit<GenericPanelMenuInput, "kind">): string[] {
-      return getGenericPanelMenuGroups({ kind: PLUGIN_KIND, ...input }).flatMap((group, index) => [
+    /** The shared list, with a rule where the menu draws a separator. */
+    const sharedLabels = (input: Partial<GenericPanelMenuInput> = {}) =>
+      getGenericPanelMenuGroups({
+        location: "grid",
+        isMaximized: false,
+        isDockable: true,
+        canMoveToWorktree: false,
+        ...input,
+      }).flatMap((group, index) => [
         ...(index > 0 ? ["---"] : []),
-        ...group.map((command) =>
-          command.id === "move-to-worktree" ? `${command.label}…` : command.label
-        ),
+        ...group.map((command) => command.label),
       ]);
-    }
 
-    it("renders the shared list for a plugin panel, in its order", () => {
-      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND, onToggleMaximize: vi.fn() })} />);
+    it("renders the shared list verbatim for a plugin panel", () => {
+      registerPluginKind(PLUGIN_KIND);
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      expect(menuLabels()).toEqual(
-        expectedLabels({ location: "grid", isMaximized: false, canMoveToWorktree: false })
-      );
-      expect(menuLabels()).toEqual([
-        "Move to dock",
-        "Maximize",
-        "---",
-        "Rename panel",
-        "---",
-        "Send to background",
-        "Trash panel",
-        "Remove panel",
-      ]);
+      expect(menuLabels()).toEqual(sharedLabels());
+      // Positive presence, so two empty lists can't agree.
+      expect(menuLabels()).toContain("Remove panel");
+    });
+
+    it("renders it for a panel whose plugin has gone missing", () => {
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      // Unregistered, so the dock can't render it either.
+      expect(menuLabels()).toEqual(sharedLabels({ isDockable: false }));
     });
 
     it.each(["Duplicate", "Rename", "Trash"])("never offers the generic %s", (label) => {
+      registerPluginKind(PLUGIN_KIND);
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
       expect(findMenuButton(label)).toBeUndefined();
     });
 
-    it("gives file panels the same list", () => {
-      render(<PanelHeader {...makeProps({ kind: "file" })} />);
+    it.each(["file", "file-browser", "diff"])("gives %s panels the same list", (kind) => {
+      render(<PanelHeader {...makeProps({ kind })} />);
 
-      expect(menuLabels()).toEqual(
-        expectedLabels({ location: "grid", isMaximized: false, canMoveToWorktree: false })
-      );
+      expect(menuLabels()).toEqual(sharedLabels());
     });
 
-    it("leads with Move to worktree… when another worktree exists", () => {
+    it("leads with Move to worktree… and opens the picker from it", () => {
+      registerPluginKind(PLUGIN_KIND);
       mockStoreState = {
         ...mockStoreState,
         panelsById: { "test-panel": { id: "test-panel", worktreeId: "w-a" } },
@@ -997,9 +1023,7 @@ describe("PanelHeader", () => {
       mockWorktreeIds = ["w-a", "w-b"];
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
-      expect(menuLabels()).toEqual(
-        expectedLabels({ location: "grid", isMaximized: false, canMoveToWorktree: true })
-      );
+      expect(menuLabels()).toEqual(sharedLabels({ canMoveToWorktree: true }));
       fireEvent.click(findMenuButton("Move to worktree…")!);
       const closeEvent = new Event("closeAutoFocus", { cancelable: true });
       act(() => mockMenuCloseAutoFocus?.(closeEvent));
@@ -1008,27 +1032,26 @@ describe("PanelHeader", () => {
     });
 
     it("offers Restore on a maximized panel and Move to grid in the dock", () => {
+      registerPluginKind(PLUGIN_KIND);
       const { unmount } = render(
         <PanelHeader {...makeProps({ kind: PLUGIN_KIND, isMaximized: true })} />
       );
-      expect(findMenuButton("Restore")).toBeDefined();
-      expect(findMenuButton("Maximize")).toBeUndefined();
+      expect(menuLabels()).toEqual(sharedLabels({ isMaximized: true }));
       unmount();
 
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND, location: "dock" })} />);
-      expect(menuLabels()).toEqual(
-        expectedLabels({ location: "dock", isMaximized: false, canMoveToWorktree: false })
-      );
+      expect(menuLabels()).toEqual(sharedLabels({ location: "dock" }));
     });
 
     it("disables Move to dock for a kind the dock cannot render", () => {
-      mockIsDockable = false;
+      registerPluginKind(PLUGIN_KIND, { dockable: false });
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
       expect(findMenuButton("Move to dock")?.hasAttribute("disabled")).toBe(true);
     });
 
     it("marks only Remove panel destructive", () => {
+      registerPluginKind(PLUGIN_KIND);
       render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
 
       const destructive = Array.from(
@@ -1046,8 +1069,17 @@ describe("PanelHeader", () => {
       ["Trash panel", "terminal.trash", "grid"],
       ["Remove panel", "terminal.kill", "grid"],
     ] as const)("routes %s to %s for this panel", (label, actionId, location) => {
+      registerPluginKind(PLUGIN_KIND);
+      // Another panel holds focus: the command still names this one.
+      mockStoreState = { ...mockStoreState, focusedId: "other-panel" };
       const onRestore = vi.fn();
-      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND, location, onRestore })} />);
+      const onMinimize = vi.fn();
+      const onToggleMaximize = vi.fn();
+      render(
+        <PanelHeader
+          {...makeProps({ kind: PLUGIN_KIND, location, onRestore, onMinimize, onToggleMaximize })}
+        />
+      );
 
       findMenuButton(label)!.click();
 
@@ -1058,20 +1090,34 @@ describe("PanelHeader", () => {
         { source: "menu" }
       );
       expect(onRestore).not.toHaveBeenCalled();
+      expect(onMinimize).not.toHaveBeenCalled();
+      expect(onToggleMaximize).not.toHaveBeenCalled();
     });
 
-    it("keeps the terminal menu for a PTY-backed plugin kind", () => {
-      mockHasPty = true;
-      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+    it("keeps a PTY-backed plugin kind on the terminal menu, without a dead Duplicate", () => {
+      registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true });
+      render(<PanelHeader {...makeProps({ kind: PTY_PLUGIN_KIND })} />);
 
       expect(findMenuButton("Rename")).toBeDefined();
       expect(findMenuButton("Rename panel")).toBeUndefined();
+      expect(findMenuButton("Duplicate")).toBeUndefined();
+    });
+
+    it("switches menus when the plugin registers its kind after the header mounted", () => {
+      render(<PanelHeader {...makeProps({ kind: PTY_PLUGIN_KIND })} />);
+      expect(findMenuButton("Rename panel")).toBeDefined();
+
+      act(() => registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true }));
+
+      expect(findMenuButton("Rename panel")).toBeUndefined();
+      expect(findMenuButton("Rename")).toBeDefined();
     });
 
     it("leaves a browser panel's menu alone", () => {
       render(<PanelHeader {...makeProps({ kind: "browser" })} />);
 
       expect(findMenuButton("Rename")).toBeDefined();
+      expect(findMenuButton("Duplicate")).toBeDefined();
       expect(findMenuButton("Rename panel")).toBeUndefined();
     });
   });

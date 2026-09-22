@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
+import {
+  getPanelKindRegistrySnapshot,
+  panelKindHasPty,
+  panelKindIsDockable,
+  registerPanelKind,
+  unregisterPanelKind,
+} from "@shared/config/panelKindRegistry";
+import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import {
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
-  type GenericPanelMenuCommand,
+  readPanelKindMenuCapabilities,
   type GenericPanelMenuInput,
 } from "../genericPanelMenu";
 
@@ -25,29 +32,18 @@ function registerPluginKind(id: string, overrides: { hasPty?: boolean; dockable?
   });
 }
 
-function labels(input: Partial<GenericPanelMenuInput> = {}): string[][] {
+function groups(input: Partial<GenericPanelMenuInput> = {}) {
   return getGenericPanelMenuGroups({
-    kind: VIEW_PLUGIN_KIND,
     location: "grid",
     isMaximized: false,
+    isDockable: true,
     canMoveToWorktree: true,
     ...input,
-  }).map((group) => group.map((command) => command.label));
+  });
 }
 
-function find(input: Partial<GenericPanelMenuInput>, id: string): GenericPanelMenuCommand {
-  const command = getGenericPanelMenuGroups({
-    kind: VIEW_PLUGIN_KIND,
-    location: "grid",
-    isMaximized: false,
-    canMoveToWorktree: false,
-    ...input,
-  })
-    .flat()
-    .find((entry) => entry.id === id);
-  if (!command) throw new Error(`no ${id} command`);
-  return command;
-}
+const labels = (input: Partial<GenericPanelMenuInput> = {}) =>
+  groups(input).map((group) => group.map((command) => command.label));
 
 afterEach(() => {
   unregisterPanelKind(PTY_PLUGIN_KIND);
@@ -55,97 +51,135 @@ afterEach(() => {
   unregisterPanelKind(UNDOCKABLE_PLUGIN_KIND);
 });
 
+describe("readPanelKindMenuCapabilities", () => {
+  it("answers as the registry helpers do, for built-in, plugin and unknown kinds", () => {
+    registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true });
+    registerPluginKind(VIEW_PLUGIN_KIND);
+    registerPluginKind(UNDOCKABLE_PLUGIN_KIND, { dockable: false });
+    const snapshot = getPanelKindRegistrySnapshot();
+
+    for (const kind of [
+      "terminal",
+      "browser",
+      "file",
+      "diff",
+      PTY_PLUGIN_KIND,
+      VIEW_PLUGIN_KIND,
+      UNDOCKABLE_PLUGIN_KIND,
+      "acme.missing",
+    ]) {
+      expect(readPanelKindMenuCapabilities(snapshot, kind)).toEqual({
+        hasPty: panelKindHasPty(kind),
+        isDockable: panelKindIsDockable(kind),
+      });
+    }
+  });
+
+  it("reads the snapshot it is handed, not the live registry", () => {
+    const before = getPanelKindRegistrySnapshot();
+    registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true });
+
+    expect(readPanelKindMenuCapabilities(before, PTY_PLUGIN_KIND).hasPty).toBe(false);
+    expect(
+      readPanelKindMenuCapabilities(getPanelKindRegistrySnapshot(), PTY_PLUGIN_KIND).hasPty
+    ).toBe(true);
+  });
+});
+
 describe("hasGenericPanelMenu", () => {
   it.each(["file", "file-browser", "diff"])("covers the built-in %s kind", (kind) => {
-    expect(hasGenericPanelMenu(kind)).toBe(true);
+    expect(hasGenericPanelMenu(kind, false)).toBe(true);
   });
 
-  it.each(["terminal", "browser", "dev-preview", "review"])(
-    "leaves the built-in %s kind to its own menu",
-    (kind) => {
-      expect(hasGenericPanelMenu(kind)).toBe(false);
-    }
-  );
-
-  it("covers a plugin kind without a PTY", () => {
-    registerPluginKind(VIEW_PLUGIN_KIND);
-    expect(hasGenericPanelMenu(VIEW_PLUGIN_KIND)).toBe(true);
+  it.each([
+    ["terminal", true],
+    ["browser", false],
+    ["dev-preview", false],
+    ["review", false],
+  ] as const)("leaves the built-in %s kind to its own menu", (kind, hasPty) => {
+    expect(hasGenericPanelMenu(kind, hasPty)).toBe(false);
   });
 
-  it("covers a plugin kind whose plugin has gone missing", () => {
-    // Unregistered: the lookup a missing plugin leaves behind.
-    expect(hasGenericPanelMenu("acme.missing")).toBe(true);
+  it("covers a plugin kind without a PTY, registered or gone missing", () => {
+    expect(hasGenericPanelMenu(VIEW_PLUGIN_KIND, false)).toBe(true);
   });
 
   it("leaves a PTY-backed plugin kind on the terminal menu", () => {
-    registerPluginKind(PTY_PLUGIN_KIND, { hasPty: true });
-    expect(hasGenericPanelMenu(PTY_PLUGIN_KIND)).toBe(false);
+    expect(hasGenericPanelMenu(PTY_PLUGIN_KIND, true)).toBe(false);
+  });
+
+  it("offers none of its kinds a Duplicate that could work", () => {
+    // Why the list carries no Duplicate: if one of these kinds gains a
+    // duplicate recipe, this fails and the command belongs in the list.
+    for (const kind of ["file", "file-browser", "diff", VIEW_PLUGIN_KIND]) {
+      expect(hasGenericPanelMenu(kind, false)).toBe(true);
+      expect(canDuplicatePanelKind(kind)).toBe(false);
+    }
   });
 });
 
 describe("getGenericPanelMenuGroups", () => {
   it("lists a grid panel's commands in order, grouped", () => {
-    registerPluginKind(VIEW_PLUGIN_KIND);
     expect(labels()).toEqual([
-      ["Move to worktree", "Move to dock", "Maximize"],
+      ["Move to worktree…", "Move to dock", "Maximize"],
       ["Rename panel"],
       ["Send to background", "Trash panel", "Remove panel"],
     ]);
   });
 
   it("offers Restore in place of Maximize on a maximized panel", () => {
-    registerPluginKind(VIEW_PLUGIN_KIND);
     expect(labels({ isMaximized: true })[0]).toEqual([
-      "Move to worktree",
+      "Move to worktree…",
       "Move to dock",
       "Restore",
     ]);
   });
 
   it("offers Move to grid and no maximize in the dock", () => {
-    expect(labels({ location: "dock" })[0]).toEqual(["Move to worktree", "Move to grid"]);
+    expect(labels({ location: "dock" })[0]).toEqual(["Move to worktree…", "Move to grid"]);
   });
 
   it("drops Move to worktree when there is nowhere to move to", () => {
-    registerPluginKind(VIEW_PLUGIN_KIND);
     expect(labels({ canMoveToWorktree: false })[0]).toEqual(["Move to dock", "Maximize"]);
   });
 
-  it("disables Move to dock for a kind the dock cannot render", () => {
-    registerPluginKind(UNDOCKABLE_PLUGIN_KIND, { dockable: false });
-    expect(find({ kind: UNDOCKABLE_PLUGIN_KIND }, "move-to-dock").disabled).toBe(true);
-  });
-
-  it("keeps Move to dock enabled for a dockable kind", () => {
-    registerPluginKind(VIEW_PLUGIN_KIND);
-    expect(find({}, "move-to-dock").disabled).toBe(false);
-  });
-
-  it("never offers Duplicate", () => {
-    registerPluginKind(VIEW_PLUGIN_KIND);
-    for (const kind of ["file", "file-browser", "diff", VIEW_PLUGIN_KIND]) {
-      const ids = getGenericPanelMenuGroups({
-        kind,
-        location: "grid",
-        isMaximized: false,
-        canMoveToWorktree: true,
-      })
+  it("disables only Move to dock, and only for a kind the dock cannot render", () => {
+    const disabled = (isDockable: boolean) =>
+      groups({ isDockable })
         .flat()
-        .map((command) => command.id as string);
-      expect(ids).not.toContain("duplicate");
-    }
+        .filter((command) => command.disabled)
+        .map((command) => command.id);
+
+    expect(disabled(false)).toEqual(["move-to-dock"]);
+    expect(disabled(true)).toEqual([]);
   });
 
   it("marks only Remove panel destructive", () => {
-    const destructive = getGenericPanelMenuGroups({
-      kind: "file",
-      location: "grid",
-      isMaximized: false,
-      canMoveToWorktree: true,
-    })
+    const destructive = groups()
       .flat()
       .filter((command) => command.destructive)
       .map((command) => command.label);
     expect(destructive).toEqual(["Remove panel"]);
+  });
+
+  it("shows the maximize keybinding on Maximize and Restore alike", () => {
+    for (const isMaximized of [false, true]) {
+      const withShortcut = groups({ isMaximized })
+        .flat()
+        .filter((command) => command.shortcutActionId !== undefined)
+        .map((command) => [command.id, command.shortcutActionId]);
+      expect(withShortcut).toEqual([["toggle-maximize", "terminal.maximize"]]);
+    }
+  });
+
+  it("never repeats a command or leaves a group empty", () => {
+    for (const location of ["grid", "dock"] as const) {
+      for (const canMoveToWorktree of [false, true]) {
+        const result = groups({ location, canMoveToWorktree });
+        const ids = result.flat().map((command) => command.id);
+        expect(new Set(ids).size).toBe(ids.length);
+        expect(result.every((group) => group.length > 0)).toBe(true);
+      }
+    }
   });
 });

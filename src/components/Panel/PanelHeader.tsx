@@ -5,6 +5,7 @@ import React, {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
 } from "react";
 import {
@@ -82,6 +83,7 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
+  DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { PopoverAnchor } from "@/components/ui/popover";
@@ -94,14 +96,18 @@ import {
   GENERIC_PANEL_MENU_ACTION_IDS,
   getGenericPanelMenuGroups,
   hasGenericPanelMenu,
+  readPanelKindMenuCapabilities,
   type GenericPanelMenuCommandId,
 } from "./genericPanelMenu";
 
 import {
+  getPanelKindRegistrySnapshot,
   panelKindCanRestart,
   panelKindHasPty,
   panelKindIsDockable,
+  subscribeToPanelKindRegistry,
 } from "@shared/config/panelKindRegistry";
+import { canDuplicatePanelKind } from "@/services/terminal/panelDuplicationService";
 import { isPtyPanel } from "@shared/types/panel";
 import { actionService } from "@/services/ActionService";
 import { fireWatchNotification } from "@/lib/watchNotification";
@@ -109,6 +115,13 @@ import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import type { BrandMarkSurface } from "@/lib/brandIcon";
+import type { ActionId } from "@shared/types/actions";
+
+/** An overflow item's shortcut: the action's live keybinding, or nothing. */
+function OverflowMenuShortcut({ actionId }: { actionId: ActionId }) {
+  const combo = useKeybindingDisplay(actionId);
+  return combo ? <DropdownMenuShortcut>{combo}</DropdownMenuShortcut> : null;
+}
 
 export interface PanelHeaderProps {
   id: string;
@@ -442,10 +455,23 @@ function PanelHeaderComponent({
     [id]
   );
 
+  // Read from the subscribed snapshot, not the registry helpers: a plugin
+  // registering or dropping its kind has to reach this menu.
+  const panelKindRegistry = useSyncExternalStore(
+    subscribeToPanelKindRegistry,
+    getPanelKindRegistrySnapshot,
+    getPanelKindRegistrySnapshot
+  );
+  const kindCapabilities = readPanelKindMenuCapabilities(panelKindRegistry, kind);
   // The same list the right-click menu renders for these kinds (#12606), so
   // the two menus offer one set of panel commands.
-  const genericMenuGroups = hasGenericPanelMenu(kind)
-    ? getGenericPanelMenuGroups({ kind, location, isMaximized, canMoveToWorktree })
+  const genericMenuGroups = hasGenericPanelMenu(kind, kindCapabilities.hasPty)
+    ? getGenericPanelMenuGroups({
+        location,
+        isMaximized,
+        isDockable: kindCapabilities.isDockable,
+        canMoveToWorktree,
+      })
     : null;
   const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
     if (commandId === "move-to-worktree") {
@@ -1318,9 +1344,10 @@ function PanelHeaderComponent({
                         onSelect={() => handleGenericMenuCommand(command.id)}
                       >
                         <command.icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                        {/* The right-click menu shows the worktrees as a
-                            submenu; here the command opens the picker. */}
-                        {command.id === "move-to-worktree" ? `${command.label}…` : command.label}
+                        {command.label}
+                        {command.shortcutActionId && (
+                          <OverflowMenuShortcut actionId={command.shortcutActionId} />
+                        )}
                       </DropdownMenuItem>
                     ))}
                     {groupIndex === genericMenuGroups.length - 2 && headerActions && (
@@ -1417,18 +1444,20 @@ function PanelHeaderComponent({
                     <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Rename
                   </DropdownMenuItem>
-                  <DropdownMenuItem
-                    onSelect={() =>
-                      void actionService.dispatch(
-                        "terminal.duplicate",
-                        { terminalId: id },
-                        { source: "menu" }
-                      )
-                    }
-                  >
-                    <CopyPlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                    Duplicate
-                  </DropdownMenuItem>
+                  {canDuplicatePanelKind(kind) && (
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        void actionService.dispatch(
+                          "terminal.duplicate",
+                          { terminalId: id },
+                          { source: "menu" }
+                        )
+                      }
+                    >
+                      <CopyPlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Duplicate
+                    </DropdownMenuItem>
+                  )}
                   {hasPty && (
                     <DropdownMenuItem
                       onSelect={() =>

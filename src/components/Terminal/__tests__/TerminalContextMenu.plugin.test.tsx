@@ -9,15 +9,31 @@
  * mislabeled ones survived.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { render, screen, cleanup } from "@testing-library/react";
+import { act, render, screen, cleanup } from "@testing-library/react";
 
 // Render menu content synchronously. Radix only mounts it behind a real
 // right-click into a portal, which tells us nothing about which branch ran —
 // the branch choice is the whole contract under test here.
 vi.mock("@/components/ui/context-menu", () => {
   const Passthrough = ({ children }: { children?: React.ReactNode }) => <div>{children}</div>;
-  const Item = ({ children, onSelect }: { children?: React.ReactNode; onSelect?: () => void }) => (
-    <button onClick={() => onSelect?.()}>{children}</button>
+  const Item = ({
+    children,
+    onSelect,
+    disabled,
+    destructive,
+  }: {
+    children?: React.ReactNode;
+    onSelect?: () => void;
+    disabled?: boolean;
+    destructive?: boolean;
+  }) => (
+    <button
+      disabled={disabled}
+      data-destructive={destructive || undefined}
+      onClick={() => onSelect?.()}
+    >
+      {children}
+    </button>
   );
   return {
     ContextMenu: Passthrough,
@@ -30,12 +46,15 @@ vi.mock("@/components/ui/context-menu", () => {
     ContextMenuRadioItem: Item,
     ContextMenuSeparator: () => null,
     ContextMenuLabel: Passthrough,
-    ContextMenuShortcut: Passthrough,
+    ContextMenuShortcut: ({ children }: { children?: React.ReactNode }) => <kbd>{children}</kbd>,
     ContextMenuGroup: Passthrough,
     ContextMenuPortal: Passthrough,
     ContextMenuSub: Passthrough,
-    ContextMenuSubContent: Passthrough,
-    ContextMenuSubTrigger: Passthrough,
+    // The worktree rows are the submenu's business, not the panel commands'.
+    ContextMenuSubContent: () => null,
+    ContextMenuSubTrigger: ({ children }: { children?: React.ReactNode }) => (
+      <div data-subtrigger>{children}</div>
+    ),
   };
 });
 
@@ -56,8 +75,12 @@ vi.mock("@/services/TerminalInstanceService", () => ({
   },
 }));
 
+const worktreeList = vi.hoisted(() => ({
+  current: [] as Array<{ id: string; path: string; name: string }>,
+}));
+
 vi.mock("@/hooks/useSidebarWorktreeOrder", () => ({
-  useSidebarWorktreeOrder: () => [],
+  useSidebarWorktreeOrder: () => worktreeList.current,
 }));
 
 vi.mock("@/hooks/useIsHibernated", () => ({
@@ -121,6 +144,20 @@ const TERMINAL_ONLY_LABELS = [
 
 const GENERIC_PANEL_LABELS = ["Rename panel", "Send to background", "Trash panel", "Remove panel"];
 
+/** A row's own label: its text, without the icon or the shortcut hint. */
+function ownText(node: Element): string {
+  return Array.from(node.childNodes)
+    .filter((child) => child.nodeType === Node.TEXT_NODE)
+    .map((child) => child.textContent)
+    .join("")
+    .trim();
+}
+
+/** The menu's command rows in order, submenu triggers included. */
+function commandLabels(): string[] {
+  return Array.from(document.querySelectorAll("button, [data-subtrigger]")).map(ownText);
+}
+
 function renderMenuFor(panel: Record<string, unknown>) {
   panelsById.current = { "panel-1": panel };
   return render(
@@ -142,6 +179,8 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
   afterEach(() => {
     cleanup();
     dispatch.mockReset();
+    worktreeList.current = [];
+    unregisterPanelKind(PTY_PLUGIN_KIND);
   });
 
   it.each(GENERIC_PANEL_LABELS)("offers %s on a plugin panel", (label) => {
@@ -170,24 +209,52 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     expect(args).toMatchObject({ terminalId: "panel-1" });
   });
 
-  it("lists the shared panel commands in the shared order (#12606)", () => {
-    // The header's overflow menu renders this same list; asserting both
+  it("lists the shared panel commands verbatim, in the shared order (#12606)", () => {
+    // The header's overflow menu is held to this same list; asserting both
     // against it is what keeps the two menus from drifting apart again.
+    worktreeList.current = [
+      { id: "wt-1", path: "/repo", name: "main" },
+      { id: "wt-2", path: "/repo-feature", name: "feature" },
+    ];
     renderMenuFor(pluginPanel);
 
-    const labels = Array.from(document.querySelectorAll("button")).map((button) =>
-      button.textContent?.replace("^⇧F", "").trim()
-    );
     const expected = getGenericPanelMenuGroups({
-      kind: "acme.dashboard",
       location: "grid",
       isMaximized: false,
-      canMoveToWorktree: false,
+      // Unregistered here, so the dock can't render it.
+      isDockable: false,
+      canMoveToWorktree: true,
     })
       .flat()
       .map((command) => command.label);
-    expect(labels).toEqual(expected);
-    expect(labels).not.toContain("Duplicate panel");
+    expect(commandLabels()).toEqual(expected);
+    expect(commandLabels()).toContain("Move to worktree…");
+    expect(commandLabels()).not.toContain("Duplicate panel");
+  });
+
+  it("disables Move to dock and marks only Remove panel destructive", () => {
+    renderMenuFor(pluginPanel);
+
+    const row = (label: string) =>
+      Array.from(document.querySelectorAll("button")).find((button) => ownText(button) === label);
+    expect(row("Move to dock")?.disabled).toBe(true);
+    expect(
+      Array.from(document.querySelectorAll("[data-destructive]")).map((node) => ownText(node))
+    ).toEqual(["Remove panel"]);
+  });
+
+  it("offers Move to worktree… to a panel whose worktree has gone", () => {
+    worktreeList.current = [{ id: "wt-2", path: "/repo-feature", name: "feature" }];
+    renderMenuFor({ ...pluginPanel, worktreeId: "wt-gone" });
+
+    expect(commandLabels()[0]).toBe("Move to worktree…");
+  });
+
+  it("offers no Move to worktree… when the panel's own worktree is the only one", () => {
+    worktreeList.current = [{ id: "wt-1", path: "/repo", name: "main" }];
+    renderMenuFor(pluginPanel);
+
+    expect(commandLabels()).not.toContain("Move to worktree…");
   });
 
   it.each([
@@ -226,6 +293,34 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
 
     expect(screen.queryByText("Rename panel")).toBeNull();
     expect(screen.getByText("Rename terminal")).toBeTruthy();
+    expect(screen.getByText("Duplicate terminal")).toBeTruthy();
+  });
+
+  it("moves to the terminal menu when the plugin registers a PTY kind after mount", () => {
+    renderMenuFor({
+      id: "panel-1",
+      title: "Acme Shell",
+      kind: PTY_PLUGIN_KIND,
+      pluginId: "acme",
+      worktreeId: "wt-1",
+    });
+    expect(screen.getByText("Rename panel")).toBeTruthy();
+
+    act(() =>
+      registerPanelKind({
+        id: PTY_PLUGIN_KIND,
+        name: "Acme Shell",
+        iconId: "terminal",
+        color: "#abcdef",
+        hasPty: true,
+        canRestart: true,
+        canConvert: false,
+        extensionId: "acme",
+      })
+    );
+
+    expect(screen.queryByText("Rename panel")).toBeNull();
+    expect(screen.getByText("Rename terminal")).toBeTruthy();
   });
 
   it("gives a PTY-backed plugin panel the terminal menu, not the generic one", () => {
@@ -254,6 +349,8 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
 
       expect(screen.queryByText("Rename panel")).toBeNull();
       expect(screen.getByText("Rename terminal")).toBeTruthy();
+      // Its kind has no duplicate recipe, so a Duplicate here would throw.
+      expect(screen.queryByText("Duplicate terminal")).toBeNull();
     } finally {
       unregisterPanelKind(PTY_PLUGIN_KIND);
     }
