@@ -414,9 +414,24 @@ export function DockLaunchButton({
   // not into the rendered output afterwards: the flat array is the navigation
   // space, so a preset row that isn't in it has no index, no
   // `aria-activedescendant` and no way to be reached by an arrow key.
+  //
+  // Arranged first, so the column a band is drawn in and its place in the
+  // navigation order are one decision rather than two that can drift.
+  const arranged = useMemo(() => arrangeBrowseRows(model.browseRows), [model.browseRows]);
   const browseRows = useMemo(
-    () => insertExpandedPresetRows(model.browseRows, expandedPresetParentKey),
-    [model.browseRows, expandedPresetParentKey]
+    () => insertExpandedPresetRows(arranged.rows, expandedPresetParentKey),
+    [arranged.rows, expandedPresetParentKey]
+  );
+  // Recency is a fact about the agent, not about the band a row sits in, so it
+  // survives search collapsing every row into one results band.
+  const recentKeys = useMemo(
+    () =>
+      new Set(
+        model.browseRows.flatMap((row) =>
+          row.kind === "item" && row.band === "recent" ? [row.item.key] : []
+        )
+      ),
+    [model.browseRows]
   );
 
   // One flat row list drives selection in both modes: browsing renders the
@@ -795,6 +810,23 @@ export function DockLaunchButton({
         return;
       }
 
+      // Focus can sit on the results region after Tab. Typing there used to do
+      // nothing at all while the arrows kept working; hand a printable key (or
+      // a deletion) back to the search box instead. Moving focus during
+      // keydown sends the character to the newly focused input.
+      if (
+        !event.metaKey &&
+        !event.ctrlKey &&
+        !event.altKey &&
+        (event.key.length === 1 || event.key === "Backspace" || event.key === "Delete") &&
+        input !== null &&
+        event.target !== input
+      ) {
+        input.focus({ preventScroll: true });
+        event.stopPropagation();
+        return;
+      }
+
       // Leave shortcuts alone — swallowing modified keys here would break app
       // keybindings while the launcher is open. Plain typing is still stopped
       // so a letter can't reach the dock's own key handling behind the popover;
@@ -824,7 +856,7 @@ export function DockLaunchButton({
   // it in order, so ArrowDown reads down the agents, then down the panels and
   // recipes, then along the footer — the same order the eye reads them in.
   const isBrowsing = results.length > 0 && results[0]!.band !== "results";
-  const columns = splitIntoColumns(results);
+  const columns = splitIntoColumns(results, arranged.recipesWithAgents);
 
   const renderRow = ({ row, index }: { row: DockLaunchRow; index: number }) => (
     // The band heading is a sibling of the row, not a child of it. It used to
@@ -859,6 +891,7 @@ export function DockLaunchButton({
           onStartCapture={setCapturingRowKey}
           onToggleExpanded={toggleExpanded}
           placement={placement}
+          isRecent={row.kind === "item" && recentKeys.has(row.item.key)}
         />
       )}
     </Fragment>
@@ -1097,8 +1130,43 @@ interface IndexedRow {
   index: number;
 }
 
+/**
+ * Which column the recipes join. With the usual inventory the agents are the
+ * long column and recipes follow the panels. With fewer agents than panels that
+ * leaves the agent column mostly empty beside an overflowing one, so recipes
+ * move under the agents instead. Decided from the inventory alone — never from
+ * a query or an expansion — so the layout cannot rebalance under the pointer.
+ * The rows are reordered to match, because the flat order is the navigation
+ * order and it has to read down each column in turn.
+ */
+function arrangeBrowseRows(rows: ReadonlyArray<DockLaunchRow>): {
+  rows: DockLaunchRow[];
+  recipesWithAgents: boolean;
+} {
+  const agentCount = rows.filter((row) => AGENT_BANDS.has(row.band)).length;
+  const panelCount = rows.filter(
+    (row) => row.band === "dock-panels" || row.band === "grid-panels"
+  ).length;
+  if (agentCount >= panelCount) return { rows: [...rows], recipesWithAgents: false };
+  const byGroup = (test: (row: DockLaunchRow) => boolean) => rows.filter(test);
+  return {
+    rows: [
+      ...byGroup((row) => AGENT_BANDS.has(row.band)),
+      ...byGroup((row) => row.band === "recipes"),
+      ...byGroup(
+        (row) => !AGENT_BANDS.has(row.band) && row.band !== "recipes" && row.band !== "actions"
+      ),
+      ...byGroup((row) => row.band === "actions"),
+    ],
+    recipesWithAgents: true,
+  };
+}
+
 /** Cut the browse rows into the agent column, the launch column and the footer. */
-function splitIntoColumns(rows: ReadonlyArray<DockLaunchRow>): {
+function splitIntoColumns(
+  rows: ReadonlyArray<DockLaunchRow>,
+  recipesWithAgents: boolean
+): {
   agents: IndexedRow[];
   launch: IndexedRow[];
   footer: IndexedRow[];
@@ -1108,7 +1176,8 @@ function splitIntoColumns(rows: ReadonlyArray<DockLaunchRow>): {
   const footer: IndexedRow[] = [];
   rows.forEach((row, index) => {
     if (row.band === "actions") footer.push({ row, index });
-    else if (AGENT_BANDS.has(row.band)) agents.push({ row, index });
+    else if (AGENT_BANDS.has(row.band) || (recipesWithAgents && row.band === "recipes"))
+      agents.push({ row, index });
     else launch.push({ row, index });
   });
   return { agents, launch, footer };
@@ -1242,6 +1311,8 @@ interface DockLaunchOptionProps {
   onStartCapture: (rowKey: string) => void;
   onToggleExpanded: (rowKey: string) => void;
   placement: DockLaunchPlacement;
+  /** Launched recently — true in search too, where the recent band is gone. */
+  isRecent: boolean;
 }
 
 function DockLaunchOption({
@@ -1257,6 +1328,7 @@ function DockLaunchOption({
   onStartCapture,
   onToggleExpanded,
   placement,
+  isRecent,
 }: DockLaunchOptionProps) {
   const item = row.kind === "cue" ? undefined : row.item;
   const agent = item?.category === "agent" ? item.agent : undefined;
@@ -1341,7 +1413,7 @@ function DockLaunchOption({
   // cannot see the band heading has nothing else to place the row with.
   const spokenQualifier =
     row.kind === "cue"
-      ? undefined
+      ? "Action"
       : row.kind === "preset"
         ? // From the preset's own data, never from whether a heading happened to
           // render above it: only the first row of a named group carries one.
@@ -1399,10 +1471,8 @@ function DockLaunchOption({
               ? // Setup rows share the agent column and its one heading now, so
                 // the row states it in both modes.
                 "Setup"
-              : item!.category === "agent" && (row.band === "recent" || launchOutcome)
-                ? [row.band === "recent" ? "Recent" : undefined, launchOutcome]
-                    .filter(Boolean)
-                    .join(" · ")
+              : item!.category === "agent" && !isSearchResult && (isRecent || launchOutcome)
+                ? [isRecent ? "Recent" : undefined, launchOutcome].filter(Boolean).join(" · ")
                 : item!.category === "panel"
                   ? // Provenance is the panel row's only metadata, and in browse it
                     // has the column to itself — the band heading already said
@@ -1461,7 +1531,7 @@ function DockLaunchOption({
     // `e2e/helpers/panels.ts` matches rows by, and states provenance for a
     // listener who never sees the trailing span.
     originLabel,
-    row.kind === "item" && row.band === "recent" ? "Recent" : undefined,
+    isRecent ? "Recent" : undefined,
     launchOutcome ? `Launches ${launchOutcome}` : undefined,
     displayCombo ? `Shortcut ${displayCombo}` : undefined,
     agent?.isNew ? "New" : undefined,

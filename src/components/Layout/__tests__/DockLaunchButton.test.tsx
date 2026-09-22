@@ -424,6 +424,13 @@ function qualifierTextOf(row: HTMLElement): string {
   return row.querySelector("[data-launcher-qualifier]")?.textContent?.trim() ?? "";
 }
 
+/** The option whose accessible name starts `Name,` — the e2e helpers' contract. */
+function rowByName(container: HTMLElement, name: string): HTMLElement {
+  const row = options(container).find((o) => o.getAttribute("aria-label")?.startsWith(`${name},`));
+  if (!row) throw new Error(`no row for ${name}`);
+  return row;
+}
+
 /** Rows wearing the "Recent" mark — the recency group at the head of the agents. */
 function recentRows(container: HTMLElement): HTMLElement[] {
   return options(container).filter((row) => qualifierTextOf(row) === "Recent");
@@ -567,9 +574,10 @@ describe("DockLaunchButton", () => {
 
     const labels = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
     // Gemini is blocked in the fixture; it stays in the agent column under the
-    // one "Agents" heading and says "Setup" on its own row. The footer actions
-    // are placed, not headed.
-    expect(labels).toEqual(["Agents", "Open in dock", "Open in grid", "Recipes"]);
+    // one "Agents" heading and says "Setup" on its own row. With two agents
+    // against the full panel set, recipes stack under the agents. The footer
+    // actions are placed, not headed.
+    expect(labels).toEqual(["Agents", "Recipes", "Open in dock", "Open in grid"]);
   });
 
   it("lists pinned and unpinned agents under one Agents heading, pinned first", () => {
@@ -949,6 +957,23 @@ describe("DockLaunchButton", () => {
       expect(container.querySelectorAll(SELECTED_OPTION)).toHaveLength(1);
     });
 
+    it("hands typing on the results region back to the search box", () => {
+      const { container } = renderButton();
+      const region = container.querySelector<HTMLElement>('[aria-label="Launcher results"]')!;
+      region.focus();
+
+      fireEvent.keyDown(region, { key: "c" });
+      expect(document.activeElement).toBe(searchInput(container));
+    });
+
+    it("still speaks Recent on a recently launched agent while searching", () => {
+      mockMruEntries = [{ id: "agent.claude", score: 1, lastAccessedAt: 1000 }];
+      const { container } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "claude" } });
+
+      expect(rowByName(container, "Claude").getAttribute("aria-label")).toContain("Recent");
+    });
+
     it("does not swallow modified keys, so app shortcuts still work", () => {
       const { container } = renderButton();
       const input = searchInput(container);
@@ -1283,6 +1308,46 @@ describe("DockLaunchButton", () => {
       expect.anything(),
       expect.anything()
     );
+  });
+
+  it("stacks recipes under the agents when agents are the short column", () => {
+    // Two agents against six panels: recipes beneath the panels would leave the
+    // agent column mostly empty beside an overflowing one.
+    mockRecipes = [{ id: "r-1", name: "Deploy", worktreeId: undefined }];
+    const { container } = renderButton({
+      agents: [{ id: "claude", name: "Claude", availability: "ready" }],
+    });
+
+    const agentColumn = listbox(container).querySelector('[data-launcher-column="agents"]')!;
+    const deploy = rowByName(container, "Deploy");
+    expect(agentColumn.contains(deploy)).toBe(true);
+    // DOM order is navigation order, so Deploy comes before every panel.
+    const rows = options(container);
+    const firstPanel = rows.findIndex((row) =>
+      row.getAttribute("aria-label")?.startsWith("Terminal,")
+    );
+    expect(rows.indexOf(deploy)).toBeLessThan(firstPanel);
+  });
+
+  it("keeps recipes with the panels when the agents are the long column", () => {
+    mockRecipes = [{ id: "r-1", name: "Deploy", worktreeId: undefined }];
+    const many = ["claude", "codex", "cursor", "goose", "kimi", "amp", "qwen"].map((id) => ({
+      id,
+      name: id,
+      availability: "ready" as const,
+    }));
+    const { container } = renderButton({ agents: many });
+
+    const agentColumn = listbox(container).querySelector('[data-launcher-column="agents"]')!;
+    expect(agentColumn.contains(rowByName(container, "Deploy"))).toBe(false);
+  });
+
+  it("gives action cues a spoken qualifier like every other row", () => {
+    const { container } = renderButton();
+    const footer = listbox(container).querySelector('[data-launcher-column="footer"]')!;
+    for (const row of footer.querySelectorAll('[role="option"]')) {
+      expect(row.getAttribute("aria-label")).toMatch(/^[^,]+, Action/);
+    }
   });
 
   it("places both action cues in the footer, last in navigation order", () => {
@@ -2417,13 +2482,6 @@ describe("DockLaunchButton", () => {
 describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
   const READY = [{ id: "claude", name: "Claude", availability: "ready" as const }];
 
-  function rowByName(container: HTMLElement, name: string): HTMLElement {
-    const row = options(container).find((o) =>
-      o.getAttribute("aria-label")?.startsWith(`${name},`)
-    );
-    if (!row) throw new Error(`no row for ${name}`);
-    return row;
-  }
   const presetRows = (container: HTMLElement) =>
     Array.from(container.querySelectorAll<HTMLElement>('[role="option"][data-row-kind="preset"]'));
 
