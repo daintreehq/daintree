@@ -758,15 +758,15 @@ describe("PluginManagerView", () => {
   });
 
   it("explains a refused install when the download no longer matches the preview", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([urlPlugin()]);
-    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([urlPlugin()]);
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
       status: "available",
       name: "acme.demo",
       version: "2.0.0",
       capabilities: [],
       archiveHash: REVIEWED_HASH,
     });
-    (window.electron.plugin.installFromUrl as ReturnType<typeof vi.fn>).mockResolvedValue({
+    vi.mocked(window.electron.plugin.installFromUrl).mockResolvedValue({
       status: "failed",
       errors: [{ code: "archive_mismatch", message: "raw" }],
     });
@@ -1063,15 +1063,13 @@ describe("PluginManagerView", () => {
 
   it("skips an http reinstall whose plugin was uninstalled while the warning was open", async () => {
     let fireProvenance: (() => void) | undefined;
-    (window.electron.plugin.onProvenanceChanged as ReturnType<typeof vi.fn>).mockImplementation(
-      (cb: () => void) => {
-        fireProvenance = cb;
-        return () => {};
-      }
-    );
-    const listMock = window.electron.plugin.list as ReturnType<typeof vi.fn>;
+    vi.mocked(window.electron.plugin.onProvenanceChanged).mockImplementation((cb) => {
+      fireProvenance = () => cb({});
+      return () => {};
+    });
+    const listMock = vi.mocked(window.electron.plugin.list);
     listMock.mockResolvedValue([urlPlugin({ originalUrl: "http://example.com/p.dntr" })]);
-    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
       status: "available",
       name: "acme.demo",
       version: "2.0.0",
@@ -1097,10 +1095,10 @@ describe("PluginManagerView", () => {
   });
 
   it("leaves a manual http install unbound after a cancelled http reinstall", async () => {
-    (window.electron.plugin.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+    vi.mocked(window.electron.plugin.list).mockResolvedValue([
       urlPlugin({ originalUrl: "http://example.com/p.dntr" }),
     ]);
-    (window.electron.plugin.checkForUpdate as ReturnType<typeof vi.fn>).mockResolvedValue({
+    vi.mocked(window.electron.plugin.checkForUpdate).mockResolvedValue({
       status: "available",
       name: "acme.demo",
       version: "2.0.0",
