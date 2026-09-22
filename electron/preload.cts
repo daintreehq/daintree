@@ -72,6 +72,7 @@ import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.prel
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
 import { buildHibernationPreloadBindings } from "./ipc/handlers/hibernation.preload.js";
 import { buildSessionRestorePreloadBindings } from "./ipc/handlers/sessionRestore.preload.js";
+import { buildWindowOpeningPreloadBindings } from "./ipc/handlers/windowOpening.preload.js";
 import { buildKeepAwakePreloadBindings } from "./ipc/handlers/keepAwake.preload.js";
 import { buildIdleTerminalPreloadBindings } from "./ipc/handlers/idleTerminals.preload.js";
 import { buildIdleBackgroundAutoClosePreloadBindings } from "./ipc/handlers/idleBackgroundAutoClose.preload.js";
@@ -2434,6 +2435,10 @@ function buildElectronApi(): ElectronAPI {
     // Hibernation API
     sessionRestore: {
       ...buildSessionRestorePreloadBindings(_unwrappingInvoke),
+    },
+
+    windowOpening: {
+      ...buildWindowOpeningPreloadBindings(_unwrappingInvoke),
     },
 
     // Keep-awake API

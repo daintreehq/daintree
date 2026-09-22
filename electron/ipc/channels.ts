@@ -388,6 +388,8 @@ export const CHANNELS = {
   SESSION_RESTORE_GET_CONFIG: "session-restore:get-config",
   SESSION_RESTORE_UPDATE_CONFIG: "session-restore:update-config",
   SESSION_RESTORE_VIEW_HYDRATED: "session-restore:view-hydrated",
+  WINDOW_OPENING_GET_CONFIG: "window-opening:get-config",
+  WINDOW_OPENING_UPDATE_CONFIG: "window-opening:update-config",
   KEEP_AWAKE_GET_STATE: "keep-awake:get-state",
   KEEP_AWAKE_UPDATE_CONFIG: "keep-awake:update-config",
   KEEP_AWAKE_STATE_CHANGED: "keep-awake:state-changed",

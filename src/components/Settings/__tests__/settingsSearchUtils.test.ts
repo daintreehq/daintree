@@ -101,6 +101,19 @@ describe("filterSettings", () => {
     expect(modifiedOnly.map((r) => r.id)).toEqual(["g"]);
   });
 
+  it.each(["folder", "project", "window", "Dock", "Finder", "Explorer", "file manager"])(
+    "finds the window opening setting by %s, with or without a project open",
+    (query) => {
+      for (const hasProject of [true, false]) {
+        const hit = filterSettings(SETTINGS_SEARCH_INDEX, query, { hasProject }).find(
+          (entry) => entry.id === "general-window-opening"
+        );
+        expect(hit?.tab).toBe("general");
+        expect(hit?.subtab).toBe("overview");
+      }
+    }
+  );
+
   it("still answers a misspelling, where fuzzy matching is the whole point", () => {
     // The gate only fires when a literal match exists, so typo tolerance has
     // to survive it untouched.

@@ -120,6 +120,10 @@ export const BUILT_IN_ACTION_IDS = [
   "sessionRestore.getConfig",
   "sessionRestore.updateConfig",
 
+  // -- windowOpeningActions --
+  "windowOpening.getConfig",
+  "windowOpening.updateConfig",
+
   // -- hibernationActions --
   "hibernation.getConfig",
   "hibernation.updateConfig",

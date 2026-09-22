@@ -10,6 +10,7 @@ export * from "./brands";
 // Each was chosen to fit the metaphor.
 export {
   Activity, // project pulse / live activity heartbeat
+  AppWindow, // where an opened folder lands — a window of its own or the current one
   ArrowDown, // a branch behind what it tracks — the same ↓ the upstream badge writes beside the count, so the collapsed alarm and the expanded one name the drift alike
   ArrowDownAZ, // alphabetical sort order (A to Z)
   ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope

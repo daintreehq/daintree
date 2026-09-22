@@ -23,6 +23,7 @@ import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { SettingsSwitchCard } from "@/components/Settings/SettingsSwitchCard";
 import { SettingsLoadErrorBanner } from "@/components/Settings/SettingsLoadErrorBanner";
 import { KeepAwakeSection } from "@/components/Settings/KeepAwakeSection";
+import { WindowOpeningSection } from "@/components/Settings/WindowOpeningSection";
 import { SettingsSubtabBar, subtabPanelProps } from "./SettingsSubtabBar";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
 import type { SettingsSubtabItem } from "./SettingsSubtabBar";
@@ -1034,6 +1035,8 @@ export function GeneralTab({
                 ) : null}
               </SettingsSection>
             )}
+
+            <WindowOpeningSection />
 
             <KeepAwakeSection />
 

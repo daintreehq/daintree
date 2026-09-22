@@ -57,6 +57,10 @@ const mocks = vi.hoisted(() => ({
     getConfig: vi.fn(),
     updateConfig: vi.fn(),
   },
+  windowOpeningClient: {
+    getConfig: vi.fn(),
+    updateConfig: vi.fn(),
+  },
   terminalConfigClient: {
     get: vi.fn(),
     setScrollback: vi.fn(),
@@ -179,6 +183,7 @@ vi.mock("@/clients", () => ({
   agentSettingsClient: mocks.agentSettingsClient,
   appClient: mocks.appClient,
   hibernationClient: mocks.hibernationClient,
+  windowOpeningClient: mocks.windowOpeningClient,
   terminalConfigClient: mocks.terminalConfigClient,
   worktreeConfigClient: mocks.worktreeConfigClient,
 }));
@@ -885,6 +890,8 @@ describe("preferences action hardening", () => {
       "window.close",
       "sessionRestore.getConfig",
       "sessionRestore.updateConfig",
+      "windowOpening.getConfig",
+      "windowOpening.updateConfig",
       "hibernation.getConfig",
       "hibernation.updateConfig",
       "idleTerminalNotify.getConfig",
@@ -1200,5 +1207,75 @@ describe("preferences action hardening", () => {
     const quitResult = await service.dispatch("app.quit", undefined, { source: "agent" });
     expect(quitResult.ok).toBe(true);
     expect(mocks.appClient.quit).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads and writes the window opening config through its client", async () => {
+    mocks.windowOpeningClient.getConfig.mockResolvedValueOnce({
+      openFoldersInNewWindow: "default",
+    });
+    mocks.windowOpeningClient.updateConfig.mockResolvedValueOnce({ openFoldersInNewWindow: "on" });
+    const { service } = buildService(registerPreferencesActions);
+
+    await expect(service.dispatch("windowOpening.getConfig")).resolves.toEqual({
+      ok: true,
+      result: { openFoldersInNewWindow: "default" },
+    });
+    await expect(
+      service.dispatch("windowOpening.updateConfig", { openFoldersInNewWindow: "on" })
+    ).resolves.toEqual({ ok: true, result: { openFoldersInNewWindow: "on" } });
+    expect(mocks.windowOpeningClient.updateConfig).toHaveBeenCalledWith({
+      openFoldersInNewWindow: "on",
+    });
+  });
+
+  it("rejects an unknown window opening mode before it reaches main", async () => {
+    const { service } = buildService(registerPreferencesActions);
+
+    const result = await service.dispatch("windowOpening.updateConfig", {
+      openFoldersInNewWindow: "sometimes",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("VALIDATION_ERROR");
+    expect(mocks.windowOpeningClient.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a misspelt field", { openFolderInNewWindow: "on" }],
+    ["a known field alongside an unknown one", { openFoldersInNewWindow: "on", extra: true }],
+  ])("rejects %s instead of reporting an empty patch as success", async (_label, args) => {
+    const { service } = buildService(registerPreferencesActions);
+
+    const result = await service.dispatch("windowOpening.updateConfig", args);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.error.code).toBe("VALIDATION_ERROR");
+    expect(mocks.windowOpeningClient.updateConfig).not.toHaveBeenCalled();
+  });
+
+  it("passes an empty window opening patch through as a read-back", async () => {
+    mocks.windowOpeningClient.updateConfig.mockResolvedValueOnce({ openFoldersInNewWindow: "off" });
+    const { service } = buildService(registerPreferencesActions);
+
+    await expect(service.dispatch("windowOpening.updateConfig", {})).resolves.toEqual({
+      ok: true,
+      result: { openFoldersInNewWindow: "off" },
+    });
+    expect(mocks.windowOpeningClient.updateConfig).toHaveBeenCalledWith({});
+  });
+
+  it("surfaces a window opening write failure as { ok: false }", async () => {
+    mocks.windowOpeningClient.updateConfig.mockRejectedValueOnce(new Error("disk full"));
+    const { service } = buildService(registerPreferencesActions);
+
+    const result = await service.dispatch("windowOpening.updateConfig", {
+      openFoldersInNewWindow: "off",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("EXECUTION_ERROR");
+      expect(result.error.message).toBe("disk full");
+    }
   });
 });
