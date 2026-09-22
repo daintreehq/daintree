@@ -224,6 +224,24 @@ describe("QuickRun", () => {
     expect(screen.queryByPlaceholderText("Run a command")).toBeNull();
   });
 
+  it("holds its chevron in the footer's shared glyph column, open or shut", () => {
+    render(<QuickRun projectId="test-project" />);
+    const header = screen.getByRole("button", { name: /run command/i });
+
+    // The rows below carry 8px marks where this one carries a 12px chevron, so
+    // a glyph sized by itself pushes this label off their shared edge (#12587).
+    const expectChevronInColumn = () => {
+      const slots = header.querySelectorAll('[data-sidebar-footer-slot="glyph"]');
+      expect(slots).toHaveLength(1);
+      expect(slots[0]!.querySelector("svg")).not.toBeNull();
+      expect(slots[0]!.nextElementSibling?.textContent).toBe("Run command");
+    };
+
+    expectChevronInColumn();
+    openPanel();
+    expectChevronInColumn();
+  });
+
   it("renders all main buttons with type='button'", () => {
     render(<QuickRun projectId="test-project" />);
     openPanel();

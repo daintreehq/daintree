@@ -2,6 +2,7 @@ import { useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Button } from "@/components/ui/button";
+import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useProjectPluginStore } from "@/store/projectPluginStore";
 import type { ProjectPluginInfo } from "@shared/types/plugin";
@@ -130,10 +131,12 @@ export function ProjectPluginIndicator() {
                 this dot while repainting the readout's one row below, so the
                 two footer marks would disagree in exactly the mode that has
                 the least to disagree with. */}
-            <span
-              className="status-mark inline-flex h-2 w-2 rounded-full border border-text-secondary shrink-0"
-              data-working="false"
-            />
+            <SidebarFooterGlyph>
+              <span
+                className="status-mark inline-flex h-2 w-2 rounded-full border border-text-secondary shrink-0"
+                data-working="false"
+              />
+            </SidebarFooterGlyph>
             <span className="text-2xs text-text-secondary font-medium truncate">{summary}</span>
           </div>
         </button>

@@ -4,6 +4,7 @@ import { projectClient, systemClient } from "@/clients";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
+import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import { logError } from "@/utils/logger";
 import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import { actionService } from "@/services/ActionService";
@@ -646,14 +647,16 @@ export function ProjectResourceBadge({ holdingWakeLock = false }: ProjectResourc
               {/* Decorative: the working/idle state it encodes is carried in
                   words by the label and the live region, so announcing the mark
                   as well would say everything twice. */}
-              <span
-                key={`${isWorking}-${memoryState}`}
-                aria-hidden="true"
-                data-working={isWorking ? "true" : "false"}
-                className={`status-mark inline-flex h-2 w-2 rounded-full shrink-0 ${
-                  isWorking ? WORKING_DOT_CLASS : IDLE_DOT_CLASS
-                } animate-diagnostics-flash`}
-              />
+              <SidebarFooterGlyph>
+                <span
+                  key={`${isWorking}-${memoryState}`}
+                  aria-hidden="true"
+                  data-working={isWorking ? "true" : "false"}
+                  className={`status-mark inline-flex h-2 w-2 rounded-full shrink-0 ${
+                    isWorking ? WORKING_DOT_CLASS : IDLE_DOT_CLASS
+                  } animate-diagnostics-flash`}
+                />
+              </SidebarFooterGlyph>
               <span className="text-2xs tabular-nums text-text-secondary font-medium truncate">
                 {readoutLabel}
               </span>

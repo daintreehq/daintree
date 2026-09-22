@@ -69,6 +69,7 @@ const FIXTURES = [
   "many-projects",
   "memory-critical",
   "toggles-active",
+  "plugin-row",
   "no-worktree",
   "long-branch",
   "running-tasks",
