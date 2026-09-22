@@ -226,12 +226,15 @@ export class PluginInstaller {
    * The flow, with rollback on every failure branch:
    * 1. Acquire the cross-process `install.lock` (sub-30s stale TTL so a crashed
    *    prior install can't hold it forever). A second instance blocks, not races.
-   * 2. Extract / copy the source into a sibling `.install-tmp-*` dir — same
+   * 2. Compute the `.dntr` SHA-256 for the `archiveHash` provenance field. A
+   *    reviewed update (`opts.expected`) is refused here if the digest differs,
+   *    before anything is unpacked (#12612).
+   * 3. Extract / copy the source into a sibling `.install-tmp-*` dir — same
    *    filesystem as the final location so the eventual rename is atomic.
-   * 3. Validate `plugin.json` with the strict Zod schema (unknown keys, reserved
+   * 4. Validate `plugin.json` with the strict Zod schema (unknown keys, reserved
    *    `daintree.*` namespace, publisher/name agreement). An unmet engine range
    *    doesn't fail the install — the load that follows warns about it (#12589).
-   * 4. Compute the `.dntr` SHA-256 for the `archiveHash` provenance field.
+   *    A reviewed update must also still name the plugin it was approved for.
    * 5. If the id already exists: `unloadPlugin` (disposer cascade), then swap via
    *    rename — park old aside → move new in → restore old on failure. Per-plugin
    *    settings/secrets live under a separate `plugin-settings/` root, so the
@@ -321,8 +324,17 @@ export class PluginInstaller {
 
       pluginInstallJobs.setPhase(jobId, "extracting");
 
+      const expected = opts?.expected;
       let hash: string | null = null;
       if (sourceIsDir) {
+        // A directory has no archive digest, so an approval bound to one can't
+        // be honoured — refuse rather than install bytes nobody reviewed.
+        if (expected) {
+          return fail(
+            "archive_mismatch",
+            "A reviewed update can only be installed from the archive it was reviewed from"
+          );
+        }
         try {
           await fs.cp(archivePath, tmpDir, { recursive: true });
         } catch (err) {
@@ -332,6 +344,19 @@ export class PluginInstaller {
           );
         }
       } else {
+        // Hashed before extraction so a confirmed update whose bytes changed
+        // since its preview is refused before any entry reaches the disk.
+        try {
+          hash = await computeArchiveHash(archivePath);
+        } catch (err) {
+          return fail("hash_failed", `Failed to compute archive hash: ${(err as Error).message}`);
+        }
+        if (expected && hash !== expected.archiveHash) {
+          return fail(
+            "archive_mismatch",
+            "The downloaded archive isn't the one reviewed for this update"
+          );
+        }
         try {
           await extractPluginArchive(archivePath, tmpDir, {
             signal: jobSignal,
@@ -349,11 +374,6 @@ export class PluginInstaller {
             return fail("extraction_timeout", `Extraction timed out: ${err.message}`);
           }
           return fail("archive_invalid", `Failed to extract archive: ${(err as Error).message}`);
-        }
-        try {
-          hash = await computeArchiveHash(archivePath);
-        } catch (err) {
-          return fail("hash_failed", `Failed to compute archive hash: ${(err as Error).message}`);
         }
       }
 
@@ -390,6 +410,16 @@ export class PluginInstaller {
       }
       const manifest = parsed.data;
 
+      // A matching digest already proves these are the reviewed bytes; this
+      // keeps the destination below from ever being a different installed
+      // plugin than the one the user approved updating.
+      if (expected && manifest.name !== expected.pluginId) {
+        return fail(
+          "archive_mismatch",
+          `The archive is for "${manifest.name}", not "${expected.pluginId}"`
+        );
+      }
+
       // 3. Atomic swap into the final location.
       const pluginId = manifest.name;
       const finalDir = path.join(this.pluginsRoot, pluginId);
@@ -399,6 +429,15 @@ export class PluginInstaller {
         existing = true;
       } catch {
         existing = false;
+      }
+
+      // A reviewed update replaces an installed plugin; one uninstalled since
+      // its preview (say, from another window) isn't this approval's to restore.
+      if (expected && !existing) {
+        return fail(
+          "archive_mismatch",
+          `"${pluginId}" is no longer installed, so its update wasn't applied`
+        );
       }
 
       // Reject a name collision BEFORE the swap (#10518). The `existing` probe
@@ -965,6 +1004,7 @@ export class PluginInstaller {
         version: manifest.version,
         displayName: manifest.displayName,
         capabilities: manifest.capabilities ?? [],
+        archiveHash: downloadedHash,
       };
     } finally {
       if (tmpRoot) {

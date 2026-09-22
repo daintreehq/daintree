@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { rm, writeFile } from "node:fs/promises";
+import { access, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { markAuditedHandlerFailure } from "../../../utils/pluginAuditMarker.js";
+import type { PluginCheckUpdateResult } from "../../../../shared/types/plugin.js";
 
 // `withContext` handlers read `event.sender.id`, so every invocation needs a
 // sender-bearing event the way a real IPC call always has one.
@@ -630,6 +631,91 @@ describe("registerPluginHandlers", () => {
     expect(opts).toEqual({ source: "url", originalUrl: "https://example.com/p.dntr" });
   });
 
+  // #12612: a confirmed update carries the reviewed archive's identity + digest
+  // so the installer can refuse whatever else the second download returns.
+  const REVIEWED = { pluginId: "acme.my-plugin", archiveHash: "a".repeat(64) };
+
+  it("PLUGIN_INSTALL_FROM_URL forwards a reviewed-update expectation to the installer", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    const handler = getHandler("plugin:install-from-url");
+    await handler(
+      { sender: { id: 1 } },
+      "https://example.com/p.dntr",
+      undefined,
+      // Extra keys from the renderer are dropped, not passed through.
+      { ...REVIEWED, smuggled: true }
+    );
+    const [, opts] = mockInstallPlugin.mock.calls[0] as [string, unknown];
+    expect(opts).toEqual({
+      source: "url",
+      originalUrl: "https://example.com/p.dntr",
+      expected: REVIEWED,
+    });
+  });
+
+  it.each([
+    ["null", null],
+    ["a non-object", "acme.my-plugin"],
+    ["a missing hash", { pluginId: "acme.my-plugin" }],
+    ["an empty hash", { pluginId: "acme.my-plugin", archiveHash: "" }],
+    ["a non-string hash", { pluginId: "acme.my-plugin", archiveHash: 42 }],
+    ["a short hash", { pluginId: "acme.my-plugin", archiveHash: "a".repeat(63) }],
+    ["a non-string plugin id", { pluginId: 7, archiveHash: "a".repeat(64) }],
+    ["a missing plugin id", { archiveHash: "a".repeat(64) }],
+    ["an empty object", {}],
+    ["an array", ["acme.my-plugin", "a".repeat(64)]],
+    ["an uppercase hash", { pluginId: "acme.my-plugin", archiveHash: "A".repeat(64) }],
+    ["an unscoped plugin id", { pluginId: "../victim", archiveHash: "a".repeat(64) }],
+  ])(
+    "PLUGIN_INSTALL_FROM_URL refuses %s expectation without downloading",
+    async (_label, expected) => {
+      const handler = getHandler("plugin:install-from-url");
+      const result = (await handler(
+        { sender: { id: 1 } },
+        "https://example.com/p.dntr",
+        undefined,
+        expected
+      )) as { status: string; errors: Array<{ code: string }> };
+      // Failing closed: a broken binding must never degrade to an unbound install.
+      expect(result.status).toBe("failed");
+      expect(result.errors[0]!.code).toBe("archive_mismatch");
+      expect(mockNetFetch).not.toHaveBeenCalled();
+      expect(mockInstallPlugin).not.toHaveBeenCalled();
+    }
+  );
+
+  it("PLUGIN_INSTALL_FROM_URL keeps the download on disk until the installer settles", async () => {
+    mockNetFetch.mockResolvedValue(
+      mockResponse({ headers: { "content-type": "application/zip" } })
+    );
+    const exists = (p: string) =>
+      access(p).then(
+        () => true,
+        () => false
+      );
+    let presentMidInstall = true;
+    let downloadPath = "";
+    mockInstallPlugin.mockImplementationOnce(async (archivePath: string) => {
+      downloadPath = archivePath;
+      // The real installer yields for the install lock before it reads the
+      // file. Watch for a while: a cleanup that races ahead (a bare `return`
+      // inside the handler's try/finally) unlinks it within a few ms.
+      for (let i = 0; i < 20 && presentMidInstall; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        presentMidInstall = await exists(archivePath);
+      }
+      return { status: "installed", pluginId: "acme.my-plugin" };
+    });
+    const handler = getHandler("plugin:install-from-url");
+    const result = await handler({ sender: { id: 1 } }, "https://example.com/p.dntr");
+    expect(result).toEqual({ status: "installed", pluginId: "acme.my-plugin" });
+    expect(presentMidInstall).toBe(true);
+    // ...and still reaped once the install is done.
+    expect(await exists(downloadPath)).toBe(false);
+  });
+
   it("PLUGIN_INSTALL_FROM_URL accepts application/x-dntr content type", async () => {
     mockNetFetch.mockResolvedValue(
       mockResponse({ headers: { "content-type": "application/x-dntr" } })
@@ -1077,21 +1163,19 @@ describe("registerPluginHandlers", () => {
   });
 
   it("PLUGIN_CHECK_FOR_UPDATE delegates to pluginService.checkForUpdate and returns the result", async () => {
-    mockCheckForUpdate.mockResolvedValue({
+    const preview = {
       status: "available",
       name: "acme.my-plugin",
       version: "2.0.0",
       capabilities: ["network:fetch"],
-    });
+      archiveHash: "c".repeat(64),
+    } satisfies PluginCheckUpdateResult;
+    mockCheckForUpdate.mockResolvedValue(preview);
     const handler = getHandler("plugin:check-for-update");
     const result = await handler({}, "acme.my-plugin");
     expect(mockCheckForUpdate).toHaveBeenCalledWith("acme.my-plugin");
-    expect(result).toEqual({
-      status: "available",
-      name: "acme.my-plugin",
-      version: "2.0.0",
-      capabilities: ["network:fetch"],
-    });
+    // The digest must survive the hop: it is what a confirmed update is held to.
+    expect(result).toEqual(preview);
   });
 
   it("PLUGIN_CHECK_FOR_UPDATE returns invalid-id for an empty id without delegating", async () => {

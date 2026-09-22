@@ -8,6 +8,7 @@ import type {
   LoadedPluginInfo,
   PluginDeepLinkIntent,
   PluginInstallError,
+  PluginInstallExpectation,
   PluginInstallProgressEvent,
 } from "@shared/types/plugin";
 
@@ -45,6 +46,11 @@ function installErrorMessage(error: PluginInstallError | undefined): string {
       // The archive itself may be fine — it just never finished arriving, so
       // "check the file" would send the user down the wrong path (#11302).
       return "Unpacking the plugin took too long and was stopped. Try installing it again.";
+    case "archive_mismatch":
+      // The install no longer matches the preview the user approved — the
+      // server sent different bytes, or the plugin is gone (#12612).
+      // Re-checking shows what's actually there now.
+      return "This update no longer matches what you reviewed, so nothing was installed. Check for updates again.";
     default:
       return error?.message ?? "Installation failed. Check the file and try again.";
   }
@@ -152,6 +158,10 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
   // if the dialog fires a re-entrant close before the state flush — otherwise a
   // second cancel could re-read stale state and reopen the manual URL dialog.
   const pendingHttpUrlRef = useRef<string | null>(null);
+  // The reviewed-archive binding of a reinstall parked behind the HTTP confirm,
+  // so the install that follows is held to the preview the user approved
+  // (#12612). Null for a manual URL install. Cleared with `pendingHttpUrlRef`.
+  const pendingHttpExpectedRef = useRef<PluginInstallExpectation | null>(null);
   // "Update all" (#10893) drains available updates through the SAME per-plugin
   // capability-diff confirm as a single check: the queue holds the not-yet-shown
   // updates, `pendingUpdate` shows the head, and each confirm/skip/HTTP-gate
@@ -299,6 +309,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     setPendingUpdate(null);
     setPendingHttpUrl(null);
     pendingHttpUrlRef.current = null;
+    pendingHttpExpectedRef.current = null;
     // Abandon any in-flight "Update all" batch — the fresh list supersedes it.
     isBatchActiveRef.current = false;
     pendingQueueRef.current = [];
@@ -451,11 +462,13 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     }
   };
 
-  const performInstallFromUrl = async (url: string) => {
+  const performInstallFromUrl = async (url: string, expected?: PluginInstallExpectation) => {
     setIsInstalling(true);
     try {
       const result = await runInstallJob((jobId) =>
-        window.electron.plugin.installFromUrl(url, jobId)
+        expected
+          ? window.electron.plugin.installFromUrl(url, jobId, expected)
+          : window.electron.plugin.installFromUrl(url, jobId)
       );
       handleInstallResult(result);
       // Keep the dialog open for URL-correctable failures so the user can edit
@@ -499,6 +512,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // switch to https; confirming proceeds with the install.
       setShowUrlDialog(false);
       pendingHttpUrlRef.current = url;
+      pendingHttpExpectedRef.current = null;
       setPendingHttpUrl(url);
       return;
     }
@@ -510,10 +524,20 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     const url = pendingHttpUrlRef.current;
     if (!url) return;
     pendingHttpUrlRef.current = null;
+    const expected = pendingHttpExpectedRef.current ?? undefined;
+    pendingHttpExpectedRef.current = null;
     const fromReinstall = httpFromReinstallRef.current;
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
-    await performInstallFromUrl(url);
+    // The staleness check `confirmReinstall` makes before its own download: a
+    // plugin uninstalled (say, in another window) while this confirm was open
+    // has nothing left to update. Main refuses it anyway; this skips the
+    // download and the misleading "no longer matches" error it would surface.
+    if (expected && !plugins.some((p) => p.manifest.name === expected.pluginId)) {
+      if (fromReinstall && isBatchActiveRef.current) advanceUpdateQueue();
+      return;
+    }
+    await performInstallFromUrl(url, expected);
     // A reinstall-over-http came from the update flow, not the manual install
     // dialog — advance the "Update all" queue if one is draining (#10893).
     if (fromReinstall && isBatchActiveRef.current) advanceUpdateQueue();
@@ -524,6 +548,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     // reinstall cancel as a manual one (or double-advance the batch).
     if (!pendingHttpUrlRef.current) return;
     pendingHttpUrlRef.current = null;
+    pendingHttpExpectedRef.current = null;
     const fromReinstall = httpFromReinstallRef.current;
     httpFromReinstallRef.current = false;
     setPendingHttpUrl(null);
@@ -811,6 +836,12 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       advanceUpdateQueue();
       return;
     }
+    // The confirm re-downloads the URL, so hold it to the archive this preview
+    // was read from — main refuses anything else (#12612).
+    const expected: PluginInstallExpectation = {
+      pluginId: pendingUpdate.plugin.manifest.name,
+      archiveHash: pendingUpdate.result.archiveHash,
+    };
     // Tier D2: a plugin first installed over http:// keeps an http upstream, so
     // reinstalling re-fetches it unencrypted. Route it through the same HTTP
     // warning gate as a manual install rather than downloading silently.
@@ -827,6 +858,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
       // install dialog and its resolution advances the batch (#10893).
       httpFromReinstallRef.current = true;
       pendingHttpUrlRef.current = url;
+      pendingHttpExpectedRef.current = expected;
       setPendingHttpUrl(url);
       return;
     }
@@ -841,7 +873,7 @@ export function usePluginManager(isOpen: boolean, deepLink?: PluginManagerDeepLi
     try {
       setError(null);
       const result = await runInstallJob((jobId) =>
-        window.electron.plugin.installFromUrl(url, jobId)
+        window.electron.plugin.installFromUrl(url, jobId, expected)
       );
       handleInstallResult(result);
       advanceUpdateQueue();
