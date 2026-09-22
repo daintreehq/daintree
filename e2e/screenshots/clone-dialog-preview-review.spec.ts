@@ -123,12 +123,18 @@ async function open(page: Page, theme: string, query = ""): Promise<Locator> {
 
 async function fill(page: Page, url = CLONE_URL): Promise<void> {
   await page.locator("#clone-repo-url").fill(url);
-  await page.getByRole("button", { name: /browse|choose/i }).first().click();
+  await page
+    .getByRole("button", { name: /browse|choose/i })
+    .first()
+    .click();
   await page.waitForTimeout(200);
 }
 
 async function clickClone(page: Page): Promise<void> {
-  await page.getByRole("button", { name: /^clone/i }).last().click();
+  await page
+    .getByRole("button", { name: /^clone/i })
+    .last()
+    .click();
 }
 
 async function emit(page: Page, stages: typeof STAGES): Promise<void> {

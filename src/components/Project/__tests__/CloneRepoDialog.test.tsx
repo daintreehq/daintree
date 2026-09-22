@@ -230,16 +230,16 @@ describe("CloneRepoDialog", () => {
   it("renders input fields when opened", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    expect(screen.getByLabelText(/repository url/i)).toBeTruthy();
-    expect(screen.getByLabelText(/parent directory/i)).toBeTruthy();
-    expect(screen.getByLabelText(/folder name/i)).toBeTruthy();
-    expect(screen.getByText("Clone")).toBeTruthy();
+    expect(screen.getByLabelText(/^url$/i)).toBeTruthy();
+    expect(screen.getByLabelText(/^location$/i)).toBeTruthy();
+    expect(screen.getByLabelText(/^name$/i)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Clone" })).toBeTruthy();
   });
 
   it("Clone button is disabled when URL or path is empty", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const cloneBtn = screen.getByText("Clone") as HTMLButtonElement;
+    const cloneBtn = screen.getByRole("button", { name: "Clone" }) as HTMLButtonElement;
     expect(cloneBtn.disabled).toBe(true);
   });
 
@@ -262,12 +262,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/test-repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -288,12 +288,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -321,10 +321,10 @@ describe("CloneRepoDialog", () => {
       target: { value: "https://github.com/user/my-repo.git" },
     });
     await act(async () => {
-      fireEvent.click(screen.getByText("Browse"));
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
     });
     await act(async () => {
-      fireEvent.click(screen.getByText("Clone"));
+      fireEvent.click(screen.getByRole("button", { name: "Clone" }));
     });
 
     await waitFor(() => expect(screen.getByText("Open project")).toBeTruthy());
@@ -344,12 +344,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/my-repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -390,10 +390,10 @@ describe("CloneRepoDialog", () => {
       target: { value: "https://github.com/user/my-repo.git" },
     });
     await act(async () => {
-      fireEvent.click(screen.getByText("Browse"));
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
     });
     await act(async () => {
-      fireEvent.click(screen.getByText("Clone"));
+      fireEvent.click(screen.getByRole("button", { name: "Clone" }));
     });
 
     const openButton = await screen.findByRole("button", { name: "Open in new window" });
@@ -418,14 +418,14 @@ describe("CloneRepoDialog", () => {
       target: { value: "https://github.com/user/my-repo.git" },
     });
     await act(async () => {
-      fireEvent.click(screen.getByText("Browse"));
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
     });
     const newWindow = screen.getByRole<HTMLButtonElement>("radio", { name: "New window" });
     expect(newWindow.disabled).toBe(false);
 
     // Synchronous on purpose: the form gives way to the running view after a
     // real 400ms gate, so no await may sit between the click and the check.
-    fireEvent.click(screen.getByText("Clone"));
+    fireEvent.click(screen.getByRole("button", { name: "Clone" }));
     expect(newWindow.isConnected).toBe(true);
     expect(newWindow.disabled).toBe(true);
 
@@ -444,12 +444,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -459,6 +459,33 @@ describe("CloneRepoDialog", () => {
       expect(screen.getByText("Auth failed")).toBeTruthy();
       expect(screen.getByText("Retry")).toBeTruthy();
     });
+  });
+
+  it("won't retry a form the user has made invalid since the failure", async () => {
+    cloneRepoMock.mockRejectedValue(new Error("early EOF"));
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Clone" }));
+    });
+    await waitFor(() => expect(screen.getByText("Retry")).toBeTruthy());
+    expect(cloneRepoMock).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(urlInput, { target: { value: "" } });
+    const retry = screen.getByRole<HTMLButtonElement>("button", { name: "Retry" });
+    expect(retry.disabled).toBe(true);
+    // The guard lives in the clone path itself, not only on the button.
+    await act(async () => {
+      fireEvent.click(retry);
+      fireEvent.keyDown(screen.getByLabelText(/^name$/i), { key: "Enter" });
+    });
+    expect(cloneRepoMock).toHaveBeenCalledTimes(1);
   });
 
   it("shows GitHub sign-in CTA even after an 'error' progress event is emitted", async () => {
@@ -480,12 +507,12 @@ describe("CloneRepoDialog", () => {
       target: { value: "https://github.com/acme/private.git" },
     });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -532,12 +559,12 @@ describe("CloneRepoDialog", () => {
       target: { value: "https://github.com/acme/private.git" },
     });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -570,12 +597,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "acme/private" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -600,12 +627,12 @@ describe("CloneRepoDialog", () => {
       target: { value: "https://gitlab.com/acme/private.git" },
     });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -631,12 +658,12 @@ describe("CloneRepoDialog", () => {
       target: { value: "https://github.com/acme/private.git" },
     });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -655,12 +682,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -683,12 +710,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "vercel/next.js" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -723,14 +750,14 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "vercel/next.js" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
     // Shorthand has no well-defined host with two providers — the URL stays
     // unexpanded and fails validation, so Clone is disabled.
-    const cloneBtn = screen.getByText("Clone") as HTMLButtonElement;
+    const cloneBtn = screen.getByRole("button", { name: "Clone" }) as HTMLButtonElement;
     expect(cloneBtn.disabled).toBe(true);
     expect(cloneRepoMock).not.toHaveBeenCalled();
   });
@@ -754,7 +781,7 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
@@ -762,7 +789,7 @@ describe("CloneRepoDialog", () => {
     const checkbox = screen.getByRole("checkbox");
     fireEvent.click(checkbox);
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -783,12 +810,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -816,12 +843,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -852,12 +879,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -904,12 +931,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -973,7 +1000,7 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
@@ -1009,12 +1036,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -1081,12 +1108,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -1110,12 +1137,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -1154,12 +1181,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -1192,12 +1219,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -1226,12 +1253,12 @@ describe("CloneRepoDialog", () => {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://gitlab.com/user/repo.git" } });
 
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
 
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -1246,11 +1273,11 @@ describe("CloneRepoDialog", () => {
   async function startActiveClone() {
     const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
-    const browseBtn = screen.getByText("Browse");
+    const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
       fireEvent.click(browseBtn);
     });
-    const cloneBtn = screen.getByText("Clone");
+    const cloneBtn = screen.getByRole("button", { name: "Clone" });
     await act(async () => {
       fireEvent.click(cloneBtn);
     });
@@ -1451,7 +1478,7 @@ describe("CloneRepoDialog", () => {
 
       await waitFor(() => expect(screen.getByText("Clone failed")).toBeTruthy());
 
-      fireEvent.change(screen.getByLabelText(/folder name/i), {
+      fireEvent.change(screen.getByLabelText(/^name$/i), {
         target: { value: "somewhere-else" },
       });
 

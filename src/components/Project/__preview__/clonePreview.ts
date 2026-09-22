@@ -25,6 +25,8 @@ const withProvider = params.get("providers") !== "0";
 
 type Listener = (event: CloneRepoProgressEvent) => void;
 const listeners = new Set<Listener>();
+/** A settled outcome still resolves on a later tick, as a real IPC round trip does. */
+const SETTLED_CLONE_MS = 50;
 let release: (() => void) | null = null;
 let cancelled = false;
 
@@ -61,7 +63,7 @@ installPreviewShims({
             release = resolve;
           });
         } else {
-          await new Promise((resolve) => setTimeout(resolve, 50));
+          await new Promise((resolve) => setTimeout(resolve, SETTLED_CLONE_MS));
         }
         if (cancelled) throw new Error("[AppError|CANCELLED] Clone cancelled");
         if (outcome === "auth") {
