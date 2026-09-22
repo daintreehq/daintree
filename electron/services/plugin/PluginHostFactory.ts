@@ -2094,14 +2094,14 @@ function fsTargetError(code: PluginFsWriteErrorCode, message: string): Error & {
 }
 
 /**
- * Open a contained leaf for reading and prove the descriptor is the entry
- * containment approved before a byte is read (#12618). O_NOFOLLOW refuses a
- * leaf swapped for a symlink after containment realpathed it, but only on
- * POSIX — Windows has no such flag. So the descriptor is also compared with
- * whatever now stands at the path: a symlink there, or a different file, means
- * the open may have followed something containment never saw. A legitimate
- * replace landing between the open and the compare is refused too; the caller
- * reads again.
+ * Open a contained leaf for reading and prove, before a byte is read, that the
+ * descriptor is the entry standing at the contained path (#12618). O_NOFOLLOW
+ * refuses a leaf swapped for a symlink after containment realpathed it, but
+ * only on POSIX — Windows has no such flag. So the descriptor is also compared
+ * with whatever stands at the path once it is open: a symlink there, or a
+ * different file, means the open may have followed something containment
+ * never saw. A legitimate replace landing between the open and the compare is
+ * refused too; the caller reads again.
  *
  * Ancestor directories stay out of scope, as for every other read here: the
  * open is by pathname, and O_NOFOLLOW and the compare both cover only the leaf.
@@ -2150,7 +2150,9 @@ async function withVerifiedReadHandle<T>(
     }
     return await read(handle, opened);
   } finally {
-    await handle.close();
+    // A read-only descriptor has nothing to flush, so a failed close must not
+    // replace the refusal or the bytes this call is returning.
+    await handle.close().catch(() => undefined);
   }
 }
 

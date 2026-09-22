@@ -86,10 +86,17 @@ function harness(root: string, dataDir: string): Harness {
 
 type ReadName = "readFile" | "readFileBytes" | "readFileBounded";
 
-async function readAsText(api: BuiltinPluginFsApi, name: ReadName, target: string) {
-  if (name === "readFile") return api.readFile(target);
-  if (name === "readFileBytes") return Buffer.from(await api.readFileBytes(target)).toString();
-  const read = await api.readFileBounded!(target, { limitBytes: 1 << 20 });
+async function readAsText(
+  api: BuiltinPluginFsApi,
+  name: ReadName,
+  target: string,
+  signal?: AbortSignal
+) {
+  if (name === "readFile") return api.readFile(target, { signal });
+  if (name === "readFileBytes") {
+    return Buffer.from(await api.readFileBytes(target, { signal })).toString();
+  }
+  const read = await api.readFileBounded!(target, { limitBytes: 1 << 20, signal });
   if (read.status !== "ok") throw new Error(`unexpected ${read.status}`);
   return Buffer.from(read.bytes).toString();
 }
@@ -157,20 +164,44 @@ describe.each<ReadName>(["readFile", "readFileBytes", "readFileBounded"])(
         code: "TARGET_UNAVAILABLE",
       });
     });
+
+    it("still honours an abort that lands after containment", async () => {
+      const h = harness(root, path.join(base, "data"));
+      const target = path.join(root, "notes.md");
+      await fs.writeFile(target, "mine");
+      const controller = new AbortController();
+      h.afterContainment(() => controller.abort());
+      await expect(readAsText(h.api, name, target, controller.signal)).rejects.toMatchObject({
+        name: "AbortError",
+      });
+    });
   }
 );
 
 describe("host.fs.writeFile while queued behind another writer", () => {
-  function holdQueue(key: string): { release: () => void; held: Promise<void> } {
+  /**
+   * Hold `key`, start `write` behind it, run `duringWait` once the write has
+   * joined the queue, then let it through and hand back how it settled.
+   */
+  async function whileQueued(
+    key: string,
+    write: () => Promise<unknown>,
+    duringWait: () => void | Promise<void>
+  ): Promise<unknown> {
     let release!: () => void;
     const barrier = new Promise<void>((resolve) => {
       release = resolve;
     });
-    return { release, held: runExclusive(key, () => barrier) };
-  }
-
-  async function waitForQueuedWrite(): Promise<void> {
-    await vi.waitFor(() => expect(vi.mocked(runExclusive)).toHaveBeenCalledTimes(2));
+    const held = runExclusive(key, () => barrier);
+    const outcome = write().catch((error: unknown) => error);
+    try {
+      await vi.waitFor(() => expect(vi.mocked(runExclusive)).toHaveBeenCalledTimes(2));
+      await duringWait();
+    } finally {
+      release();
+      await held;
+    }
+    return outcome;
   }
 
   beforeEach(() => {
@@ -181,13 +212,14 @@ describe("host.fs.writeFile while queued behind another writer", () => {
     const h = harness(root, path.join(base, "data"));
     const target = path.join(root, "doc.md");
     await fs.writeFile(target, "before");
-    const queue = holdQueue(target);
-    const write = h.api.writeFile(target, "after").catch((error: unknown) => error);
-    await waitForQueuedWrite();
-    h.deps.plugins.delete(PLUGIN_ID);
-    queue.release();
-    await queue.held;
-    expect(String(await write)).toMatch(/PLUGIN_UNLOADED:/);
+    const outcome = await whileQueued(
+      target,
+      () => h.api.writeFile(target, "after"),
+      () => {
+        h.deps.plugins.delete(PLUGIN_ID);
+      }
+    );
+    expect(String(outcome)).toMatch(/PLUGIN_UNLOADED:/);
     // Refused on entering the critical section, not by a containment recheck
     // against an unloaded plugin's (now empty) roots.
     expect(h.containmentCalls()).toBe(1);
@@ -200,14 +232,15 @@ describe("host.fs.writeFile while queued behind another writer", () => {
       const h = harness(root, path.join(base, "data"));
       const target = path.join(root, "doc.md");
       await fs.writeFile(target, "before");
-      const queue = holdQueue(target);
-      const write = h.api.writeFile(target, "redirected").catch((error: unknown) => error);
-      await waitForQueuedWrite();
-      await fs.rm(target);
-      await fs.symlink(outside, target);
-      queue.release();
-      await queue.held;
-      expect(await write).toMatchObject({ code: "TARGET_UNAVAILABLE" });
+      const outcome = await whileQueued(
+        target,
+        () => h.api.writeFile(target, "redirected"),
+        async () => {
+          await fs.rm(target);
+          await fs.symlink(outside, target);
+        }
+      );
+      expect(outcome).toMatchObject({ code: "TARGET_UNAVAILABLE" });
       expect(await fs.readFile(outside, "utf-8")).toBe("secret");
     }
   );

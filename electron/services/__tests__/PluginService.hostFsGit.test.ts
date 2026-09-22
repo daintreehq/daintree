@@ -1292,6 +1292,7 @@ describe("host.fs.writeFile checked path (#12323)", () => {
   });
 
   it("refuses a leaf swapped for an outside symlink during consent, without options (#12618)", async () => {
+    if (process.platform === "win32") return;
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const target = join(allowed, "doc.md");
     await fs.writeFile(target, "mine");
@@ -1313,6 +1314,7 @@ describe("host.fs.writeFile checked path (#12323)", () => {
   });
 
   it("refuses a leaf swapped for an in-scope symlink during consent, without options (#12618)", async () => {
+    if (process.platform === "win32") return;
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const target = join(allowed, "doc.md");
     await fs.writeFile(target, "mine");
@@ -1409,25 +1411,38 @@ describe("host.fs.writeFile checked path (#12323)", () => {
     expect((await fs.stat(target)).isDirectory()).toBe(true);
   });
 
-  it("an options-only write replaces atomically without reading the target", async () => {
-    const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
-    const target = join(allowed, "opaque.md");
-    await fs.writeFile(target, "v1");
-    const readSpy = vi.spyOn(fs, "readFile");
-    try {
-      const result = await host.fs.writeFile(target, "v2", {});
-      expect(result.revision).toBe(sha("v2"));
-      expect(readSpy.mock.calls.some((call) => call[0] === target)).toBe(false);
-    } finally {
-      readSpy.mockRestore();
+  it.each([
+    ["with empty options", {}],
+    ["without options", undefined],
+  ] as const)(
+    "a write %s replaces atomically without reading the target",
+    async (_label, options) => {
+      const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
+      const target = join(allowed, "opaque.md");
+      await fs.writeFile(target, "v1");
+      const canonical = await fs.realpath(target);
+      // Reads open a descriptor, so a read of the target shows up as an open.
+      const openSpy = vi.spyOn(fs, "open");
+      const readSpy = vi.spyOn(fs, "readFile");
+      try {
+        const result = await host.fs.writeFile(target, "v2", options);
+        expect(result.revision).toBe(sha("v2"));
+        const touched = [...openSpy.mock.calls, ...readSpy.mock.calls].map((call) => call[0]);
+        expect(touched).not.toContain(target);
+        expect(touched).not.toContain(canonical);
+      } finally {
+        openSpy.mockRestore();
+        readSpy.mockRestore();
+      }
+      expect(await fs.readFile(target, "utf-8")).toBe("v2");
     }
-    expect(await fs.readFile(target, "utf-8")).toBe("v2");
-  });
+  );
 
   it.each([
     ["with options", {}],
     ["without options", undefined],
   ] as const)("refuses to write through a symlink %s", async (_label, options) => {
+    if (process.platform === "win32") return;
     const host = registerPlugin(["fs:project-read", "fs:project-write"], [allowed]);
     const real = join(allowed, "real.md");
     await fs.writeFile(real, "real");
