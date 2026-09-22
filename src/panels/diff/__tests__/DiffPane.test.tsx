@@ -904,7 +904,7 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
   // vitest.setup.ts installs for every later test.
   const pdfProbeMock = vi.fn();
   const realFetch = globalThis.fetch;
-  let dispatchSpy: ReturnType<typeof vi.spyOn> | null = null;
+  let dispatchSpy: { mockRestore: () => void } | null = null;
   beforeEach(() => {
     pdfProbeMock.mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal("fetch", pdfProbeMock);

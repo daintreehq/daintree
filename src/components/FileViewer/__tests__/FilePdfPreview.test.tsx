@@ -13,7 +13,7 @@
  * `fetch` is stubbed at that boundary.
  */
 import { StrictMode, useLayoutEffect } from "react";
-import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
+import { describe, it, expect, afterEach, beforeEach, vi, type Mock } from "vitest";
 import { render, cleanup, waitFor, act } from "@testing-library/react";
 import { FilePdfPreview, type PdfPreviewError } from "../FilePdfPreview";
 
@@ -48,6 +48,12 @@ async function renderPreview(props: Partial<React.ComponentProps<typeof FilePdfP
 
 function status(code: number): ProbeResponse {
   return { ok: code >= 200 && code < 300, status: code };
+}
+
+function firstReported(onError: Mock<(error: PdfPreviewError) => void>): PdfPreviewError {
+  const error = onError.mock.calls[0]?.[0];
+  if (!error) throw new Error("onError was never called");
+  return error;
 }
 
 describe("FilePdfPreview", () => {
@@ -143,7 +149,9 @@ describe("FilePdfPreview", () => {
       const frame = await renderPreview({ reloadKey: 3 });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      const [probed, init] = fetchMock.mock.calls[0];
+      const call = fetchMock.mock.calls[0];
+      if (!call) throw new Error("the preview never probed");
+      const [probed, init] = call;
       expect(init?.method).toBe("HEAD");
       expect(probed).toBe(frame.getAttribute("src"));
     });
@@ -168,7 +176,7 @@ describe("FilePdfPreview", () => {
       [500, undefined],
     ])("reports a %i as a named error and never mounts the frame", async (httpStatus, code) => {
       fetchMock.mockResolvedValue(status(httpStatus));
-      const onError = vi.fn();
+      const onError = vi.fn<(error: PdfPreviewError) => void>();
       const { container } = render(
         <FilePdfPreview
           filePath="/repo/spec.pdf"
@@ -179,7 +187,7 @@ describe("FilePdfPreview", () => {
       );
 
       await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-      const error: PdfPreviewError = onError.mock.calls[0][0];
+      const error = firstReported(onError);
       expect(error.code).toBe(code);
       // Both halves, so every caller can render a headline and a way forward.
       expect(error.title).toBeTruthy();
@@ -192,7 +200,7 @@ describe("FilePdfPreview", () => {
       const titles = new Set<string>();
       for (const httpStatus of [404, 413, 415, 500]) {
         fetchMock.mockResolvedValue(status(httpStatus));
-        const onError = vi.fn();
+        const onError = vi.fn<(error: PdfPreviewError) => void>();
         render(
           <FilePdfPreview
             filePath="/repo/spec.pdf"
@@ -202,7 +210,7 @@ describe("FilePdfPreview", () => {
           />
         );
         await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-        titles.add(onError.mock.calls[0][0].title);
+        titles.add(firstReported(onError).title);
         cleanup();
       }
       expect(titles.size).toBe(4);
@@ -210,7 +218,7 @@ describe("FilePdfPreview", () => {
 
     it("reports a probe the network layer refused outright", async () => {
       fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
-      const onError = vi.fn();
+      const onError = vi.fn<(error: PdfPreviewError) => void>();
       const { container } = render(
         <FilePdfPreview
           filePath="/repo/spec.pdf"
@@ -221,7 +229,7 @@ describe("FilePdfPreview", () => {
       );
 
       await waitFor(() => expect(onError).toHaveBeenCalledTimes(1));
-      expect(onError.mock.calls[0][0].title).toBeTruthy();
+      expect(firstReported(onError).title).toBeTruthy();
       expect(container.querySelector("iframe")).toBeNull();
     });
 
@@ -234,7 +242,7 @@ describe("FilePdfPreview", () => {
           failFirst = resolve;
         })
       );
-      const onError = vi.fn();
+      const onError = vi.fn<(error: PdfPreviewError) => void>();
       const { container, rerender } = render(
         <FilePdfPreview filePath="/repo/a.pdf" rootPath="/repo" label="a.pdf" onError={onError} />
       );
@@ -316,7 +324,7 @@ describe("FilePdfPreview", () => {
     });
 
     it("settles into one frame under StrictMode's double effect", async () => {
-      const onError = vi.fn();
+      const onError = vi.fn<(error: PdfPreviewError) => void>();
       const { container } = render(
         <StrictMode>
           <FilePdfPreview
@@ -346,7 +354,7 @@ describe("FilePdfPreview", () => {
     });
 
     it("drops the frame when a refresh of the same document fails", async () => {
-      const onError = vi.fn();
+      const onError = vi.fn<(error: PdfPreviewError) => void>();
       const { container, rerender } = render(
         <FilePdfPreview
           filePath="/repo/spec.pdf"
