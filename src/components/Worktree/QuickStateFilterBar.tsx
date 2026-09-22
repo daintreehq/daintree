@@ -93,6 +93,7 @@ export function QuickStateFilterBar({
             <TooltipTrigger asChild>
               <button
                 type="button"
+                data-quick-state-segment
                 aria-pressed={isActive}
                 aria-label={accessibleName}
                 onClick={() => onChange(isActive ? "all" : option.value)}

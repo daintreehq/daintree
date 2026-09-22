@@ -196,10 +196,11 @@ test("Quick state filter — states, widths and themes", async ({ page }) => {
 
 /**
  * An empty bucket's glyph is the segment's only visible name, so dimming it
- * must not take it under 3:1 against the bar (WCAG 1.4.11) — wherever the
- * populated hue has the headroom to allow that. A theme whose hue sits under
- * 4.5:1 even at full strength is a palette limit, not something the fade step
- * can fix, and is reported rather than failed.
+ * must not take it under 3:1 against whatever it sits on (WCAG 1.4.11) — the
+ * bar at rest, the hover fill, and the selected fill — wherever the populated
+ * hue has the headroom to allow that. A theme whose hue sits under 4.5:1 even
+ * at full strength is a palette limit, not something the dimming step can
+ * fix, and is reported rather than failed.
  */
 test("Quick state filter — empty glyphs hold 3:1 in every theme", async ({ page }) => {
   test.info().annotations.push({
@@ -208,63 +209,106 @@ test("Quick state filter — empty glyphs hold 3:1 in every theme", async ({ pag
   });
   test.skip(!ENABLED, "set DAINTREE_SHOT_QUICK_STATE=1 to run the capture");
 
-  const failures: string[] = [];
-  const report: string[] = [];
-  for (const theme of ALL_THEMES) {
-    await open(page, "idle", theme);
-    const glyphs = await page.evaluate(() => {
-      const paint = (css: string): number[] => {
+  const luminance = (c: number[]) => {
+    const f = (v: number) => {
+      const s = v / 255;
+      return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    };
+    return 0.2126 * f(c[0]!) + 0.7152 * f(c[1]!) + 0.0722 * f(c[2]!);
+  };
+  const ratio = (a: number[], b: number[]) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  };
+
+  /** The segment's glyph colour, its opacity, and the colour actually painted behind it. */
+  const measure = (segment: string) =>
+    page.getByRole("button", { name: new RegExp(`^${segment}`) }).evaluate((button) => {
+      const rgba = (css: string): number[] => {
         const canvas = document.createElement("canvas");
         canvas.width = canvas.height = 1;
-        const ctx = canvas.getContext("2d")!;
+        const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
+        ctx.clearRect(0, 0, 1, 1);
         ctx.fillStyle = css;
         ctx.fillRect(0, 0, 1, 1);
-        return Array.from(ctx.getImageData(0, 0, 1, 1).data).slice(0, 3);
+        const [r, g, b, a] = Array.from(ctx.getImageData(0, 0, 1, 1).data);
+        return [r!, g!, b!, a! / 255];
       };
-      const toolbar = document.querySelector('[role="toolbar"]')!;
-      let node: Element | null = toolbar;
-      let bg = "rgba(0, 0, 0, 0)";
-      while (node && (bg === "rgba(0, 0, 0, 0)" || bg === "transparent")) {
-        bg = getComputedStyle(node).backgroundColor;
-        node = node.parentElement;
+      // Composite every translucent fill from the button up to the first
+      // opaque one — the hover and selected fills are tints over the sidebar.
+      const layers: number[][] = [];
+      for (let node: Element | null = button; node; node = node.parentElement) {
+        const fill = rgba(getComputedStyle(node).backgroundColor);
+        if (fill[3]! > 0) layers.push(fill);
+        if (fill[3]! >= 1) break;
       }
-      return Array.from(toolbar.querySelectorAll("button[aria-pressed]"))
-        .map((button) => {
-          const glyph = button.querySelector("svg, [data-glyph-box]");
-          if (!glyph) return null;
-          const style = getComputedStyle(glyph);
-          return {
-            name: button.getAttribute("aria-label") ?? "",
-            color: paint(style.color),
-            opacity: Number(style.opacity),
-            bg: paint(bg),
-          };
-        })
-        .filter((g): g is NonNullable<typeof g> => g !== null);
+      const bg = layers.reduceRight(
+        (under, over) => [0, 1, 2].map((i) => over[i]! * over[3]! + under[i]! * (1 - over[3]!)),
+        [0, 0, 0]
+      );
+      const glyph = button.querySelector("svg, [data-glyph-box]")!;
+      const style = getComputedStyle(glyph);
+      return { color: rgba(style.color).slice(0, 3), opacity: Number(style.opacity), bg };
     });
-    const luminance = (c: number[]) => {
-      const f = (v: number) => {
-        const s = v / 255;
-        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
-      };
-      return 0.2126 * f(c[0]!) + 0.7152 * f(c[1]!) + 0.0722 * f(c[2]!);
-    };
-    const ratio = (a: number[], b: number[]) => {
-      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-      return (hi! + 0.05) / (lo! + 0.05);
-    };
-    expect(glyphs.length, `${theme}: no glyphs measured`).toBe(3);
-    for (const g of glyphs) {
-      expect(g.opacity, `${theme} ${g.name}: empty glyph is not dimmed`).toBeLessThan(1);
-      const blended = g.color.map((v, i) => v * g.opacity + g.bg[i]! * (1 - g.opacity));
-      const full = ratio(g.color, g.bg);
-      const empty = ratio(blended, g.bg);
-      const line = `${theme} ${g.name.split(",")[0]}: full ${full.toFixed(2)} empty ${empty.toFixed(2)}`;
-      if (full < 4.5) report.push(`${line} (palette-limited, not gated)`);
-      else if (empty < 3) failures.push(line);
-      else report.push(line);
+
+  const SEGMENTS = ["Working", "Attention", "Finished"];
+  const failures: string[] = [];
+  const report: string[] = [];
+  const check = (
+    theme: string,
+    segment: string,
+    state: string,
+    g: Awaited<ReturnType<typeof measure>>
+  ) => {
+    expect(g.opacity, `${theme} ${segment}: empty glyph is not dimmed`).toBeLessThan(1);
+    const blended = g.color.map((v, i) => v * g.opacity + g.bg[i]! * (1 - g.opacity));
+    const full = ratio(g.color, g.bg);
+    const empty = ratio(blended, g.bg);
+    const line = `${theme} ${segment} ${state}: full ${full.toFixed(2)} empty ${empty.toFixed(2)}`;
+    if (full < 4.5) report.push(`${line} (palette-limited, not gated)`);
+    else if (empty < 3) failures.push(line);
+    else report.push(line);
+  };
+
+  for (const theme of ALL_THEMES) {
+    await open(page, "idle", theme);
+    for (const segment of SEGMENTS) check(theme, segment, "rest", await measure(segment));
+    for (const segment of SEGMENTS) {
+      await page.getByRole("button", { name: new RegExp(`^${segment}`) }).hover();
+      await page.waitForTimeout(200);
+      check(theme, segment, "hover", await measure(segment));
+    }
+    for (const segment of SEGMENTS) {
+      const button = page.getByRole("button", { name: new RegExp(`^${segment}`) });
+      await button.click();
+      await page.mouse.move(0, 0);
+      await expect(button).toHaveAttribute("aria-pressed", "true");
+      await page.waitForTimeout(200);
+      check(theme, segment, "selected", await measure(segment));
     }
   }
   console.log(`[quick-state-filter-contrast]\n${report.join("\n")}`);
   expect(failures, `empty glyphs under 3:1:\n${failures.join("\n")}`).toEqual([]);
+});
+
+/**
+ * Forced colors erases box-shadow, which is how both bars draw the selected
+ * underline. Capture the mode and prove the replacement bar is painted.
+ */
+test("Quick state filter — forced colors keeps the selection", async ({ page }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_QUICK_STATE is required for the quick-state-filter capture",
+  });
+  test.skip(!ENABLED, "set DAINTREE_SHOT_QUICK_STATE=1 to run the capture");
+
+  await page.emulateMedia({ forcedColors: "active" });
+  await open(page, "working-active", THEMES[0]!);
+  const marker = await page.getByRole("button", { name: /^Working/ }).evaluate((button) => {
+    const after = getComputedStyle(button, "::after");
+    return { content: after.content, height: after.height };
+  });
+  expect(marker.content).not.toBe("none");
+  expect(marker.height).toBe("2px");
+  await snap(bar(page), `forced-colors-${THEMES[0]}.png`);
 });

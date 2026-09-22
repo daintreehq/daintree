@@ -682,33 +682,12 @@ body,
 
 /* An empty bucket's glyph in the quick state filters (sidebar and Pilot).
  * Faded "slightly — it should still be clearly visible" (#10353): the glyph is
- * the segment's only visible name, so it has to hold 3:1 against the bar while
- * still reading as quieter than a populated one. Light themes get the lighter
- * step because their state hues start with far less headroom — the same
- * reduction that leaves a dark theme at 3-4:1 takes a light one under 2.5:1.
- * Opacity rather than a slash-alpha colour so one rule covers every hue and
- * the step can differ by colour mode. */
+ * the segment's only visible name, so it has to hold 3:1 against the bar at
+ * rest, hovered and selected, while still reading as quieter than a populated
+ * one. Opacity rather than a slash-alpha colour so one rule covers every hue.
+ * Increase Contrast and forced colors reset it in their own blocks below. */
 .quick-state-glyph-empty {
-  opacity: 0.75;
-}
-
-:root[data-color-mode="light"] .quick-state-glyph-empty {
   opacity: 0.8;
-}
-
-/* Increase Contrast and forced colors both want every mark at full strength;
- * the digit beside the glyph still says the bucket is empty. Kept as two
- * blocks, like every other pair in this file. */
-@media (prefers-contrast: more) {
-  .quick-state-glyph-empty {
-    opacity: 1;
-  }
-}
-
-@media (forced-colors: active) {
-  .quick-state-glyph-empty {
-    opacity: 1;
-  }
 }
 
 /* Delayed pulse animation for skeleton loading states
@@ -2499,6 +2478,11 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
    outline-color and removes box-shadow entirely. We ensure critical UI boundaries
    remain visible by using CSS system color keywords. */
 @media (forced-colors: active) {
+  /* Every mark at full strength; the digit beside it still says "empty". */
+  .quick-state-glyph-empty {
+    opacity: 1;
+  }
+
   *:focus-visible {
     outline: 2px solid Highlight !important;
     outline-offset: 2px !important;
@@ -2886,6 +2870,27 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
     border: 2px solid ButtonText;
   }
 
+  /* The quick state filters (sidebar and Pilot) mark the selected segment with
+     an inset box-shadow underline, which forced colors removes entirely. Redraw
+     the underline in the same place rather than borrowing the chips' border —
+     a border would shift the segment's contents by its width. ButtonText, not
+     Highlight, for the same reason as the chips above. */
+  [data-quick-state-segment][aria-pressed="true"],
+  [data-quick-state-segment][aria-checked="true"] {
+    position: relative;
+  }
+
+  [data-quick-state-segment][aria-pressed="true"]::after,
+  [data-quick-state-segment][aria-checked="true"]::after {
+    content: "";
+    position: absolute;
+    inset-inline: 0;
+    bottom: 0;
+    height: 2px;
+    forced-color-adjust: none;
+    background: ButtonText;
+  }
+
   /* Inbox row actions. Primary is marked by a status-info fill and border; both
      are flattened, leaving "Pull and rebase" and "Open review" identical, so the
      recommended action loses its recommendation at exactly the moment the row is
@@ -3059,6 +3064,11 @@ body[data-power-saving="true"] .pulse-skeleton-shimmer::after {
  * above but keeps theme colors (the user wants more contrast, not a
  * system-color repaint). */
 @media (prefers-contrast: more) {
+  /* Every quick-state glyph at full strength; the digit still says "empty". */
+  .quick-state-glyph-empty {
+    opacity: 1;
+  }
+
   .terminal-selected,
   .terminal-selected-quiet,
   .terminal-focused {
