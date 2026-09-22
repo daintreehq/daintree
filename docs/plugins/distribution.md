@@ -227,9 +227,9 @@ Daintree:
 4. Deletes `~/.daintree/plugins/{publisher}.{name}/`.
 5. By default, **keeps** the plugin's user-scope settings file (`~/.daintree/plugin-settings/{publisher}.{name}.json`) so an API token survives a reinstall. The CLI's `--delete-settings` flag (or the UI's "also remove stored settings" checkbox) deletes that file instead.
 
-Secrets are not stored in a separate file — `type: "secret"` values live in the same user-scope settings file, but encrypted at rest through the OS keychain (Electron `safeStorage`: macOS Keychain / Windows DPAPI / Linux libsecret-kwallet) when one is available, persisted as a tagged ciphertext envelope. On a host with no keychain backend (typically headless Linux) they fall back to plaintext JSON under `chmod 0o600`, and the settings UI discloses which tier is in use. Either way they share the settings file's lifecycle: "keep settings" keeps the secrets too, and `--delete-settings` removes them.
+Secrets are not stored in a separate file — user-scope `type: "secret"` values live in the same user-scope settings file, encrypted at rest through the OS keychain (Electron `safeStorage`: macOS Keychain / Windows DPAPI / Linux libsecret-kwallet) and persisted as a tagged ciphertext envelope. On a host with no keychain backend (typically headless Linux) a secret can't be saved at all, and the settings UI says so. User-scope secrets share the settings file's lifecycle: "keep settings" keeps them too, and `--delete-settings` removes them.
 
-Project-scope settings (`<projectRoot>/.daintree/plugin-settings/{publisher}.{name}.json`) are **never** touched by uninstall — they're tracked per-repo and removing them is the project's concern.
+Project-scope settings (`<projectRoot>/.daintree/plugin-settings/{publisher}.{name}.json`) are **never** touched by uninstall — they're tracked per-repo and removing them is the project's concern. Project-scope secrets are not in that file: they live in this machine's per-project local settings (`~/.daintree/plugin-settings/local/{projectId}/`), which uninstall also leaves in place.
 
 Uninstall is reversible only from a backup — Daintree doesn't maintain a trash bin for plugins.
 

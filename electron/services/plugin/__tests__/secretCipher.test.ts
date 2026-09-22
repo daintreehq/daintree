@@ -45,11 +45,11 @@ describe("safeStorageCipher tier", () => {
     );
 
     it.each(["basic_text", "unknown", "some_future_backend", "constructor"])(
-      "reports plaintext and refuses to encrypt under the %s backend",
+      "reports unavailable and refuses to encrypt under the %s backend",
       (backend) => {
         safeStorageMock.getSelectedStorageBackend.mockReturnValue(backend);
 
-        expect(safeStorageCipher.tier()).toBe("plaintext");
+        expect(safeStorageCipher.tier()).toBe("unavailable");
         expect(safeStorageCipher.encrypt("hunter2")).toBeNull();
         expect(safeStorageMock.encryptString).not.toHaveBeenCalled();
       }
@@ -63,12 +63,12 @@ describe("safeStorageCipher tier", () => {
       expect(safeStorageCipher.decrypt(ciphertext)).toBe("hunter2");
     });
 
-    it("reports plaintext when the backend lookup throws", () => {
+    it("reports unavailable when the backend lookup throws", () => {
       safeStorageMock.getSelectedStorageBackend.mockImplementation(() => {
         throw new Error("not ready");
       });
 
-      expect(safeStorageCipher.tier()).toBe("plaintext");
+      expect(safeStorageCipher.tier()).toBe("unavailable");
       expect(safeStorageCipher.encrypt("hunter2")).toBeNull();
     });
 
@@ -76,7 +76,7 @@ describe("safeStorageCipher tier", () => {
       safeStorageMock.isEncryptionAvailable.mockReturnValue(false);
       safeStorageMock.getSelectedStorageBackend.mockReturnValue("gnome_libsecret");
 
-      expect(safeStorageCipher.tier()).toBe("plaintext");
+      expect(safeStorageCipher.tier()).toBe("unavailable");
       expect(safeStorageCipher.encrypt("hunter2")).toBeNull();
       expect(safeStorageMock.getSelectedStorageBackend).not.toHaveBeenCalled();
       expect(safeStorageMock.encryptString).not.toHaveBeenCalled();
@@ -94,13 +94,13 @@ describe("safeStorageCipher tier", () => {
     }
   );
 
-  it("reports plaintext when isEncryptionAvailable throws", () => {
+  it("reports unavailable when isEncryptionAvailable throws", () => {
     setPlatform("darwin");
     safeStorageMock.isEncryptionAvailable.mockImplementation(() => {
       throw new Error("not ready");
     });
 
-    expect(safeStorageCipher.tier()).toBe("plaintext");
+    expect(safeStorageCipher.tier()).toBe("unavailable");
     expect(safeStorageCipher.encrypt("hunter2")).toBeNull();
   });
 });

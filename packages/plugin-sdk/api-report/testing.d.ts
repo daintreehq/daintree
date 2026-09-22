@@ -1737,9 +1737,9 @@ interface SettingDefinition {
     /**
      * Legacy secret hint (F19). The manifest schema normalizes `secret: true` to
      * `type: "secret"`; new manifests should use the type. Once normalized, the
-     * value follows the same at-rest tier as any `type: "secret"` setting —
-     * keychain-backed via Electron `safeStorage` when available, plaintext JSON
-     * only as a fallback (see {@link PluginSecretStorageTier}, #9167).
+     * value is stored like any `type: "secret"` setting — encrypted through the
+     * OS keychain via Electron `safeStorage`, and refused rather than written in
+     * plaintext when no keychain is available (see {@link PluginSecretStorageTier}).
      */
     secret?: boolean;
 }
@@ -1753,6 +1753,12 @@ interface SettingDefinition {
  * machine's per-project plugin state, never in the repo. An interpreter path is
  * the canonical example — committing it publishes one machine's layout, and
  * putting it in user scope applies it to unrelated projects.
+ *
+ * Secret settings are the exception to where `"project"` writes: a secret is
+ * never stored under the project root, whatever its scope. A `"project"`-scoped
+ * secret is still read, written, and subscribed to under `"project"` and shown
+ * in the settings form's project section, but its value is stored in the
+ * `"local"` file on this machine — so it is per project, and never committed.
  */
 type PluginSettingsScope = "user" | "project" | "local";
 /**
@@ -1771,10 +1777,12 @@ type PluginStorageScope = "user" | "project" | "worktree";
  * `~/.daintree/plugin-settings/{pluginId}.json` (user scope) or
  * `<projectRoot>/.daintree/plugin-settings/{pluginId}.json` (project scope),
  * with `chmod 0o600` applied on POSIX. Settings declared `type: "secret"` are
- * encrypted at rest through the OS keychain (Electron `safeStorage`) when one is
- * available, falling back to the same plaintext-0600 path when it is not (#9167);
- * the `get`/`set` API shape is identical either way. Non-secret values are always
- * plaintext JSON — do not store credentials in non-secret keys.
+ * encrypted at rest through the OS keychain (Electron `safeStorage`), and are
+ * never stored under the project root: a project-scoped secret lives in this
+ * machine's per-project local file instead (see {@link PluginSettingsScope}).
+ * With no keychain available a secret write is refused rather than stored in
+ * plaintext. Non-secret values are always plaintext JSON — do not store
+ * credentials in non-secret keys.
  *
  * `scope` defaults to `"user"`. Project scope resolves the active project at
  * call time, so it tracks project switches: `get` returns `undefined` and `set`
@@ -1819,7 +1827,8 @@ interface SettingsApi {
     /**
      * Persist a setting. Rejects `undefined` and non-JSON-serializable values.
      * For `"project"` scope with no active project, throws. When the manifest
-     * declares `contributes.settings`, an undeclared key is rejected.
+     * declares `contributes.settings`, an undeclared key is rejected. A declared
+     * secret is rejected when no OS keychain is available to encrypt it.
      */
     set<T = unknown>(key: string, value: T, scope?: PluginSettingsScope): Promise<void>;
     /**
@@ -3354,8 +3363,9 @@ interface PluginHostApi extends PluginActivationApi {
      */
     showConfirm(options: PluginConfirmOptions, callOptions?: PluginHostCallOptions): Promise<boolean>;
     /**
-     * Persistent, plugin-scoped key/value settings. Plaintext JSON storage with
-     * `chmod 0o600` on POSIX — no OS keychain (#9167). See {@link SettingsApi}.
+     * Persistent, plugin-scoped key/value settings. JSON storage with `chmod 0o600`
+     * on POSIX; declared secrets are encrypted through the OS keychain. See
+     * {@link SettingsApi}.
      */
     readonly settings: SettingsApi;
     /**

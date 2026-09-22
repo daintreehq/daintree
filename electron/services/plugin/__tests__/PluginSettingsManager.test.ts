@@ -87,10 +87,10 @@ describe("PluginSettingsManager explicit project root", () => {
     const a = mgr.resolveSettingsFilePath(PLUGIN_ID, "project", "/projects/a")!;
     const b = mgr.resolveSettingsFilePath(PLUGIN_ID, "project", "/projects/b")!;
 
-    const storeA = mgr.getOrCreateSettingsStore(PLUGIN_ID, "project", a);
-    const storeB = mgr.getOrCreateSettingsStore(PLUGIN_ID, "project", b);
+    const storeA = mgr.getOrCreateSettingsStore(PLUGIN_ID, a);
+    const storeB = mgr.getOrCreateSettingsStore(PLUGIN_ID, b);
     expect(storeB).not.toBe(storeA);
-    expect(mgr.getOrCreateSettingsStore(PLUGIN_ID, "project", a)).toBe(storeA);
+    expect(mgr.getOrCreateSettingsStore(PLUGIN_ID, a)).toBe(storeA);
   });
 });
 

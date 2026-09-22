@@ -28,6 +28,14 @@ async function userSecretsSet(page: Page): Promise<string[]> {
   }, PLUGIN_ID);
 }
 
+/** The at-rest tier a secret write would use on this host right now. */
+async function userSecretTier(page: Page): Promise<string> {
+  return page.evaluate(async (pluginId) => {
+    const res = await window.electron.plugin.getSettingValues(pluginId, "user", null);
+    return res.secretTier;
+  }, PLUGIN_ID);
+}
+
 /** Remove user-scope rich-plugin settings so the serial form tests start clean. */
 async function resetUserSettings(page: Page): Promise<void> {
   await page.evaluate(async (pluginId) => {
@@ -177,6 +185,16 @@ test.describe.serial("Core: Plugin settings form", () => {
     await expect(input).toHaveAttribute("type", "password");
     await input.fill("s3cr3t");
     await window.keyboard.press("Tab");
+
+    // A host with no OS keychain refuses the secret rather than storing it in
+    // plaintext: the typed value stays in the field beside the error.
+    if ((await userSecretTier(window)) === "unavailable") {
+      await expect(window.getByText(/wasn't saved/)).toBeVisible({ timeout: T_MEDIUM });
+      await expect(input).toHaveValue("s3cr3t");
+      expect(await userSecretsSet(window)).not.toContain("apiKey");
+      await closePluginManager(window);
+      return;
+    }
 
     // The secret is reported as set (its value never rides on getSettingValues).
     await expect.poll(() => userSecretsSet(window)).toContain("apiKey");

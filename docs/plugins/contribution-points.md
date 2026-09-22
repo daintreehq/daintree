@@ -462,7 +462,7 @@ Declares user-configurable settings for your plugin.
 | `label` | no | Field label shown in the generated form. |
 | `description` | no | Help text shown beneath the field. |
 | `default` | no | Default value. |
-| `scope` | no | `user` (global) or `project` (per-project). Defaults to `user`. |
+| `scope` | no | `user` (global), `project` (per-project, stored in the repository), or `local` (per-project, stored on this machine only). Defaults to `user`. A `secret` in `project` scope is stored like `local`, never in the repository. |
 | `options` | no | Non-empty string array; required when `type` is `enum`. |
 | `min` / `max` | no | Numeric bounds for `number` settings. `min` cannot exceed `max`. |
 | `mustExist` | no | For `path` / `directory` / `file`: when `true`, the form flags a stored path that no longer resolves on disk. Advisory — it never blocks saving. |
@@ -471,7 +471,7 @@ Declares user-configurable settings for your plugin.
 
 The `path` and `directory` types render a read-only text input plus a **Browse** button that opens a native folder chooser; `file` opens a single-file chooser narrowed by `extensions`. The stored value is an absolute filesystem path. Plugins read it back through the host settings API like any other setting.
 
-**Scopes:** `user` (global, persisted in Daintree config), `project` (per-project, persisted with project state).
+**Scopes:** `user` (global, persisted in Daintree config), `project` (per-project, persisted in `<projectRoot>/.daintree/plugin-settings/`), `local` (per-project, persisted on this machine only). Secret values are never persisted in the repository: a `project`-scoped secret is stored on this machine, in the `local` file.
 
 Settings appear in Preferences → Plugins → `{pluginId}` as a generated form. Values are read via the host API:
 

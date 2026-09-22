@@ -7,6 +7,7 @@ import {
 import { isProjectWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import { PluginSettingsStore } from "../PluginSettingsStore.js";
 import { projectStore } from "../ProjectStore.js";
+import { safeStorageCipher, type SecretCipher } from "./secretCipher.js";
 import type {
   PluginManifest,
   PluginSettingsScope,
@@ -42,10 +43,12 @@ interface PluginSettingsManagerDeps {
   getPluginsRoot: () => string;
   /** Narrow manifest lookup — the manifest stays owned by core lifecycle. */
   getManifest: (pluginId: string) => PluginManifest | undefined;
+  /** Secret-value cipher for every store. Defaults to Electron `safeStorage`; tests inject a fake. */
+  cipher?: SecretCipher;
 }
 
 /**
- * Owns the per-(plugin, scope, path) {@link PluginSettingsStore} cache, scope and
+ * Owns the per-(plugin, path) {@link PluginSettingsStore} cache, scope and
  * file-path resolution (user vs project, main-current-project vs explicit-projectId
  * UI variants), the subscriber set and notification, serializability / declared-key /
  * secret guards, the `${settings:<id>}` template resolver, and the renderer-facing
@@ -53,14 +56,19 @@ interface PluginSettingsManagerDeps {
  */
 export class PluginSettingsManager {
   private readonly deps: PluginSettingsManagerDeps;
+  private readonly cipher: SecretCipher;
 
   /**
-   * Persisted-settings stores keyed by `{pluginId}\u0000{scope}\u0000{filePath}`.
-   * The NUL (`\u0000`) separator is unambiguous because a valid plugin id can
-   * never contain it (see the manifest name pattern). Keyed on the resolved path
-   * (not just scope) so a project switch — which changes the `project`-scope
-   * path — creates a fresh store without evicting the old project's cache.
-   * Entries for a plugin are dropped on unload.
+   * Persisted-settings stores keyed by `{pluginId}\u0000{filePath}`. The NUL
+   * (`\u0000`) separator is unambiguous because a valid plugin id can never
+   * contain it (see the manifest name pattern). Keyed on the resolved path so a
+   * project switch — which changes the `project`-scope path — creates a fresh
+   * store without evicting the old project's cache.
+   *
+   * Not keyed on scope: a `project`-scoped secret lives in the same file as the
+   * plugin's `local` settings, and two stores over one file would each rewrite
+   * it from their own cache, erasing the other's keys. Entries for a plugin are
+   * dropped on unload.
    */
   private settingsStores = new Map<string, PluginSettingsStore>();
   /**
@@ -73,6 +81,7 @@ export class PluginSettingsManager {
 
   constructor(deps: PluginSettingsManagerDeps) {
     this.deps = deps;
+    this.cipher = deps.cipher ?? safeStorageCipher;
   }
 
   /**
@@ -134,6 +143,48 @@ export class PluginSettingsManager {
   }
 
   /**
+   * Resolve the file backing one setting `key` for the host `settings` API.
+   * Every read and write of a key goes through here rather than
+   * {@link resolveSettingsFilePath}, because the key decides the file as much
+   * as the scope does: a secret declared in `"project"` scope is stored in this
+   * machine's per-project local file, never under the project root (#12613).
+   * The scope stays `"project"` for everything else — declaration checks,
+   * change notifications, the settings form section.
+   *
+   * The project is pinned exactly as for `"local"` scope, by the plugin
+   * instance key, except that a bound host (`projectRoot` supplied) never falls
+   * back to the active project: with no instance key to name its project, the
+   * secret has no target.
+   */
+  resolveSettingsFilePathForKey(
+    pluginId: string,
+    key: string,
+    scope: PluginSettingsScope,
+    projectRoot?: string | null
+  ): string | undefined {
+    const scopeFile = this.resolveSettingsFilePath(pluginId, scope, projectRoot);
+    if (!scopeFile || !this.isSecretKeptOffProjectRoot(pluginId, key, scope)) return scopeFile;
+    const projectId =
+      projectIdFromPluginInstanceKey(pluginId) ??
+      (projectRoot == null ? projectStore.getCurrentProject()?.id : undefined);
+    return this.localSettingsFilePath(pluginId, projectId);
+  }
+
+  /**
+   * Whether `key` is a `"project"`-scoped secret, whose value must be stored in
+   * the `"local"` file instead of the git-tracked project one. The single
+   * authority both key resolvers consult, so a read and a write of the same key
+   * can never land in different files.
+   */
+  private isSecretKeptOffProjectRoot(
+    pluginId: string,
+    key: string,
+    scope: PluginSettingsScope
+  ): boolean {
+    return scope === "project" && this.isSecretKey(pluginId, key);
+  }
+
+  /**
    * `<settingsRoot>/local/<projectId>/<pluginId>.json` — the per-project,
    * per-machine settings file.
    *
@@ -165,15 +216,11 @@ export class PluginSettingsManager {
     return path.join(this.settingsRoot(), "local", projectId, `${pluginId}.json`);
   }
 
-  getOrCreateSettingsStore(
-    pluginId: string,
-    scope: PluginSettingsScope,
-    filePath: string
-  ): PluginSettingsStore {
-    const cacheKey = `${pluginId}\u0000${scope}\u0000${filePath}`;
+  getOrCreateSettingsStore(pluginId: string, filePath: string): PluginSettingsStore {
+    const cacheKey = `${pluginId}\u0000${filePath}`;
     let store = this.settingsStores.get(cacheKey);
     if (!store) {
-      store = new PluginSettingsStore(filePath);
+      store = new PluginSettingsStore(filePath, this.cipher);
       this.settingsStores.set(cacheKey, store);
     }
     return store;
@@ -308,12 +355,11 @@ export class PluginSettingsManager {
    * `"undefined"`.
    */
   async resolveSettingTemplate(pluginId: string, settingId: string): Promise<string> {
-    const filePath = this.resolveSettingsFilePath(pluginId, "user");
+    const filePath = this.resolveSettingsFilePathForKey(pluginId, settingId, "user");
     if (!filePath) return "";
-    const value = await this.getOrCreateSettingsStore(pluginId, "user", filePath).get<unknown>(
-      settingId,
-      { secret: this.isSecretKey(pluginId, settingId) }
-    );
+    const value = await this.getOrCreateSettingsStore(pluginId, filePath).get<unknown>(settingId, {
+      secret: this.isSecretKey(pluginId, settingId),
+    });
     if (value === undefined || value === null) return "";
     if (typeof value === "string") return value;
     if (typeof value === "number" || typeof value === "boolean") return String(value);
@@ -328,7 +374,7 @@ export class PluginSettingsManager {
   // Settings UI bridge (#9301)
   //
   // Renderer-facing read/write/reveal/clear for the generated settings form.
-  // These reuse the same per-(plugin, scope) store and subscriber path as the
+  // These reuse the same per-(plugin, path) store and subscriber path as the
   // plugin-facing `host.settings` API, so a write from the form fires the
   // owning plugin's `onDidChange` without it reactivating. Project scope is
   // resolved from an explicit `projectId` (not the main-process "current
@@ -422,11 +468,30 @@ export class PluginSettingsManager {
   }
 
   /**
+   * The settings-form counterpart of {@link resolveSettingsFilePathForKey}:
+   * resolve the file backing one `key`, moving a `"project"`-scoped secret into
+   * the `"local"` file. The scope's own file is resolved first so validation,
+   * project pinning, and "no project, no target" apply to a secret exactly as to
+   * any other key.
+   */
+  private resolveUiSettingsFilePathForKey(
+    pluginId: string,
+    key: string,
+    scope: PluginSettingsScope,
+    projectId: string | null
+  ): string | null {
+    const scopeFile = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
+    if (!scopeFile || !this.isSecretKeptOffProjectRoot(pluginId, key, scope)) return scopeFile;
+    return this.resolveUiSettingsFilePath(pluginId, "local", projectId);
+  }
+
+  /**
    * Read stored values for one plugin + scope, for the settings form. Secret
    * settings are never returned by value — their ids appear in `secretsSet` when
    * a value is stored. Only settings whose declared scope matches `scope` are
    * included, so a stray key in the wrong file can't surface under the other
-   * scope.
+   * scope. Each setting is read from its own file: a scope's secrets and its
+   * other values need not share one.
    */
   async getSettingValuesForUi(
     pluginId: string,
@@ -436,21 +501,25 @@ export class PluginSettingsManager {
     const values: Record<string, unknown> = {};
     const secretsSet: string[] = [];
     const secretsPlaintext: string[] = [];
-    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
-    if (!filePath) {
-      return { values, secretsSet, secretsPlaintext, secretTier: "plaintext" };
+    const secretTier = this.cipher.tier();
+    // Validates the request and answers "is there a target at all?" before any
+    // per-setting resolution.
+    if (!this.resolveUiSettingsFilePath(pluginId, scope, projectId)) {
+      return { values, secretsSet, secretsPlaintext, secretTier };
     }
-    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
     const defs = this.uiSettingDefinitions(pluginId).filter((d) => (d.scope ?? "user") === scope);
     await Promise.all(
       defs.map(async (def) => {
+        const filePath = this.resolveUiSettingsFilePathForKey(pluginId, def.id, scope, projectId);
+        if (!filePath) return;
+        const store = this.getOrCreateSettingsStore(pluginId, filePath);
         const secret = this.isSecretSetting(def);
         const stored = await store.get<unknown>(def.id, { secret });
         if (stored === undefined) return;
         if (secret) {
           secretsSet.push(def.id);
-          // Surface a value still sitting in plaintext so the form can nudge a
-          // re-save once a keychain is available.
+          // Surface a legacy value still sitting in plaintext so the form can
+          // nudge a re-save into the keychain.
           if ((await store.storedSecretTier(def.id)) === "plaintext") {
             secretsPlaintext.push(def.id);
           }
@@ -459,7 +528,7 @@ export class PluginSettingsManager {
         }
       })
     );
-    return { values, secretsSet, secretsPlaintext, secretTier: store.secretTier() };
+    return { values, secretsSet, secretsPlaintext, secretTier };
   }
 
   /**
@@ -483,13 +552,13 @@ export class PluginSettingsManager {
     }
     this.assertSettingSerializable(pluginId, key, value);
     this.assertSettingDeclared(pluginId, key, scope);
-    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
+    const filePath = this.resolveUiSettingsFilePathForKey(pluginId, key, scope, projectId);
     if (!filePath) {
       throw new Error(
         `Plugin "${pluginId}" settings: no active project — "project" scope has no target`
       );
     }
-    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
+    const store = this.getOrCreateSettingsStore(pluginId, filePath);
     const changed = await store.set(key, value, { secret: this.isSecretKey(pluginId, key) });
     if (changed) this.notifySettingsSubscribers(pluginId, scope, key, value);
     return changed;
@@ -510,9 +579,9 @@ export class PluginSettingsManager {
   ): Promise<boolean> {
     assertSettingsKey(pluginId, "delete", key);
     this.assertSettingDeclared(pluginId, key, scope);
-    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
+    const filePath = this.resolveUiSettingsFilePathForKey(pluginId, key, scope, projectId);
     if (!filePath) return false;
-    const store = this.getOrCreateSettingsStore(pluginId, scope, filePath);
+    const store = this.getOrCreateSettingsStore(pluginId, filePath);
     const changed = await store.delete(key);
     if (changed) this.notifySettingsSubscribers(pluginId, scope, key, undefined);
     return changed;
@@ -540,9 +609,9 @@ export class PluginSettingsManager {
     // filter in getSettingValuesForUi so a user-scoped secret can't be probed
     // under "project" by passing a projectId.
     if ((def.scope ?? "user") !== scope) return null;
-    const filePath = this.resolveUiSettingsFilePath(pluginId, scope, projectId);
+    const filePath = this.resolveUiSettingsFilePathForKey(pluginId, key, scope, projectId);
     if (!filePath) return null;
-    const value = await this.getOrCreateSettingsStore(pluginId, scope, filePath).get<unknown>(key, {
+    const value = await this.getOrCreateSettingsStore(pluginId, filePath).get<unknown>(key, {
       secret: true,
     });
     if (value === undefined || value === null) return null;

@@ -3,9 +3,10 @@ import fs from "fs/promises";
 import path from "path";
 import os from "os";
 import type { PluginManifest, SettingDefinition } from "../../../shared/types/plugin.js";
+import type { SecretCipher } from "../plugin/secretCipher.js";
 
 const projectStoreMock = vi.hoisted(() => ({
-  getCurrentProject: vi.fn((): { path: string } | null => null),
+  getCurrentProject: vi.fn((): { id?: string; path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
 }));
 
@@ -40,11 +41,28 @@ function manifestWith(settings: SettingDefinition[]): PluginManifest {
   };
 }
 
-function managerFor(settings: SettingDefinition[]): InstanceType<typeof PluginSettingsManager> {
+/** Reversible fake keychain; `available: false` is a host with no OS keychain. */
+function fakeCipher(available = true): SecretCipher {
+  return {
+    tier: () => (available ? "keychain" : "unavailable"),
+    encrypt: (plaintext) =>
+      available ? Buffer.from(`enc:${plaintext}`, "utf-8").toString("base64") : null,
+    decrypt: (c) => Buffer.from(c, "base64").toString("utf-8").slice("enc:".length),
+  };
+}
+
+function managerFor(
+  settings: SettingDefinition[],
+  cipher: SecretCipher = fakeCipher()
+): InstanceType<typeof PluginSettingsManager> {
   const manifest = manifestWith(settings);
   return new PluginSettingsManager({
     getPluginsRoot: () => path.join(tmpDir, "plugins"),
-    getManifest: (id) => (id === manifest.name ? manifest : undefined),
+    // A project plugin's instance key (`project__<id>__<name>`) resolves to the
+    // same manifest, as it does in the real plugin registry.
+    getManifest: (id) =>
+      id === manifest.name || id.endsWith(`__${manifest.name}`) ? manifest : undefined,
+    cipher,
   });
 }
 
@@ -133,10 +151,6 @@ describe("PluginSettingsManager declared-scope enforcement", () => {
 });
 
 describe("PluginSettingsManager secret tier routing (#9167)", () => {
-  // safeStorage is absent under vitest, so the default cipher reports the
-  // plaintext fallback tier — exercising the fallback wiring end-to-end through
-  // the manager (the encrypted path is covered with an injected cipher in
-  // PluginSettingsStore.secret.test.ts).
   it("masks a stored secret, reports it set, and discloses the at-rest tier", async () => {
     const mgr = managerFor([
       { id: "token", type: "secret", scope: "user" },
@@ -151,10 +165,30 @@ describe("PluginSettingsManager secret tier routing (#9167)", () => {
     expect(ui.values).not.toHaveProperty("token");
     expect(ui.secretsSet).toContain("token");
     expect(ui.values.endpoint).toBe("https://x");
-    // Tier is disclosed; with no keychain the fallback is plaintext and the
-    // stored value is flagged as plaintext.
-    expect(ui.secretTier).toBe("plaintext");
-    expect(ui.secretsPlaintext).toContain("token");
+    expect(ui.secretTier).toBe("keychain");
+    expect(ui.secretsPlaintext).toEqual([]);
+  });
+
+  it("discloses an unavailable keychain and refuses the write", async () => {
+    const mgr = managerFor([{ id: "token", type: "secret", scope: "user" }], fakeCipher(false));
+    await expect(
+      mgr.setSettingValueFromUi("acme.scope-test", "token", "sk-1", "user", null)
+    ).rejects.toThrow(/Secure storage is unavailable/);
+    const ui = await mgr.getSettingValuesForUi("acme.scope-test", "user", null);
+    expect(ui.secretTier).toBe("unavailable");
+    expect(ui.secretsSet).toEqual([]);
+  });
+
+  it("flags a legacy plaintext secret so the form can nudge a re-save", async () => {
+    const mgr = managerFor([{ id: "token", type: "secret", scope: "user" }]);
+    await fs.mkdir(path.join(tmpDir, "plugin-settings"), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpDir, "plugin-settings", "acme.scope-test.json"),
+      JSON.stringify({ token: "sk-legacy" })
+    );
+    const ui = await mgr.getSettingValuesForUi("acme.scope-test", "user", null);
+    expect(ui.secretsSet).toEqual(["token"]);
+    expect(ui.secretsPlaintext).toEqual(["token"]);
   });
 
   it("reveals a stored secret only through the explicit reveal path", async () => {
@@ -363,5 +397,189 @@ describe("PluginSettingsManager local scope", () => {
     expect(
       (await mgr.getSettingValuesForUi("acme.scope-test", "project", PROJECT_ID)).values
     ).toEqual({ ref: "origin" });
+  });
+});
+
+/**
+ * Every file's contents under `dir`, concatenated — empty only when nothing was
+ * ever written there. Any other scan failure throws, so a negative assertion
+ * can't pass without having looked.
+ */
+async function contentsUnder(dir: string): Promise<string> {
+  let entries: string[];
+  try {
+    entries = (await fs.readdir(dir, { recursive: true })) as string[];
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw err;
+  }
+  const chunks: string[] = [];
+  for (const entry of entries) {
+    const full = path.join(dir, entry);
+    if ((await fs.stat(full)).isFile()) chunks.push(await fs.readFile(full, "utf8"));
+  }
+  return chunks.join("\n");
+}
+
+describe("PluginSettingsManager project-scoped secrets (#12613)", () => {
+  const PROJECT_ID = "a".repeat(64);
+  const OTHER_PROJECT_ID = "b".repeat(64);
+  const PLUGIN_ID = "acme.scope-test";
+  const SETTINGS: SettingDefinition[] = [
+    { id: "token", type: "secret", scope: "project" },
+    { id: "ref", type: "string", scope: "project" },
+  ];
+  let projectRoot: string;
+
+  const localFile = (pluginId = PLUGIN_ID) =>
+    path.join(tmpDir, "plugin-settings", "local", PROJECT_ID, `${pluginId}.json`);
+  const repoFile = () =>
+    path.join(projectRoot, ".daintree", "plugin-settings", `${PLUGIN_ID}.json`);
+
+  beforeEach(() => {
+    projectRoot = path.join(tmpDir, "checkout");
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === PROJECT_ID ? { path: projectRoot } : null
+    );
+    projectStoreMock.getCurrentProject.mockReturnValue(null);
+  });
+
+  it("stores the secret in this machine's local file and the rest in the repository", async () => {
+    const mgr = managerFor(SETTINGS);
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-project-1", "project", PROJECT_ID);
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "ref", "origin", "project", PROJECT_ID);
+
+    expect(JSON.parse(await fs.readFile(repoFile(), "utf8"))).toEqual({ ref: "origin" });
+    const local = JSON.parse(await fs.readFile(localFile(), "utf8")) as Record<string, unknown>;
+    expect(local.token).toMatchObject({ __daintreeSecret: "daintree:secret:v1" });
+
+    const underRoot = await contentsUnder(projectRoot);
+    expect(underRoot).not.toContain("sk-project-1");
+    expect(underRoot).not.toContain("daintree:secret");
+  });
+
+  it("still reads, reveals, and clears the secret as a project setting", async () => {
+    const mgr = managerFor(SETTINGS);
+    const cb = vi.fn();
+    mgr.addSubscriber(PLUGIN_ID, { key: "token", scope: "project", cb });
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-project-1", "project", PROJECT_ID);
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "ref", "origin", "project", PROJECT_ID);
+    expect(cb).toHaveBeenLastCalledWith("sk-project-1");
+
+    const ui = await mgr.getSettingValuesForUi(PLUGIN_ID, "project", PROJECT_ID);
+    expect(ui.values).toEqual({ ref: "origin" });
+    expect(ui.secretsSet).toEqual(["token"]);
+    expect(await mgr.revealSecretSettingForUi(PLUGIN_ID, "token", "project", PROJECT_ID)).toBe(
+      "sk-project-1"
+    );
+    // Stored beside local settings, but never surfaced in the local section.
+    expect(await mgr.getSettingValuesForUi(PLUGIN_ID, "local", PROJECT_ID)).toMatchObject({
+      values: {},
+      secretsSet: [],
+    });
+
+    expect(await mgr.deleteSettingValueFromUi(PLUGIN_ID, "token", "project", PROJECT_ID)).toBe(
+      true
+    );
+    expect(cb).toHaveBeenLastCalledWith(undefined);
+    expect(JSON.parse(await fs.readFile(localFile(), "utf8"))).toEqual({});
+  });
+
+  it("refuses the secret with no keychain and leaves nothing of it under the project root", async () => {
+    const mgr = managerFor(SETTINGS, fakeCipher(false));
+    await expect(
+      mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-project-1", "project", PROJECT_ID)
+    ).rejects.toThrow(/Secure storage is unavailable/);
+    // An ordinary project write afterwards must not carry the refused value
+    // into the repository file either.
+    await mgr.setSettingValueFromUi(PLUGIN_ID, "ref", "origin", "project", PROJECT_ID);
+    expect(JSON.parse(await fs.readFile(repoFile(), "utf8"))).toEqual({ ref: "origin" });
+
+    const underRoot = await contentsUnder(projectRoot);
+    expect(underRoot).not.toContain("sk-project-1");
+    expect(underRoot).not.toContain("daintree:secret");
+    await expect(fs.access(localFile())).rejects.toThrow();
+
+    const ui = await mgr.getSettingValuesForUi(PLUGIN_ID, "project", PROJECT_ID);
+    expect(ui.secretTier).toBe("unavailable");
+    expect(ui.secretsSet).toEqual([]);
+  });
+
+  it("shares one store with the plugin's local settings, so neither write erases the other", async () => {
+    const mgr = managerFor([...SETTINGS, { id: "interpreter", type: "string", scope: "local" }]);
+    await Promise.all([
+      mgr.setSettingValueFromUi(PLUGIN_ID, "interpreter", "/usr/bin/python3", "local", PROJECT_ID),
+      mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-project-1", "project", PROJECT_ID),
+    ]);
+    const local = JSON.parse(await fs.readFile(localFile(), "utf8")) as Record<string, unknown>;
+    expect(local.interpreter).toBe("/usr/bin/python3");
+    expect(local.token).toMatchObject({ __daintreeSecret: "daintree:secret:v1" });
+  });
+
+  it("ignores a secret an older Daintree left in the repository file", async () => {
+    await fs.mkdir(path.dirname(repoFile()), { recursive: true });
+    await fs.writeFile(repoFile(), JSON.stringify({ token: "sk-committed", ref: "origin" }));
+    const mgr = managerFor(SETTINGS);
+
+    const ui = await mgr.getSettingValuesForUi(PLUGIN_ID, "project", PROJECT_ID);
+    expect(ui.values).toEqual({ ref: "origin" });
+    expect(ui.secretsSet).toEqual([]);
+    expect(await mgr.revealSecretSettingForUi(PLUGIN_ID, "token", "project", PROJECT_ID)).toBe(
+      null
+    );
+  });
+
+  it("pins a project plugin's secret to its own project and fails closed on an unknown one", async () => {
+    const mgr = managerFor(SETTINGS);
+    const instance = `project__${PROJECT_ID}__${PLUGIN_ID}`;
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === PROJECT_ID || id === OTHER_PROJECT_ID ? { path: projectRoot } : null
+    );
+    await expect(mgr.getSettingValuesForUi(instance, "project", OTHER_PROJECT_ID)).rejects.toThrow(
+      /belongs to a different project/
+    );
+    await expect(
+      mgr.setSettingValueFromUi(instance, "token", "sk-x", "project", OTHER_PROJECT_ID)
+    ).rejects.toThrow(/belongs to a different project/);
+
+    // A well-formed id no project is registered under has no target, even
+    // though its local file path could be built from the id alone.
+    const unknownId = "c".repeat(64);
+    await expect(
+      mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-x", "project", unknownId)
+    ).rejects.toThrow(/no active project/);
+    expect(await mgr.getSettingValuesForUi(PLUGIN_ID, "project", unknownId)).toMatchObject({
+      values: {},
+      secretsSet: [],
+    });
+    expect(await mgr.deleteSettingValueFromUi(PLUGIN_ID, "token", "project", unknownId)).toBe(
+      false
+    );
+    expect(await mgr.revealSecretSettingForUi(PLUGIN_ID, "token", "project", unknownId)).toBe(null);
+    await expect(fs.access(path.join(tmpDir, "plugin-settings", "local"))).rejects.toThrow();
+  });
+
+  it("resolves the host's secret file through the same authority", () => {
+    const mgr = managerFor(SETTINGS);
+    const instance = `project__${PROJECT_ID}__${PLUGIN_ID}`;
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: PROJECT_ID, path: projectRoot });
+
+    // Unbound: the active project, like every other project-scope call.
+    expect(mgr.resolveSettingsFilePathForKey(PLUGIN_ID, "token", "project")).toBe(localFile());
+    expect(mgr.resolveSettingsFilePathForKey(PLUGIN_ID, "ref", "project")).toBe(repoFile());
+
+    // Bound: the instance key names the project; the active one is never read.
+    projectStoreMock.getCurrentProject.mockReturnValue({
+      id: OTHER_PROJECT_ID,
+      path: path.join(tmpDir, "other"),
+    });
+    expect(mgr.resolveSettingsFilePathForKey(instance, "token", "project", projectRoot)).toBe(
+      localFile(instance)
+    );
+    // A bound host with no instance key has no project id to key the file by,
+    // so the secret has no target rather than landing in the active project's.
+    expect(
+      mgr.resolveSettingsFilePathForKey(PLUGIN_ID, "token", "project", projectRoot)
+    ).toBeUndefined();
   });
 });
