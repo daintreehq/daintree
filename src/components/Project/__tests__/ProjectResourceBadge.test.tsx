@@ -635,6 +635,24 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     expect(/\bborder\b/.test(workingMark)).not.toBe(/\bborder\b/.test(idleMark));
   });
 
+  it("sits its mark in the footer's shared glyph column", async () => {
+    mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
+    statsStoreState.stats = { p1: { processCount: 1, activeAgentCount: 1 } };
+
+    const { container } = render(<ProjectResourceBadge />);
+    await flush();
+
+    // The footer's other rows share this leading column; a mark sized by
+    // itself put this label at a different x from Run command's (#12587).
+    const readout = container.querySelector("[data-status-readout]");
+    const slots = readout?.querySelectorAll('[data-sidebar-footer-slot="glyph"]') ?? [];
+    expect(slots).toHaveLength(1);
+    // The forced-colors hooks stay on the mark itself, not on its column.
+    const mark = slots[0]!.querySelector(".status-mark");
+    expect(mark?.getAttribute("data-working")).toBe("true");
+    expect(slots[0]!.nextElementSibling?.textContent).toBe("1 project active");
+  });
+
   it("reads work from agent activity, not from processes being up", async () => {
     mockGetAll.mockResolvedValue([makeProject({ id: "p1", name: "Proj One" })]);
     // Processes are up but no agent is working — a shell sitting at a prompt.

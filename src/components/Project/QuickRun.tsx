@@ -18,6 +18,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useWorktrees } from "@/hooks/useWorktrees";
 import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { SidebarFooterGlyph } from "@/components/Layout/SidebarFooterGlyph";
 import type { RunCommand } from "@/types";
 import { logError } from "@/utils/logger";
 import { RunningTaskList } from "./RunningTaskList";
@@ -418,11 +419,13 @@ export function QuickRun({ projectId }: QuickRunProps) {
         aria-expanded={isExpanded}
         aria-controls="quick-run-panel"
       >
-        {isExpanded ? (
-          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
-        ) : (
-          <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
-        )}
+        <SidebarFooterGlyph>
+          {isExpanded ? (
+            <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="h-3 w-3 shrink-0" aria-hidden="true" />
+          )}
+        </SidebarFooterGlyph>
         <span className="font-medium shrink-0">Run command</span>
         {isExpanded && (
           <span className="ml-auto flex items-center gap-1 min-w-0 text-2xs">

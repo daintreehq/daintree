@@ -12,6 +12,7 @@ import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { useKeepAwakeStore } from "@/store/keepAwakeStore";
 import { usePanelStore } from "@/store/panelStore";
+import { useProjectPluginStore } from "@/store/projectPluginStore";
 import { QuickRun } from "@/components/Project/QuickRun";
 import { ProjectPluginIndicator } from "@/components/Plugin/ProjectPluginIndicator";
 import { SidebarStatusBar } from "../SidebarStatusBar";
@@ -183,6 +184,7 @@ function baseline(): void {
     error: null,
   });
   usePanelStore.setState({ panelsById: {}, panelIds: [] });
+  useProjectPluginStore.setState({ projectId: null, plugins: [], trust: null });
   useKeepAwakeStore.setState({
     visible: true,
     state: { config: { enabled: true, onBattery: false }, isBlocking: true, revision: 1 },
@@ -283,6 +285,35 @@ export const FIXTURES: Record<string, Fixture> = {
       } catch {
         // defaults to off, which the fixture label will contradict — acceptable
       }
+    },
+  },
+
+  /**
+   * All three strips at once. The plugin row only renders when the project has
+   * something to act on, so no other fixture shows the stack whose leading
+   * glyphs have to share one column.
+   */
+  "plugin-row": {
+    what: "a project plugin switched off — every footer strip stacked",
+    seed: () => {
+      baseline();
+      useProjectPluginStore.setState({
+        projectId: PROJECT_ID,
+        plugins: [
+          {
+            projectId: PROJECT_ID,
+            id: "acme.deploy",
+            displayName: "Deploy",
+            version: "1.0.0",
+            capabilities: [],
+            dirName: "deploy",
+            state: "blocked",
+            muted: true,
+            collidesWithGlobal: false,
+          },
+        ],
+        trust: { projectId: PROJECT_ID, decision: "enabled", enabled: true, persisted: true },
+      });
     },
   },
 
