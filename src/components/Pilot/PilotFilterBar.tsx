@@ -282,6 +282,7 @@ export function PilotFilterBar({
             key={segment}
             type="button"
             role="radio"
+            data-quick-state-segment
             aria-checked={isActive}
             // Roving tabindex: the checked segment is the bar's single tab
             // stop, so Tab from the search box lands on the active filter
