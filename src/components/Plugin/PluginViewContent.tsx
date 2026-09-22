@@ -715,6 +715,11 @@ export function makePluginViewContent(
       (error: Error) => {
         boundaryShowingError.current = true;
         lastErrorWasImportStage.current = isImportStageFailure(error);
+        // The boundary has thrown the view away, so whatever it said it held
+        // went with it, and the setter it kept must not raise the flag again
+        // (#12611). Retired before the abort so no abort listener sees it live.
+        attemptRef.current += 1;
+        retireUnsavedOwner();
         // Abort BEFORE reporting, and for the same reason `handleReset` does it
         // on retry: the thrown-away view instance is finished either way, so
         // anything it tied to `disposeSignal` has to cancel now rather than keep
@@ -724,7 +729,7 @@ export function makePluginViewContent(
         controllerRef.current?.abort();
         reportViewRenderFailed(panelId, { kindId, pluginId });
       },
-      [panelId]
+      [panelId, retireUnsavedOwner]
     );
 
     /**
@@ -1017,11 +1022,13 @@ export function makePluginViewContent(
      * A view's unsaved-work report, bound to the attempt that made it (#12611).
      * Only the attempt that is current may raise or lower the flag, and it does
      * so under its own token, so a setter held past its view cannot clear what
-     * the replacement raised.
+     * the replacement raised. Not gated on `aliveRef`: a StrictMode replay runs
+     * the view's effects before this host's, so a view re-reporting from its
+     * mount effect would find the host still marked dead.
      */
     const setHasUnsavedChangesFor = useCallback(
       (attempt: number, hasUnsavedChanges: boolean): void => {
-        if (!aliveRef.current || attempt !== attemptRef.current) return;
+        if (attempt !== attemptRef.current) return;
         setViewUnsavedChanges(panelId, unsavedOwnerRef.current, hasUnsavedChanges === true);
       },
       [panelId]
@@ -1043,9 +1050,26 @@ export function makePluginViewContent(
       });
     }, [offerRequestReload, panelId, handleReloadPanel]);
 
-    // An unmounted view holds nothing, so neither does the panel.
+    // An unmounted view holds nothing, so neither does the panel. Deferred and
+    // called off by a replayed setup, like the dispose abort above: StrictMode
+    // runs this cleanup and then the view's own effects, which may report
+    // unsaved work again before this setup runs. A real unmount never re-runs
+    // setup, so the retirement lands and a setter the view kept goes stale.
+    const pendingUnsavedRetire = useRef<{ cancelled: boolean } | null>(null);
     useEffect(() => {
-      return () => retireUnsavedOwner();
+      if (pendingUnsavedRetire.current) {
+        pendingUnsavedRetire.current.cancelled = true;
+        pendingUnsavedRetire.current = null;
+      }
+      return () => {
+        const retire = { cancelled: false };
+        pendingUnsavedRetire.current = retire;
+        queueMicrotask(() => {
+          if (retire.cancelled) return;
+          attemptRef.current += 1;
+          retireUnsavedOwner();
+        });
+      };
     }, [retireUnsavedOwner]);
 
     // Stale content stays visible behind a terminal failure — it is the last

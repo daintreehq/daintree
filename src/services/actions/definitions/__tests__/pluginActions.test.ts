@@ -519,6 +519,40 @@ describe("plugin.reloadPanel (#12611)", () => {
     );
   });
 
+  it("leaves an approval for its own panel when another panel reloads", async () => {
+    panelState.panelsById["plugin-2"] = { id: "plugin-2", kind: "acme.dashboard", title: "Two" };
+    usePluginPanelReloadConfirmStore.getState().approve("plugin-1");
+
+    await run("plugin.reloadPanel", { panelId: "plugin-2" });
+
+    expect(usePluginPanelReloadConfirmStore.getState().consumeApproval("plugin-1")).toBe(true);
+  });
+
+  it("spends the approval even when the approved panel has gone", async () => {
+    usePluginPanelReloadConfirmStore.getState().approve("gone-1");
+
+    await expect(run("plugin.reloadPanel", { panelId: "gone-1" })).rejects.toThrow(/No panel/);
+    expect(usePluginPanelReloadConfirmStore.getState().approvedPanelId).toBeNull();
+  });
+
+  it("stages through ActionService for an agent, as a recognisable staged confirmation", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const { isStagedConfirmation } = await import("../../confirmationStaged");
+    const service = new ActionService();
+    service.register(definition("plugin.reloadPanel"));
+    const handler = vi.fn();
+    registerUserViewReload("plugin-1", handler);
+    setViewUnsavedChanges("plugin-1", {}, true);
+
+    for (const args of [{ panelId: "plugin-1" }, { panelId: "plugin-1", confirmed: true }]) {
+      const result = await service.dispatch("plugin.reloadPanel", args, { source: "agent" });
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(isStagedConfirmation(result.error)).toBe(true);
+    }
+    expect(handler).not.toHaveBeenCalled();
+    expect(usePluginPanelReloadConfirmStore.getState().pending?.panelId).toBe("plugin-1");
+  });
+
   it("does not let one panel's approval cover another", async () => {
     panelState.panelsById["plugin-2"] = { id: "plugin-2", kind: "acme.dashboard", title: "Two" };
     setViewUnsavedChanges("plugin-2", {}, true);

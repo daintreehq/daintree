@@ -860,7 +860,9 @@ describe("the user's Reload panel (#12611)", () => {
 
     expect(document.activeElement).not.toBe(document.body);
     expect(content.contains(document.activeElement)).toBe(false);
+    // The host-owned status wrapper, which sits beside the content it replaced.
     expect(document.activeElement?.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement?.nextElementSibling).toBe(screen.getByTestId("plugin-content"));
   });
 
   it("leaves focus alone when it was somewhere else", async () => {
@@ -894,6 +896,7 @@ describe("setHasUnsavedChanges (#12611)", () => {
   it("keeps one setter per attempt", async () => {
     const { rerender, Content } = await mountContent();
     const first = latest().setHasUnsavedChanges;
+    expect(typeof first).toBe("function");
     rerender(<Content panelId="panel-1" offerRequestReload />);
     expect(latest().setHasUnsavedChanges).toBe(first);
   });
@@ -944,9 +947,59 @@ describe("setHasUnsavedChanges (#12611)", () => {
   it("is lowered when the content unmounts", async () => {
     const { lifecycle, unmount } = await mountContent();
     act(() => latest().setHasUnsavedChanges?.(true));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(true);
+    const held = latest().setHasUnsavedChanges;
 
     unmount();
+    await act(async () => {});
 
     expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+    held?.(true);
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+  });
+
+  it("is lowered when the loop breaker stops the view, and stays down", async () => {
+    const { lifecycle } = await mountContent();
+    for (let i = 0; i < lifecycle.VIEW_RELOAD_LIMIT; i++) {
+      await requestReload();
+    }
+    const last = latest();
+    act(() => last.setHasUnsavedChanges?.(true));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(true);
+
+    await requestReload();
+
+    expect(blockedBanner()).not.toBeNull();
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+    act(() => last.setHasUnsavedChanges?.(true));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+  });
+
+  it("is lowered when the view crashes, and the crashed view cannot raise it", async () => {
+    const { lifecycle } = await mountContent();
+    const crashed = latest();
+    act(() => crashed.setHasUnsavedChanges?.(true));
+
+    await act(async () => {
+      boundaryCallbacks.onError?.(new Error("view threw"));
+    });
+
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+    act(() => crashed.setHasUnsavedChanges?.(true));
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+  });
+
+  it("survives a StrictMode replay and goes with the final unmount", async () => {
+    h.onMountEffect = (props) => props.setHasUnsavedChanges?.(true);
+    const { lifecycle, unmount } = await mountContent({}, { strict: true });
+    await act(async () => {});
+
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(true);
+    expect(lifecycle.requestUserViewReload("panel-1")).toBe(true);
+
+    unmount();
+    await act(async () => {});
+    expect(lifecycle.hasViewUnsavedChanges("panel-1")).toBe(false);
+    expect(lifecycle.requestUserViewReload("panel-1")).toBe(false);
   });
 });

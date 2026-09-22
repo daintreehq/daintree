@@ -1169,6 +1169,27 @@ describe("PanelHeader", () => {
       expect(onToggleMaximize).not.toHaveBeenCalled();
     });
 
+    it("routes Reload panel to plugin.reloadPanel for this panel by id (#12611)", () => {
+      registerPluginKind(PLUGIN_KIND);
+      mockStoreState = { ...mockStoreState, focusedId: "other-panel" };
+      render(<PanelHeader {...makeProps({ kind: PLUGIN_KIND })} />);
+
+      findMenuButton("Reload panel")!.click();
+
+      expect(mockDispatch).toHaveBeenCalledTimes(1);
+      expect(mockDispatch).toHaveBeenCalledWith(
+        "plugin.reloadPanel",
+        { panelId: "test-panel" },
+        { source: "menu" }
+      );
+    });
+
+    it.each(["file", "file-browser", "diff"])("offers no Reload panel on %s panels", (kind) => {
+      render(<PanelHeader {...makeProps({ kind })} />);
+
+      expect(findMenuButton("Reload panel")).toBeUndefined();
+    });
+
     it("asks a panel holding unsaved work before removing it", async () => {
       registerPluginKind(PLUGIN_KIND);
       let verdict: "proceed" | "cancel" = "cancel";

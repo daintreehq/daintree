@@ -75,11 +75,12 @@ const tracked = new Map<string, TrackedPanel>();
  */
 const userReloadHandlers = new Map<string, Array<() => void>>();
 /**
- * Which view attempt last said it holds unsaved work, per panel (#12611).
- * Keyed by an owner token rather than a boolean so a setter held past its
- * attempt can never clear the flag its replacement raised.
+ * The view attempts that say they hold unsaved work, per panel (#12611). Owner
+ * tokens rather than a boolean so a setter held past its attempt can never
+ * clear the flag its replacement raised, and a set because two hosts of one
+ * panel can overlap: one leaving must not clear what the other still holds.
  */
-const unsavedOwners = new Map<string, object>();
+const unsavedOwners = new Map<string, Set<object>>();
 let pending: PluginPanelLifecycleEvent[] = [];
 let flushScheduled = false;
 let nextMountToken = 1;
@@ -333,11 +334,14 @@ export function requestUserViewReload(panelId: string): boolean {
  * it, so a stale setter cannot clear its replacement's flag.
  */
 export function setViewUnsavedChanges(panelId: string, owner: object, dirty: boolean): void {
+  const owners = unsavedOwners.get(panelId);
   if (dirty) {
-    unsavedOwners.set(panelId, owner);
+    if (owners) owners.add(owner);
+    else unsavedOwners.set(panelId, new Set([owner]));
     return;
   }
-  if (unsavedOwners.get(panelId) === owner) unsavedOwners.delete(panelId);
+  if (!owners?.delete(owner)) return;
+  if (owners.size === 0) unsavedOwners.delete(panelId);
 }
 
 /** Whether the panel's live view attempt says it holds unsaved work. */

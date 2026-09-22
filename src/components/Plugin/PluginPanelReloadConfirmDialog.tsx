@@ -35,6 +35,9 @@ export function PluginPanelReloadConfirmDialog(): ReactElement | null {
       description={`${pending.panelTitle} has changes it hasn't saved. Reloading the panel discards them.`}
       confirmLabel="Reload panel"
       variant="destructive"
+      // The reload can be asked for from a panel hosted in a nested dialog,
+      // which sits on the nested layer; the modal layer would open underneath.
+      zIndex="nested"
       onConfirm={handleConfirm}
     />
   );

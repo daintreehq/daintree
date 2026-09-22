@@ -404,6 +404,18 @@ describe("unsaved changes (#12611)", () => {
     expect(hasViewUnsavedChanges("p1")).toBe(true);
   });
 
+  it("stays raised while an overlapping host still holds unsaved work", () => {
+    const leaving = {};
+    const staying = {};
+    setViewUnsavedChanges("p1", staying, true);
+    setViewUnsavedChanges("p1", leaving, true);
+    setViewUnsavedChanges("p1", leaving, false);
+
+    expect(hasViewUnsavedChanges("p1")).toBe(true);
+    setViewUnsavedChanges("p1", staying, false);
+    expect(hasViewUnsavedChanges("p1")).toBe(false);
+  });
+
   it("is per panel", () => {
     setViewUnsavedChanges("p1", {}, true);
     expect(hasViewUnsavedChanges("p2")).toBe(false);

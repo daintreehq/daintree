@@ -410,6 +410,20 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     expect(dispatch).toHaveBeenCalledWith(actionId, { terminalId: "panel-1" }, expect.anything());
   });
 
+  it("reloads this panel by id, never the focused one (#12611)", () => {
+    registerPluginKind(VIEW_PLUGIN_KIND);
+    renderMenuFor(pluginPanel);
+
+    findRow(commandLabel({}, "reload"))!.click();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith(
+      "plugin.reloadPanel",
+      { panelId: "panel-1" },
+      expect.anything()
+    );
+  });
+
   it("asks a panel holding unsaved work before removing it", async () => {
     let verdict: "proceed" | "cancel" = "cancel";
     const guard = vi.fn(async () => verdict);
