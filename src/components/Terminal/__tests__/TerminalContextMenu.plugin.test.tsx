@@ -100,6 +100,7 @@ vi.mock("@/store", () => ({
 
 import { registerPanelKind, unregisterPanelKind } from "@shared/config/panelKindRegistry";
 import { TerminalContextMenu } from "../TerminalContextMenu";
+import { getGenericPanelMenuGroups } from "@/components/Panel/genericPanelMenu";
 
 // A PTY-backed plugin kind. Registered so the real `panelKindHasPty` reports
 // `hasPty: true` for it, which is what keeps such a panel on the terminal menu
@@ -167,6 +168,50 @@ describe("TerminalContextMenu — plugin panels (#11228)", () => {
     const [actionId, args] = dispatch.mock.calls[0]!;
     expect(actionId).toBe("terminal.trash");
     expect(args).toMatchObject({ terminalId: "panel-1" });
+  });
+
+  it("lists the shared panel commands in the shared order (#12606)", () => {
+    // The header's overflow menu renders this same list; asserting both
+    // against it is what keeps the two menus from drifting apart again.
+    renderMenuFor(pluginPanel);
+
+    const labels = Array.from(document.querySelectorAll("button")).map((button) =>
+      button.textContent?.replace("^⇧F", "").trim()
+    );
+    const expected = getGenericPanelMenuGroups({
+      kind: "acme.dashboard",
+      location: "grid",
+      isMaximized: false,
+      canMoveToWorktree: false,
+    })
+      .flat()
+      .map((command) => command.label);
+    expect(labels).toEqual(expected);
+    expect(labels).not.toContain("Duplicate panel");
+  });
+
+  it.each([
+    ["Maximize", "terminal.toggleMaximize"],
+    ["Send to background", "terminal.background"],
+    ["Remove panel", "terminal.kill"],
+  ])("routes %s to %s for this panel", (label, actionId) => {
+    renderMenuFor(pluginPanel);
+
+    screen.getByText(label).click();
+
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    const [calledId, args] = dispatch.mock.calls[0]!;
+    expect(calledId).toBe(actionId);
+    expect(args).toMatchObject({ terminalId: "panel-1" });
+  });
+
+  it("offers a docked plugin panel Move to grid", () => {
+    renderMenuFor({ ...pluginPanel, location: "dock" });
+
+    screen.getByText("Move to grid").click();
+
+    expect(dispatch.mock.calls[0]?.[0]).toBe("terminal.moveToGrid");
+    expect(screen.queryByText("Maximize")).toBeNull();
   });
 
   it("still gives a built-in terminal the terminal menu", () => {

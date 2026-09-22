@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
 import { isMac, isWindows } from "@/lib/platform";
 import type React from "react";
 import { type PanelLocation } from "@/types";
@@ -90,6 +90,7 @@ import { MenuActionSourceContext, type MenuActionSourceValue } from "@/component
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { PopoverAnchor } from "@/components/ui/popover";
 import { MoveToWorktreePicker } from "@/components/Panel/MoveToWorktreePicker";
+import { getGenericPanelMenuGroups } from "@/components/Panel/genericPanelMenu";
 
 const ICON_CLASS = "w-3.5 h-3.5 mr-2 shrink-0";
 
@@ -759,43 +760,46 @@ export function TerminalContextMenu({
   const submenuWorktrees = worktrees.slice(0, MOVE_TO_WORKTREE_SUBMENU_LIMIT);
   const hasMoreWorktrees = worktrees.length > submenuWorktrees.length;
 
-  const layoutSection = (
-    <>
-      {worktrees.length > 1 && (
-        <ContextMenuSub>
-          <ContextMenuSubTrigger>
-            <FolderGit2 className={ICON_CLASS} />
-            Move to worktree
-          </ContextMenuSubTrigger>
-          {/* No search field in here: Radix's typeahead claims printable keys
+  const canMoveToWorktree = worktrees.length > 1;
+  const moveToWorktreeSubmenu = canMoveToWorktree && (
+    <ContextMenuSub>
+      <ContextMenuSubTrigger>
+        <FolderGit2 className={ICON_CLASS} />
+        Move to worktree
+      </ContextMenuSubTrigger>
+      {/* No search field in here: Radix's typeahead claims printable keys
               inside a submenu, so finding a worktree past the cap is the
               picker's job. */}
-          <ContextMenuSubContent>
-            {submenuWorktrees.map((wt) => {
-              const isCurrent = wt.id === terminal.worktreeId;
-              return (
-                <ContextMenuItem
-                  key={wt.id}
-                  disabled={isCurrent}
-                  onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
-                >
-                  <FolderGit2 className={ICON_CLASS} />
-                  {getWorktreeHeadline(wt).label}
-                </ContextMenuItem>
-              );
-            })}
-            {hasMoreWorktrees && (
-              <>
-                <ContextMenuSeparator />
-                <ContextMenuItem aria-haspopup="dialog" onSelect={handleMoveToWorktreeMore}>
-                  <FolderGit2 className={ICON_CLASS} />
-                  More worktrees…
-                </ContextMenuItem>
-              </>
-            )}
-          </ContextMenuSubContent>
-        </ContextMenuSub>
-      )}
+      <ContextMenuSubContent>
+        {submenuWorktrees.map((wt) => {
+          const isCurrent = wt.id === terminal.worktreeId;
+          return (
+            <ContextMenuItem
+              key={wt.id}
+              disabled={isCurrent}
+              onSelect={() => handleAction(`move-to-worktree:${wt.id}`)}
+            >
+              <FolderGit2 className={ICON_CLASS} />
+              {getWorktreeHeadline(wt).label}
+            </ContextMenuItem>
+          );
+        })}
+        {hasMoreWorktrees && (
+          <>
+            <ContextMenuSeparator />
+            <ContextMenuItem aria-haspopup="dialog" onSelect={handleMoveToWorktreeMore}>
+              <FolderGit2 className={ICON_CLASS} />
+              More worktrees…
+            </ContextMenuItem>
+          </>
+        )}
+      </ContextMenuSubContent>
+    </ContextMenuSub>
+  );
+
+  const layoutSection = (
+    <>
+      {moveToWorktreeSubmenu}
       {terminalPty?.launchAgentId && (
         <ContextMenuItem
           onSelect={() =>
@@ -1059,25 +1063,35 @@ export function TerminalContextMenu({
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent onCloseAutoFocus={handleCloseAutoFocus}>
-          {layoutSection}
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("rename")}>
-            <Pencil className={ICON_CLASS} aria-hidden="true" />
-            Rename panel
-          </ContextMenuItem>
-          <ContextMenuSeparator />
-          <ContextMenuItem onSelect={() => handleAction("background")}>
-            <ArrowDownFromLine className={ICON_CLASS} aria-hidden="true" />
-            Send to background
-          </ContextMenuItem>
-          <ContextMenuItem onSelect={() => handleAction("trash")}>
-            <Trash2 className={ICON_CLASS} aria-hidden="true" />
-            Trash panel
-          </ContextMenuItem>
-          <ContextMenuItem destructive onSelect={() => handleAction("kill")}>
-            <OctagonX className={ICON_CLASS} aria-hidden="true" />
-            Remove panel
-          </ContextMenuItem>
+          {/* The header's overflow menu renders this same list (#12606). */}
+          {getGenericPanelMenuGroups({
+            kind: terminal.kind ?? "terminal",
+            location: currentLocation === "grid" ? "grid" : "dock",
+            isMaximized,
+            canMoveToWorktree,
+          }).map((group, groupIndex) => (
+            <Fragment key={group[0]?.id ?? groupIndex}>
+              {groupIndex > 0 && <ContextMenuSeparator />}
+              {group.map((command) =>
+                command.id === "move-to-worktree" ? (
+                  <Fragment key={command.id}>{moveToWorktreeSubmenu}</Fragment>
+                ) : (
+                  <ContextMenuItem
+                    key={command.id}
+                    disabled={command.disabled}
+                    destructive={command.destructive}
+                    onSelect={() => handleAction(command.id)}
+                  >
+                    <command.icon className={ICON_CLASS} aria-hidden="true" />
+                    {command.label}
+                    {command.id === "toggle-maximize" && (
+                      <ContextMenuShortcut>^⇧F</ContextMenuShortcut>
+                    )}
+                  </ContextMenuItem>
+                )
+              )}
+            </Fragment>
+          ))}
         </ContextMenuContent>
         {movePicker}
       </ContextMenu>

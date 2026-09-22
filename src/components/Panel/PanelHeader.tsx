@@ -90,6 +90,12 @@ import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { TabButton, type TabInfo } from "./TabButton";
 import { SortableTabButton } from "./SortableTabButton";
 import { MoveToWorktreePicker } from "./MoveToWorktreePicker";
+import {
+  GENERIC_PANEL_MENU_ACTION_IDS,
+  getGenericPanelMenuGroups,
+  hasGenericPanelMenu,
+  type GenericPanelMenuCommandId,
+} from "./genericPanelMenu";
 
 import {
   panelKindCanRestart,
@@ -435,6 +441,23 @@ function PanelHeaderComponent({
     },
     [id]
   );
+
+  // The same list the right-click menu renders for these kinds (#12606), so
+  // the two menus offer one set of panel commands.
+  const genericMenuGroups = hasGenericPanelMenu(kind)
+    ? getGenericPanelMenuGroups({ kind, location, isMaximized, canMoveToWorktree })
+    : null;
+  const handleGenericMenuCommand = (commandId: GenericPanelMenuCommandId) => {
+    if (commandId === "move-to-worktree") {
+      handleMoveToWorktreeSelect();
+      return;
+    }
+    void actionService.dispatch(
+      GENERIC_PANEL_MENU_ACTION_IDS[commandId],
+      { terminalId: id },
+      { source: "menu" }
+    );
+  };
 
   // Restart handler for Radix DropdownMenu onSelect
   const handleRestartSelect = useCallback(
@@ -1283,148 +1306,179 @@ function PanelHeaderComponent({
               className="min-w-[160px]"
               onCloseAutoFocus={handleOverflowMenuCloseAutoFocus}
             >
-              {/* Session group */}
-              {hasPty && (
-                <DropdownMenuItem
-                  disabled={isHibernated}
-                  onSelect={() =>
-                    void actionService.dispatch(
-                      "terminal.redraw",
-                      { terminalId: id },
-                      { source: "menu" }
-                    )
-                  }
-                  data-testid="panel-redraw"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  Redraw
-                </DropdownMenuItem>
-              )}
-
-              {canRestart && onRestart && (
-                <DropdownMenuItem
-                  onSelect={handleRestartSelect}
-                  className={cn(
-                    armedRestartId === id && "bg-status-warning/10 text-status-warning"
+              {genericMenuGroups ? (
+                genericMenuGroups.map((group, groupIndex) => (
+                  <React.Fragment key={group[0]?.id ?? groupIndex}>
+                    {groupIndex > 0 && <DropdownMenuSeparator />}
+                    {group.map((command) => (
+                      <DropdownMenuItem
+                        key={command.id}
+                        disabled={command.disabled}
+                        destructive={command.destructive}
+                        onSelect={() => handleGenericMenuCommand(command.id)}
+                      >
+                        <command.icon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                        {/* The right-click menu shows the worktrees as a
+                            submenu; here the command opens the picker. */}
+                        {command.id === "move-to-worktree" ? `${command.label}…` : command.label}
+                      </DropdownMenuItem>
+                    ))}
+                    {groupIndex === genericMenuGroups.length - 2 && headerActions && (
+                      <>
+                        <DropdownMenuSeparator />
+                        {headerActions}
+                      </>
+                    )}
+                  </React.Fragment>
+                ))
+              ) : (
+                <>
+                  {/* Session group */}
+                  {hasPty && (
+                    <DropdownMenuItem
+                      disabled={isHibernated}
+                      onSelect={() =>
+                        void actionService.dispatch(
+                          "terminal.redraw",
+                          { terminalId: id },
+                          { source: "menu" }
+                        )
+                      }
+                      data-testid="panel-redraw"
+                    >
+                      <RefreshCw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Redraw
+                    </DropdownMenuItem>
                   )}
-                  data-testid={armedRestartId === id ? "panel-restart-confirm" : "panel-restart"}
-                  aria-label={
-                    armedRestartId === id
-                      ? `Armed — click again to confirm restart. ${countdown !== null ? `Confirmation expires in ${countdown} seconds` : ""}`
-                      : "Restart session"
-                  }
-                >
-                  <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  {armedRestartId === id
-                    ? `Confirm restart (${countdown ?? 0}s)`
-                    : "Restart session"}
-                </DropdownMenuItem>
-              )}
 
-              {canMoveToWorktree && (
-                <DropdownMenuItem onSelect={handleMoveToWorktreeSelect}>
-                  <FolderGit2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  Move to worktree…
-                </DropdownMenuItem>
-              )}
-
-              {agentId && (
-                <DropdownMenuItem
-                  onSelect={() =>
-                    void actionService.dispatch(
-                      "terminal.moveToNewWorktree",
-                      { terminalId: id },
-                      { source: "menu" }
-                    )
-                  }
-                >
-                  <FolderGit2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  Move to new worktree…
-                </DropdownMenuItem>
-              )}
-
-              {/* Management group */}
-              {((canRestart && onRestart) || hasPty || canMoveToWorktree || agentId) && (
-                <DropdownMenuSeparator />
-              )}
-              {location === "dock" && onRestore && (
-                <DropdownMenuItem onSelect={() => onRestore()}>
-                  <PanelTopClose className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  Move to grid
-                </DropdownMenuItem>
-              )}
-              <DropdownMenuItem
-                onSelect={() =>
-                  void actionService.dispatch(
-                    "terminal.rename",
-                    { terminalId: id },
-                    { source: "menu" }
-                  )
-                }
-              >
-                <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                Rename
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                onSelect={() =>
-                  void actionService.dispatch(
-                    "terminal.duplicate",
-                    { terminalId: id },
-                    { source: "menu" }
-                  )
-                }
-              >
-                <CopyPlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                Duplicate
-              </DropdownMenuItem>
-              {hasPty && (
-                <DropdownMenuItem
-                  onSelect={() =>
-                    void actionService.dispatch(
-                      "terminal.toggleInputLock",
-                      { terminalId: id },
-                      { source: "menu" }
-                    )
-                  }
-                >
-                  {isInputLocked ? (
-                    <Unlock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  ) : (
-                    <Lock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                  {canRestart && onRestart && (
+                    <DropdownMenuItem
+                      onSelect={handleRestartSelect}
+                      className={cn(
+                        armedRestartId === id && "bg-status-warning/10 text-status-warning"
+                      )}
+                      data-testid={
+                        armedRestartId === id ? "panel-restart-confirm" : "panel-restart"
+                      }
+                      aria-label={
+                        armedRestartId === id
+                          ? `Armed — click again to confirm restart. ${countdown !== null ? `Confirmation expires in ${countdown} seconds` : ""}`
+                          : "Restart session"
+                      }
+                    >
+                      <RotateCcw className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      {armedRestartId === id
+                        ? `Confirm restart (${countdown ?? 0}s)`
+                        : "Restart session"}
+                    </DropdownMenuItem>
                   )}
-                  {isInputLocked ? "Unlock input" : "Lock input"}
-                </DropdownMenuItem>
-              )}
-              {showWatchButton && (
-                <DropdownMenuItem onSelect={handleWatchToggle}>
-                  {isWatched ? (
-                    <BellOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  ) : (
-                    <Bell className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+
+                  {canMoveToWorktree && (
+                    <DropdownMenuItem onSelect={handleMoveToWorktreeSelect}>
+                      <FolderGit2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Move to worktree…
+                    </DropdownMenuItem>
                   )}
-                  {isWatched ? "Cancel watch" : "Watch"}
-                </DropdownMenuItem>
+
+                  {agentId && (
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        void actionService.dispatch(
+                          "terminal.moveToNewWorktree",
+                          { terminalId: id },
+                          { source: "menu" }
+                        )
+                      }
+                    >
+                      <FolderGit2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Move to new worktree…
+                    </DropdownMenuItem>
+                  )}
+
+                  {/* Management group */}
+                  {((canRestart && onRestart) || hasPty || canMoveToWorktree || agentId) && (
+                    <DropdownMenuSeparator />
+                  )}
+                  {location === "dock" && onRestore && (
+                    <DropdownMenuItem onSelect={() => onRestore()}>
+                      <PanelTopClose className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      Move to grid
+                    </DropdownMenuItem>
+                  )}
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      void actionService.dispatch(
+                        "terminal.rename",
+                        { terminalId: id },
+                        { source: "menu" }
+                      )
+                    }
+                  >
+                    <Pencil className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Rename
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onSelect={() =>
+                      void actionService.dispatch(
+                        "terminal.duplicate",
+                        { terminalId: id },
+                        { source: "menu" }
+                      )
+                    }
+                  >
+                    <CopyPlus className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Duplicate
+                  </DropdownMenuItem>
+                  {hasPty && (
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        void actionService.dispatch(
+                          "terminal.toggleInputLock",
+                          { terminalId: id },
+                          { source: "menu" }
+                        )
+                      }
+                    >
+                      {isInputLocked ? (
+                        <Unlock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      ) : (
+                        <Lock className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      )}
+                      {isInputLocked ? "Unlock input" : "Lock input"}
+                    </DropdownMenuItem>
+                  )}
+                  {showWatchButton && (
+                    <DropdownMenuItem onSelect={handleWatchToggle}>
+                      {isWatched ? (
+                        <BellOff className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      ) : (
+                        <Bell className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                      )}
+                      {isWatched ? "Cancel watch" : "Watch"}
+                    </DropdownMenuItem>
+                  )}
+
+                  {/* Header actions slot */}
+                  {headerActions && <DropdownMenuSeparator />}
+                  {headerActions}
+
+                  {/* Destructive group */}
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    destructive
+                    onSelect={() =>
+                      void actionService.dispatch(
+                        "terminal.trash",
+                        { terminalId: id },
+                        { source: "menu" }
+                      )
+                    }
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Trash
+                  </DropdownMenuItem>
+                </>
               )}
-
-              {/* Header actions slot */}
-              {headerActions && <DropdownMenuSeparator />}
-              {headerActions}
-
-              {/* Destructive group */}
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                destructive
-                onSelect={() =>
-                  void actionService.dispatch(
-                    "terminal.trash",
-                    { terminalId: id },
-                    { source: "menu" }
-                  )
-                }
-              >
-                <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                Trash
-              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         )}
