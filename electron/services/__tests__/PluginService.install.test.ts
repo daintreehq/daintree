@@ -117,6 +117,8 @@ import * as PluginArchive from "../PluginArchive.js";
 import { pluginInstallJobs } from "../plugin/PluginInstallJobRegistry.js";
 import { resilientRename } from "../../utils/fs.js";
 import { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 /** A PluginBlocklistService backed by an in-memory list (no network/disk). */
 function fakeBlocklist(entries: Array<Record<string, unknown>>): PluginBlocklistService {
@@ -365,23 +367,32 @@ describe("installPlugin — validation failures (rollback)", () => {
     service.dispose();
   });
 
-  it("rejects an incompatible engines.daintree range", async () => {
+  it("installs and loads a plugin outside its engines.daintree range, with a warning", async () => {
     const archive = await makeArchive({
       name: "acme.future",
       version: "1.0.0",
       engines: { daintree: ">=99.0.0" },
     });
     const service = new PluginService(pluginsRoot, "0.0.0");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await service.installPlugin(archive);
+    try {
+      const result = await service.installPlugin(archive);
 
-    expect(result.status).toBe("failed");
-    if (result.status === "failed") {
-      expect(result.errors[0].code).toBe("engine_incompatible");
+      expect(result.status).toBe("installed");
+      expect(await exists(path.join(pluginsRoot, "acme.future"))).toBe(true);
+      expect(service.hasPlugin("acme.future")).toBe(true);
+      expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.objectContaining({
+          type: "warning",
+          message: expect.stringContaining('"acme.future" targets Daintree >=99.0.0'),
+        })
+      );
+    } finally {
+      warnSpy.mockRestore();
+      service.dispose();
     }
-    expect(await exists(path.join(pluginsRoot, "acme.future"))).toBe(false);
-
-    service.dispose();
   });
 
   it("returns archive_invalid for a missing source path", async () => {

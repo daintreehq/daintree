@@ -21,7 +21,7 @@ import { randomUUID } from "crypto";
  *   `PluginService` instance, but the module evaluation path still touches
  *   `app.getVersion()` via the singleton.
  * - `broadcastToRenderer` is also mocked because it is imported at module
- *   scope by `PluginService` and called from the `engines.daintree` reject path.
+ *   scope by `PluginService` and called from the `engines.daintree` warning path.
  * - `vitest.integration.config.ts` uses `pool: forks` with `singleFork: true`,
  *   so the module-level registries persist across tests. `afterEach` clears
  *   them explicitly.

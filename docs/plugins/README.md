@@ -73,7 +73,7 @@ The two entry points are at the top of this page. Everything below is reference 
 
 `@daintreehq/plugin-sdk` is not yet published on npm (see the [status banner](#daintree-plugins) above); once it ships it will follow semver but stay pre-1.0 until the SDK stabilizes. Breaking changes may occur between 0.x minor versions, so pin to an exact version during early development and upgrade deliberately.
 
-The `engines.daintree` field in your manifest controls host compatibility. A plugin declaring a range the running Daintree doesn't satisfy is rejected at load with a user-visible warning. Declare an **open-ended lower bound** (`">=0.34.0"`), never a caret — under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so it stops matching on the very next minor. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
+The `engines.daintree` field in your manifest controls host compatibility. A plugin declaring a range the running Daintree doesn't satisfy still loads, with a warning toast that it may not work on this version. Declare an **open-ended lower bound** (`">=0.34.0"`), never a caret — under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so it stops matching on the very next minor. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
 
 ## Security and trust
 

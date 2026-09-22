@@ -5,8 +5,8 @@ import path from "path";
 import os from "os";
 import { pathToFileURL } from "url";
 import { app } from "electron";
-import * as semver from "semver";
 import { createLogger } from "../utils/logger.js";
+import { PRODUCT_WEBSITE } from "../utils/productBranding.js";
 // Aliased to avoid colliding with Vite's auto-injected ESM shim
 // (`import { createRequire } from 'module'; const require = createRequire(import.meta.url);`),
 // which it adds to every bundled chunk for CJS interop.
@@ -142,6 +142,7 @@ import {
   type ParsedPluginBlocklist,
 } from "./plugin/PluginBlocklistService.js";
 import { PluginInstaller } from "./plugin/PluginInstaller.js";
+import { checkPluginEngineRange, type PluginEngineMismatch } from "./plugin/pluginEngineCompat.js";
 import { PluginDevWorkerHost } from "./plugin/PluginDevWorkerHost.js";
 import { PluginDevWorkerMainBridge } from "./plugin/PluginDevWorkerMainBridge.js";
 import { agentMcpEndpointRegistry } from "./pluginAgentMcp/endpointRegistry.js";
@@ -251,6 +252,7 @@ import type {
   PluginDiagnosticsSnapshot,
 } from "../../shared/types/ipc/pluginDiagnostics.js";
 import { BUILT_IN_ACTION_IDS } from "../../shared/config/actionIds.js";
+import { isWindowsStoreBuild } from "../../shared/config/distribution.js";
 import { CONFIRM_TRIGGERING_CAPABILITIES } from "../../shared/config/pluginCapabilities.js";
 
 /** Plugin action IDs must be `{pluginId}.{actionId}`. Built-in IDs use colons, so the formats cannot collide. */
@@ -772,6 +774,12 @@ export class PluginService {
    */
   private pluginsWithLoadTimeErrors = new Set<string>();
   /**
+   * Plugin instances (by id, version and range) already warned about an unmet
+   * `engines.daintree` range this session. Project switches, watcher re-scans and dev rebuilds all
+   * re-run the load gate, and each would otherwise re-toast the same warning.
+   */
+  private engineMismatchWarned = new Set<string>();
+  /**
    * Runtime load/activation errors for project plugin instances (#12232).
    *
    * A project plugin loads under an instance key that
@@ -1086,7 +1094,6 @@ export class PluginService {
 
     this.installer = new PluginInstaller({
       getPluginsRoot: () => this.pluginsRoot,
-      getAppVersion: () => this.appVersion,
       records: this.records,
       getSettingsRoot: () => this.settings.settingsRoot(),
       loadPlugin: (root, pluginId, opts) => this.loadPlugin(root, pluginId, opts),
@@ -1504,6 +1511,58 @@ export class PluginService {
     return loaded;
   }
 
+  /**
+   * An unmet `engines.daintree` range is advisory (#12589). The plugin may well
+   * work, and the failure mode of trying is a broken plugin rather than a broken
+   * app, so it loads and the user is told once why it might misbehave.
+   */
+  private warnEngineMismatch(
+    pluginId: string,
+    binding: PluginHostBinding,
+    manifest: PluginManifest,
+    requiredRange: string,
+    mismatch: PluginEngineMismatch
+  ): void {
+    console.warn(
+      `[PluginService] Plugin "${pluginId}" targets Daintree ${requiredRange} but current version is ${this.appVersion} — loading anyway`
+    );
+    const warnedKey = `${pluginId}@${manifest.version} ${requiredRange}`;
+    if (this.engineMismatchWarned.has(warnedKey)) return;
+    this.engineMismatchWarned.add(warnedKey);
+
+    const remedy =
+      mismatch === "app-too-old"
+        ? " Update Daintree if you run into problems."
+        : mismatch === "app-too-new"
+          ? " Check for a newer version of the plugin if you run into problems."
+          : "";
+    // The updater can't be asked whether it's live this early in boot, and some
+    // distributions never register it, so point at the download page instead.
+    // The Store owns installs there, so a daintree.org download is wrong.
+    const offerDownload = mismatch === "app-too-old" && !isWindowsStoreBuild();
+    const payload = {
+      type: "warning" as const,
+      title: "Plugin version mismatch",
+      message: `"${manifest.displayName ?? manifest.name}" targets Daintree ${requiredRange} and may not work on ${this.appVersion}.${remedy}`,
+      rateLimitKey: `plugin-engine:${pluginId}`,
+      // An action would otherwise make the toast sticky, and several mismatched
+      // plugins at launch would stack up.
+      duration: 8000,
+      ...(offerDownload && {
+        action: {
+          label: "Download latest",
+          ipcChannel: CHANNELS.SYSTEM_OPEN_EXTERNAL,
+          data: `${PRODUCT_WEBSITE}/download`,
+        },
+      }),
+    };
+    if (binding.projectId) {
+      broadcastToProjectRenderers(binding.projectId, CHANNELS.NOTIFICATION_SHOW_TOAST, payload);
+    } else {
+      broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, payload);
+    }
+  }
+
   private async loadPlugin(
     root: string,
     dirName: string,
@@ -1714,17 +1773,8 @@ export class PluginService {
 
     const requiredRange = manifest.engines?.daintree;
     if (requiredRange) {
-      if (!semver.satisfies(this.appVersion, requiredRange, { includePrerelease: true })) {
-        console.error(
-          `[PluginService] Plugin "${manifest.name}" requires Daintree ${requiredRange} but current version is ${this.appVersion} — skipping`
-        );
-        broadcastToRenderer(CHANNELS.NOTIFICATION_SHOW_TOAST, {
-          type: "error",
-          title: "Plugin incompatible",
-          message: `Plugin "${manifest.displayName ?? manifest.name}" requires Daintree ${requiredRange} but current version is ${this.appVersion}.`,
-        });
-        return null;
-      }
+      const mismatch = checkPluginEngineRange(this.appVersion, requiredRange);
+      if (mismatch) this.warnEngineMismatch(pluginId, binding, manifest, requiredRange, mismatch);
     } else {
       console.warn(
         `[PluginService] Plugin "${manifest.name}" does not declare engines.daintree — consider adding it to ensure compatibility`
@@ -1735,8 +1785,8 @@ export class PluginService {
     // identified by load path. Non-builtins get one created on first encounter.
     // Disabled-state filtering already happened upstream via `opts.disabled`
     // (the unified `plugins.disabled` list, #9284), so we only run here when
-    // the plugin is going to load. Must run after the engine gate above so
-    // incompatible plugins don't leave zombie records in the store.
+    // the plugin is going to load. Must run after the rejecting gates above so
+    // refused plugins don't leave zombie records in the store.
     if (isUserInstalled) {
       const existing = this.records.getInstalledRecord(manifest.name);
       if (!existing) {

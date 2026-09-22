@@ -1,7 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
 import { randomUUID } from "node:crypto";
-import * as semver from "semver";
 import { createRequire as nodeCreateRequire } from "node:module";
 
 import {
@@ -76,8 +75,6 @@ interface InstallerPluginInfo {
 interface PluginInstallerDeps {
   /** User plugins root — the only directory the installer mutates. */
   getPluginsRoot: () => string;
-  /** Running Daintree version, for the engine-compatibility gate. */
-  getAppVersion: () => string;
   /** Persisted provenance record CRUD + disabled-list reads. */
   records: PluginInstalledRecordsStore;
   /** Per-(plugin,scope) user-settings file root — uninstall optionally deletes the file. */
@@ -111,7 +108,7 @@ interface PluginInstallerDeps {
 
 /**
  * Owns the atomic install/upgrade orchestration (lockfile, temp-dir staging,
- * manifest re-validation, engine check, archive hashing, atomic dir swap +
+ * manifest re-validation, archive hashing, atomic dir swap +
  * parked-old rollback, post-swap load-failure rollback), the manual
  * update-check download/hash/compare flow, the uninstall flow (unload + on-disk
  * delete + consent purge + MCP shutdown + record removal), and the stale
@@ -127,10 +124,6 @@ export class PluginInstaller {
 
   private get pluginsRoot(): string {
     return this.deps.getPluginsRoot();
-  }
-
-  private get appVersion(): string {
-    return this.deps.getAppVersion();
   }
 
   private get records(): PluginInstalledRecordsStore {
@@ -236,7 +229,8 @@ export class PluginInstaller {
    * 2. Extract / copy the source into a sibling `.install-tmp-*` dir — same
    *    filesystem as the final location so the eventual rename is atomic.
    * 3. Validate `plugin.json` with the strict Zod schema (unknown keys, reserved
-   *    `daintree.*` namespace, publisher/name agreement) and the engine range.
+   *    `daintree.*` namespace, publisher/name agreement). An unmet engine range
+   *    doesn't fail the install — the load that follows warns about it (#12589).
    * 4. Compute the `.dntr` SHA-256 for the `archiveHash` provenance field.
    * 5. If the id already exists: `unloadPlugin` (disposer cascade), then swap via
    *    rename — park old aside → move new in → restore old on failure. Per-plugin
@@ -396,19 +390,7 @@ export class PluginInstaller {
       }
       const manifest = parsed.data;
 
-      // 3. Engine compatibility.
-      const requiredRange = manifest.engines?.daintree;
-      if (
-        requiredRange &&
-        !semver.satisfies(this.appVersion, requiredRange, { includePrerelease: true })
-      ) {
-        return fail(
-          "engine_incompatible",
-          `Plugin requires Daintree ${requiredRange} but the running version is ${this.appVersion}`
-        );
-      }
-
-      // 4. Atomic swap into the final location.
+      // 3. Atomic swap into the final location.
       const pluginId = manifest.name;
       const finalDir = path.join(this.pluginsRoot, pluginId);
       let existing = false;
@@ -508,7 +490,7 @@ export class PluginInstaller {
         this._purgeConsentPins(pluginId, "upgrade");
       }
 
-      // 5. Persist provenance and load the new plugin. On an upgrade over an
+      // 4. Persist provenance and load the new plugin. On an upgrade over an
       // existing install (the swap path) preserve the original `installedAt`
       // and record `updatedAt` instead — `upsertInstalledRecord` spreads over
       // the prior record, so omitting `installedAt` from the patch keeps it.

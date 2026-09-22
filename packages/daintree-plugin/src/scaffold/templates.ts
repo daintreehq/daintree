@@ -38,8 +38,8 @@ export function projectPluginRelDir(scopedName: string): string {
 }
 
 // Open-ended lower bound: `^0.11.0` resolves to `>=0.11.0 <0.12.0` under semver's
-// 0.x caret rule, so a scaffolded plugin would be rejected by the host's
-// `engines.daintree` gate on every release past 0.11 (e.g. 0.19.x). Match the
+// 0.x caret rule, so a scaffolded plugin would draw the host's `engines.daintree`
+// compatibility warning on every release past 0.11 (e.g. 0.19.x). Match the
 // reference manifests under `plugins/sample/`, which pin the open-ended range.
 const DAINTREE_ENGINE_RANGE = ">=0.11.0";
 

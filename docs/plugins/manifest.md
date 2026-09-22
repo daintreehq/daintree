@@ -172,9 +172,9 @@ Semver range expressing which Daintree versions the plugin supports. The scaffol
 - `">=0.11.0 <0.13.0"` — explicit range
 - `"0.11.x"` — any 0.11 release
 
-**Never use a caret on a 0.x range.** `"^0.11.0"` resolves to `>=0.11.0 <0.12.0` under semver's 0.x rule, so it stops matching at the very next minor and the plugin is rejected on every release after the one you wrote it against.
+**Never use a caret on a 0.x range.** `"^0.11.0"` resolves to `>=0.11.0 <0.12.0` under semver's 0.x rule, so it stops matching at the very next minor and the plugin draws a compatibility warning on every release after the one you wrote it against.
 
-If the running Daintree version doesn't satisfy the range, the plugin is rejected at load with a user-visible warning toast. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
+If the running Daintree version doesn't satisfy the range, the plugin still installs and loads, and Daintree shows a warning toast (once per plugin version per session) that it may not work on this version. A local dev build such as `0.37.0-dev.<stamp>` is compared as the release it precedes, so it satisfies `>=0.37.0`. If `engines.daintree` is omitted entirely, Daintree warns in the console but loads the plugin anyway.
 
 Daintree is pre-1.0. Pin to a current minor during this phase — a plugin that works on Daintree 0.11 may not work on 0.12 without changes.
 

@@ -32,6 +32,7 @@ const windowRefMock = vi.hoisted(() => ({
   getProjectViewManager: vi.fn(() => null),
 }));
 const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+const broadcastToProjectRenderersMock = vi.hoisted(() => vi.fn());
 const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
@@ -59,6 +60,7 @@ vi.mock("../../window/windowRef.js", () => ({
 }));
 vi.mock("../../ipc/utils.js", () => ({
   broadcastToRenderer: broadcastToRendererMock,
+  broadcastToProjectRenderers: broadcastToProjectRenderersMock,
 }));
 vi.mock("../../store.js", () => ({
   store: storeMock,
@@ -283,7 +285,7 @@ describe("engines.daintree compatibility gate", () => {
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
-  it("rejects a plugin when app version does not satisfy engines.daintree", async () => {
+  it("loads a plugin the app version is newer than, with a warning toast", async () => {
     await writePlugin("incompatible", {
       name: "acme.incompatible",
       displayName: "Incompatible Plugin",
@@ -297,19 +299,20 @@ describe("engines.daintree compatibility gate", () => {
     const service = new PluginService(tmpDir, "0.8.0");
     await service.initialize();
 
-    expect(service.listPlugins()).toEqual([]);
-    expect(registerPanelKind).not.toHaveBeenCalled();
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Plugin "acme.incompatible" requires Daintree ^0.7.0')
+    expect(service.listPlugins().map((p) => p.manifest.name)).toEqual(["acme.incompatible"]);
+    expect(registerPanelKind).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('Plugin "acme.incompatible" targets Daintree ^0.7.0')
     );
-    expect(broadcastToRendererMock).toHaveBeenCalledWith(
-      CHANNELS.NOTIFICATION_SHOW_TOAST,
-      expect.objectContaining({
-        type: "error",
-        title: "Plugin incompatible",
-        message: expect.stringContaining("Incompatible Plugin"),
-      })
-    );
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    const [channel, payload] = broadcastToRendererMock.mock.calls[0];
+    expect(channel).toBe(CHANNELS.NOTIFICATION_SHOW_TOAST);
+    expect(payload).toMatchObject({
+      type: "warning",
+      message: expect.stringContaining('"Incompatible Plugin" targets Daintree ^0.7.0'),
+    });
+    expect(payload.message).toContain("newer version of the plugin");
+    expect(payload).not.toHaveProperty("action");
   });
 
   it("treats app prerelease versions as satisfying their release-series range", async () => {
@@ -369,7 +372,7 @@ describe("engines.daintree compatibility gate", () => {
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
-  it("rejects plugins requiring a future major version", async () => {
+  it("loads a plugin requiring a future version and points at updating Daintree", async () => {
     await writePlugin("future", {
       name: "acme.future",
       version: "1.0.0",
@@ -379,15 +382,116 @@ describe("engines.daintree compatibility gate", () => {
     const service = new PluginService(tmpDir, "0.7.1");
     await service.initialize();
 
-    expect(service.listPlugins()).toEqual([]);
+    expect(service.listPlugins()).toHaveLength(1);
     expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    const payload = broadcastToRendererMock.mock.calls[0][1];
+    expect(payload.message).toContain("Update Daintree");
+    expect(payload.action).toMatchObject({
+      ipcChannel: CHANNELS.SYSTEM_OPEN_EXTERNAL,
+      data: expect.stringMatching(/^https:\/\/daintree\.org\//),
+    });
   });
 
-  it("does not attempt main import or register contributions for incompatible plugins", async () => {
+  it("omits the download link on Windows Store builds, where the Store owns updates", async () => {
+    await writePlugin("future-store", {
+      name: "acme.future-store",
+      version: "1.0.0",
+      engines: { daintree: ">=0.8.0" },
+    });
+    Object.defineProperty(process, "windowsStore", { value: true, configurable: true });
+
+    try {
+      const service = new PluginService(tmpDir, "0.7.1");
+      await service.initialize();
+    } finally {
+      Reflect.deleteProperty(process, "windowsStore");
+    }
+
+    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    const payload = broadcastToRendererMock.mock.calls[0][1];
+    expect(payload.message).toContain("Update Daintree");
+    expect(payload).not.toHaveProperty("action");
+  });
+
+  it("warns once per plugin version across reloads", async () => {
+    const manifest = {
+      name: "acme.reloaded",
+      version: "1.0.0",
+      engines: { daintree: ">=0.8.0" },
+    };
+    await writePlugin("acme.reloaded", manifest);
+
+    const toasts = () =>
+      broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST
+      );
+
+    const service = new PluginService(tmpDir, "0.7.1");
+    await service.initialize();
+    await service.loadDevPlugin("acme.reloaded");
+
+    expect(service.hasPlugin("acme.reloaded")).toBe(true);
+    expect(toasts()).toHaveLength(1);
+
+    await writePlugin("acme.reloaded", { ...manifest, version: "1.1.0" });
+    await service.loadDevPlugin("acme.reloaded");
+
+    expect(toasts()).toHaveLength(2);
+  });
+
+  it("sends a project plugin's warning to that project's views only", async () => {
+    const projectRoot = path.join(tmpDir, "project-a");
+    const pluginsParent = path.join(projectRoot, ".daintree", "plugins");
+    await fs.mkdir(path.join(pluginsParent, "acme.project-future"), { recursive: true });
+    await fs.writeFile(
+      path.join(pluginsParent, "acme.project-future", "plugin.json"),
+      JSON.stringify({
+        name: "acme.project-future",
+        version: "1.0.0",
+        scope: "project",
+        engines: { daintree: ">=0.8.0" },
+      })
+    );
+
+    const service = new PluginService(path.join(tmpDir, "installed"), "0.7.1");
+    const seam = service as unknown as {
+      loadPlugin(
+        root: string,
+        dirName: string,
+        opts: {
+          isBuiltin: boolean;
+          disabled: Set<string>;
+          origin: "project";
+          instanceKey: string;
+          binding: { projectId: string; projectRoot: string };
+        }
+      ): Promise<unknown>;
+    };
+    const loaded = await seam.loadPlugin(pluginsParent, "acme.project-future", {
+      isBuiltin: false,
+      disabled: new Set(),
+      origin: "project",
+      instanceKey: "project__proj-a__acme.project-future",
+      binding: { projectId: "proj-a", projectRoot },
+    });
+
+    expect(loaded).not.toBeNull();
+    expect(broadcastToProjectRenderersMock).toHaveBeenCalledWith(
+      "proj-a",
+      CHANNELS.NOTIFICATION_SHOW_TOAST,
+      expect.objectContaining({ type: "warning" })
+    );
+    expect(
+      broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST
+      )
+    ).toHaveLength(0);
+  });
+
+  it("registers contributions for a plugin outside its declared range", async () => {
     await writePlugin("skip-side-effects", {
       name: "acme.skip-side-effects",
       version: "1.0.0",
-      main: "dist/main.js",
       engines: { daintree: "^1.0.0" },
       contributes: {
         panels: [{ id: "p", name: "P", iconId: "i", color: "#000" }],
@@ -401,13 +505,13 @@ describe("engines.daintree compatibility gate", () => {
     const service = new PluginService(tmpDir, "0.7.1");
     await service.initialize();
 
-    expect(service.listPlugins()).toEqual([]);
-    expect(registerPanelKind).not.toHaveBeenCalled();
-    expect(registerToolbarButton).not.toHaveBeenCalled();
-    expect(registerPluginMenuItem).not.toHaveBeenCalled();
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(registerPanelKind).toHaveBeenCalled();
+    expect(registerToolbarButton).toHaveBeenCalled();
+    expect(registerPluginMenuItem).toHaveBeenCalled();
   });
 
-  it("loads only the compatible plugins in a mixed batch", async () => {
+  it("loads every plugin in a mixed batch and warns only for the mismatched one", async () => {
     await writePlugin("good", {
       name: "acme.good",
       version: "1.0.0",
@@ -422,9 +526,13 @@ describe("engines.daintree compatibility gate", () => {
     const service = new PluginService(tmpDir, "0.7.5");
     await service.initialize();
 
-    const names = service.listPlugins().map((p) => p.manifest.name);
-    expect(names).toEqual(["acme.good"]);
+    const names = service
+      .listPlugins()
+      .map((p) => p.manifest.name)
+      .sort();
+    expect(names).toEqual(["acme.bad", "acme.good"]);
     expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    expect(broadcastToRendererMock.mock.calls[0][1].message).toContain('"acme.bad"');
   });
 
   it("accepts the wildcard range '*'", async () => {
@@ -455,18 +563,18 @@ describe("engines.daintree compatibility gate", () => {
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an app prerelease that is below a non-prerelease range's lower bound", async () => {
-    await writePlugin("prerelease-too-early", {
-      name: "acme.prerelease-too-early",
+  it("treats a dev build as the release it precedes (#12589)", async () => {
+    await writePlugin("dev-build", {
+      name: "acme.dev-build",
       version: "1.0.0",
-      engines: { daintree: ">=0.7.0" },
+      engines: { daintree: ">=0.37.0" },
     });
 
-    const service = new PluginService(tmpDir, "0.7.0-rc.1");
+    const service = new PluginService(tmpDir, "0.37.0-dev.20260922");
     await service.initialize();
 
-    expect(service.listPlugins()).toEqual([]);
-    expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
+    expect(service.listPlugins()).toHaveLength(1);
+    expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
   it("accepts an exact-version range when the app matches precisely", async () => {
@@ -483,7 +591,7 @@ describe("engines.daintree compatibility gate", () => {
     expect(broadcastToRendererMock).not.toHaveBeenCalled();
   });
 
-  it("rejects an exact-version range when the app does not match", async () => {
+  it("loads an exact-version range the app does not match, with a warning", async () => {
     await writePlugin("exact-mismatch", {
       name: "acme.exact-mismatch",
       version: "1.0.0",
@@ -493,7 +601,7 @@ describe("engines.daintree compatibility gate", () => {
     const service = new PluginService(tmpDir, "0.7.4");
     await service.initialize();
 
-    expect(service.listPlugins()).toEqual([]);
+    expect(service.listPlugins()).toHaveLength(1);
     expect(broadcastToRendererMock).toHaveBeenCalledTimes(1);
   });
 });
