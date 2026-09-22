@@ -22,7 +22,10 @@ import {
   buildWindowOpeningPreloadBindings,
   WINDOW_OPENING_METHOD_CHANNELS,
 } from "../windowOpening.preload.js";
-import { readWindowOpeningConfig } from "../../../window/windowOpeningConfig.js";
+import {
+  readOpenFoldersInNewWindow,
+  readWindowOpeningConfig,
+} from "../../../window/windowOpeningConfig.js";
 import { CHANNELS } from "../../channels.js";
 import type { HandlerDependencies } from "../../types.js";
 
@@ -76,6 +79,32 @@ describe("readWindowOpeningConfig", () => {
     expect(readWindowOpeningConfig().openFoldersInNewWindow).toBe("on");
     storeData.set("windowOpening", { openFoldersInNewWindow: "off" });
     expect(readWindowOpeningConfig().openFoldersInNewWindow).toBe("off");
+  });
+});
+
+// The open policy's `getPreference` (windowServices.ts) is this function, so a
+// stored choice reaches folder opens from outside the app (#12593).
+describe("readOpenFoldersInNewWindow", () => {
+  beforeEach(() => {
+    storeData.clear();
+    vi.clearAllMocks();
+  });
+
+  it.each(["default", "on", "off"] as const)("returns a stored %s", (mode) => {
+    storeData.set("windowOpening", { openFoldersInNewWindow: mode });
+    expect(readOpenFoldersInNewWindow()).toBe(mode);
+  });
+
+  it("follows a change made after an earlier read", () => {
+    storeData.set("windowOpening", { openFoldersInNewWindow: "off" });
+    expect(readOpenFoldersInNewWindow()).toBe("off");
+    storeData.set("windowOpening", { openFoldersInNewWindow: "on" });
+    expect(readOpenFoldersInNewWindow()).toBe("on");
+  });
+
+  it("reads an unknown stored value as the default", () => {
+    storeData.set("windowOpening", { openFoldersInNewWindow: "sometimes" });
+    expect(readOpenFoldersInNewWindow()).toBe("default");
   });
 });
 

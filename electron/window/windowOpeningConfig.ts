@@ -1,9 +1,10 @@
 import { store } from "../store.js";
+import type { WindowOpeningConfig } from "../../shared/types/ipc/windowOpening.js";
 import {
   DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
-  isOpenFoldersInNewWindowMode,
-  type WindowOpeningConfig,
-} from "../../shared/types/ipc/windowOpening.js";
+  isOpenFoldersInNewWindow,
+  type OpenFoldersInNewWindow,
+} from "../../shared/types/windowOpen.js";
 
 /**
  * The stored window-opening preference, read fresh on every call so a change
@@ -17,8 +18,13 @@ import {
 export function readWindowOpeningConfig(): WindowOpeningConfig {
   const stored: unknown = store.get("windowOpening")?.openFoldersInNewWindow;
   return {
-    openFoldersInNewWindow: isOpenFoldersInNewWindowMode(stored)
+    openFoldersInNewWindow: isOpenFoldersInNewWindow(stored)
       ? stored
       : DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
   };
+}
+
+/** The preference the open policy (`windowOpenPolicy.ts`) decides folder opens with. */
+export function readOpenFoldersInNewWindow(): OpenFoldersInNewWindow {
+  return readWindowOpeningConfig().openFoldersInNewWindow;
 }

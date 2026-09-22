@@ -13,14 +13,14 @@ import {
 } from "@/clients";
 import { dispatchEscape } from "@/lib/escapeStack";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
-import { OPEN_FOLDERS_IN_NEW_WINDOW_MODES } from "@shared/types/ipc/windowOpening";
+import { OPEN_FOLDERS_IN_NEW_WINDOW_VALUES } from "@shared/types/windowOpen";
 
 const ProjectIdArgsSchema = z.object({ projectId: z.string().min(1) });
 
 /** Shared by `sessionRestore.updateConfig`'s declared schema and its body. */
 const SessionRestoreConfigPatchSchema = z.object({ enabled: z.boolean().optional() });
 
-const OpenFoldersInNewWindowSchema = z.enum(OPEN_FOLDERS_IN_NEW_WINDOW_MODES);
+const OpenFoldersInNewWindowSchema = z.enum(OPEN_FOLDERS_IN_NEW_WINDOW_VALUES);
 
 /** Shared by `windowOpening.updateConfig`'s declared schema and its body. */
 // Strict so a misspelt field fails validation instead of reaching main as an

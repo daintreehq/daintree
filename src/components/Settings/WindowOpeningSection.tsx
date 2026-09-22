@@ -9,16 +9,16 @@ import { logError } from "@/utils/logger";
 import type { ActionDispatchResult } from "@shared/types/actions";
 import {
   DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
-  isOpenFoldersInNewWindowMode,
-  OPEN_FOLDERS_IN_NEW_WINDOW_MODES,
-  type OpenFoldersInNewWindowMode,
-} from "@shared/types/ipc/windowOpening";
+  isOpenFoldersInNewWindow,
+  OPEN_FOLDERS_IN_NEW_WINDOW_VALUES,
+  type OpenFoldersInNewWindow,
+} from "@shared/types/windowOpen";
 
-const MODE_COPY: Record<OpenFoldersInNewWindowMode, { label: string; description: string }> = {
+const MODE_COPY: Record<OpenFoldersInNewWindow, { label: string; description: string }> = {
   default: {
     label: "Only from outside Daintree",
     description:
-      "Folders opened from the Dock, Finder or command line get a new window; folders picked in Daintree use the current one",
+      "Folders opened from your file manager or the command line get a new window; folders picked in Daintree use the current one",
   },
   on: {
     label: "Always",
@@ -30,24 +30,24 @@ const MODE_COPY: Record<OpenFoldersInNewWindowMode, { label: string; description
   },
 };
 
-const MODE_OPTIONS: SettingsSelectOption[] = OPEN_FOLDERS_IN_NEW_WINDOW_MODES.map((mode) => ({
+const MODE_OPTIONS: SettingsSelectOption[] = OPEN_FOLDERS_IN_NEW_WINDOW_VALUES.map((mode) => ({
   value: mode,
   ...MODE_COPY[mode],
 }));
 
 interface SaveFailure {
-  mode: OpenFoldersInNewWindowMode;
+  mode: OpenFoldersInNewWindow;
   message: string;
 }
 
-function modeFromResult(result: ActionDispatchResult): OpenFoldersInNewWindowMode {
+function modeFromResult(result: ActionDispatchResult): OpenFoldersInNewWindow {
   if (!result.ok) throw new Error(result.error.message);
   const config: unknown = result.result;
   const mode =
     typeof config === "object" && config !== null && "openFoldersInNewWindow" in config
       ? config.openFoldersInNewWindow
       : undefined;
-  if (!isOpenFoldersInNewWindowMode(mode)) {
+  if (!isOpenFoldersInNewWindow(mode)) {
     throw new Error("The stored value isn't one Daintree recognizes.");
   }
   return mode;
@@ -59,10 +59,10 @@ function modeFromResult(result: ActionDispatchResult): OpenFoldersInNewWindowMod
  * already known keeps its window whatever this says.
  */
 export function WindowOpeningSection() {
-  const [mode, setMode] = useState<OpenFoldersInNewWindowMode | null>(null);
+  const [mode, setMode] = useState<OpenFoldersInNewWindow | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadNonce, setLoadNonce] = useState(0);
-  const [pendingMode, setPendingMode] = useState<OpenFoldersInNewWindowMode | null>(null);
+  const [pendingMode, setPendingMode] = useState<OpenFoldersInNewWindow | null>(null);
   const [saveFailure, setSaveFailure] = useState<SaveFailure | null>(null);
   const savingRef = useRef(false);
 
@@ -91,7 +91,7 @@ export function WindowOpeningSection() {
   // Carries the value being saved rather than toggling what the select shows,
   // so a retry resends exactly what failed. Promise chaining rather than
   // try/finally, which the React Compiler can't lower.
-  const save = (next: OpenFoldersInNewWindowMode): Promise<void> => {
+  const save = (next: OpenFoldersInNewWindow): Promise<void> => {
     // Nothing to change until the saved value is known — a write racing the
     // initial read could be overwritten by it on screen.
     if (savingRef.current || mode === null) return Promise.resolve();
@@ -145,7 +145,7 @@ export function WindowOpeningSection() {
             options={MODE_OPTIONS}
             value={value}
             onValueChange={(next) => {
-              if (isOpenFoldersInNewWindowMode(next) && next !== value) void save(next);
+              if (isOpenFoldersInNewWindow(next) && next !== value) void save(next);
             }}
             disabled={mode === null || pendingMode !== null}
           />

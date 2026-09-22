@@ -1,10 +1,10 @@
 import { store } from "../../store.js";
 import { readWindowOpeningConfig } from "../../window/windowOpeningConfig.js";
+import type { WindowOpeningConfig } from "../../../shared/types/ipc/windowOpening.js";
 import {
-  isOpenFoldersInNewWindowMode,
-  OPEN_FOLDERS_IN_NEW_WINDOW_MODES,
-  type WindowOpeningConfig,
-} from "../../../shared/types/ipc/windowOpening.js";
+  isOpenFoldersInNewWindow,
+  OPEN_FOLDERS_IN_NEW_WINDOW_VALUES,
+} from "../../../shared/types/windowOpen.js";
 import type { HandlerDependencies } from "../types.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { WINDOW_OPENING_METHOD_CHANNELS } from "./windowOpening.preload.js";
@@ -33,9 +33,9 @@ export function registerWindowOpeningHandlers(_deps: HandlerDependencies): () =>
             }
           }
           const mode = config.openFoldersInNewWindow;
-          if (mode !== undefined && !isOpenFoldersInNewWindowMode(mode)) {
+          if (mode !== undefined && !isOpenFoldersInNewWindow(mode)) {
             throw new Error(
-              `openFoldersInNewWindow must be one of: ${OPEN_FOLDERS_IN_NEW_WINDOW_MODES.join(", ")}`
+              `openFoldersInNewWindow must be one of: ${OPEN_FOLDERS_IN_NEW_WINDOW_VALUES.join(", ")}`
             );
           }
           if (mode !== undefined) {

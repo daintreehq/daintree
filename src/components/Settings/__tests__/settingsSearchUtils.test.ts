@@ -101,7 +101,7 @@ describe("filterSettings", () => {
     expect(modifiedOnly.map((r) => r.id)).toEqual(["g"]);
   });
 
-  it.each(["folder", "project", "window", "Dock", "Finder"])(
+  it.each(["folder", "project", "window", "Dock", "Finder", "Explorer", "file manager"])(
     "finds the window opening setting by %s, with or without a project open",
     (query) => {
       for (const hasProject of [true, false]) {

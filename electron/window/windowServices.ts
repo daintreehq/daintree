@@ -63,7 +63,7 @@ import {
   type OpenDirHandlerDeps,
 } from "./openDirHandler.js";
 import { holdWindowForOpen, isWindowBound } from "./windowOpenState.js";
-import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../../shared/types/windowOpen.js";
+import { readOpenFoldersInNewWindow } from "./windowOpeningConfig.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
 import { initPerWindowServices, wireWatchdogDisabledBroadcast } from "./perWindowInit.js";
@@ -133,8 +133,8 @@ function createOpenDirDeps(
       handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
     createWindowForPath,
     getWindowRegistry,
-    // #12595 stores the user's choice; until then every open follows the default.
-    getPreference: () => DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
+    // Read per open so a change in Settings applies to the next folder opened.
+    getPreference: readOpenFoldersInNewWindow,
     isProjectClosed,
   };
 }

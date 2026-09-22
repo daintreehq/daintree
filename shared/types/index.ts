@@ -215,7 +215,6 @@ export type {
   SessionRestoreConfig,
   // Window opening types
   WindowOpeningConfig,
-  OpenFoldersInNewWindowMode,
   // Keep-awake types
   KeepAwakeConfig,
   KeepAwakeState,

@@ -31,10 +31,8 @@ import { PLUGIN_MCP_DEFAULT_MAX_TOOLS_PER_SESSION } from "../shared/types/ipc/pl
 import type { ForgeAuditRecord } from "../shared/types/ipc/forge.js";
 import type { RunParkRecord, RunSnoozeRecord } from "../shared/types/ipc/fleet.js";
 import type { RunHistoryRecord } from "../shared/types/ipc/runHistory.js";
-import {
-  DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
-  type WindowOpeningConfig,
-} from "../shared/types/ipc/windowOpening.js";
+import type { WindowOpeningConfig } from "../shared/types/ipc/windowOpening.js";
+import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../shared/types/windowOpen.js";
 import type { SuggestedDictionaryEntry } from "../shared/types/ipc/api.js";
 import { FORGE_AUDIT_DEFAULT_MAX_RECORDS } from "../shared/types/ipc/forge.js";
 import type { BuiltInAgentId } from "../shared/config/agentIds.js";

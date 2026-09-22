@@ -306,7 +306,7 @@ export const SETTINGS_REGISTRY = [
         section: "Opening folders",
         title: "Open folders in a new window",
         description:
-          "Choose whether a folder opened from the Dock, Finder or command line, or picked in Daintree, gets a new window or replaces the current one.",
+          "Choose whether a folder opened from your file manager or the command line, or picked in Daintree, gets a new window or replaces the current one.",
         keywords: [
           "folder",
           "project",
@@ -316,6 +316,8 @@ export const SETTINGS_REGISTRY = [
           "replace",
           "dock",
           "finder",
+          "explorer",
+          "file manager",
           "cli",
           "command line",
           "open",
