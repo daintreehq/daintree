@@ -43,6 +43,8 @@ const safeStorageMock = vi.hoisted(() => {
   return {
     state,
     isEncryptionAvailable: () => state.available,
+    // Linux gates the keychain tier on the backend; name a real keychain one.
+    getSelectedStorageBackend: () => "gnome_libsecret",
     encryptString: (plaintext: string) => Buffer.from(`enc:${plaintext}`, "utf-8"),
     decryptString: (cipher: Buffer) => cipher.toString("utf-8").slice("enc:".length),
   };
