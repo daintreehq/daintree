@@ -4092,8 +4092,6 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
     it("closes the handle and answers 500 with the CORS grant when the fstat fails", async () => {
       const handle = makeFileHandle();
       handle.stat.mockRejectedValue(Object.assign(new Error("io"), { code: "EIO" }));
-      // A failing close must not replace the result it was cleaning up after.
-      handle.close.mockRejectedValue(new Error("close failed"));
       await installHandle(handle);
 
       const handler = await captureHandler();
@@ -4107,6 +4105,22 @@ describe("createDaintreePdfProtocolHandler — inline PDF preview (#11427)", () 
       expect(response.status).toBe(500);
       expect(response.headers.get("Access-Control-Allow-Origin")).toBe("app://daintree");
       expect(handle.readFile).not.toHaveBeenCalled();
+      expect(handle.close).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a successful answer when closing the handle fails", async () => {
+      // The close is cleanup: its rejection must not turn an admitted document
+      // into a 500 the probe would report as an error.
+      const handle = makeFileHandle();
+      handle.close.mockRejectedValue(new Error("close failed"));
+      await installHandle(handle);
+
+      const handler = await captureHandler();
+      const response = await handler(
+        makeRequest("/project/spec.pdf", "/project", { method: "HEAD" })
+      );
+
+      expect(response.status).toBe(200);
       expect(handle.close).toHaveBeenCalledTimes(1);
     });
 
