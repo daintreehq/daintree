@@ -12,17 +12,37 @@ export type NewWindowOpener = (
   initiatingWindowId: number | null
 ) => Promise<ProjectOpenOutcome>;
 
+interface QueuedOpen {
+  dirPath: string;
+  initiatingWindowId: number | null;
+  resolve: (outcome: ProjectOpenOutcome) => void;
+  reject: (reason: unknown) => void;
+}
+
 let opener: NewWindowOpener | null = null;
+let queued: QueuedOpen[] = [];
 
 export function setNewWindowOpener(next: NewWindowOpener | null): void {
   opener = next;
+  const waiting = queued;
+  queued = [];
+  for (const open of waiting) {
+    if (next) next(open.dirPath, open.initiatingWindowId).then(open.resolve, open.reject);
+    else open.reject(new Error("Window opening was shut down"));
+  }
 }
 
-/** Rejects when no window has finished setting up yet: until then there is nothing to route with. */
+/**
+ * The menu and renderer are usable before the first window finishes setting up,
+ * so a request that arrives before the router does waits for it rather than
+ * failing or skipping the routing rules.
+ */
 export function openFolderInNewWindow(
   dirPath: string,
   initiatingWindowId: number | null
 ): Promise<ProjectOpenOutcome> {
-  if (!opener) return Promise.reject(new Error("Window opening isn't ready yet"));
-  return opener(dirPath, initiatingWindowId);
+  if (opener) return opener(dirPath, initiatingWindowId);
+  return new Promise((resolve, reject) => {
+    queued.push({ dirPath, initiatingWindowId, resolve, reject });
+  });
 }

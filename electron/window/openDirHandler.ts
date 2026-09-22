@@ -45,6 +45,15 @@ export interface OpenDirHandlerDeps {
   getPreference: () => OpenFoldersInNewWindow;
   /** Whether a workspace id names a closed project — its window is showing the picker. */
   isProjectClosed: IsClosedWorkspace;
+  /**
+   * Hand an in-app request to the window that holds a live view of the project,
+   * the way the switch handler does (#12596): the project view itself takes
+   * focus, and a cached view is switched to by that window's own renderer so the
+   * layout it is leaving is saved. False when the window holds no such view — a
+   * closed project behind its picker, or a folder still in flight — and the
+   * router opens it there itself.
+   */
+  redirectToOwner?: (project: { id: string; path: string }, windowId: number) => boolean;
 }
 
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
@@ -147,6 +156,24 @@ export async function routeProjectOpen(
   // the folder.
   if (decision.kind === "create" || !win || win.isDestroyed()) {
     return { kind: "created", windowId: await deps.createWindowForPath(targetPath) };
+  }
+
+  // An owner that is the asking window itself only holds the project cached
+  // (one showing it is a no-op focus), and there is nowhere else a single live
+  // view can go: that window switches to it. The single-owner rule outranks
+  // "new" here, as it does for every other gesture.
+  const isOwnerDecision =
+    decision.kind === "focus" || (decision.kind === "activate" && decision.reason === "owner");
+  if (
+    routing.source === "in-app" &&
+    project &&
+    isOwnerDecision &&
+    deps.redirectToOwner?.(project, decision.windowId)
+  ) {
+    return {
+      kind: decision.kind === "focus" ? "focused" : "activated",
+      windowId: decision.windowId,
+    };
   }
 
   if (decision.kind === "focus") {

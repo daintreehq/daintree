@@ -836,7 +836,7 @@ describe("WelcomeScreen", () => {
 
     const secondary = screen.getByRole("button", { name: "Open in new window…" });
     // A sibling of the card, never nested inside its button.
-    expect(secondary.closest("button")).toBe(secondary);
+    expect(secondary.parentElement?.closest("button")).toBeNull();
     expect(screen.getByText("Open project").closest("button")!.contains(secondary)).toBe(false);
 
     fireEvent.click(secondary);

@@ -677,6 +677,9 @@ async function openInNewWindow(projectPath: string): Promise<void> {
       {
         label: "Try again",
         variant: "primary",
+        // Serializable too, so the retry survives into the inbox entry.
+        actionId: "app.newWindow",
+        actionArgs: { projectPath },
         onClick: () => void openInNewWindow(projectPath),
       },
     ],

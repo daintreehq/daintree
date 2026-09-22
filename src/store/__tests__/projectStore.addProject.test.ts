@@ -99,6 +99,10 @@ describe("projectStore addProject", () => {
       gitInitDirectoryPath: null,
       gitInitIdentity: null,
       gitInitDisposition: "default",
+      // A happy-path switch in one case never clears these (the outgoing view
+      // is replaced in production), so they'd leak into the next.
+      isSwitching: false,
+      switchingToProjectId: null,
       addProjectByPath: originalAddProjectByPath,
       addProject: originalAddProject,
     });
@@ -272,13 +276,20 @@ describe("projectStore addProject", () => {
     }
 
     it("registers the folder here, then hands it to main without switching this window", async () => {
-      // An earlier case's happy-path switch leaves the flag set; start clean so
-      // the assertion below is about this open.
-      useProjectStore.setState({ isSwitching: false, switchingToProjectId: null });
+      const here = { id: "p-here", path: "/tmp/here", name: "here", emoji: "🌳", lastOpened: 1 };
+      useProjectStore.setState({ projects: [here], currentProject: here });
+      projectClientMock.getAll.mockResolvedValueOnce([here, { ...REPO, name: "repo" }]);
       projectClientMock.add.mockResolvedValueOnce(REPO);
       const switchSpy = vi.spyOn(useProjectStore.getState(), "switchProject");
+      // Every intermediate state, not just the last: a switch that started and
+      // was undone would still have flashed this window's switching overlay.
+      const seenSwitching: boolean[] = [];
+      const unsubscribe = useProjectStore.subscribe((state) => {
+        seenSwitching.push(state.isSwitching);
+      });
 
       await useProjectStore.getState().addProjectByPath("/tmp/repo", { disposition: "new" });
+      unsubscribe();
 
       expect(projectClientMock.add).toHaveBeenCalledWith("/tmp/repo", undefined);
       expect(actionServiceDispatchMock).toHaveBeenCalledExactlyOnceWith(
@@ -288,7 +299,9 @@ describe("projectStore addProject", () => {
       );
       expect(switchSpy).not.toHaveBeenCalled();
       expect(projectClientMock.switch).not.toHaveBeenCalled();
-      expect(useProjectStore.getState().isSwitching).toBe(false);
+      expect(seenSwitching.length).toBeGreaterThan(0);
+      expect(seenSwitching.every((switching) => !switching)).toBe(true);
+      expect(useProjectStore.getState().currentProject?.id).toBe("p-here");
       expect(useProjectStore.getState().isLoading).toBe(false);
       switchSpy.mockRestore();
     });
@@ -320,6 +333,15 @@ describe("projectStore addProject", () => {
           type: "error",
           title: "Couldn't open a new window",
           priority: "high",
+          // The inbox keeps only serializable actions; without these the
+          // retry would vanish from a toast that went straight to history.
+          actions: [
+            expect.objectContaining({
+              label: "Try again",
+              actionId: "app.newWindow",
+              actionArgs: { projectPath: "/tmp/repo" },
+            }),
+          ],
         })
       );
       actionServiceDispatchMock.mockClear();

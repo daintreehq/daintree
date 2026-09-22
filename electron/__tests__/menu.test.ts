@@ -824,13 +824,38 @@ describe("File menu layout (#12473)", () => {
       expect(projectStoreMock.addProject).toHaveBeenCalledWith(RECENT.path);
     });
 
-    it("logs rather than throws when the new window can't be opened", async () => {
-      openFolderInNewWindowMock.mockRejectedValueOnce(new Error("Window opening isn't ready yet"));
+    it("says so when the new window can't be opened, and never falls back to this window", async () => {
+      openFolderInNewWindowMock.mockRejectedValueOnce(new Error("boom"));
       const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 
       await expect(click(recentEntry("darwin"), { metaKey: true })).resolves.toBeUndefined();
 
-      expect(errSpy).toHaveBeenCalled();
+      expect(dialog.showMessageBox).toHaveBeenCalledExactlyOnceWith(
+        mockBrowserWindow,
+        expect.objectContaining({
+          type: "error",
+          message: "Couldn't open a new window",
+          buttons: ["Try again", "Cancel"],
+          cancelId: 1,
+        })
+      );
+      expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(1);
+      expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
+
+    it("tries the new window again, not this one, when asked to", async () => {
+      openFolderInNewWindowMock.mockRejectedValueOnce(new Error("boom"));
+      vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
+        response: 0,
+        checkboxChecked: false,
+      });
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await click(recentEntry("darwin"), { metaKey: true });
+
+      expect(openFolderInNewWindowMock).toHaveBeenCalledTimes(2);
+      expect(openFolderInNewWindowMock).toHaveBeenLastCalledWith(RECENT.path, mockBrowserWindow.id);
       expect(projectStoreMock.addProject).not.toHaveBeenCalled();
       errSpy.mockRestore();
     });

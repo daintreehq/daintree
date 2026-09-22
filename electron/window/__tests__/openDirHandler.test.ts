@@ -481,6 +481,62 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
     expect(deps.createWindowForPath).not.toHaveBeenCalled();
   });
 
+  it("hands a live owner to the owner redirect, which focuses its project view", async () => {
+    const world = makeWorld();
+    const owner = world.add({ active: idFor("/work/known") });
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "focused", windowId: owner.id });
+    expect(deps.redirectToOwner).toHaveBeenCalledExactlyOnceWith(
+      { id: idFor("/work/known"), path: "/work/known" },
+      owner.id
+    );
+    // The redirect did the revealing; the router didn't switch anything itself.
+    expect(owner.win.focus).not.toHaveBeenCalled();
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+  });
+
+  it("lets the owner's own renderer switch to a view it holds cached", async () => {
+    const world = makeWorld();
+    const owner = world.add({ active: "front" });
+    owner.views.push(idFor("/work/known"));
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: owner.id });
+    expect(deps.openDirectory).not.toHaveBeenCalled();
+    expect(owner.active).toBe("front");
+  });
+
+  it("opens the project itself when the owner redirect declines, as for a closed project", async () => {
+    const world = makeWorld();
+    const picker = world.add({ active: idFor("/work/known") });
+    world.closed.add(idFor("/work/known"));
+    const asking = world.add({ active: "other" });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => false) };
+
+    const outcome = await routeProjectOpen("/work/known", newWindowFrom(asking.id), deps);
+
+    expect(outcome).toEqual({ kind: "activated", windowId: picker.id });
+    expect(deps.openDirectory).toHaveBeenCalledExactlyOnceWith("/work/known", picker.win);
+  });
+
+  it("leaves external opens on the router's own owner handling", async () => {
+    const world = makeWorld();
+    const owner = world.add({ active: idFor("/work/known") });
+    const deps = { ...makeDeps(world), redirectToOwner: vi.fn(() => true) };
+
+    await routeExternalOpen("/work/known", deps);
+
+    expect(deps.redirectToOwner).not.toHaveBeenCalled();
+    expect(owner.win.focus).toHaveBeenCalled();
+  });
+
   it("gives a folder with no repository its own window, where git init is offered", async () => {
     const world = makeWorld();
     const asking = world.add({ active: "busy" });
@@ -495,8 +551,28 @@ describe("routeProjectOpen — an explicit new window (#12594)", () => {
 });
 
 describe("openFolderInNewWindow", () => {
-  it("rejects until a window has installed the router", async () => {
-    await expect(openFolderInNewWindow("/work/a", 1)).rejects.toThrow("isn't ready");
+  it("holds a request made before any window has installed the router, then routes it", async () => {
+    const world = makeWorld();
+    const asking = world.add({ active: "busy" });
+    const deps = makeDeps(world);
+
+    const early = openFolderInNewWindow("/work/early", asking.id);
+    await Promise.resolve();
+    expect(deps.createWindowForPath).not.toHaveBeenCalled();
+
+    installOpenDirConsumer(deps);
+
+    await expect(early).resolves.toEqual({ kind: "created", windowId: asking.id + 1 });
+    expect(deps.createWindowForPath).toHaveBeenCalledExactlyOnceWith("/work/early");
+    expect(asking.active).toBe("busy");
+  });
+
+  it("fails a held request cleanly if routing is torn down before it arrives", async () => {
+    const early = openFolderInNewWindow("/work/early", 1);
+
+    _resetOpenDirConsumerForTest();
+
+    await expect(early).rejects.toThrow("shut down");
   });
 
   it("routes as an explicit new window once installed", async () => {

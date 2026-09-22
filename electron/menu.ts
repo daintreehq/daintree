@@ -842,6 +842,19 @@ async function openInNewWindow(directoryPath: string, targetWindow: BrowserWindo
     await openFolderInNewWindow(directoryPath, targetWindow.id);
   } catch (error) {
     console.error("Failed to open project in a new window:", error);
+    if (targetWindow.isDestroyed()) return;
+    // Its own retry, never showProjectOpenFailure's: that one reopens the
+    // folder in this window, which is exactly what the user asked not to do.
+    const { response } = await dialog.showMessageBox(targetWindow, {
+      type: "error",
+      title: "Couldn't open a new window",
+      message: "Couldn't open a new window",
+      detail: `No window opened for "${directoryPath}". This window was left as it was.`,
+      buttons: ["Try again", "Cancel"],
+      defaultId: 1,
+      cancelId: 1,
+    });
+    if (response === 0) await openInNewWindow(directoryPath, targetWindow);
   }
 }
 

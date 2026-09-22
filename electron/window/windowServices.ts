@@ -56,7 +56,7 @@ import {
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
-import { findOtherProjectOwner } from "./projectOwnership.js";
+import { findOtherProjectOwner, redirectToProjectOwner } from "./projectOwnership.js";
 import {
   installOpenDirConsumer,
   drainPendingOpenDirs,
@@ -136,6 +136,16 @@ function createOpenDirDeps(
     // Read per open so a change in Settings applies to the next folder opened.
     getPreference: readOpenFoldersInNewWindow,
     isProjectClosed,
+    redirectToOwner: (project, windowId) => {
+      // A closed project's view is still live behind its picker; reopening it
+      // is handleDirectoryOpen's job, not a focus.
+      if (isProjectClosed(project.id)) return false;
+      const row = projectStore.getProjectById(project.id);
+      const owner = findOtherProjectOwner(getWindowRegistry() ?? undefined, project.id, {});
+      if (!row || !owner || owner.context.windowId !== windowId) return false;
+      redirectToProjectOwner(owner, row);
+      return true;
+    },
   };
 }
 

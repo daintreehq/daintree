@@ -420,11 +420,13 @@ describe("CloneRepoDialog", () => {
     await act(async () => {
       fireEvent.click(screen.getByText("Browse"));
     });
-    await act(async () => {
-      fireEvent.click(screen.getByText("Clone"));
-    });
-
     const newWindow = screen.getByRole<HTMLButtonElement>("radio", { name: "New window" });
+    expect(newWindow.disabled).toBe(false);
+
+    // Synchronous on purpose: the form gives way to the running view after a
+    // real 400ms gate, so no await may sit between the click and the check.
+    fireEvent.click(screen.getByText("Clone"));
+    expect(newWindow.isConnected).toBe(true);
     expect(newWindow.disabled).toBe(true);
 
     await act(async () => {
