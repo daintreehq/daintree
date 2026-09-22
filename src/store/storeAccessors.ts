@@ -39,7 +39,6 @@ let _setPanelExtensionState: ((panelId: string, patch: Record<string, unknown>) 
   null;
 let _clearPanelStoreForSwitch: (() => void) | null = null;
 let _clearFleetArming: (() => void) | null = null;
-let _restoreFleetArming: ((armedIds: readonly string[]) => void) | null = null;
 let _getFleetArmedIds: (() => Set<string>) | null = null;
 let _getFleetLastArmedId: (() => string | null) | null = null;
 let _getAgentSettingsEntry: ((agentId: string) => AgentSettingsEntry | undefined) | null = null;
@@ -180,16 +179,6 @@ export function clearFleetArmingThroughAccessor(): void {
   _clearFleetArming?.();
 }
 
-export function setFleetArmingRestoreAccessor(
-  callback: (armedIds: readonly string[]) => void
-): void {
-  _restoreFleetArming = callback;
-}
-
-export function restoreFleetArmingThroughAccessor(armedIds: readonly string[]): void {
-  _restoreFleetArming?.(armedIds);
-}
-
 export function setFleetArmedIdsAccessor(getter: () => Set<string>): void {
   _getFleetArmedIds = getter;
 }
@@ -216,7 +205,6 @@ export function resetStoreAccessorsForTesting(): void {
   _setPanelExtensionState = null;
   _clearPanelStoreForSwitch = null;
   _clearFleetArming = null;
-  _restoreFleetArming = null;
   _getFleetArmedIds = null;
   _getFleetLastArmedId = null;
 }

@@ -32,6 +32,12 @@ export interface BackgroundRestoreJob {
   projectIds: string[];
   /** Resolve a workspace id to its on-disk path, or null if it is gone. */
   resolveWorkspacePath: (projectId: string) => string | null;
+  /**
+   * Whether another window already holds, or is opening, a view of the project.
+   * A project has one live view across the app (#12596), so one the user opened
+   * elsewhere while this job waited in the queue belongs to that window now.
+   */
+  isOwnedElsewhere?: (projectId: string) => boolean;
 }
 
 interface QueuedJob extends BackgroundRestoreJob {
@@ -158,6 +164,10 @@ async function runOne(job: QueuedJob, projectId: string): Promise<void> {
     // leaving an unhandled rejection behind.
     manager = job.getManager();
     projectPath = manager && !manager.disposed ? job.resolveWorkspacePath(projectId) : null;
+    if (projectPath && job.isOwnedElsewhere?.(projectId)) {
+      logInfo("projectrestore.skipped", { projectId, reason: "owned-elsewhere" });
+      return;
+    }
   } catch (error) {
     logWarn("projectrestore.prepare-failed", {
       projectId,

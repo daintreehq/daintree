@@ -34,8 +34,6 @@ import { getViewWorkspaceId } from "./viewWorkspaceId";
 import {
   clearPanelStoreForSwitchThroughAccessor,
   clearFleetArmingThroughAccessor,
-  getFleetArmedIds,
-  restoreFleetArmingThroughAccessor,
   getPanelStoreSnapshot,
   getWorktreeSelectionSnapshot,
   getWorktreeIdSet,
@@ -118,9 +116,14 @@ function collectTerminalSizes(
   return sizes;
 }
 
-/** What a switch clears up front on the assumption that this view is leaving. */
+/**
+ * What a switch clears up front on the assumption that this view is leaving,
+ * and that a redirect puts back. Fleet arming is cleared too but deliberately
+ * not restored: its orchestrator subscriptions drop per-target overrides, skips
+ * and failures along with the membership, and a fleet restored without them
+ * could broadcast to a terminal the user had excluded.
+ */
 interface PreSwitchState {
-  armedFleetIds: readonly string[];
   error: string | null;
   worktreeLoadError: string | null;
 }
@@ -145,7 +148,6 @@ function settleRedirectedTransition(
     error: state.error ?? before.error,
     worktreeLoadError: state.worktreeLoadError ?? before.worktreeLoadError,
   }));
-  restoreFleetArmingThroughAccessor(before.armedFleetIds);
 }
 
 function buildOutgoingState(projectId: string): ProjectSwitchOutgoingState {
@@ -868,7 +870,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     markSwitch(PERF_MARKS.PROJECT_SWITCH_INTENT, { ...traceMeta, targetProjectId: projectId });
 
     const before: PreSwitchState = {
-      armedFleetIds: Array.from(getFleetArmedIds() ?? []),
       error: get().error,
       worktreeLoadError: get().worktreeLoadError,
     };
@@ -1218,7 +1219,6 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
     const requestId = ++projectTransitionRequestId;
     const currentProjectId = get().currentProject?.id;
     const before: PreSwitchState = {
-      armedFleetIds: [],
       error: get().error,
       worktreeLoadError: get().worktreeLoadError,
     };

@@ -1276,7 +1276,11 @@ describe("handleDirectoryOpen window targeting", () => {
       show: vi.fn(),
       focus: vi.fn(),
     };
-    const ownerAppWebContents = { isDestroyed: () => false, send: vi.fn() };
+    const ownerAppWebContents = {
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+    };
     getAppWebContentsMock.mockImplementation((win: unknown) =>
       win === ownerWindow ? ownerAppWebContents : { isDestroyed: () => false, send: vi.fn() }
     );

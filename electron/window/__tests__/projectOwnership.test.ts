@@ -18,8 +18,14 @@ import type { ProjectViewManager } from "../ProjectViewManager.js";
 import type { WindowContext, WindowRegistry } from "../WindowRegistry.js";
 import type { Project } from "../../../shared/types/project.js";
 
-function makeWebContents(destroyed = false) {
-  return { isDestroyed: () => destroyed, focus: vi.fn(), send: vi.fn() };
+function makeWebContents(destroyed = false, loading = false) {
+  return {
+    isDestroyed: () => destroyed,
+    isLoadingMainFrame: vi.fn(() => loading),
+    once: vi.fn(),
+    focus: vi.fn(),
+    send: vi.fn(),
+  };
 }
 
 function makePvm(active: string | null, views: Array<string | [string, { destroyed: boolean }]>) {
@@ -92,7 +98,7 @@ describe("findOtherProjectOwner", () => {
     const owner = findOtherProjectOwner(registryOf([cached, shown]), "p", { windowId: 1 });
 
     expect(owner?.context).toBe(shown);
-    expect(owner?.isForeground).toBe(true);
+    expect(owner?.state).toBe("foreground");
   });
 
   it("falls back to a window that has the project cached", () => {
@@ -101,7 +107,7 @@ describe("findOtherProjectOwner", () => {
     const owner = findOtherProjectOwner(registryOf([cached]), "p", { windowId: 1 });
 
     expect(owner?.context).toBe(cached);
-    expect(owner?.isForeground).toBe(false);
+    expect(owner?.state).toBe("cached");
   });
 
   it("never names the requesting window, by id or by the manager it acts on", () => {
@@ -138,7 +144,7 @@ describe("claimProjectActivation", () => {
     try {
       const owner = findOtherProjectOwner(registryOf([activating]), "p", { windowId: 1 });
       expect(owner?.context).toBe(activating);
-      expect(owner?.isForeground).toBe(true);
+      expect(owner?.state).toBe("activating");
     } finally {
       release();
     }
@@ -161,23 +167,38 @@ describe("claimProjectActivation", () => {
     const release = claimProjectActivation("p", 2);
     try {
       const owner = findOtherProjectOwner(registryOf([switchedOn]), "p", { windowId: 1 });
-      expect(owner?.isForeground).toBe(false);
+      expect(owner?.state).toBe("cached");
     } finally {
       release();
     }
   });
 
-  it("does not let a superseded claim's release drop the newer one", () => {
-    const first = makeContext(2, makePvm("q", ["q"]));
-    const second = makeContext(3, makePvm("q", ["q"]));
+  it("keeps a window's claim while another of its activations is still in flight", () => {
+    // A menu open landing on an IPC switch of the same project: whichever
+    // settles first must not drop the protection the other still needs.
+    const activating = makeContext(2, makePvm("q", ["q"]));
     const releaseFirst = claimProjectActivation("p", 2);
-    const releaseSecond = claimProjectActivation("p", 3);
-    releaseFirst();
+    const releaseSecond = claimProjectActivation("p", 2);
+    releaseSecond();
     try {
-      const owner = findOtherProjectOwner(registryOf([first, second]), "p", { windowId: 1 });
-      expect(owner?.context).toBe(second);
+      const owner = findOtherProjectOwner(registryOf([activating]), "p", { windowId: 1 });
+      expect(owner?.state).toBe("activating");
     } finally {
-      releaseSecond();
+      releaseFirst();
+    }
+    expect(findOtherProjectOwner(registryOf([activating]), "p", { windowId: 1 })).toBeNull();
+  });
+
+  it("treats a second release of the same claim as a no-op", () => {
+    const activating = makeContext(2, makePvm("q", ["q"]));
+    const release = claimProjectActivation("p", 2);
+    const other = claimProjectActivation("p", 2);
+    release();
+    release();
+    try {
+      expect(findOtherProjectOwner(registryOf([activating]), "p", { windowId: 1 })).not.toBeNull();
+    } finally {
+      other();
     }
   });
 });
@@ -244,7 +265,7 @@ describe("redirectToProjectOwner", () => {
     const owner = {
       context: makeContext(2, pvm, win),
       projectViewManager: pvm,
-      isForeground: true,
+      state: "foreground",
     };
 
     const result = redirectToProjectOwner(owner as never, PROJECT, {
@@ -269,7 +290,7 @@ describe("redirectToProjectOwner", () => {
     const owner = {
       context: makeContext(2, pvm, win),
       projectViewManager: pvm,
-      isForeground: false,
+      state: "cached",
     };
     const focusIntent = { intent: "focus-panel", panelId: "x" } as const;
 
@@ -282,5 +303,46 @@ describe("redirectToProjectOwner", () => {
       args: { projectId: "p" },
     });
     expect(win.focus).toHaveBeenCalled();
+  });
+
+  it("waits for a still-loading owner view before asking it to switch", () => {
+    const pvm = makePvm("r", ["q", "p"]);
+    const appWebContents = makeWebContents(false, true);
+    getAppWebContentsMock.mockReturnValue(appWebContents);
+    const owner = { context: makeContext(2, pvm), projectViewManager: pvm, state: "cached" };
+
+    redirectToProjectOwner(owner as never, PROJECT);
+
+    expect(appWebContents.send).not.toHaveBeenCalled();
+    expect(appWebContents.once).toHaveBeenCalledWith("did-finish-load", expect.any(Function));
+    const onLoaded = appWebContents.once.mock.calls[0]![1] as () => void;
+    onLoaded();
+    expect(appWebContents.send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
+      actionId: "project.switch",
+      args: { projectId: "p" },
+    });
+  });
+
+  it("only brings forward a window still activating the project, parking the intent", () => {
+    // Its active view is still the project it is leaving: focusing it, or
+    // sending it the intent, would land on the wrong project.
+    const pvm = makePvm("q", ["q"]);
+    const win = makeBrowserWindow();
+    const owner = {
+      context: makeContext(2, pvm, win),
+      projectViewManager: pvm,
+      state: "activating",
+    };
+    const focusIntent = { intent: "focus-next-waiting" } as const;
+
+    const result = redirectToProjectOwner(owner as never, PROJECT, focusIntent);
+
+    expect(result).toEqual({ outcome: "focused-elsewhere", project: PROJECT, targetWindowId: 2 });
+    expect(win.focus).toHaveBeenCalled();
+    const leavingView = pvm.getActiveView()!.webContents;
+    expect(leavingView.focus).not.toHaveBeenCalled();
+    expect(leavingView.send).not.toHaveBeenCalled();
+    expect(pvm.setPendingFocusIntent).toHaveBeenCalledWith("p", focusIntent);
+    expect(getAppWebContentsMock).not.toHaveBeenCalled();
   });
 });

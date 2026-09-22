@@ -1102,34 +1102,47 @@ describe("switch busy indication (#10736)", () => {
     }
   );
 
-  it("puts back what the switch cleared when main redirects it", async () => {
+  it("puts back the banner and error a redirected switch cleared", async () => {
     projectClientMock.switch.mockResolvedValueOnce({
       outcome: "focused-elsewhere",
       project: projectB,
       targetWindowId: 2,
     });
-    const { setFleetArmedIdsAccessor, setFleetArmingClearAccessor, setFleetArmingRestoreAccessor } =
-      await import("../storeAccessors");
-    const restoreSpy = vi.fn();
-    const clearSpy = vi.fn();
-    setFleetArmedIdsAccessor(() => new Set(["agent-1", "agent-2"]));
-    setFleetArmingClearAccessor(clearSpy);
-    setFleetArmingRestoreAccessor(restoreSpy);
     const { useProjectStore } = await import("../projectStore");
     useProjectStore.setState({
       projects: [projectA, projectB],
       currentProject: projectA,
       worktreeLoadError: "worktree load failed",
+      error: "Failed to get current project",
     });
 
     await useProjectStore.getState().switchProject(projectB.id);
-    // The switch still starts from a clean slate, before main has answered.
-    expect(clearSpy).toHaveBeenCalledTimes(1);
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(restoreSpy).toHaveBeenCalledWith(["agent-1", "agent-2"]);
     expect(useProjectStore.getState().worktreeLoadError).toBe("worktree load failed");
+    expect(useProjectStore.getState().error).toBe("Failed to get current project");
+  });
+
+  it("does not resurrect a banner a newer status already replaced", async () => {
+    let answer!: (value: unknown) => void;
+    projectClientMock.switch.mockImplementationOnce(
+      () => new Promise((resolve) => (answer = resolve))
+    );
+    const { useProjectStore } = await import("../projectStore");
+    useProjectStore.setState({
+      projects: [projectA, projectB],
+      currentProject: projectA,
+      worktreeLoadError: "old failure",
+    });
+
+    await useProjectStore.getState().switchProject(projectB.id);
+    useProjectStore.getState().setWorktreeLoadError("new failure");
+    answer({ outcome: "focused-elsewhere", project: projectB, targetWindowId: 2 });
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(useProjectStore.getState().worktreeLoadError).toBe("new failure");
   });
 
   it("puts back the worktree banner a redirected reopen cleared", async () => {
@@ -1152,21 +1165,20 @@ describe("switch busy indication (#10736)", () => {
     expect(useProjectStore.getState().worktreeLoadError).toBe("worktree load failed");
   });
 
-  it("restores nothing after a real switch", async () => {
+  it("leaves the banner cleared after a real switch", async () => {
     projectClientMock.switch.mockResolvedValueOnce({ outcome: "switched", project: projectB });
-    const { setFleetArmedIdsAccessor, setFleetArmingRestoreAccessor } =
-      await import("../storeAccessors");
-    const restoreSpy = vi.fn();
-    setFleetArmedIdsAccessor(() => new Set(["agent-1"]));
-    setFleetArmingRestoreAccessor(restoreSpy);
     const { useProjectStore } = await import("../projectStore");
-    useProjectStore.setState({ projects: [projectA, projectB], currentProject: projectA });
+    useProjectStore.setState({
+      projects: [projectA, projectB],
+      currentProject: projectA,
+      worktreeLoadError: "worktree load failed",
+    });
 
     await useProjectStore.getState().switchProject(projectB.id);
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(restoreSpy).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().worktreeLoadError).toBeNull();
   });
 
   it("keeps isSwitching set when main reports a real switch", async () => {

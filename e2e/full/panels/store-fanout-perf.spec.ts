@@ -262,16 +262,17 @@ perfDescribe("Perf: store-update fanout (renders per git tick / agent flip)", ()
       test.slow();
       test.setTimeout(900_000);
 
-      const fixture = prepareFixture(scale);
       const windowMode = process.env.BACKGROUND_ENERGY_SECOND_WINDOW;
       // "mirror" opened this same fixture again in a second window. A project
       // has one live view across the app now (#12596) — that open brings the
       // first window forward instead — so the duplicate it measured can't be built.
+      // Checked before any fixture is created, which nothing would clean up.
       if (windowMode === "mirror") {
         throw new Error(
           "BACKGROUND_ENERGY_SECOND_WINDOW=mirror is retired: a project can no longer be open in two windows (#12596)"
         );
       }
+      const fixture = prepareFixture(scale);
       const secondFixture = windowMode ? prepareFixture(1) : undefined;
       const thirdFixture = windowMode === "1" ? prepareFixture(1) : undefined;
       let ctx: AppContext | undefined;

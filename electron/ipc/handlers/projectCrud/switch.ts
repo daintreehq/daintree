@@ -126,6 +126,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
             resumeWorkspace: true,
             trace,
             requestedAt,
+            onSwapSettled: releaseClaim,
           });
           await persistOutgoing;
         } finally {
@@ -227,6 +228,7 @@ export function registerProjectSwitchHandlers(deps: HandlerDependencies): () => 
             resumeWorkspace: true,
             trace,
             requestedAt,
+            onSwapSettled: releaseClaim,
           });
           await persistOutgoing;
         } finally {
@@ -618,6 +620,13 @@ type ActivateOptions = {
   trace: ProjectSwitchTrace;
   /** `Date.now()` when main received the request — the origin of the status timing. */
   requestedAt: number;
+  /**
+   * Runs once the view swap has settled either way. From then on the manager's
+   * own inventory answers who owns the project, so the activation claim that
+   * covered the gap before it is released here rather than after the long
+   * worktree-load tail, during which this window may already have moved on.
+   */
+  onSwapSettled?: () => void;
 };
 
 async function activateProjectView(
@@ -684,7 +693,11 @@ async function activateProjectView(
       const ptyClient = deps.ptyClient;
       void prefetchTerminalInventory(projectId, (id) => buildTerminalInventory(ptyClient, id));
     }
-    swapResult = await pvm.switchTo(projectId, project.path, trace);
+    try {
+      swapResult = await pvm.switchTo(projectId, project.path, trace);
+    } finally {
+      options.onSwapSettled?.();
+    }
   } catch (error) {
     // The swap failed and rolled back to the previous view, but the early
     // loadProject may have already pointed windowToProject at the failed

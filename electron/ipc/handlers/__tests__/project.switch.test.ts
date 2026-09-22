@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { _resetTerminalInventoryPrefetchForTests } from "../../../services/terminalInventoryPrefetch.js";
 import os from "os";
 
@@ -2396,7 +2396,13 @@ describe("project switch/reopen redirects to the window that owns the project (#
   }
 
   function makeViewWebContents(id: number) {
-    return { id, isDestroyed: () => false, send: vi.fn(), focus: vi.fn() };
+    return {
+      id,
+      isDestroyed: () => false,
+      isLoadingMainFrame: () => false,
+      send: vi.fn(),
+      focus: vi.fn(),
+    };
   }
 
   /** A manager whose views are `views` (project ids) and whose active one is `active`. */
@@ -2616,18 +2622,27 @@ describe("project switch/reopen redirects to the window that owns the project (#
   });
 
   describe("when two windows ask for the same project at once", () => {
-    function setupRace() {
+    let settleOutstanding: (() => Promise<void>) | null = null;
+
+    // A failed assertion must not leave window 1's activation hanging: its
+    // claim lives in module state and would leak into every later test.
+    afterEach(async () => {
+      await settleOutstanding?.();
+      settleOutstanding = null;
+    });
+
+    function setupRace(opts: { holdWorktreeLoad?: boolean } = {}) {
       // Neither manager lists the target yet: window 1's switch is still in
       // flight, so only its claim can tell window 2 the project is taken.
       const pvm1 = makeSenderPvm();
       let finishSwap!: () => void;
-      pvm1.switchTo.mockImplementation(
-        () =>
-          new Promise((resolve) => {
-            finishSwap = () =>
-              resolve({ view: { webContents: makeViewWebContents(200) }, isNew: true });
-          })
-      );
+      const swapGate = new Promise<void>((resolve) => (finishSwap = resolve));
+      pvm1.switchTo.mockImplementation(async () => {
+        await swapGate;
+        return { view: { webContents: makeViewWebContents(200) }, isNew: true };
+      });
+      let finishWorktreeLoad!: () => void;
+      const worktreeGate = new Promise<void>((resolve) => (finishWorktreeLoad = resolve));
       const pvm2 = makeOwnerPvm("proj-two", ["proj-two"]);
       pvm2.switchTo.mockResolvedValue({
         view: { webContents: makeViewWebContents(201) },
@@ -2647,20 +2662,45 @@ describe("project switch/reopen redirects to the window that owns the project (#
       ctx2.browserWindow = window2 as unknown as Electron.BrowserWindow;
       registerProjectCrudHandlers({
         mainWindow: { id: 1 } as unknown,
-        windowRegistry: makeWindowRegistry([ctx1, ctx2]),
+        windowRegistry: {
+          ...makeWindowRegistry([ctx1, ctx2]),
+          registerAppViewWebContents: vi.fn(),
+        },
+        ...(opts.holdWorktreeLoad && {
+          worktreeService: {
+            resumeProject: vi.fn(),
+            // Only window 1's load is held; window 2's lands straight away.
+            loadProject: vi
+              .fn()
+              .mockImplementationOnce(async () => {
+                await worktreeGate;
+                return "warm";
+              })
+              .mockResolvedValue("warm"),
+            attachDirectPort: vi.fn(),
+            getHostForProject: vi.fn(),
+          },
+        }),
       } as unknown as HandlerDependencies);
-      const switchHandler = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find(
+      const handler = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find(
         (c) => c[0] === CHANNELS.PROJECT_SWITCH
       )![1] as (...args: unknown[]) => Promise<unknown>;
-      return { pvm1, pvm2, window1, switchHandler, finishSwap: () => finishSwap() };
-    }
-
-    async function untilSwapStarts(pvm: { switchTo: ReturnType<typeof vi.fn> }) {
-      await vi.waitFor(() => expect(pvm.switchTo).toHaveBeenCalled());
+      const outstanding: Promise<unknown>[] = [];
+      const switchHandler = (...args: unknown[]) => {
+        const request = handler(...args);
+        outstanding.push(request.catch(() => {}));
+        return request;
+      };
+      settleOutstanding = async () => {
+        finishSwap();
+        finishWorktreeLoad();
+        await Promise.all(outstanding);
+      };
+      return { pvm1, pvm2, window1, switchHandler, finishSwap, finishWorktreeLoad };
     }
 
     it("sends the second request to the window already activating it", async () => {
-      const { pvm1, pvm2, window1, switchHandler, finishSwap } = setupRace();
+      const { pvm2, window1, switchHandler, finishSwap } = setupRace();
 
       const first = switchHandler({ sender: { id: 10 } }, TARGET.id);
       const second = await switchHandler({ sender: { id: 20 } }, TARGET.id);
@@ -2669,26 +2709,44 @@ describe("project switch/reopen redirects to the window that owns the project (#
       expect(window1.focus).toHaveBeenCalled();
       expect(pvm2.switchTo).not.toHaveBeenCalled();
 
-      await untilSwapStarts(pvm1);
       finishSwap();
       await expect(first).resolves.toEqual({ outcome: "switched", project: TARGET });
     });
 
-    it("releases the claim once the activation settles", async () => {
-      const { pvm1, pvm2, switchHandler, finishSwap } = setupRace();
+    it("parks a redirected focus intent on the activating window, not its outgoing view", async () => {
+      const { pvm1, switchHandler } = setupRace();
+      const focusIntent = { intent: "focus-panel", panelId: "panel-9" };
+
+      void switchHandler({ sender: { id: 10 } }, TARGET.id);
+      await switchHandler({ sender: { id: 20 } }, TARGET.id, undefined, { focusIntent });
+
+      expect(pvm1.setPendingFocusIntent).toHaveBeenCalledWith(TARGET.id, focusIntent);
+      const outgoingView = pvm1.webContentsFor("proj-sender");
+      expect(outgoingView.send).not.toHaveBeenCalled();
+      expect(outgoingView.focus).not.toHaveBeenCalled();
+    });
+
+    it("releases the claim once the swap settles, before the worktree load does", async () => {
+      const { pvm1, pvm2, switchHandler, finishSwap } = setupRace({ holdWorktreeLoad: true });
 
       const first = switchHandler({ sender: { id: 10 } }, TARGET.id);
-      await untilSwapStarts(pvm1);
       finishSwap();
-      await first;
+      // Committed after the swap, so seeing it means the swap has settled.
+      await vi.waitFor(() => expect(projectStoreMock.setCurrentProject).toHaveBeenCalled());
+      expect(pvm1.switchTo).toHaveBeenCalled();
 
-      // Window 1's mock manager never lists the view, so with the claim gone
-      // nothing marks the project as taken any more.
+      // Window 1's handler is still waiting on its worktree load, but its
+      // manager now answers for the project. This mock manager never lists the
+      // view, so with the claim gone nothing marks the project as taken.
       await expect(switchHandler({ sender: { id: 20 } }, TARGET.id)).resolves.toEqual({
         outcome: "switched",
         project: TARGET,
       });
       expect(pvm2.switchTo).toHaveBeenCalled();
+      let firstSettled = false;
+      void first.finally(() => (firstSettled = true)).catch(() => {});
+      await Promise.resolve();
+      expect(firstSettled).toBe(false);
     });
 
     it("releases the claim when the activation fails", async () => {

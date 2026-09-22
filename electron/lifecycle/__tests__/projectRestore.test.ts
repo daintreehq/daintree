@@ -185,6 +185,26 @@ describe("enqueueBackgroundRestores", () => {
     expect(fake.calls).toEqual(["b"]);
   });
 
+  // #12596: one live view per project. A project the user opened in another
+  // window while this one waited belongs to that window now.
+  it("skips a project another window has opened since it was queued", async () => {
+    const fake = createFakeManager();
+    const opened = new Set<string>();
+    enqueueBackgroundRestores(
+      job({
+        getManager: () => fake.manager,
+        projectIds: ["a", "b"],
+        isOwnedElsewhere: (id) => opened.has(id),
+      })
+    );
+    // Asked at the job's turn, not when it was queued.
+    opened.add("b");
+    await tick();
+    fake.settle();
+    await tick();
+    expect(fake.calls).toEqual(["a"]);
+  });
+
   it("abandons a window's remaining projects once it hits its warm-view ceiling", async () => {
     // Every remaining project would hit the same wall, and their agents are
     // still running and still resumable the moment the user opens them.

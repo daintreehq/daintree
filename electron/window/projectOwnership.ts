@@ -1,4 +1,4 @@
-import type { BrowserWindow } from "electron";
+import type { BrowserWindow, WebContents } from "electron";
 import { CHANNELS } from "../ipc/channels.js";
 import { getAppWebContents } from "./webContentsRegistry.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
@@ -19,8 +19,12 @@ import type { Project } from "../../shared/types/project.js";
 export interface ProjectOwner {
   context: WindowContext;
   projectViewManager: ProjectViewManager;
-  /** True when the window is showing the project, false when it only has it cached. */
-  isForeground: boolean;
+  /**
+   * `foreground`: the window is showing the project. `activating`: it has
+   * committed to showing it but its manager has no view yet. `cached`: it holds
+   * a view it isn't showing.
+   */
+  state: "foreground" | "activating" | "cached";
 }
 
 /**
@@ -29,25 +33,44 @@ export interface ProjectOwner {
  * persist and the manager's switch queue still lie between that and the
  * manager's inventory showing it. Without this, two windows asking for the same
  * project in that gap would both find no owner and both build a view.
+ *
+ * One entry per claim rather than per project: the same window can have two
+ * activations of a project in flight (a menu open landing on an IPC switch), and
+ * the first to settle must not drop the other's protection.
  */
-const pendingActivations = new Map<string, { windowId: number; token: object }>();
+const pendingActivations = new Map<string, Set<{ windowId: number }>>();
 
 /**
  * Claim `projectId` for `windowId` until the returned release runs. Taken
- * synchronously with the owner check, and released in a `finally`: a claim that
- * outlived its activation would send every later request for the project to a
- * window that never got it.
+ * synchronously with the owner check and released once the window's manager has
+ * the view (or the swap failed), with a `finally` behind that: a claim that
+ * outlived its activation would send later requests for the project to a
+ * window that may no longer have it. Releasing twice is harmless.
  */
 export function claimProjectActivation(
   projectId: string,
   windowId: number | undefined
 ): () => void {
   if (windowId === undefined) return () => {};
-  const token = {};
-  pendingActivations.set(projectId, { windowId, token });
+  const claim = { windowId };
+  let claims = pendingActivations.get(projectId);
+  if (!claims) {
+    claims = new Set();
+    pendingActivations.set(projectId, claims);
+  }
+  claims.add(claim);
   return () => {
-    if (pendingActivations.get(projectId)?.token === token) pendingActivations.delete(projectId);
+    const current = pendingActivations.get(projectId);
+    if (!current?.delete(claim)) return;
+    if (current.size === 0) pendingActivations.delete(projectId);
   };
+}
+
+function hasPendingActivation(projectId: string, windowId: number): boolean {
+  for (const claim of pendingActivations.get(projectId) ?? []) {
+    if (claim.windowId === windowId) return true;
+  }
+  return false;
 }
 
 export function hasLiveProjectView(
@@ -73,10 +96,11 @@ export function hasLiveProjectView(
  * and a manager the request is about to act on is never someone else's owner.
  *
  * A window whose manager has flipped `activeProjectId` to the project counts as
- * showing it, and so does one that has claimed it but not yet registered a view.
- * A foreground owner wins over a cached one: with the rule enforced there is at
- * most one owner, but a fleet built before it could hold two, and the window
- * already showing the project is the one to bring forward.
+ * showing it. Preference runs foreground, then activating, then cached: with the
+ * rule enforced there is at most one owner, but a fleet built before it could
+ * hold two, and the window closest to showing the project is the one to bring
+ * forward. The manager's own inventory outranks a claim, since a window can
+ * finish activating the project and switch on before its claim is released.
  */
 export function findOtherProjectOwner(
   registry: WindowRegistry | undefined,
@@ -85,8 +109,7 @@ export function findOtherProjectOwner(
 ): ProjectOwner | null {
   if (!registry) return null;
 
-  const pendingWindowId = pendingActivations.get(projectId)?.windowId;
-  let pendingOwner: ProjectOwner | null = null;
+  let activatingOwner: ProjectOwner | null = null;
   let cachedOwner: ProjectOwner | null = null;
   for (const context of registry.all()) {
     if (context.windowId === requester.windowId) continue;
@@ -95,21 +118,19 @@ export function findOtherProjectOwner(
       const projectViewManager = context.services.projectViewManager;
       if (!projectViewManager || projectViewManager === requester.projectViewManager) continue;
       if (projectViewManager.getActiveProjectId() === projectId) {
-        return { context, projectViewManager, isForeground: true };
+        return { context, projectViewManager, state: "foreground" };
       }
-      // The manager's own inventory outranks the claim: a window can finish
-      // activating the project and switch on before its handler settles.
       if (hasLiveProjectView(projectViewManager, projectId)) {
-        cachedOwner ??= { context, projectViewManager, isForeground: false };
-      } else if (context.windowId === pendingWindowId) {
-        pendingOwner = { context, projectViewManager, isForeground: true };
+        cachedOwner ??= { context, projectViewManager, state: "cached" };
+      } else if (hasPendingActivation(projectId, context.windowId)) {
+        activatingOwner ??= { context, projectViewManager, state: "activating" };
       }
     } catch {
       // A window tearing down can throw from any of these reads. It can't be
       // shown or switched either, so it owns nothing worth redirecting to.
     }
   }
-  return pendingOwner ?? cachedOwner;
+  return activatingOwner ?? cachedOwner;
 }
 
 /** Bring a window to the front, restoring it first if it was minimized. */
@@ -129,6 +150,10 @@ export function revealWindow(browserWindow: BrowserWindow): void {
  * On screen there: the window comes forward, and the project view itself takes
  * keyboard focus, which focusing the window doesn't hand to a WebContentsView.
  *
+ * Still activating there: the window comes forward, but its active view may
+ * still be the project it is leaving, so nothing is focused or told anything.
+ * The focus intent is parked for the activation already under way to consume.
+ *
  * Cached there: the owning window's own renderer runs the switch, exactly as if
  * the user had picked the project in that window. The switch has to start in
  * that renderer, because it is the one holding the layout of whatever it is
@@ -142,11 +167,11 @@ export function redirectToProjectOwner(
   project: Project,
   focusIntent?: ProjectFocusOnActivateIntent
 ): ProjectSwitchResult {
-  const { context, projectViewManager, isForeground } = owner;
+  const { context, projectViewManager, state } = owner;
   const browserWindow = context.browserWindow;
   const targetWindowId = context.windowId;
 
-  if (isForeground) {
+  if (state === "foreground") {
     revealWindow(browserWindow);
     const webContents = projectViewManager.getActiveView()?.webContents;
     if (webContents && !webContents.isDestroyed()) {
@@ -161,15 +186,37 @@ export function redirectToProjectOwner(
   if (focusIntent) {
     projectViewManager.setPendingFocusIntent(project.id, focusIntent);
   }
-  const appWebContents = getAppWebContents(browserWindow);
-  if (!appWebContents.isDestroyed()) {
-    appWebContents.send(CHANNELS.MENU_ACTION, {
-      actionId: "project.switch",
-      args: { projectId: project.id },
-    });
+  if (state === "activating") {
+    revealWindow(browserWindow);
+    return { outcome: "focused-elsewhere", project, targetWindowId };
   }
+
+  requestOwnerSwitch(getAppWebContents(browserWindow), project.id);
   revealWindow(browserWindow);
   return { outcome: "activated-elsewhere", project, targetWindowId };
+}
+
+/**
+ * Ask the owner's app view to switch. A view still loading — the owner can be
+ * mid cold switch to a third project, whose fresh view is already the app view —
+ * has no menu-action listener yet, and a send before `did-finish-load` is
+ * dropped with no queue, so it waits for the load (`isLoadingMainFrame`, not
+ * `isLoading`, which a loading subframe would hold open indefinitely).
+ */
+function requestOwnerSwitch(appWebContents: WebContents, projectId: string): void {
+  const send = (): void => {
+    if (appWebContents.isDestroyed()) return;
+    appWebContents.send(CHANNELS.MENU_ACTION, {
+      actionId: "project.switch",
+      args: { projectId },
+    });
+  };
+  if (appWebContents.isDestroyed()) return;
+  if (appWebContents.isLoadingMainFrame()) {
+    appWebContents.once("did-finish-load", send);
+  } else {
+    send();
+  }
 }
 
 /**

@@ -56,6 +56,7 @@ import {
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
+import { findOtherProjectOwner } from "./projectOwnership.js";
 import {
   installOpenDirConsumer,
   drainPendingOpenDirs,
@@ -764,6 +765,11 @@ export async function setupWindowServices(
         // user can still open the project by hand once the folder is back.
         return workspacePath !== null && fs.existsSync(workspacePath) ? workspacePath : null;
       },
+      isOwnedElsewhere: (projectId) =>
+        findOtherProjectOwner(windowRegistry, projectId, {
+          windowId: win.id,
+          projectViewManager: opts.projectViewManager,
+        }) !== null,
     });
   }
 
