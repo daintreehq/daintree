@@ -1,4 +1,4 @@
-import type { InputHTMLAttributes, ReactNode } from "react";
+import type { InputHTMLAttributes, ReactNode, Ref } from "react";
 import { FolderOpen } from "lucide-react";
 import { basename, normalize } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
@@ -66,6 +66,12 @@ export const FIELD_SLOT_BUTTON = cn(
   "hover:bg-overlay-hover hover:text-text-primary",
   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
   "disabled:cursor-not-allowed disabled:opacity-50"
+);
+
+/** `ProjectEmojiButton`, re-seated as a {@link SlottedInputField}'s leading slot. */
+export const EMOJI_SLOT_CLASS = cn(
+  FIELD_SLOT_BUTTON,
+  "rounded-none border-0 border-r bg-transparent text-base"
 );
 
 /**
@@ -143,10 +149,12 @@ export function SlottedInputField({
   leading,
   invalid,
   className,
+  ref,
   ...inputProps
 }: InputHTMLAttributes<HTMLInputElement> & {
   leading: ReactNode;
   invalid?: boolean;
+  ref?: Ref<HTMLInputElement>;
 }) {
   return (
     <div
@@ -160,6 +168,7 @@ export function SlottedInputField({
     >
       {leading}
       <input
+        ref={ref}
         type="text"
         {...inputProps}
         aria-invalid={invalid || undefined}

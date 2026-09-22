@@ -435,9 +435,9 @@ test("git init dialog review — configuration, progress, recovery and success",
     //    only path that carries one, so it is the only honest way to reach this state.
     await step("identity-carried", async () => {
       await page.getByRole("button", { name: "Create project", exact: true }).click();
-      await dialogButton("Browse").waitFor({ state: "visible", timeout: 8000 });
+      await dialogButton("Browse for a location").waitFor({ state: "visible", timeout: 8000 });
       await mockOpenDialog(app, parentForCreateFlow);
-      await dialogButton("Browse").click();
+      await dialogButton("Browse for a location").click();
       await page.locator("#create-folder-name").fill("telemetry-pipeline");
       await dialogButton("Create folder").click();
       await dialogButton("Initialize repository").waitFor({

@@ -23,7 +23,7 @@ import {
 import {
   DirectoryPickerField,
   SlottedInputField,
-  FIELD_SLOT_BUTTON,
+  EMOJI_SLOT_CLASS,
   OpenDestinationControl,
   PathCaption,
   type ProjectOpenDestination,
@@ -59,9 +59,6 @@ interface CloneRepoDialogProps {
 }
 
 const AUTO_CLOSE_DELAY_MS = 2000;
-
-/** The emoji swatch, re-seated as the name field's leading slot. */
-const EMOJI_SLOT_CLASS = `${FIELD_SLOT_BUTTON} rounded-none border-0 border-r bg-transparent text-base`;
 
 /**
  * House rule for a wait with nothing to show is reassurance past five seconds;

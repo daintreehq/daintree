@@ -2,20 +2,19 @@ import { useState, useCallback, useEffect, useRef, useId, useMemo } from "react"
 import { join } from "@shared/utils/path";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { FolderPlus, FolderOpen } from "lucide-react";
+import { FolderPlus } from "lucide-react";
 import { projectClient } from "@/clients";
 import { useProjectStore } from "@/store/projectStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { validateFolderName } from "@shared/utils/folderName";
 import { suggestProjectEmoji, DEFAULT_PROJECT_EMOJI } from "@shared/utils/projectEmoji";
 import { ProjectEmojiButton } from "./ProjectEmojiButton";
+import { FormGrid, FormRow } from "@/components/Worktree/views/WorktreeFormLayout";
 import {
-  FIELD_LABEL_CLASS,
-  FIELD_INPUT_CLASS,
-  FIELD_READONLY_INPUT_CLASS,
-  FIELD_BROWSE_BUTTON_CLASS,
-  FIELD_EMOJI_ROW_INDENT,
-  OpenDestinationField,
+  DirectoryPickerField,
+  SlottedInputField,
+  EMOJI_SLOT_CLASS,
+  OpenDestinationControl,
   PathCaption,
   type ProjectOpenDestination,
 } from "./projectDialogFields";
@@ -131,106 +130,117 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
     [handleCreate, isCreating]
   );
 
+  // Validated as it is typed, not only on submit, so the footer never promises
+  // a path that Create would then refuse.
+  const nameError = folderName.trim() ? validateFolderName(folderName) : null;
+  const shownError = error ?? nameError;
+
   const previewPath = useMemo(() => {
     const trimmed = folderName.trim();
-    if (!parentPath || !trimmed) return null;
+    if (!parentPath || !trimmed || nameError) return null;
     return join(parentPath, trimmed);
-  }, [parentPath, folderName]);
+  }, [parentPath, folderName, nameError]);
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" dismissible={!isCreating}>
-      <AppDialog.Header>
+      <AppDialog.Header className="py-3">
         {/* Neutral, not accent: the header glyph is decoration, and this focus
             region's one load-bearing accent is the keyboard focus ring. */}
-        <AppDialog.Title icon={<FolderPlus className="h-5 w-5 text-text-secondary" />}>
+        <AppDialog.Title icon={<FolderPlus className="h-4 w-4 text-text-secondary" />}>
           Create project folder
         </AppDialog.Title>
         {!isCreating && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
-        <div className="space-y-1.5">
-          <label className={FIELD_LABEL_CLASS} htmlFor="create-folder-parent">
-            Parent directory
-          </label>
-          <div className="flex gap-2">
-            <input
+        <FormGrid>
+          <FormRow label="Location" htmlFor="create-folder-parent">
+            <DirectoryPickerField
               id="create-folder-parent"
-              type="text"
-              readOnly
-              aria-readonly="true"
               value={parentPath}
-              className={FIELD_READONLY_INPUT_CLASS}
-              placeholder="Select a directory…"
-            />
-            <Button
-              variant="outline"
-              onClick={handleBrowseParent}
+              onBrowse={() => void handleBrowseParent()}
               disabled={isCreating}
-              className={FIELD_BROWSE_BUTTON_CLASS}
-            >
-              <FolderOpen className="h-4 w-4" />
-              Browse
-            </Button>
-          </div>
-        </div>
-
-        <div className="space-y-1.5">
-          <label className={FIELD_LABEL_CLASS} htmlFor="create-folder-name">
-            Folder name
-          </label>
-          <div className="flex items-center gap-2">
-            <ProjectEmojiButton
-              emoji={effectiveEmoji}
-              onEmojiChange={setPickedEmoji}
-              disabled={isCreating}
-              ariaLabel="Choose project emoji"
+              browseLabel="Browse for a location"
             />
-            <input
+          </FormRow>
+          <FormRow
+            label="Name"
+            htmlFor="create-folder-name"
+            hint={
+              shownError && (
+                <p id={errorId} role="alert" className="text-xs text-status-error">
+                  {shownError}
+                </p>
+              )
+            }
+          >
+            <SlottedInputField
               ref={folderNameInputRef}
               id="create-folder-name"
-              type="text"
               value={folderName}
               onChange={(e) => {
                 setFolderName(e.target.value);
                 setError(null);
               }}
               onKeyDown={handleKeyDown}
-              aria-invalid={error != null}
-              aria-describedby={error ? errorId : undefined}
-              className={FIELD_INPUT_CLASS}
+              invalid={shownError != null}
+              aria-describedby={shownError ? errorId : undefined}
+              spellCheck={false}
+              autoComplete="off"
               placeholder="my-project"
               disabled={isCreating}
+              leading={
+                <ProjectEmojiButton
+                  emoji={effectiveEmoji}
+                  onEmojiChange={setPickedEmoji}
+                  disabled={isCreating}
+                  ariaLabel="Choose project emoji"
+                  className={EMOJI_SLOT_CLASS}
+                />
+              }
             />
-          </div>
-          {error && (
-            <p
-              id={errorId}
-              role="alert"
-              className={`${FIELD_EMOJI_ROW_INDENT} text-xs text-status-error`}
-            >
-              {error}
-            </p>
-          )}
-          {!error && previewPath && (
-            <PathCaption path={previewPath} className={FIELD_EMOJI_ROW_INDENT} />
-          )}
-        </div>
-
-        <OpenDestinationField value={destination} onChange={setDestination} disabled={isCreating} />
+          </FormRow>
+          <FormRow label="Open in" selfLabelled>
+            <OpenDestinationControl
+              value={destination}
+              onChange={setDestination}
+              disabled={isCreating}
+            />
+          </FormRow>
+        </FormGrid>
       </AppDialog.Body>
 
-      <AppDialog.Footer>
-        <Button variant="outline" onClick={onClose} disabled={isCreating}>
-          Cancel
-        </Button>
-        <Button
-          variant="contrast"
-          onClick={handleCreate}
-          disabled={isCreating || !parentPath || !folderName.trim()}
-        >
-          {isCreating ? "Creating…" : "Create folder"}
-        </Button>
+      <AppDialog.Footer
+        hint={
+          previewPath ? (
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0">Creates</span>
+              <PathCaption path={previewPath} className="min-w-0 text-text-primary" />
+            </span>
+          ) : (
+            <span className="truncate">
+              {!parentPath
+                ? "Choose a location to continue"
+                : nameError
+                  ? "Fix the folder name to continue"
+                  : "Name the folder to continue"}
+            </span>
+          )
+        }
+      >
+        <div className="flex shrink-0 items-center gap-3">
+          <Button variant="ghost" size="sm" onClick={onClose} disabled={isCreating}>
+            Cancel
+          </Button>
+          <Button
+            variant="contrast"
+            size="sm"
+            onClick={handleCreate}
+            disabled={isCreating || !parentPath || !folderName.trim() || nameError !== null}
+          >
+            {isCreating ? "Creating…" : "Create folder"}
+          </Button>
+        </div>
       </AppDialog.Footer>
     </AppDialog>
   );
