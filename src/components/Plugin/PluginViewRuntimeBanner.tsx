@@ -9,11 +9,19 @@ export interface PluginViewRuntimeStatusProps {
   /** Retire the backend generation and start a fresh one. */
   onRestartPlugin: () => void;
   restarting: boolean;
+  /**
+   * The host stopped the view for asking to reload too often (#12609). Only
+   * honoured with {@link onReloadPanel}, since the banner exists to offer it.
+   */
+  reloadBlocked?: boolean;
+  /** Clear the reload block and mount a fresh view attempt. */
+  onReloadPanel?: () => void;
 }
 
 /**
  * The host-owned half of a plugin panel: what the shell draws when the plugin's
- * backend, rather than its view, is the thing that went wrong (#12278).
+ * backend, rather than its view, is the thing that went wrong (#12278) — and
+ * when the host itself stopped a view that kept asking to reload (#12609).
  *
  * Rendered OUTSIDE the plugin's ErrorBoundary and Suspense, and outside its
  * style root, so a crashed backend can't take its own error report down with it
@@ -21,17 +29,37 @@ export interface PluginViewRuntimeStatusProps {
  *
  * Only one recovery action, and only one accent: `InlineStatusBanner` enforces
  * the single-action rule for `severity="error"` at the type level, and the
- * design system allows at most one load-bearing accent per focus region. "Reload
- * view" is deliberately absent here — it recreates the view against the SAME
- * backend, which is exactly what a panel in this state does not have. It stays
- * on the diagnostics fallback, where the backend is healthy and the view is not.
+ * design system allows at most one load-bearing accent per focus region. So a
+ * dead backend outranks a reload block: reloading the view recreates it against
+ * the SAME backend, which is exactly what a panel in that state does not have.
+ * Once the backend is back, the block's own banner takes over.
  */
 export function PluginViewRuntimeBanner({
   presentation,
   panelDisplayName,
   onRestartPlugin,
   restarting,
+  reloadBlocked,
+  onReloadPanel,
 }: PluginViewRuntimeStatusProps) {
+  if (
+    reloadBlocked &&
+    onReloadPanel &&
+    (presentation.kind === "content" || presentation.kind === "reloading")
+  ) {
+    return (
+      <InlineStatusBanner
+        // T3: the view is gone and nothing brings it back on its own, so the
+        // banner carries the one action that does.
+        severity="error"
+        title="Panel kept reloading itself"
+        description="It asked to reload too many times in a row, so automatic reloads are off."
+        contextLine={panelDisplayName}
+        action={{ id: "reload-panel", label: "Reload panel", onClick: onReloadPanel }}
+      />
+    );
+  }
+
   if (presentation.kind === "content") return null;
 
   if (presentation.kind === "reloading") {

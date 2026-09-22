@@ -37,7 +37,34 @@ interface TrackedPanel {
   lastPhase: PluginPanelLifecyclePhase | null;
   /** Panel is gone; the entry lingers only until the pending flush drains. */
   removed: boolean;
+  /**
+   * When each plugin-initiated reload inside the current window was accepted,
+   * on the monotonic clock (#12609). Kept here rather than in the view host
+   * because the host is torn down by every temporary unmount, and a guard that
+   * forgot its history on a sibling maximize would not be a guard.
+   */
+  reloadTimes: number[];
+  /**
+   * The view asked to reload once too often and the host stopped it. One-way:
+   * the window expiring must not re-arm reloads, so only the user reloading
+   * the panel clears this. Separate from `renderFailed` because a commit
+   * clears that one automatically.
+   */
+  reloadBlocked: boolean;
 }
+
+/** Plugin-initiated reloads one panel may make in any rolling window (#12609). */
+export const VIEW_RELOAD_LIMIT = 3;
+export const VIEW_RELOAD_WINDOW_MS = 30_000;
+
+/** What the host decided about one plugin-initiated reload request. */
+export type ViewReloadAdmission =
+  /** Within budget; replace the attempt. */
+  | "accepted"
+  /** Over budget; the view is stopped until the user reloads the panel. */
+  | "blocked"
+  /** No live panel record to charge, so nothing to reload. */
+  | "refused";
 
 const tracked = new Map<string, TrackedPanel>();
 let pending: PluginPanelLifecycleEvent[] = [];
@@ -67,6 +94,8 @@ function ensureEntry(
       removal: new AbortController(),
       lastPhase: null,
       removed: false,
+      reloadTimes: [],
+      reloadBlocked: false,
     };
     tracked.set(panelId, entry);
   } else if (seed) {
@@ -91,12 +120,15 @@ function ensureEntry(
  * one rule covers every temporary-teardown case — sibling maximize, an inactive
  * dock tab, a cached project view — because all of them unmount the subtree,
  * which is precisely why they all aborted `disposeSignal` before.
+ *
+ * A view stopped for reloading too often reads as `render-failed` too: either
+ * way the panel has no working view until the user acts.
  */
 function effectivePhase(entry: TrackedPanel): PluginPanelLifecyclePhase {
   if (entry.removed) return "removed";
   if (entry.location === "trash") return "trashed";
   if (entry.location === "background") return "backgrounded";
-  if (entry.renderFailed) return "render-failed";
+  if (entry.renderFailed || entry.reloadBlocked) return "render-failed";
   return entry.mountTokens.size > 0 ? "mounted" : "hidden";
 }
 
@@ -197,6 +229,52 @@ export function clearViewRenderFailure(panelId: string): void {
   const entry = tracked.get(panelId);
   if (!entry || !entry.renderFailed) return;
   entry.renderFailed = false;
+  settle(panelId, entry);
+}
+
+/**
+ * Charge one plugin-initiated reload against the panel's budget (#12609).
+ *
+ * The first {@link VIEW_RELOAD_LIMIT} inside any rolling
+ * {@link VIEW_RELOAD_WINDOW_MS} are accepted; the next one blocks the panel,
+ * and a blocked panel refuses every request until
+ * {@link resetViewReloadBudget}. Never creates an entry: a panel the lifecycle
+ * service does not know, or one already removed, has nothing to reload.
+ */
+export function admitViewReload(
+  panelId: string,
+  now: number = performance.now()
+): ViewReloadAdmission {
+  const entry = tracked.get(panelId);
+  if (!entry || entry.removed) return "refused";
+  if (entry.reloadBlocked) return "blocked";
+  const recent = entry.reloadTimes.filter((at) => now - at < VIEW_RELOAD_WINDOW_MS);
+  if (recent.length >= VIEW_RELOAD_LIMIT) {
+    entry.reloadTimes = [];
+    entry.reloadBlocked = true;
+    settle(panelId, entry);
+    return "blocked";
+  }
+  recent.push(now);
+  entry.reloadTimes = recent;
+  return "accepted";
+}
+
+/** Whether the panel was stopped for reloading too often and still is. */
+export function isViewReloadBlocked(panelId: string): boolean {
+  return tracked.get(panelId)?.reloadBlocked === true;
+}
+
+/**
+ * The user reloaded the panel: forget its reload history and lift a block.
+ * The only way a block ends — neither time nor a backend restart clears it.
+ */
+export function resetViewReloadBudget(panelId: string): void {
+  const entry = tracked.get(panelId);
+  if (!entry) return;
+  entry.reloadTimes = [];
+  if (!entry.reloadBlocked) return;
+  entry.reloadBlocked = false;
   settle(panelId, entry);
 }
 

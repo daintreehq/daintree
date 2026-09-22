@@ -490,7 +490,7 @@ export async function activate(host: PluginHostApi) {
 | `trashed` | Soft close. Recoverable from the trash bin, so it is not permanent disposal. |
 | `restored` | One-shot edge out of the trash, emitted immediately before the phase the panel landed in. |
 | `removed` | Terminal. The panel is gone and will not return under this id. |
-| `render-failed` | The current view attempt hit the host's error boundary. Cleared by a successful retry. The failure detail stays in the renderer's diagnostics pane; only the fact of failure reaches you. |
+| `render-failed` | The panel has no working view: the current attempt hit the host's error boundary, or the host stopped a view that kept calling `requestReload`. Clears when a retry starts or the user reloads the panel; the phases after that are the new attempt's. The failure detail stays in the renderer; only the fact of failure reaches you. |
 
 **This is where durable resources belong.** A view's `disposeSignal` aborts for a temporary unmount exactly as it does for a permanent close, so a plugin that treats it as deletion tears down work the user still wants back. Keep spawned processes and long-lived sessions in the worker, keyed by `panelId`, and release them on `"removed"`.
 

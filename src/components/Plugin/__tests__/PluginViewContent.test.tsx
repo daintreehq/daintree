@@ -761,6 +761,9 @@ describe("makePluginViewContent", () => {
       expect(signal.aborted).toBe(false);
 
       unmount();
+      // One microtask late on purpose: a StrictMode replay re-runs setup right
+      // after the cleanup and has to be able to call the abort off (#12609).
+      await Promise.resolve();
       expect(signal.aborted).toBe(true);
     } finally {
       vi.doUnmock("react");
@@ -800,6 +803,7 @@ describe("makePluginViewContent", () => {
       // subtree, which must not read as "the panel was deleted". A plugin that
       // ties a running process to `panelRemovedSignal` keeps it alive here.
       unmount();
+      await Promise.resolve();
       expect(disposeSignal.aborted).toBe(true);
       expect(panelRemovedSignal.aborted).toBe(false);
     } finally {

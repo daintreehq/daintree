@@ -364,12 +364,14 @@ export interface PanelViewProps {
   /**
    * Lifetime of THIS mounted view attempt — not of the panel (#11301).
    *
-   * Aborts on React unmount, on "Try again", and when a
-   * `plugin:panel-kinds-changed` push drops this kind. Crucially, a temporary
-   * unmount aborts it too: maximizing a sibling pane, switching away from a
-   * dock tab, or caching a background project view all tear the subtree down
-   * while the panel itself lives on. Tie only view-scoped work to it — in-flight
-   * `fetch`es, DOM observers, `postToPanel` subscriptions.
+   * Aborts on React unmount, on "Try again", on an accepted
+   * {@link requestReload}, and when a `plugin:panel-kinds-changed` push drops
+   * this kind. Crucially, a temporary unmount aborts it too: maximizing a
+   * sibling pane, switching away from a dock tab, or caching a background
+   * project view all tear the subtree down while the panel itself lives on.
+   * Tie only view-scoped work to it — in-flight `fetch`es, DOM observers,
+   * `postToPanel` subscriptions. On unmount it aborts just after React has run
+   * your effect cleanups, so a cleanup may still see it open.
    *
    * NEVER tie a durable resource (a spawned process, a long-lived session) to
    * this signal: it will be killed the first time the user maximizes another
@@ -460,6 +462,31 @@ export interface PanelViewProps {
    */
   readonly persistState?: (patch: Record<string, unknown>) => boolean;
   /**
+   * Ask the host to discard this view attempt and mount a fresh one for the
+   * same panel (#12609) — for a view that has built up more than it can shed
+   * and wants to start over without restarting the plugin's backend.
+   *
+   * A reload is a new React attempt using the module that is already loaded.
+   * This attempt's {@link disposeSignal} aborts and its React cleanup runs;
+   * the next attempt gets a new `disposeSignal`, the latest state accepted
+   * through {@link persistState} as {@link initialArgs}, and the same
+   * `panelId`, {@link panelRemovedSignal} and backend. Module-scope state,
+   * document-wide registrations and anything attached to `window` survive it,
+   * so a reload frees only what your cleanup releases. It does not promise to
+   * reclaim memory, and it cannot rescue a view that is blocking the renderer.
+   *
+   * A request, not a command: the host may refuse it, and nothing reports
+   * whether or when the next attempt mounted. Calls in the same tick coalesce
+   * into one reload. The callback belongs to the attempt that received it, so
+   * one held past this attempt's teardown does nothing. A fourth reload within
+   * 30 seconds of three accepted ones stops the view instead, and the panel
+   * stays stopped until the user reloads it.
+   *
+   * Absent where the host offers no reload (a project surface, for one), so
+   * call it optionally.
+   */
+  readonly requestReload?: () => void;
+  /**
    * The worktree the panel instance belongs to, as recorded on the panel at
    * spawn time. Lets a view reconstruct its own context without dispatching
    * `worktree.getCurrent` — which resolves the *visible* worktree, not the
@@ -501,9 +528,11 @@ export interface PanelViewProps {
  * of trash (a transition, never a resting state), and `removed` is the terminal
  * event — the panel is gone and will never come back under this id.
  *
- * `render-failed` means the current view attempt reached the host's error
- * boundary. It is cleared by a successful retry. The failure detail stays in the
- * renderer's diagnostics pane; only the fact of failure crosses to the worker.
+ * `render-failed` means the panel has no working view: the current attempt
+ * reached the host's error boundary, or the host stopped a view that kept
+ * asking to reload (#12609). It clears when a retry starts or the user reloads
+ * the panel, so the next phase is the new attempt's own. The failure detail
+ * stays in the renderer; only the fact of failure crosses to the worker.
  */
 export type PluginPanelLifecyclePhase =
   "mounted" | "hidden" | "backgrounded" | "trashed" | "restored" | "removed" | "render-failed";
