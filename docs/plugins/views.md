@@ -133,6 +133,44 @@ Nothing reaches a view unless the worker sends it. The bridge is `window.electro
 
 A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginEvent`, `usePluginPanelEvent` from `@daintreehq/plugin-sdk/react`. A raw `plugin://` view cannot import that subpath — the host import map serves exactly five specifiers (`react`, `react/jsx-runtime`, `react/jsx-dev-runtime`, `react-dom`, `react-dom/client`) and nothing else — so it uses the bridge directly.
 
+## Resources your view owns
+
+An unmount frees what your component held and nothing it attached elsewhere. A `window` or `document` listener, an interval, an animation-frame loop, an observer never disconnected, a `Worker`, an object URL and a WebGL context all outlive it unless something releases them, and because `disposeSignal` aborts on every temporary unmount too, a view that forgets gains another set with each maximise or tab switch. WebGL runs out first: Chromium keeps a canvas's context until garbage collection and evicts the oldest once a renderer holds about sixteen.
+
+`createViewScope(disposeSignal)` from `@daintreehq/plugin-sdk/react` ties them to the mount attempt and releases them together, newest first, when the signal aborts or your effect's cleanup calls `dispose()`, whichever comes first:
+
+```tsx
+import { createViewScope } from "@daintreehq/plugin-sdk/react";
+
+useEffect(() => {
+  const scope = createViewScope(disposeSignal);
+  scope.listen(window, "resize", onResize);
+  scope.setInterval(refresh, 5_000);
+  const observer = new ResizeObserver(onBoxChange);
+  observer.observe(boxRef.current!);
+  scope.observe(observer);
+  const gl = scope.webgl(canvasRef.current!.getContext("webgl2")!);
+  void loadScene(gl, { signal: scope.signal });
+  return scope.dispose;
+}, [disposeSignal]);
+```
+
+| Method | Released with |
+| --- | --- |
+| `listen(target, type, listener, options?)` | `removeEventListener`, with the capture flag it was added with |
+| `setTimeout`, `setInterval`, `requestAnimationFrame` | the matching clear or cancel |
+| `observe(observer)` | `disconnect()` |
+| `worker(worker)` | `terminate()` |
+| `objectURL(blob)` | `URL.revokeObjectURL` |
+| `webgl(gl)` | `WEBGL_lose_context.loseContext()`, when the context is still live and the extension exists |
+| `add(fn)` | calling `fn` |
+
+`listen`, the timers and `add` return a function that releases early. Start an observer before adopting it, as above: a scope that is already disposed disconnects what it adopts on arrival, and an observer started after that would escape it. A timeout, a frame or a `{ once: true }` listener forgets itself as it fires, so a render loop that re-requests frames does not grow the scope. `scope.signal` aborts when the scope does; pass it to `fetch` and anything else signal-aware.
+
+Disposal is idempotent and never throws: a cleanup that throws is logged and the rest still run. Anything registered after disposal, typically from an `await` that settled after the view went away, is released on arrival and logged once, so check `scope.signal.aborted` before a continuation starts new work. Create a fresh scope in each effect setup; a disposed one stays disposed.
+
+`scope.stats()`, and the `onReport` option called once after disposal, count what the scope released, which cleanups threw and what arrived late. They see only what went through the scope, so zero proves nothing about what else the view kept alive; a heap snapshot is the tool for that. Nothing durable belongs here, for the reason `disposeSignal` exists: it belongs in the worker. A raw `plugin://` view cannot import the SDK and releases these by hand.
+
 ## Media and binary files
 
 `host.fs.readFile` returns UTF-8 text and nothing else. For an image, an audio file or anything binary, don't route the bytes through the worker at all: the renderer can fetch the file itself over the `daintree-file://` protocol, which is how Daintree's own audio and video previews work (`useMediaBlobUrl` in the repo).
@@ -143,7 +181,7 @@ A bundled view gets the same three calls as hooks: `useHostChannel`, `usePluginE
 // under `root` and refuses anything outside it.
 const url = `daintree-file://load?path=${encodeURIComponent(absPath)}&root=${encodeURIComponent(projectRoot)}`;
 const blob = await (await fetch(url, { signal: disposeSignal })).blob();
-const objectUrl = URL.createObjectURL(blob); // <audio src={objectUrl}>; revoke it on cleanup
+const objectUrl = URL.createObjectURL(blob); // <audio src={objectUrl}>; revoke it on cleanup, or use scope.objectURL(blob)
 ```
 
 Fetch into a blob rather than pointing an element's `src` at the URL directly; the blob path is the one the host has verified against Electron's media pipeline. This works because views are inline; it is not part of the host API, and a future move to an isolated view host would replace it with one.
