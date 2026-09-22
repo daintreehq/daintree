@@ -169,9 +169,33 @@ describe("compileAgentMcpSchema", () => {
         })
       )
     ).toThrow("uses $dynamicRef at /properties/id, which is not supported");
-    // A property that happens to be named $dynamicRef is just a property.
     expect(() =>
-      compileAgentMcpSchema(schema({ properties: { $dynamicRef: { type: "string" } } }))
+      compileAgentMcpSchema(
+        schema({ $defs: { id: { type: "integer" } }, properties: { id: { $recursiveRef: "#" } } })
+      )
+    ).toThrow("uses $recursiveRef at /properties/id, which is not supported");
+    // A property named like a keyword is still checked as a schema.
+    expect(() =>
+      compileAgentMcpSchema(schema({ properties: { default: { $dynamicRef: "#id" } } }))
+    ).toThrow("uses $dynamicRef at /properties/default");
+  });
+
+  it("reads property names and literal data as data, not keywords", () => {
+    expect(() =>
+      compileAgentMcpSchema(
+        schema({
+          properties: {
+            $dynamicRef: { type: "string" },
+            $schema: { type: "string", default: "http://json-schema.org/draft-04/schema#" },
+            doc: {
+              const: { $dynamicRef: "#literal" },
+              default: { $schema: "https://example.com/payload" },
+              examples: [{ $schema: "https://example.com/payload" }],
+            },
+          },
+          required: ["$schema"],
+        })
+      )
     ).not.toThrow();
   });
 

@@ -97,19 +97,47 @@ function pointerTo(path: readonly string[]): string {
   return `/${path.map((part) => part.replace(/~/g, "~0").replace(/\//g, "~1")).join("/")}`;
 }
 
+/** Keywords whose value is literal data, never a schema. */
+const DATA_KEYWORDS = new Set(["const", "enum", "default", "examples"]);
+
+/** Keywords whose value maps names to schemas: its keys are names, not keywords. */
+const SCHEMA_MAP_KEYWORDS = new Set([
+  "properties",
+  "patternProperties",
+  "$defs",
+  "definitions",
+  "dependentSchemas",
+  "dependencies",
+]);
+
 /**
  * Refuse the constructs Ajv compiles without complaint but does not enforce
  * as written: an embedded resource in another dialect is checked under the
- * root's, and 2020-12 `$dynamicRef` resolves to the wrong schema. Keywords are
- * matched by string value so a property that happens to be named `$schema`
- * (whose value is a schema object) is not mistaken for one.
+ * root's, and 2020-12 `$dynamicRef` and `$recursiveRef` resolve to the wrong
+ * schema. Literal data and property names are never read as keywords; any
+ * other value is, since a `$ref` pointer can make even an unknown keyword's
+ * value a schema.
  */
 function refuseUnenforceable(schema: PluginMcpJsonSchema, dialect: Dialect): void {
-  const pending: Array<{ node: unknown; path: string[] }> = [{ node: schema, path: [] }];
+  const pending: Array<{ node: unknown; path: string[]; names: boolean }> = [
+    { node: schema, path: [], names: false },
+  ];
   while (pending.length > 0) {
-    const { node, path } = pending.pop()!;
+    const { node, path, names } = pending.pop()!;
     if (typeof node !== "object" || node === null) continue;
+    if (Array.isArray(node)) {
+      node.forEach((item, index) =>
+        pending.push({ node: item, path: [...path, String(index)], names: false })
+      );
+      continue;
+    }
     for (const [key, value] of Object.entries(node)) {
+      const at = [...path, key];
+      if (names) {
+        pending.push({ node: value, path: at, names: false });
+        continue;
+      }
+      if (DATA_KEYWORDS.has(key)) continue;
       if (typeof value === "string") {
         if (
           key === "$schema" &&
@@ -120,13 +148,11 @@ function refuseUnenforceable(schema: PluginMcpJsonSchema, dialect: Dialect): voi
             `declares $schema ${JSON.stringify(value)} at ${pointerTo(path)}; a schema must use one dialect throughout`
           );
         }
-        if (key === "$dynamicRef" && dialect === "2020-12") {
-          throw new Error(`uses $dynamicRef at ${pointerTo(path)}, which is not supported`);
+        if ((key === "$dynamicRef" || key === "$recursiveRef") && dialect === "2020-12") {
+          throw new Error(`uses ${key} at ${pointerTo(path)}, which is not supported`);
         }
       }
-      if (typeof value === "object" && value !== null) {
-        pending.push({ node: value, path: [...path, key] });
-      }
+      pending.push({ node: value, path: at, names: SCHEMA_MAP_KEYWORDS.has(key) });
     }
   }
 }
