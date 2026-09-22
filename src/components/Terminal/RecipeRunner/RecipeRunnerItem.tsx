@@ -180,16 +180,28 @@ export function RecipeRunnerItem({
               : recipe.name
           }
           className={cn(
-            // The active option is marked by a SURFACE LIFT, not a second
-            // accent ring. In list mode DOM focus stays in the filter input —
-            // which paints its own accent ring — so an accent ring here put two
+            // The active option is marked the way the palettes mark theirs —
+            // `overlay-raised` plus `selection-outline` — not with a second
+            // accent ring. In list mode DOM focus stays in the filter input,
+            // which paints its own accent ring, so an accent ring here put two
             // accent anchors in one arrow-key domain and the surface claimed
             // the keyboard was in two places. The house rule allows exactly one
             // load-bearing accent per focus region, and in a combobox that one
-            // belongs to the control the user is actually typing into. A lift
-            // is also the conventional active-descendant cue, and it survives
-            // forced-colors better than a ring, which `box-shadow` drops.
-            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-strong group-focus-within/recipes:aria-selected:border-border-strong",
+            // belongs to the control the user is typing into.
+            //
+            // Tokens lifted from `paletteRowStyles.ts`, which is the repo's one
+            // definition of "the row Enter will act on" across ten-odd call
+            // sites: `overlay-raised` clears only ~1.1:1 on its own, so the fill
+            // cannot be the WCAG 1.4.11 indicator and `selection-outline` — the
+            // same token the palette rail spends — has to carry the 3:1.
+            //
+            // What is NOT lifted is `PALETTE_ROW_CLASS` itself. Its rail paints
+            // on `aria-selected` unconditionally, which is right for a palette
+            // that only exists while focused and wrong for a band that sits on
+            // the canvas all day: it would light the default-focused first row
+            // at rest, the exact thing the grid comment above forbids. Hence the
+            // `group-focus-within` gate stays and only the treatment is shared.
+            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:bg-overlay-raised group-focus-within/recipes:aria-selected:border-[var(--color-selection-outline)]",
             recipe.shadowedBy && "opacity-60"
           )}
         >
