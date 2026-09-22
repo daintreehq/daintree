@@ -130,6 +130,7 @@ import type {
   ProjectStatusMap,
   BulkProjectStats,
   ProjectSwitchOutgoingState,
+  ProjectSwitchResult,
 } from "./project.js";
 import type { GitInitOptions, GitInitProgressEvent, GitInitResult } from "./gitInit.js";
 import type { CloneRepoOptions, CloneRepoResult, CloneRepoProgressEvent } from "./gitClone.js";
@@ -649,7 +650,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         focusIntent?: import("./project.js").ProjectFocusOnActivateIntent;
         trace?: import("./project.js").ProjectSwitchTrace;
       }
-    ): Promise<Project>;
+    ): Promise<ProjectSwitchResult>;
     /**
      * Hover-prefetch trigger for the project switcher palette. Fire-and-forget:
      * the main process builds the `HydrateResult` for the given project and
@@ -704,7 +705,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       projectId: string,
       outgoingState?: ProjectSwitchOutgoingState,
       options?: { trace?: import("./project.js").ProjectSwitchTrace }
-    ): Promise<Project>;
+    ): Promise<ProjectSwitchResult>;
     getStats(projectId: string): Promise<ProjectStats>;
     getBulkStats(projectIds: string[]): Promise<BulkProjectStats>;
     getNotificationOverrides(

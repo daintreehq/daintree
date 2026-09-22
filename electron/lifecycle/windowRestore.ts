@@ -64,6 +64,57 @@ export function resolvePrimaryRestoreProjectId(
 }
 
 /**
+ * Collapse the manifest to one live view per workspace across the whole fleet
+ * (#12596). A manifest saved before that rule existed can name one project in
+ * two windows, and restoring it verbatim would rebuild the duplicate: two views
+ * attached to the same PTYs and an MCP binding that fails closed as ambiguous.
+ *
+ * Foreground claims run first, in focus order, so a project one window was
+ * showing is never lost to another window that merely had it warm. A window
+ * whose own project an earlier window already claimed is dropped rather than
+ * reopened on a picker, and its background list folds into the window that kept
+ * the project — those can be projects whose agents are still running, and
+ * dropping them would skip their restore. Picker windows (`null`) never collide.
+ */
+export function normalizeWindowRecords(records: readonly OpenWindowRecord[]): OpenWindowRecord[] {
+  const kept: OpenWindowRecord[] = [];
+  const keeperByProject = new Map<string, number>();
+  const folded = new Map<number, string[]>();
+
+  for (const record of records) {
+    const { projectId } = record;
+    if (projectId !== null) {
+      const keeper = keeperByProject.get(projectId);
+      if (keeper !== undefined) {
+        if (record.backgroundProjectIds?.length) {
+          folded.set(keeper, [...(folded.get(keeper) ?? []), ...record.backgroundProjectIds]);
+        }
+        continue;
+      }
+      keeperByProject.set(projectId, kept.length);
+    }
+    kept.push(record);
+  }
+
+  const claimed = new Set(keeperByProject.keys());
+  return kept.map((record, index) => {
+    const candidates = [...(record.backgroundProjectIds ?? []), ...(folded.get(index) ?? [])];
+    const backgroundProjectIds = candidates.filter((id) => {
+      if (claimed.has(id)) return false;
+      claimed.add(id);
+      return true;
+    });
+    const unchanged =
+      backgroundProjectIds.length === (record.backgroundProjectIds?.length ?? 0) &&
+      !folded.has(index);
+    if (unchanged) return record;
+    return backgroundProjectIds.length > 0
+      ? { projectId: record.projectId, backgroundProjectIds }
+      : { projectId: record.projectId };
+  });
+}
+
+/**
  * Recreate the window set, then decide whether the result is worth persisting.
  *
  * Two orderings are load-bearing:
@@ -79,8 +130,9 @@ export function resolvePrimaryRestoreProjectId(
  *     then restore only the windows that happened to survive this one.
  */
 export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<void> {
+  const records = normalizeWindowRecords(deps.records);
   const primaryProjectId = resolvePrimaryRestoreProjectId(
-    deps.records,
+    records,
     deps.hadManifest,
     deps.fallbackProjectId
   );
@@ -93,17 +145,17 @@ export async function restoreWindowFleet(deps: RestoreWindowFleetDeps): Promise<
     // global and ordered, so handing them over first is what makes "the project
     // I was in paints first, the rest fill in behind it" hold across windows.
     const primaryResult = await deps.createWindow(primaryProjectId, {
-      backgroundProjectIds: deps.records[0]?.backgroundProjectIds,
+      backgroundProjectIds: records[0]?.backgroundProjectIds,
     });
     if (primaryResult !== "ok") return;
 
     let backgroundClean = true;
-    if (deps.records.length > 1) {
+    if (records.length > 1) {
       // Background windows reveal with showInactive(): they finish loading in
       // an unpredictable order, and a plain show() would hand focus to
       // whichever renderer parsed its skeleton last.
       const results = await Promise.allSettled(
-        deps.records.slice(1).map((record) =>
+        records.slice(1).map((record) =>
           deps.createWindow(record.projectId ?? undefined, {
             revealMode: "showInactive",
             backgroundProjectIds: record.backgroundProjectIds,

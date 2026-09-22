@@ -30,8 +30,9 @@ describe("parseOpenWindowsManifest", () => {
   });
 
   it("keeps duplicate project ids as separate windows", () => {
-    // Two windows can legitimately show the same project, so the manifest is a
-    // list of windows and must never collapse to a set of project ids.
+    // The manifest is a list of windows and must never collapse to a set of
+    // project ids here. A duplicate saved before #12596 is resolved at restore,
+    // by `normalizeWindowRecords`, which also folds its background projects.
     const parsed = parseOpenWindowsManifest(
       serializeOpenWindowsManifest([record("a"), record("a")])
     );

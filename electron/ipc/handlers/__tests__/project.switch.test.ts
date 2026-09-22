@@ -119,7 +119,10 @@ vi.mock("../../../window/webContentsRegistry.js", () => ({
   // Returning [] keeps the broadcast a no-op in this suite; PROJECT_UPDATED
   // delivery is covered by projectSwitchBroadcast.test.ts.
   getAllAppWebContents: vi.fn(() => []),
+  // The owner redirect's cached path asks the owning window's app view to switch.
+  getAppWebContents: (win: unknown) => mockGetAppWebContents(win),
 }));
+const mockGetAppWebContents = vi.fn();
 
 // Root hook: runs before every describe's own `clearAllMocks` (which clears call
 // history but not return values), so no fixture inherits a previous test's
@@ -2373,5 +2376,403 @@ describe("project:switch terminal inventory prefetch", () => {
     const { invoke, ptyClient } = setupWith(false);
     await invoke();
     expect(ptyClient.getTerminalsForProjectAsync).not.toHaveBeenCalled();
+  });
+});
+
+// #12596: one live view of a project across the whole app. A request for a
+// project another window holds goes to that window; the sender stays put.
+describe("project switch/reopen redirects to the window that owns the project (#12596)", () => {
+  const TARGET = { id: "proj-owned", name: "Owned", path: "/projects/owned", status: "active" };
+
+  function makeBrowserWindow(id: number, opts: { minimized?: boolean; destroyed?: boolean } = {}) {
+    return {
+      id,
+      isDestroyed: () => opts.destroyed ?? false,
+      isMinimized: vi.fn(() => opts.minimized ?? false),
+      restore: vi.fn(),
+      show: vi.fn(),
+      focus: vi.fn(),
+    };
+  }
+
+  function makeViewWebContents(id: number) {
+    return { id, isDestroyed: () => false, send: vi.fn(), focus: vi.fn() };
+  }
+
+  /** A manager whose views are `views` (project ids) and whose active one is `active`. */
+  function makeOwnerPvm(active: string | null, views: string[]) {
+    const webContentsByProject = new Map(
+      views.map((projectId, i) => [projectId, makeViewWebContents(300 + i)])
+    );
+    return {
+      switchTo: vi.fn(),
+      getProjectIdForWebContents: vi.fn(),
+      setPendingFocusIntent: vi.fn(),
+      getActiveProjectId: vi.fn(() => active),
+      getAllViews: vi.fn(() =>
+        views.map((projectId) => ({
+          projectId,
+          view: { webContents: webContentsByProject.get(projectId)! },
+        }))
+      ),
+      getActiveView: vi.fn(() =>
+        active && webContentsByProject.has(active)
+          ? { webContents: webContentsByProject.get(active)! }
+          : null
+      ),
+      webContentsFor: (projectId: string) => webContentsByProject.get(projectId)!,
+    };
+  }
+
+  function makeSenderPvm(views: string[] = []) {
+    const pvm = makeOwnerPvm("proj-sender", ["proj-sender", ...views]);
+    pvm.switchTo.mockResolvedValue({
+      view: { webContents: makeViewWebContents(200) },
+      isNew: true,
+    });
+    return pvm;
+  }
+
+  function register(
+    senderPvm: unknown | null,
+    owner: { pvm: unknown; browserWindow: ReturnType<typeof makeBrowserWindow> }
+  ) {
+    const senderCtx = makeWindowContext(
+      1,
+      10,
+      senderPvm ? { projectViewManager: senderPvm as never } : {}
+    );
+    const ownerCtx = makeWindowContext(2, 20, { projectViewManager: owner.pvm as never });
+    ownerCtx.browserWindow = owner.browserWindow as unknown as Electron.BrowserWindow;
+    const deps = {
+      mainWindow: { id: 1 } as unknown,
+      windowRegistry: makeWindowRegistry([senderCtx, ownerCtx]),
+      ...(senderPvm ? { projectViewManager: senderPvm } : {}),
+    } as unknown as HandlerDependencies;
+    registerProjectCrudHandlers(deps);
+    const handlerFor = (channel: string) =>
+      (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find((c) => c[0] === channel)![1] as (
+        ...args: unknown[]
+      ) => Promise<unknown>;
+    return {
+      switchHandler: handlerFor(CHANNELS.PROJECT_SWITCH),
+      reopenHandler: handlerFor(CHANNELS.PROJECT_REOPEN),
+    };
+  }
+
+  const SENDER_EVENT = { sender: { id: 10 } };
+  const OUTGOING = { terminals: [], activeWorktreeId: "wt-sender" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetWindowForWebContents.mockReturnValue({ id: 1, isDestroyed: () => false });
+    mockGetProjectForWebContents.mockReturnValue("proj-sender");
+    projectStoreMock.getProjectById.mockImplementation((id: string) =>
+      id === TARGET.id ? TARGET : { id, name: id, path: `/projects/${id}` }
+    );
+    projectStoreMock.setCurrentProject.mockResolvedValue(undefined);
+  });
+
+  describe("when another window is showing the project", () => {
+    it("brings that window forward and reports it, leaving the sender where it was", async () => {
+      const senderPvm = makeSenderPvm();
+      const ownerPvm = makeOwnerPvm(TARGET.id, [TARGET.id]);
+      const ownerWindow = makeBrowserWindow(2);
+      const { switchHandler } = register(senderPvm, { pvm: ownerPvm, browserWindow: ownerWindow });
+
+      const result = await switchHandler(SENDER_EVENT, TARGET.id, OUTGOING);
+
+      expect(result).toEqual({ outcome: "focused-elsewhere", project: TARGET, targetWindowId: 2 });
+      expect(ownerWindow.show).toHaveBeenCalled();
+      expect(ownerWindow.focus).toHaveBeenCalled();
+      // Focusing the window doesn't hand keyboard focus to a WebContentsView.
+      expect(ownerPvm.webContentsFor(TARGET.id).focus).toHaveBeenCalled();
+
+      expect(senderPvm.switchTo).not.toHaveBeenCalled();
+      expect(ownerPvm.switchTo).not.toHaveBeenCalled();
+      expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+      // The sender keeps showing its project, so its layout is not "outgoing".
+      expect(projectStoreMock.enqueueProjectStateUpdate).not.toHaveBeenCalled();
+    });
+
+    it("restores the owning window first when it is minimized", async () => {
+      const ownerWindow = makeBrowserWindow(2, { minimized: true });
+      const { switchHandler } = register(makeSenderPvm(), {
+        pvm: makeOwnerPvm(TARGET.id, [TARGET.id]),
+        browserWindow: ownerWindow,
+      });
+
+      await switchHandler(SENDER_EVENT, TARGET.id);
+
+      expect(ownerWindow.restore).toHaveBeenCalled();
+      expect(ownerWindow.focus).toHaveBeenCalled();
+    });
+
+    it("delivers the focus intent to the owning view rather than dropping it", async () => {
+      const ownerPvm = makeOwnerPvm(TARGET.id, [TARGET.id]);
+      const { switchHandler } = register(makeSenderPvm(), {
+        pvm: ownerPvm,
+        browserWindow: makeBrowserWindow(2),
+      });
+      const focusIntent = { intent: "focus-panel", panelId: "panel-7" };
+
+      await switchHandler(SENDER_EVENT, TARGET.id, undefined, { focusIntent });
+
+      expect(ownerPvm.webContentsFor(TARGET.id).send).toHaveBeenCalledWith(
+        CHANNELS.PROJECT_FOCUS_ON_ACTIVATE,
+        focusIntent
+      );
+      expect(ownerPvm.setPendingFocusIntent).not.toHaveBeenCalled();
+    });
+
+    it("redirects a reopen the same way", async () => {
+      const senderPvm = makeSenderPvm();
+      const ownerWindow = makeBrowserWindow(2);
+      const { reopenHandler } = register(senderPvm, {
+        pvm: makeOwnerPvm(TARGET.id, [TARGET.id]),
+        browserWindow: ownerWindow,
+      });
+
+      const result = await reopenHandler(SENDER_EVENT, TARGET.id, OUTGOING);
+
+      expect(result).toEqual({ outcome: "focused-elsewhere", project: TARGET, targetWindowId: 2 });
+      expect(ownerWindow.focus).toHaveBeenCalled();
+      expect(senderPvm.switchTo).not.toHaveBeenCalled();
+      expect(projectStoreMock.updateProjectStatus).not.toHaveBeenCalled();
+    });
+
+    it("redirects on the legacy no-PVM path too, not only the view-swap path (#9865)", async () => {
+      const ownerWindow = makeBrowserWindow(2);
+      const { switchHandler } = register(null, {
+        pvm: makeOwnerPvm(TARGET.id, [TARGET.id]),
+        browserWindow: ownerWindow,
+      });
+
+      const result = await switchHandler(SENDER_EVENT, TARGET.id);
+
+      expect(result).toEqual({ outcome: "focused-elsewhere", project: TARGET, targetWindowId: 2 });
+      expect(ownerWindow.focus).toHaveBeenCalled();
+    });
+  });
+
+  describe("when another window has the project cached", () => {
+    function setupCached() {
+      const senderPvm = makeSenderPvm();
+      const ownerPvm = makeOwnerPvm("proj-other", ["proj-other", TARGET.id]);
+      const ownerWindow = makeBrowserWindow(2);
+      const ownerAppWebContents = makeViewWebContents(400);
+      mockGetAppWebContents.mockImplementation((win: unknown) =>
+        win === ownerWindow ? ownerAppWebContents : makeViewWebContents(999)
+      );
+      const handlers = register(senderPvm, { pvm: ownerPvm, browserWindow: ownerWindow });
+      return { senderPvm, ownerPvm, ownerWindow, ownerAppWebContents, ...handlers };
+    }
+
+    it("has the owning window's renderer switch to it, and reports it", async () => {
+      const { senderPvm, ownerPvm, ownerWindow, ownerAppWebContents, switchHandler } =
+        setupCached();
+
+      const result = await switchHandler(SENDER_EVENT, TARGET.id, OUTGOING);
+
+      expect(result).toEqual({
+        outcome: "activated-elsewhere",
+        project: TARGET,
+        targetWindowId: 2,
+      });
+      // The owner's renderer runs the switch so it can save the layout it is
+      // leaving; main never swaps the owner's view behind its back.
+      expect(ownerAppWebContents.send).toHaveBeenCalledWith(CHANNELS.MENU_ACTION, {
+        actionId: "project.switch",
+        args: { projectId: TARGET.id },
+      });
+      expect(ownerPvm.switchTo).not.toHaveBeenCalled();
+      expect(ownerWindow.focus).toHaveBeenCalled();
+
+      expect(senderPvm.switchTo).not.toHaveBeenCalled();
+      expect(projectStoreMock.setCurrentProject).not.toHaveBeenCalled();
+    });
+
+    it("parks the focus intent on the owner's manager for the switch it triggers", async () => {
+      const { ownerPvm, switchHandler } = setupCached();
+      const focusIntent = { intent: "focus-next-waiting" };
+
+      await switchHandler(SENDER_EVENT, TARGET.id, undefined, { focusIntent });
+
+      expect(ownerPvm.setPendingFocusIntent).toHaveBeenCalledWith(TARGET.id, focusIntent);
+    });
+
+    it("redirects a reopen the same way", async () => {
+      const { senderPvm, ownerAppWebContents, reopenHandler } = setupCached();
+
+      const result = await reopenHandler(SENDER_EVENT, TARGET.id);
+
+      expect(result).toMatchObject({ outcome: "activated-elsewhere", targetWindowId: 2 });
+      expect(ownerAppWebContents.send).toHaveBeenCalledWith(
+        CHANNELS.MENU_ACTION,
+        expect.objectContaining({ actionId: "project.switch" })
+      );
+      expect(senderPvm.switchTo).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("when two windows ask for the same project at once", () => {
+    function setupRace() {
+      // Neither manager lists the target yet: window 1's switch is still in
+      // flight, so only its claim can tell window 2 the project is taken.
+      const pvm1 = makeSenderPvm();
+      let finishSwap!: () => void;
+      pvm1.switchTo.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finishSwap = () =>
+              resolve({ view: { webContents: makeViewWebContents(200) }, isNew: true });
+          })
+      );
+      const pvm2 = makeOwnerPvm("proj-two", ["proj-two"]);
+      pvm2.switchTo.mockResolvedValue({
+        view: { webContents: makeViewWebContents(201) },
+        isNew: true,
+      });
+      const window1 = makeBrowserWindow(1);
+      const window2 = makeBrowserWindow(2);
+      mockGetWindowForWebContents.mockImplementation((wc: { id: number }) =>
+        wc.id === 20 ? window2 : window1
+      );
+      mockGetProjectForWebContents.mockImplementation((id: number) =>
+        id === 20 ? "proj-two" : "proj-sender"
+      );
+      const ctx1 = makeWindowContext(1, 10, { projectViewManager: pvm1 as never });
+      ctx1.browserWindow = window1 as unknown as Electron.BrowserWindow;
+      const ctx2 = makeWindowContext(2, 20, { projectViewManager: pvm2 as never });
+      ctx2.browserWindow = window2 as unknown as Electron.BrowserWindow;
+      registerProjectCrudHandlers({
+        mainWindow: { id: 1 } as unknown,
+        windowRegistry: makeWindowRegistry([ctx1, ctx2]),
+      } as unknown as HandlerDependencies);
+      const switchHandler = (ipcMain.handle as ReturnType<typeof vi.fn>).mock.calls.find(
+        (c) => c[0] === CHANNELS.PROJECT_SWITCH
+      )![1] as (...args: unknown[]) => Promise<unknown>;
+      return { pvm1, pvm2, window1, switchHandler, finishSwap: () => finishSwap() };
+    }
+
+    async function untilSwapStarts(pvm: { switchTo: ReturnType<typeof vi.fn> }) {
+      await vi.waitFor(() => expect(pvm.switchTo).toHaveBeenCalled());
+    }
+
+    it("sends the second request to the window already activating it", async () => {
+      const { pvm1, pvm2, window1, switchHandler, finishSwap } = setupRace();
+
+      const first = switchHandler({ sender: { id: 10 } }, TARGET.id);
+      const second = await switchHandler({ sender: { id: 20 } }, TARGET.id);
+
+      expect(second).toEqual({ outcome: "focused-elsewhere", project: TARGET, targetWindowId: 1 });
+      expect(window1.focus).toHaveBeenCalled();
+      expect(pvm2.switchTo).not.toHaveBeenCalled();
+
+      await untilSwapStarts(pvm1);
+      finishSwap();
+      await expect(first).resolves.toEqual({ outcome: "switched", project: TARGET });
+    });
+
+    it("releases the claim once the activation settles", async () => {
+      const { pvm1, pvm2, switchHandler, finishSwap } = setupRace();
+
+      const first = switchHandler({ sender: { id: 10 } }, TARGET.id);
+      await untilSwapStarts(pvm1);
+      finishSwap();
+      await first;
+
+      // Window 1's mock manager never lists the view, so with the claim gone
+      // nothing marks the project as taken any more.
+      await expect(switchHandler({ sender: { id: 20 } }, TARGET.id)).resolves.toEqual({
+        outcome: "switched",
+        project: TARGET,
+      });
+      expect(pvm2.switchTo).toHaveBeenCalled();
+    });
+
+    it("releases the claim when the activation fails", async () => {
+      const { pvm1, pvm2, switchHandler } = setupRace();
+      pvm1.switchTo.mockRejectedValue(new Error("view failed to load"));
+
+      await expect(switchHandler({ sender: { id: 10 } }, TARGET.id)).rejects.toThrow();
+
+      await expect(switchHandler({ sender: { id: 20 } }, TARGET.id)).resolves.toEqual({
+        outcome: "switched",
+        project: TARGET,
+      });
+      expect(pvm2.switchTo).toHaveBeenCalled();
+    });
+  });
+
+  describe("when no other window can take it", () => {
+    it("switches normally when no window holds the project", async () => {
+      const senderPvm = makeSenderPvm();
+      const { switchHandler } = register(senderPvm, {
+        pvm: makeOwnerPvm("proj-other", ["proj-other"]),
+        browserWindow: makeBrowserWindow(2),
+      });
+
+      const result = await switchHandler(SENDER_EVENT, TARGET.id);
+
+      expect(result).toEqual({ outcome: "switched", project: TARGET });
+      expect(senderPvm.switchTo).toHaveBeenCalledWith(
+        TARGET.id,
+        TARGET.path,
+        expect.objectContaining({ switchId: expect.any(String) })
+      );
+    });
+
+    it("activates the sender's own cached view even if another window also holds one", async () => {
+      // A fleet from before the rule can hold two. Reactivating the sender's
+      // own view creates nothing new, so there is nothing to redirect.
+      const senderPvm = makeSenderPvm([TARGET.id]);
+      const ownerWindow = makeBrowserWindow(2);
+      const { switchHandler } = register(senderPvm, {
+        pvm: makeOwnerPvm(TARGET.id, [TARGET.id]),
+        browserWindow: ownerWindow,
+      });
+
+      const result = await switchHandler(SENDER_EVENT, TARGET.id);
+
+      expect(result).toEqual({ outcome: "switched", project: TARGET });
+      expect(senderPvm.switchTo).toHaveBeenCalled();
+      expect(ownerWindow.focus).not.toHaveBeenCalled();
+    });
+
+    it("ignores a window that is already destroyed", async () => {
+      const senderPvm = makeSenderPvm();
+      const ownerWindow = makeBrowserWindow(2, { destroyed: true });
+      const { switchHandler } = register(senderPvm, {
+        pvm: makeOwnerPvm(TARGET.id, [TARGET.id]),
+        browserWindow: ownerWindow,
+      });
+
+      const result = await switchHandler(SENDER_EVENT, TARGET.id);
+
+      expect(result).toEqual({ outcome: "switched", project: TARGET });
+      expect(senderPvm.switchTo).toHaveBeenCalled();
+      expect(ownerWindow.focus).not.toHaveBeenCalled();
+    });
+
+    it("ignores a window whose manager throws mid-teardown", async () => {
+      const senderPvm = makeSenderPvm();
+      const ownerPvm = makeOwnerPvm(TARGET.id, [TARGET.id]);
+      ownerPvm.getActiveProjectId.mockImplementation(() => {
+        throw new Error("disposed");
+      });
+      ownerPvm.getAllViews.mockImplementation(() => {
+        throw new Error("disposed");
+      });
+      const { switchHandler } = register(senderPvm, {
+        pvm: ownerPvm,
+        browserWindow: makeBrowserWindow(2),
+      });
+
+      const result = await switchHandler(SENDER_EVENT, TARGET.id);
+
+      expect(result).toEqual({ outcome: "switched", project: TARGET });
+      expect(senderPvm.switchTo).toHaveBeenCalled();
+    });
   });
 });

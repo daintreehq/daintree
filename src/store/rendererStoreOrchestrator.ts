@@ -29,6 +29,7 @@ import {
   setWorktreeGitDirAccessor,
   setWorktreePathIndexAccessor,
   setFleetArmingClearAccessor,
+  setFleetArmingRestoreAccessor,
   setFleetArmedIdsAccessor,
   setFleetLastArmedIdAccessor,
   resetStoreAccessorsForTesting,
@@ -102,6 +103,13 @@ export function initStoreOrchestrator(): () => void {
   });
   setFleetArmingClearAccessor(() => {
     useFleetArmingStore.getState().clear();
+  });
+  setFleetArmingRestoreAccessor((armedIds) => {
+    const fleet = useFleetArmingStore.getState();
+    // Only into a fleet still empty since the clear: anything armed in between
+    // is newer intent than the selection being put back.
+    if (armedIds.length === 0 || fleet.armedIds.size > 0) return;
+    fleet.armIds([...armedIds]);
   });
   setFleetArmedIdsAccessor(() => useFleetArmingStore.getState().armedIds);
   setFleetLastArmedIdAccessor(() => useFleetArmingStore.getState().lastArmedId);

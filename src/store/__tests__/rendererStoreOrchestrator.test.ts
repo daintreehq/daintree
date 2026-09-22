@@ -1867,6 +1867,27 @@ describe("rendererStoreOrchestrator", () => {
     });
   });
 
+  // #12596: a switch clears the fleet before main answers, and a redirect to
+  // another window means this view never left, so the selection comes back.
+  describe("fleet-arming restore after a redirected switch", () => {
+    async function armedAfterRestore(armedNow: string[], restoring: string[]) {
+      const { useFleetArmingStore } = await import("../fleetArmingStore");
+      const { restoreFleetArmingThroughAccessor } = await import("../storeAccessors");
+      useFleetArmingStore.getState().clear();
+      if (armedNow.length > 0) useFleetArmingStore.getState().armIds(armedNow);
+      restoreFleetArmingThroughAccessor(restoring);
+      return useFleetArmingStore.getState().armOrder;
+    }
+
+    it("puts the cleared selection back, in order", async () => {
+      expect(await armedAfterRestore([], ["agent-b", "agent-a"])).toEqual(["agent-b", "agent-a"]);
+    });
+
+    it("leaves a selection armed since the clear alone", async () => {
+      expect(await armedAfterRestore(["agent-c"], ["agent-a"])).toEqual(["agent-c"]);
+    });
+  });
+
   describe("fleet failure auto-clear (issue #9923)", () => {
     type FleetStores = {
       useFleetArmingStore: typeof import("../fleetArmingStore").useFleetArmingStore;

@@ -26,6 +26,12 @@ import { getPluginMenuItems } from "./services/pluginMenuRegistry.js";
 import { evaluateWhen } from "./services/WhenClauseService.js";
 import { getAppWebContents } from "./window/webContentsRegistry.js";
 import {
+  claimProjectActivation,
+  findOtherProjectOwner,
+  hasLiveProjectView,
+  redirectToProjectOwner,
+} from "./window/projectOwnership.js";
+import {
   CLOSE_WINDOW_MENU_ITEM_ID,
   PROJECT_MENU_ITEM_IDS,
   hasOpenApplicationWindow,
@@ -941,7 +947,22 @@ export async function handleDirectoryOpen(
     // when available. The process-global manager points at the last-created
     // window, so opening a directory from an older window's menu would switch
     // the wrong window's view (#11100).
-    const pvm = getWindowRegistry()?.getByWindowId(targetWindow.id)?.services.projectViewManager;
+    const registry = getWindowRegistry();
+    const pvm = registry?.getByWindowId(targetWindow.id)?.services.projectViewManager;
+
+    // Same one-live-view rule as the switch handler (#12596): a folder another
+    // window already has open goes to that window, and this one stays put.
+    if (!hasLiveProjectView(pvm, project.id)) {
+      const owner = findOtherProjectOwner(registry ?? undefined, project.id, {
+        windowId: targetWindow.id,
+        projectViewManager: pvm,
+      });
+      if (owner) {
+        redirectToProjectOwner(owner, project);
+        return;
+      }
+    }
+
     if (pvm) {
       // The workspace this window is leaving, read from its own view manager
       // before the swap flips `activeProjectId` to the incoming project. Unlike
@@ -956,12 +977,16 @@ export async function handleDirectoryOpen(
       const statusTimingDeadlineAt = getWorkspaceClientRef()
         ? projectSwitchStatusTiming.begin(switchId, project.id, targetWindow.id, requestedAt)
         : undefined;
+      // Held until the manager's inventory has the view, so a switch arriving
+      // from another window in the meantime is sent here rather than duplicating it.
+      const releaseClaim = claimProjectActivation(project.id, targetWindow.id);
       const { view, isNew } = await pvm
         .switchTo(project.id, project.path, { switchId, entryPoint: "menu" })
         .catch((error: unknown) => {
           projectSwitchStatusTiming.fail(switchId, "swap-failed");
           throw error;
-        });
+        })
+        .finally(releaseClaim);
       // Capture the outgoing project id before the pointer flips so we can
       // broadcast its bumped `lastOpened` to every cached view (#8561).
       const previousProjectId = projectStore.getCurrentProjectId();
@@ -1035,7 +1060,6 @@ export async function handleDirectoryOpen(
       }
     } else {
       // Fallback: legacy single-view switch
-      const registry = getWindowRegistry();
       const wCtx = registry?.getByWindowId(targetWindow.id);
       const switchService = wCtx?.services.projectSwitchService;
       if (!switchService) {
