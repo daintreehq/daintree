@@ -27,7 +27,6 @@ const Select = ({ children, open, defaultOpen, onOpenChange, ...rest }: SelectRo
   const requestOpen = React.useCallback(
     (next: boolean) => {
       primeOnEvent();
-      if (next && disabled) return;
       if (isControlled) {
         onOpenChange?.(next);
         return;
@@ -35,7 +34,7 @@ const Select = ({ children, open, defaultOpen, onOpenChange, ...rest }: SelectRo
       setPendingOpen(next);
       onOpenChange?.(next);
     },
-    [isControlled, onOpenChange, disabled]
+    [isControlled, onOpenChange]
   );
 
   if (!radix) {
@@ -47,7 +46,10 @@ const Select = ({ children, open, defaultOpen, onOpenChange, ...rest }: SelectRo
   }
 
   const Root = radix.SelectPrimitive.Root;
-  const effectiveDefaultOpen = isControlled ? defaultOpen : (pendingOpen ?? defaultOpen);
+  // An open queued while the root was enabled is dropped if it has since been
+  // disabled — Radix honours `defaultOpen` on a disabled root.
+  const effectiveDefaultOpen =
+    isControlled || disabled ? defaultOpen : (pendingOpen ?? defaultOpen);
   return (
     <Root
       open={open}
