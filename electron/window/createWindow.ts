@@ -75,16 +75,25 @@ function getProjectViewManagerFor(win: BrowserWindow): ProjectViewManager | null
   return getWindowRegistry()?.getByWindowId(win.id)?.services.projectViewManager ?? null;
 }
 
+/** Open a new window, optionally for a folder, on behalf of the window that asked. */
+export type CreateWindowHandler = (
+  projectPath?: string,
+  initiatingWindowId?: number | null
+) => Promise<void>;
+
 let windowIpcHandlersRegistered = false;
 
-function registerWindowIpcHandlers(onCreateWindow?: (projectPath?: string) => Promise<void>): void {
+function registerWindowIpcHandlers(onCreateWindow?: CreateWindowHandler): void {
   if (windowIpcHandlersRegistered) return;
   windowIpcHandlersRegistered = true;
 
   if (onCreateWindow) {
-    ipcMain.handle(CHANNELS.WINDOW_NEW, (_event, projectPath?: string) =>
-      onCreateWindow(projectPath ?? undefined)
-    );
+    // The asking window rides along so a new window for a folder never lands
+    // back in it (#12594).
+    ipcMain.handle(CHANNELS.WINDOW_NEW, (event, projectPath?: string) => {
+      const bw = getWindowForWebContents(event.sender);
+      return onCreateWindow(projectPath ?? undefined, bw && !bw.isDestroyed() ? bw.id : null);
+    });
   }
 
   ipcMain.handle(CHANNELS.WINDOW_TOGGLE_FULLSCREEN, (event) => {
@@ -133,7 +142,7 @@ function registerWindowIpcHandlers(onCreateWindow?: (projectPath?: string) => Pr
 
 export interface SetupBrowserWindowOptions {
   onRecreateWindow?: () => Promise<void>;
-  onCreateWindow?: (projectPath?: string) => Promise<void>;
+  onCreateWindow?: CreateWindowHandler;
   projectPath?: string | null;
   /** Last-active projectId read synchronously from DB before window creation.
    *  Used to assign the correct session partition to the initial view. */

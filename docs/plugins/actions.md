@@ -319,7 +319,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `pilot.openProject` | View this project's agents | safe | — |
 | `pilot.openRun` | Open run | safe | `runId`, `workspaceId?` |
 | `pilot.toggle` | View all agents | safe | — |
-| `project.add` | Open project | safe | `path?` |
+| `project.add` | Open project | safe | `destination?`, `path?` |
 | `project.cloneRepo` | Clone repository | safe | — |
 | `project.close` | Close project | safe | `projectId` |
 | `project.closeActive` | Close project | safe | — |
@@ -330,6 +330,7 @@ An argument shown as `name?` is optional. Argument names come from each action's
 | `project.getStats` | Get project stats | safe | `projectId?` |
 | `project.muteNotifications` | Mute project notifications | safe | `projectId` |
 | `project.openDialog` | Pick directory | safe | — |
+| `project.openInNewWindow` | Open project in new window | safe | — |
 | `project.remove` | Remove project | confirm | `projectId` |
 | `project.saveSettings` | Save project settings | safe | `projectId`, `settings` |
 | `project.settings.open` | Open project settings | safe | — |

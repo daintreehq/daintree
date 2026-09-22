@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import type { WorktreeState, Project, ProjectCreationIdentity } from "@shared/types";
+import type { ProjectOpenDisposition } from "@shared/types/windowOpen";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import type { UseQuickSwitcherReturn } from "./hooks/useQuickSwitcher";
 import { useSendToAgentPalette } from "./hooks/useSendToAgentPalette";
@@ -156,7 +157,11 @@ interface ModalHostLayerProps {
   closeCreateFolderDialog: () => void;
   cloneRepoDialogOpen: boolean;
   shouldMountCloneRepoDialog: boolean;
-  handleCloneSuccess: (clonedPath: string, identity?: ProjectCreationIdentity) => Promise<void>;
+  handleCloneSuccess: (
+    clonedPath: string,
+    identity?: ProjectCreationIdentity,
+    options?: { disposition?: ProjectOpenDisposition }
+  ) => Promise<void>;
   closeCloneRepoDialog: () => void;
   reEntrySummary: ReEntrySummaryState;
   gettingStarted: GettingStartedChecklistState;

@@ -362,14 +362,74 @@ describe("CloneRepoDialog", () => {
     // timeout so the assertion outlives the dialog's read-the-log delay.
     await waitFor(
       () =>
-        expect(onSuccess).toHaveBeenCalledWith("/tmp/my-repo", {
-          name: "my-repo",
-          emoji: suggestProjectEmoji("my-repo"),
-        }),
+        expect(onSuccess).toHaveBeenCalledWith(
+          "/tmp/my-repo",
+          {
+            name: "my-repo",
+            emoji: suggestProjectEmoji("my-repo"),
+          },
+          { disposition: "current" }
+        ),
       {
         timeout: 3000,
       }
     );
+  });
+
+  it("asks where the clone opens before it starts, and opens it there (#12594)", async () => {
+    const onSuccess = vi.fn();
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
+
+    expect(screen.getByRole("radio", { name: "This window" }).getAttribute("aria-checked")).toBe(
+      "true"
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "New window" }));
+
+    fireEvent.change(screen.getByPlaceholderText("owner/repo or repository URL"), {
+      target: { value: "https://github.com/user/my-repo.git" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Browse"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Clone"));
+    });
+
+    const openButton = await screen.findByRole("button", { name: "Open in new window" });
+    fireEvent.click(openButton);
+
+    expect(onSuccess).toHaveBeenCalledExactlyOnceWith(
+      "/tmp/my-repo",
+      { name: "my-repo", emoji: suggestProjectEmoji("my-repo") },
+      { disposition: "new" }
+    );
+  });
+
+  it("locks the destination while the clone runs", async () => {
+    let finishClone: ((value: { clonedPath: string }) => void) | null = null;
+    cloneRepoMock.mockImplementationOnce(
+      () => new Promise<{ clonedPath: string }>((resolve) => (finishClone = resolve))
+    );
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText("owner/repo or repository URL"), {
+      target: { value: "https://github.com/user/my-repo.git" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Browse"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Clone"));
+    });
+
+    const newWindow = screen.getByRole<HTMLButtonElement>("radio", { name: "New window" });
+    expect(newWindow.disabled).toBe(true);
+
+    await act(async () => {
+      finishClone!({ clonedPath: "/tmp/my-repo" });
+    });
   });
 
   it("shows error and retry button on clone failure", async () => {

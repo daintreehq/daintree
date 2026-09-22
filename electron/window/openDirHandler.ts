@@ -1,12 +1,17 @@
 import type { BrowserWindow } from "electron";
-import type { OpenFoldersInNewWindow, ProjectOpenOutcome } from "../../shared/types/windowOpen.js";
+import type {
+  OpenFoldersInNewWindow,
+  ProjectOpenDisposition,
+  ProjectOpenOutcome,
+} from "../../shared/types/windowOpen.js";
 import type { WindowRegistry } from "./WindowRegistry.js";
 import {
   clearPendingOpenDirPaths,
   getPendingOpenDirPaths,
   setOpenDirConsumer,
 } from "../setup/environment.js";
-import { decideProjectOpenTarget } from "./windowOpenPolicy.js";
+import { decideProjectOpenTarget, type ProjectOpenSource } from "./windowOpenPolicy.js";
+import { setNewWindowOpener } from "./newWindowOpen.js";
 import {
   holdWindowForOpen,
   isWindowBound,
@@ -23,6 +28,7 @@ import {
  * queue, and every one is routed by `decideProjectOpenTarget` — an empty window
  * if there is one, otherwise a new window, and a window that already has the
  * project is brought forward instead. An occupied window is never replaced.
+ * In-app "open in a new window" requests take the same route (#12594).
  */
 export interface OpenDirHandlerDeps {
   /**
@@ -44,20 +50,23 @@ export interface OpenDirHandlerDeps {
 // App-lifetime consumer: macOS `open-file` is app-lifetime, so this wires once.
 let openDirConsumerInstalled = false;
 
-// Single serialized chain for every external open. Beyond keeping "last opened
-// ends active" deterministic, it is what makes the world snapshot trustworthy:
-// the previous open has finished (or holds a reservation) before the next one
-// looks for an empty window, so two queued folders can't both claim the same one.
-// Fire-and-forget, so window setup and the `open-file` listener never block.
+// Single serialized chain for every routed open, external and in-app alike.
+// Beyond keeping "last opened ends active" deterministic, it is what makes the
+// world snapshot trustworthy: the previous open has finished (or holds a
+// reservation) before the next one looks for an empty window, so two queued
+// folders can't both claim the same one. External opens are fire-and-forget,
+// so window setup and the `open-file` listener never block.
 let openChain: Promise<void> = Promise.resolve();
 
-function enqueueOpen(task: () => Promise<unknown>): void {
-  openChain = openChain.then(task).then(
+function enqueueOpen<T>(task: () => Promise<T>): Promise<T> {
+  const run = openChain.then(task);
+  openChain = run.then(
     () => undefined,
     (err) => {
       console.error("[MAIN] Failed to open folder:", err);
     }
   );
+  return run;
 }
 
 // Windows already waiting to take focus on their first show, so repeated opens
@@ -83,8 +92,30 @@ function revealWindow(win: BrowserWindow): void {
   win.focus();
 }
 
-export async function routeExternalOpen(
+/** Who asked for a routed open, and where they asked for it to land. */
+export interface ProjectOpenRouting {
+  source: ProjectOpenSource;
+  disposition: ProjectOpenDisposition;
+  /** The window the request came from. Null for opens from outside the app. */
+  initiatingWindowId: number | null;
+}
+
+const EXTERNAL_OPEN: ProjectOpenRouting = {
+  source: "external",
+  disposition: "default",
+  initiatingWindowId: null,
+};
+
+export function routeExternalOpen(
   dirPath: string,
+  deps: OpenDirHandlerDeps
+): Promise<ProjectOpenOutcome> {
+  return routeProjectOpen(dirPath, EXTERNAL_OPEN, deps);
+}
+
+export async function routeProjectOpen(
+  dirPath: string,
+  routing: ProjectOpenRouting,
   deps: OpenDirHandlerDeps
 ): Promise<ProjectOpenOutcome> {
   const project = await deps.resolveProject(dirPath).catch(() => null);
@@ -99,10 +130,10 @@ export async function routeExternalOpen(
     {
       projectId: project?.id ?? null,
       projectPath: targetPath,
-      source: "external",
+      source: routing.source,
       intent: "open",
-      disposition: "default",
-      initiatingWindowId: null,
+      disposition: routing.disposition,
+      initiatingWindowId: routing.initiatingWindowId,
     },
     snapshotOpenWorld(registry, deps.getPreference(), deps.isProjectClosed)
   );
@@ -145,8 +176,18 @@ export function installOpenDirConsumer(deps: OpenDirHandlerDeps): void {
   if (openDirConsumerInstalled) return;
   openDirConsumerInstalled = true;
   setOpenDirConsumer((dirPath) => {
-    enqueueOpen(() => routeExternalOpen(dirPath, deps));
+    void enqueueOpen(() => routeExternalOpen(dirPath, deps));
   });
+  // Open Project in New Window…, a Cmd-click in Open Recent, and every in-app
+  // flow told "New window" (#12594). Routed like an external open, on the same
+  // chain, but the window that asked is never the one it lands in: an empty
+  // window elsewhere is reused, otherwise a new one is made, and a window
+  // already showing the project is brought forward instead (#12596).
+  setNewWindowOpener((dirPath, initiatingWindowId) =>
+    enqueueOpen(() =>
+      routeProjectOpen(dirPath, { source: "in-app", disposition: "new", initiatingWindowId }, deps)
+    )
+  );
 }
 
 /**
@@ -161,12 +202,13 @@ export function drainPendingOpenDirs(win: BrowserWindow, deps: OpenDirHandlerDep
   if (pending.length === 0) return;
   clearPendingOpenDirPaths();
   for (const dirPath of pending) {
-    enqueueOpen(() => routeExternalOpen(dirPath, deps));
+    void enqueueOpen(() => routeExternalOpen(dirPath, deps));
   }
 }
 
 /** Test-only: reset the install-once guard and the open chain between cases. */
 export function _resetOpenDirConsumerForTest(): void {
   openDirConsumerInstalled = false;
+  setNewWindowOpener(null);
   openChain = Promise.resolve();
 }

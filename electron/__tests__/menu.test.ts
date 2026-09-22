@@ -103,7 +103,9 @@ vi.mock("electron", () => ({
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
-  getAllProjects: vi.fn(() => []),
+  getAllProjects: vi.fn<
+    () => Array<{ id: string; name: string; path: string; emoji: string; lastOpened: number }>
+  >(() => []),
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
   addProject: vi.fn<(path: string) => Promise<{ id: string; path: string }>>(),
   setCurrentProject: vi.fn<(id: string) => Promise<void>>(async () => {}),
@@ -178,6 +180,16 @@ vi.mock("../window/windowServices.js", () => ({
   getPtyClient: vi.fn(),
   getWorkspaceClientRef: vi.fn(),
   getWorktreePortBrokerRef: vi.fn(),
+}));
+
+const openFolderInNewWindowMock = vi.hoisted(() =>
+  vi.fn<(dirPath: string, initiatingWindowId: number | null) => Promise<unknown>>(async () => ({
+    kind: "created",
+    windowId: 2,
+  }))
+);
+vi.mock("../window/newWindowOpen.js", () => ({
+  openFolderInNewWindow: openFolderInNewWindowMock,
 }));
 
 const windowRefMock = vi.hoisted(() => ({
@@ -569,6 +581,7 @@ describe("File menu layout (#12473)", () => {
     // mockReturnValue survives vi.clearAllMocks(), so restore the defaults.
     vi.mocked(getPluginMenuItems).mockReturnValue([]);
     windowRefMock.getWindowRegistry.mockReturnValue(null);
+    projectStoreMock.getAllProjects.mockReturnValue([]);
   });
 
   function buildFileMenu(platform: NodeJS.Platform): Electron.MenuItemConstructorOptions[] {
@@ -593,6 +606,7 @@ describe("File menu layout (#12473)", () => {
   it("on macOS groups getting a project open, the open project, the window, then closing", () => {
     expect(layout(buildFileMenu("darwin"))).toEqual([
       "Open Project…",
+      "Open Project in New Window…",
       "Open Recent",
       "Clone Repository…",
       "---",
@@ -611,6 +625,7 @@ describe("File menu layout (#12473)", () => {
     (platform) => {
       expect(layout(buildFileMenu(platform))).toEqual([
         "Open Project…",
+        "Open Project in New Window…",
         "Open Recent",
         "Clone Repository…",
         "---",
@@ -632,6 +647,7 @@ describe("File menu layout (#12473)", () => {
 
   const NON_MAC_WITH_PLUGIN = [
     "Open Project…",
+    "Open Project in New Window…",
     "Open Recent",
     "Clone Repository…",
     "---",
@@ -656,6 +672,7 @@ describe("File menu layout (#12473)", () => {
       "darwin",
       [
         "Open Project…",
+        "Open Project in New Window…",
         "Open Recent",
         "Clone Repository…",
         "---",
@@ -701,6 +718,122 @@ describe("File menu layout (#12473)", () => {
       mockBrowserWindow,
       expect.objectContaining({ title: "Open Folder" })
     );
+  });
+
+  it("opens the folder picked from Open Project in New Window… in a new window (#12594)", async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ["/work/picked"],
+    });
+    const newWindowItem = item(buildFileMenu("darwin"), "Open Project in New Window…");
+    expect(newWindowItem.accelerator).toBeUndefined();
+
+    await newWindowItem.click!({} as Electron.MenuItem, undefined, {} as Electron.KeyboardEvent);
+
+    expect(dialog.showOpenDialog).toHaveBeenCalledWith(
+      mockBrowserWindow,
+      expect.objectContaining({ title: "Open Folder" })
+    );
+    expect(openFolderInNewWindowMock).toHaveBeenCalledExactlyOnceWith(
+      "/work/picked",
+      mockBrowserWindow.id
+    );
+    // The window it was chosen from is never switched.
+    expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+  });
+
+  it("does nothing when the new-window picker is cancelled", async () => {
+    vi.mocked(dialog.showOpenDialog).mockResolvedValueOnce({ canceled: true, filePaths: [] });
+
+    await item(buildFileMenu("darwin"), "Open Project in New Window…").click!(
+      {} as Electron.MenuItem,
+      undefined,
+      {} as Electron.KeyboardEvent
+    );
+
+    expect(openFolderInNewWindowMock).not.toHaveBeenCalled();
+    expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+  });
+
+  describe("Open Recent (#12594)", () => {
+    const RECENT = {
+      id: "recent-a",
+      name: "Recent A",
+      path: "/work/recent-a",
+      emoji: "🌲",
+      lastOpened: 1,
+    };
+
+    function recentEntry(platform: NodeJS.Platform) {
+      projectStoreMock.getAllProjects.mockReturnValue([RECENT]);
+      const recent = item(buildFileMenu(platform), "Open Recent");
+      const entries = recent.submenu as Electron.MenuItemConstructorOptions[];
+      expect(entries).toHaveLength(1);
+      return entries[0];
+    }
+
+    function click(
+      entry: Electron.MenuItemConstructorOptions,
+      event: Partial<Electron.KeyboardEvent>
+    ) {
+      return entry.click!(
+        {} as Electron.MenuItem,
+        mockBrowserWindow as unknown as Electron.BaseWindow,
+        event as Electron.KeyboardEvent
+      );
+    }
+
+    it("opens a Cmd-clicked entry in a new window on macOS", async () => {
+      await click(recentEntry("darwin"), { metaKey: true });
+
+      expect(openFolderInNewWindowMock).toHaveBeenCalledExactlyOnceWith(
+        RECENT.path,
+        mockBrowserWindow.id
+      );
+      expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+    });
+
+    it("treats Option as a plain click on macOS, as the switcher does", async () => {
+      projectStoreMock.addProject.mockRejectedValueOnce(new Error("stop here"));
+
+      await click(recentEntry("darwin"), { altKey: true, ctrlKey: true });
+
+      expect(openFolderInNewWindowMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.addProject).toHaveBeenCalledWith(RECENT.path);
+    });
+
+    it.each(["win32", "linux"] as const)(
+      "opens a Ctrl-clicked entry in a new window on %s",
+      async (platform) => {
+        await click(recentEntry(platform), { ctrlKey: true });
+
+        expect(openFolderInNewWindowMock).toHaveBeenCalledExactlyOnceWith(
+          RECENT.path,
+          mockBrowserWindow.id
+        );
+        expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+      }
+    );
+
+    it("keeps a plain click in the current window", async () => {
+      projectStoreMock.addProject.mockRejectedValueOnce(new Error("stop here"));
+
+      await click(recentEntry("darwin"), {});
+
+      expect(openFolderInNewWindowMock).not.toHaveBeenCalled();
+      expect(projectStoreMock.addProject).toHaveBeenCalledWith(RECENT.path);
+    });
+
+    it("logs rather than throws when the new window can't be opened", async () => {
+      openFolderInNewWindowMock.mockRejectedValueOnce(new Error("Window opening isn't ready yet"));
+      const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+      await expect(click(recentEntry("darwin"), { metaKey: true })).resolves.toBeUndefined();
+
+      expect(errSpy).toHaveBeenCalled();
+      expect(projectStoreMock.addProject).not.toHaveBeenCalled();
+      errSpy.mockRestore();
+    });
   });
 
   it("keeps New Window's accelerator and leaves New Worktree… on its chord, with no Cmd+N", () => {

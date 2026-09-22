@@ -10,7 +10,6 @@ import {
   claimProjectActivation,
   findOtherProjectOwner,
   hasLiveProjectView,
-  redirectNewWindowToOwner,
   redirectToProjectOwner,
   revealWindow,
 } from "../projectOwnership.js";
@@ -201,40 +200,6 @@ describe("claimProjectActivation", () => {
     } finally {
       other();
     }
-  });
-});
-
-describe("redirectNewWindowToOwner", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it("brings forward the window that has the project, instead of opening another", async () => {
-    const win = makeBrowserWindow();
-    const registry = registryOf([makeContext(2, makePvm("p", ["p"]), win)]);
-
-    const redirected = await redirectNewWindowToOwner(registry, "/p", async () => PROJECT);
-
-    expect(redirected).toBe(true);
-    expect(win.focus).toHaveBeenCalled();
-  });
-
-  it("opens a window as before for a folder no window has", async () => {
-    const registry = registryOf([makeContext(2, makePvm("q", ["q"]))]);
-    expect(await redirectNewWindowToOwner(registry, "/p", async () => PROJECT)).toBe(false);
-  });
-
-  it("opens a window as before for a folder that isn't a project yet", async () => {
-    const registry = registryOf([makeContext(2, makePvm("p", ["p"]))]);
-    expect(await redirectNewWindowToOwner(registry, "/new", async () => null)).toBe(false);
-  });
-
-  it("opens a window as before when the lookup fails", async () => {
-    const registry = registryOf([makeContext(2, makePvm("p", ["p"]))]);
-    const failing = async () => {
-      throw new Error("db closed");
-    };
-    expect(await redirectNewWindowToOwner(registry, "/p", failing)).toBe(false);
   });
 });
 

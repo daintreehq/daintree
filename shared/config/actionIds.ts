@@ -278,6 +278,7 @@ export const BUILT_IN_ACTION_IDS = [
   "project.getAll",
   "project.getCurrent",
   "project.add",
+  "project.openInNewWindow",
   "project.switch",
   "project.update",
   "project.remove",

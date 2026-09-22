@@ -3968,6 +3968,18 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
   },
   {
     "category": "project",
+    "danger": "safe",
+    "dangerRationale": undefined,
+    "description": "Pick a folder and open it in an empty or new window, leaving this window as it is",
+    "examples": undefined,
+    "id": "project.openInNewWindow",
+    "keywords": undefined,
+    "kind": "command",
+    "requiresArgs": false,
+    "title": "Open project in new window",
+  },
+  {
+    "category": "project",
     "danger": "confirm",
     "dangerRationale": "Removes a project from the list. Worktrees on disk remain but the project entry is lost.",
     "description": "Remove a project from the list",

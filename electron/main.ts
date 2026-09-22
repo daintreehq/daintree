@@ -65,7 +65,8 @@ import { effectiveCachedProjectViews } from "./utils/cachedProjectViews.js";
 import { setupBrowserWindow } from "./window/createWindow.js";
 import { isWindowBound, reserveWindowForOpen } from "./window/windowOpenState.js";
 import { distributePortsToView } from "./window/portDistribution.js";
-import { findOtherProjectOwner, redirectNewWindowToOwner } from "./window/projectOwnership.js";
+import { findOtherProjectOwner } from "./window/projectOwnership.js";
+import { openFolderInNewWindow } from "./window/newWindowOpen.js";
 import { deliverOpenSystemMemoryPressure } from "./window/systemMemoryPressureDelivery.js";
 import { toDisposable } from "./utils/lifecycle.js";
 import {
@@ -370,19 +371,20 @@ if (!gotTheLock) {
   let powerMonitorInitialized = false;
   let idleHarnessStarted = false;
 
-  // A new window asked for a project another window already has brings that
-  // window forward instead (#12596) — checked before creating anything, so the
-  // redirect doesn't leave an empty window behind.
-  async function openWindowForPath(projectPath?: string): Promise<void> {
-    if (
-      projectPath &&
-      (await redirectNewWindowToOwner(windowRegistry, projectPath, (p) =>
-        projectStore.getProjectByPath(p)
-      ))
-    ) {
+  // A new window for a folder is routed like every other open (#12594): an
+  // empty window other than the one that asked is reused, and a window already
+  // showing the project is brought forward instead (#12596) — decided before
+  // anything is created, so a redirect never leaves an empty window behind. A
+  // plain New Window with no folder is always a fresh window.
+  async function openWindowForPath(
+    projectPath?: string,
+    initiatingWindowId: number | null = null
+  ): Promise<void> {
+    if (!projectPath) {
+      await createWindow();
       return;
     }
-    await createWindow(projectPath);
+    await openFolderInNewWindow(projectPath, initiatingWindowId);
   }
 
   async function createWindow(
@@ -398,7 +400,8 @@ if (!gotTheLock) {
     const { win, appView, loadRenderer, smokeTestTimer, smokeRendererUnresponsive } =
       setupBrowserWindow(__dirname, {
         onRecreateWindow: () => createWindow(initialProjectPath, initialProjectId).then(() => {}),
-        onCreateWindow: (projectPath?: string) => openWindowForPath(projectPath),
+        onCreateWindow: (projectPath, initiatingWindowId) =>
+          openWindowForPath(projectPath, initiatingWindowId),
         projectPath: initialProjectPath,
         initialProjectId,
         revealMode: opts?.revealMode,
