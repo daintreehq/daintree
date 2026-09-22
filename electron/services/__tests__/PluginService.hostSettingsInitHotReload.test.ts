@@ -36,6 +36,17 @@ const projectStoreMock = vi.hoisted(() => ({
   getCurrentProject: vi.fn((): { id?: string; path: string } | null => null),
   getProjectById: vi.fn((_id: string): { path: string } | null => null),
 }));
+// A reversible stand-in for Electron `safeStorage`, off by default: most of this
+// suite never touches a secret, and a host with no keychain is the fail-safe.
+const safeStorageMock = vi.hoisted(() => {
+  const state = { available: false };
+  return {
+    state,
+    isEncryptionAvailable: () => state.available,
+    encryptString: (plaintext: string) => Buffer.from(`enc:${plaintext}`, "utf-8"),
+    decryptString: (cipher: Buffer) => cipher.toString("utf-8").slice("enc:".length),
+  };
+});
 const storeMock = vi.hoisted(() => {
   const state = new Map<string, unknown>();
   return {
@@ -48,6 +59,7 @@ const storeMock = vi.hoisted(() => {
 vi.mock("electron", () => ({
   app: appMock,
   ipcMain: ipcMainMock,
+  safeStorage: safeStorageMock,
 }));
 vi.mock("../../window/windowRef.js", () => ({
   getWindowRegistry: windowRefMock.getWindowRegistry,
@@ -221,6 +233,7 @@ beforeEach(async () => {
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-plugin-test-"));
   vi.clearAllMocks();
   storeMock._state.clear();
+  safeStorageMock.state.available = false;
 });
 
 afterEach(async () => {
@@ -228,7 +241,10 @@ afterEach(async () => {
 });
 
 type SettingsScope = "user" | "project";
-type SettingsHostShape = (pluginId: string) => {
+type SettingsHostShape = (
+  pluginId: string,
+  binding?: { projectId: string | null; projectRoot: string | null }
+) => {
   host: {
     settings: {
       get: <T = unknown>(key: string, scope?: SettingsScope) => Promise<T | undefined>;
@@ -277,8 +293,12 @@ async function setupSettingsService(
   return { service, settingsRoot: path.join(tmpDir, "plugin-settings") };
 }
 
-function createSettingsHost(service: PluginService, pluginId: string) {
-  return (service as unknown as { createHost: SettingsHostShape }).createHost(pluginId);
+function createSettingsHost(
+  service: PluginService,
+  pluginId: string,
+  binding?: { projectId: string | null; projectRoot: string | null }
+) {
+  return (service as unknown as { createHost: SettingsHostShape }).createHost(pluginId, binding);
 }
 
 describe("createHost — settings", () => {
@@ -338,8 +358,8 @@ describe("createHost — settings", () => {
     expect(JSON.parse(raw)).toEqual({ token: "in-project" });
   });
 
-  // No `safeStorage` under vitest, so this host has no keychain: the secret is
-  // refused, and nothing of it may reach the repository either way.
+  // With no keychain the secret is refused, and nothing of it may reach the
+  // repository either way.
   it("refuses a project-scoped secret without a keychain and writes nothing under the project root (#12613)", async () => {
     const projectDir = path.join(tmpDir, "proj-secret");
     projectStoreMock.getCurrentProject.mockReturnValue({ id: "a".repeat(64), path: projectDir });
@@ -358,6 +378,66 @@ describe("createHost — settings", () => {
     await expect(fs.access(path.join(settingsRoot, "local"))).rejects.toThrow();
     expect(await host.settings.get("token")).toBeUndefined();
     expect(cb).not.toHaveBeenCalled();
+  });
+
+  it("keeps a project-scoped secret in this machine's local file and reads it back (#12613)", async () => {
+    safeStorageMock.state.available = true;
+    const projectId = "a".repeat(64);
+    const projectDir = path.join(tmpDir, "proj-secret-ok");
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: projectId, path: projectDir });
+    const pluginId = "acme.settings-secret-ok";
+    const { service, settingsRoot } = await setupSettingsService(pluginId, [
+      { id: "token", type: "secret", scope: "project" },
+    ]);
+    const { host } = createSettingsHost(service, pluginId);
+    const cb = vi.fn();
+    await host.settings.onDidChange("token", cb, "project");
+
+    await host.settings.set("token", "sk-host", "project");
+
+    expect(cb).toHaveBeenCalledWith("sk-host");
+    // An omitted scope reads the declared one, from the same file the write used.
+    expect(await host.settings.get<string>("token")).toBe("sk-host");
+    const local = JSON.parse(
+      await fs.readFile(path.join(settingsRoot, "local", projectId, `${pluginId}.json`), "utf-8")
+    ) as Record<string, unknown>;
+    expect(local.token).toMatchObject({ __daintreeSecret: "daintree:secret:v1" });
+    await expect(fs.access(path.join(projectDir, ".daintree"))).rejects.toThrow();
+  });
+
+  it("pins a bound project plugin's secret to its own project while another is active (#12613)", async () => {
+    safeStorageMock.state.available = true;
+    const ownId = "a".repeat(64);
+    const activeId = "b".repeat(64);
+    const ownRoot = path.join(tmpDir, "own");
+    const activeRoot = path.join(tmpDir, "active");
+    projectStoreMock.getCurrentProject.mockReturnValue({ id: activeId, path: activeRoot });
+    const manifestId = "acme.settings-secret-bound";
+    const { service, settingsRoot } = await setupSettingsService(manifestId, [
+      { id: "token", type: "secret", scope: "project" },
+    ]);
+    // Register the loaded plugin under a project instance key, the shape the
+    // real loader gives a project-owned plugin.
+    const instanceKey = `project__${ownId}__${manifestId}`;
+    const seam = service as unknown as {
+      plugins: Map<string, unknown>;
+      _registerFakePluginForTests: (plugin: unknown, instanceKey?: string) => void;
+    };
+    seam._registerFakePluginForTests(seam.plugins.get(manifestId), instanceKey);
+    const { host } = createSettingsHost(service, instanceKey, {
+      projectId: ownId,
+      projectRoot: ownRoot,
+    });
+
+    await host.settings.set("token", "sk-own", "project");
+
+    expect(await host.settings.get<string>("token")).toBe("sk-own");
+    await expect(
+      fs.access(path.join(settingsRoot, "local", ownId, `${instanceKey}.json`))
+    ).resolves.toBeUndefined();
+    await expect(fs.access(path.join(settingsRoot, "local", activeId))).rejects.toThrow();
+    await expect(fs.access(path.join(ownRoot, ".daintree"))).rejects.toThrow();
+    await expect(fs.access(path.join(activeRoot, ".daintree"))).rejects.toThrow();
   });
 
   // The host supplies no project root, so it stays on the ambient path: an

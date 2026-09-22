@@ -400,13 +400,18 @@ describe("PluginSettingsManager local scope", () => {
   });
 });
 
-/** Every file's contents under `dir`, concatenated — empty when nothing was written there. */
+/**
+ * Every file's contents under `dir`, concatenated — empty only when nothing was
+ * ever written there. Any other scan failure throws, so a negative assertion
+ * can't pass without having looked.
+ */
 async function contentsUnder(dir: string): Promise<string> {
   let entries: string[];
   try {
     entries = (await fs.readdir(dir, { recursive: true })) as string[];
-  } catch {
-    return "";
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw err;
   }
   const chunks: string[] = [];
   for (const entry of entries) {
@@ -488,6 +493,7 @@ describe("PluginSettingsManager project-scoped secrets (#12613)", () => {
     // An ordinary project write afterwards must not carry the refused value
     // into the repository file either.
     await mgr.setSettingValueFromUi(PLUGIN_ID, "ref", "origin", "project", PROJECT_ID);
+    expect(JSON.parse(await fs.readFile(repoFile(), "utf8"))).toEqual({ ref: "origin" });
 
     const underRoot = await contentsUnder(projectRoot);
     expect(underRoot).not.toContain("sk-project-1");
@@ -521,6 +527,36 @@ describe("PluginSettingsManager project-scoped secrets (#12613)", () => {
     expect(await mgr.revealSecretSettingForUi(PLUGIN_ID, "token", "project", PROJECT_ID)).toBe(
       null
     );
+  });
+
+  it("pins a project plugin's secret to its own project and fails closed on an unknown one", async () => {
+    const mgr = managerFor(SETTINGS);
+    const instance = `project__${PROJECT_ID}__${PLUGIN_ID}`;
+    projectStoreMock.getProjectById.mockImplementation((id) =>
+      id === PROJECT_ID || id === OTHER_PROJECT_ID ? { path: projectRoot } : null
+    );
+    await expect(mgr.getSettingValuesForUi(instance, "project", OTHER_PROJECT_ID)).rejects.toThrow(
+      /belongs to a different project/
+    );
+    await expect(
+      mgr.setSettingValueFromUi(instance, "token", "sk-x", "project", OTHER_PROJECT_ID)
+    ).rejects.toThrow(/belongs to a different project/);
+
+    // A well-formed id no project is registered under has no target, even
+    // though its local file path could be built from the id alone.
+    const unknownId = "c".repeat(64);
+    await expect(
+      mgr.setSettingValueFromUi(PLUGIN_ID, "token", "sk-x", "project", unknownId)
+    ).rejects.toThrow(/no active project/);
+    expect(await mgr.getSettingValuesForUi(PLUGIN_ID, "project", unknownId)).toMatchObject({
+      values: {},
+      secretsSet: [],
+    });
+    expect(await mgr.deleteSettingValueFromUi(PLUGIN_ID, "token", "project", unknownId)).toBe(
+      false
+    );
+    expect(await mgr.revealSecretSettingForUi(PLUGIN_ID, "token", "project", unknownId)).toBe(null);
+    await expect(fs.access(path.join(tmpDir, "plugin-settings", "local"))).rejects.toThrow();
   });
 
   it("resolves the host's secret file through the same authority", () => {
