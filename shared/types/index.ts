@@ -204,6 +204,10 @@ export type {
   ServiceConnectivityStatus,
   ServiceConnectivityPayload,
   ServiceConnectivitySnapshot,
+  // Project presence types
+  ProjectPresenceState,
+  ProjectPresenceEntry,
+  ProjectPresenceSnapshot,
   // Hibernation types
   HibernationConfig,
   HibernationProjectHibernatedPayload,

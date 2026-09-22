@@ -244,6 +244,7 @@ vi.mock("../../utils/logger.js", () => ({
 }));
 
 import { ProjectViewManager } from "../ProjectViewManager.js";
+import { onProjectPresenceChanged } from "../projectPresenceChanges.js";
 import { BACKGROUND_HYDRATION_TIMEOUT_MS } from "../ProjectViewRestoreController.js";
 import { MIN_PRESSURE_EVICTION_AGE_MS } from "../ProjectViewEvictionController.js";
 import { logWarn } from "../../utils/logger.js";
@@ -1352,5 +1353,105 @@ describe("ProjectViewManager — background restore", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("ProjectViewManager — presence change signal (#12597)", () => {
+  let observed: Array<{ active: string | null; views: string[] }>;
+  let watched: ProjectViewManager | null;
+  let unsubscribe: () => void;
+
+  beforeEach(() => {
+    nextWebContentsId = 500;
+    wcQueue.length = 0;
+    vi.clearAllMocks();
+    resetAppMetricsSnapshotForTesting();
+    observed = [];
+    watched = null;
+    // What the manager looked like at each signal — a listener reads the live
+    // state, so the signal has to fire after the mutation, not before it.
+    unsubscribe = onProjectPresenceChanged(() => {
+      observed.push({
+        active: watched?.activeProjectId ?? null,
+        views: watched ? [...watched.views.keys()].sort() : [],
+      });
+    });
+  });
+
+  afterEach(() => {
+    unsubscribe();
+    wcQueue.length = 0;
+  });
+
+  function watch(): ManagerSetup {
+    const setup = createManager();
+    watched = setup.manager;
+    observed = [];
+    return setup;
+  }
+
+  it("reports the initial view", () => {
+    createManager();
+    expect(observed.length).toBeGreaterThan(0);
+  });
+
+  it("reports a cold switch, ending on the state it lands in", async () => {
+    const setup = watch();
+    await coldSwitch(setup, "proj-b", "/b");
+
+    expect(observed.at(-1)).toEqual({ active: "proj-b", views: ["proj-a", "proj-b"] });
+  });
+
+  it("reports a warm switch back", async () => {
+    const setup = watch();
+    await coldSwitch(setup, "proj-b", "/b");
+    observed = [];
+
+    await warmSwitch(setup, "proj-a", setup.initialWc);
+
+    expect(observed.length).toBeGreaterThan(0);
+    expect(observed.at(-1)).toEqual({ active: "proj-a", views: ["proj-a", "proj-b"] });
+  });
+
+  it("reports a torn-down view", async () => {
+    const setup = watch();
+    await coldSwitch(setup, "proj-b", "/b");
+    observed = [];
+
+    setup.manager.destroyView("proj-a");
+
+    expect(observed.at(-1)).toEqual({ active: "proj-b", views: ["proj-b"] });
+  });
+
+  it("reports a background restore", async () => {
+    const setup = watch();
+    const wc = createMockWebContents();
+    wcQueue.push(wc);
+    const promise = setup.manager.restoreInBackground("proj-c", "/proj-c", { lastUsed: 1_000 });
+    setup.manager.signalViewHydrated(wc.id);
+    await promise;
+    await flushImmediates();
+
+    expect(observed.at(-1)).toEqual({ active: "proj-a", views: ["proj-a", "proj-c"] });
+  });
+
+  it("reports disposal, ending with nothing held", async () => {
+    const setup = watch();
+    await coldSwitch(setup, "proj-b", "/b");
+    observed = [];
+
+    setup.manager.dispose();
+
+    expect(observed.at(-1)).toEqual({ active: null, views: [] });
+  });
+
+  it("stays quiet when nothing moved", () => {
+    const setup = watch();
+
+    const active = setup.manager.activeProjectId;
+    setup.manager.activeProjectId = active;
+    setup.manager.views.delete("never-held");
+
+    expect(observed).toEqual([]);
   });
 });

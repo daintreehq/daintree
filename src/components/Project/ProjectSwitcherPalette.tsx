@@ -586,6 +586,69 @@ export function canSleepProject(project: { isMissing: boolean; status?: string }
   return !project.isMissing && project.status !== "closed";
 }
 
+/**
+ * Whether the row reads as open in another window (#12597): picking it goes to
+ * that window, and the row says so before Enter does. Never on the current row,
+ * whose place is here, nor on a missing one, whose Enter goes to Locate.
+ */
+function isOpenElsewhere(project: SearchableProject): boolean {
+  return project.openInOtherWindow !== undefined && !project.isActive && !project.isMissing;
+}
+
+/**
+ * The row's new-window menu item, or null where it has none (#12597).
+ *
+ * A project has one live view across the app, so asking for a new window for
+ * one another window owns brings that window forward — the item says so. A
+ * project this window already holds has no second window to go to: the request
+ * would just switch here, which the row itself already does.
+ *
+ * Exported for its own test, like `canSleepProject`.
+ */
+export function getNewWindowMenuLabel(
+  project: Pick<
+    SearchableProject,
+    "isActive" | "isMissing" | "openInOtherWindow" | "isOpenInThisWindow"
+  >
+): string | null {
+  if (project.isActive || project.isMissing || project.isOpenInThisWindow) return null;
+  return project.openInOtherWindow !== undefined ? "Go to window" : "Open in new window";
+}
+
+/**
+ * Whether ⌘↵ on `row` takes the new-window path rather than a plain switch.
+ * The keypress and the footer's hint both read it, so the hint can't name an
+ * action the keypress doesn't take. A scratch has no second window to open.
+ */
+function modEnterOpensWindow(
+  row: ProjectSwitcherRow,
+  canOpenWindow: boolean
+): row is ProjectSwitcherProjectRow {
+  return canOpenWindow && row.kind === "project" && !row.isActive && !row.isMissing;
+}
+
+/**
+ * The footer's Enter hint for the highlighted row (#12597). A row another
+ * window owns goes there on either key, so both say where it goes rather than
+ * "Switch" or "New window". A row this window already holds switches here on
+ * either key too. Null with nothing highlighted: Enter no-ops there.
+ *
+ * Exported for its own test.
+ */
+export function getProjectSwitcherEnterHint(
+  row: ProjectSwitcherRow | undefined,
+  modifierHeld: boolean,
+  canOpenWindow: boolean
+): { keys: string; label: string } | null {
+  if (!row) return null;
+  const opensWindow = modifierHeld && modEnterOpensWindow(row, canOpenWindow);
+  if (row.kind === "project" && isOpenElsewhere(row)) {
+    return { keys: opensWindow ? "⌘↵" : "↵", label: "Go to window" };
+  }
+  if (opensWindow && !row.isOpenInThisWindow) return { keys: "⌘↵", label: "New window" };
+  return { keys: "↵", label: "Switch" };
+}
+
 function ProjectListItem({
   project,
   isSelected,
@@ -612,6 +675,8 @@ function ProjectListItem({
 
   const status = getProjectRowStatus(project, nowMs);
   const showResumeDot = showResumableAgentMark(status, project);
+  const showOpenElsewhere = isOpenElsewhere(project);
+  const newWindowLabel = getNewWindowMenuLabel(project);
 
   const row = (
     <div
@@ -692,6 +757,22 @@ function ProjectListItem({
           {project.isActive && <span className="sr-only">, current</span>}
           {/* Same shape as `, current` above — see `ResumableAgentsLabel`. */}
           {showResumeDot && <ResumableAgentsLabel count={project.resumableAgentCount ?? 0} />}
+          {showOpenElsewhere && (
+            <>
+              {/*
+               * Quiet, like the bell beside it: the glyph VS Code puts on a
+               * workspace open in another window. The footer names the action
+               * once the row is highlighted, so the row only has to say where
+               * the project lives.
+               */}
+              <span className="sr-only">, </span>
+              <AppWindow
+                className="w-3.5 h-3.5 text-text-secondary shrink-0 ml-1"
+                aria-label="Open in another window"
+                data-testid="project-open-elsewhere-marker"
+              />
+            </>
+          )}
           {isProjectNotificationsMuted && (
             <>
               {/*
@@ -736,10 +817,10 @@ function ProjectListItem({
     <ContextMenu>
       <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
       <ContextMenuContent>
-        {onSelectNewWindow && !project.isActive && !project.isMissing && (
+        {onSelectNewWindow && newWindowLabel !== null && (
           <ContextMenuItem onSelect={() => onSelectNewWindow(project)}>
             <AppWindow className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Open in new window
+            {newWindowLabel}
           </ContextMenuItem>
         )}
         {onTogglePinProject && (
@@ -1921,17 +2002,18 @@ function ScratchSection({
  * switch, and a search-mode scratch row carries no context menu.
  */
 function ProjectSwitcherFooter({
-  hasSelection,
-  isScratchSelected,
+  selectedRow,
+  canOpenWindow,
   onOpenPilot,
 }: {
   /**
-   * False when nothing is highlighted — an empty list, or every band folded
+   * Undefined when nothing is highlighted — an empty list, or every band folded
    * (#11943). Enter no-ops there, so naming it would be the footer promising an
    * action the keypress does not perform.
    */
-  hasSelection: boolean;
-  isScratchSelected: boolean;
+  selectedRow: ProjectSwitcherRow | undefined;
+  /** Whether ⌘↵ has a new-window handler to go to at all. */
+  canOpenWindow: boolean;
   onOpenPilot: () => void;
 }) {
   const modifiers = useModifierKeys();
@@ -1939,11 +2021,9 @@ function ProjectSwitcherFooter({
   // wrong for anyone who rebound or removed the binding.
   const pilotShortcut = useEffectiveCombo("pilot.toggle");
 
-  const hint = !hasSelection
-    ? null
-    : modifiers.meta && !isScratchSelected
-      ? { keys: "⌘↵", label: "New window" }
-      : { keys: "↵", label: "Switch" };
+  const hasSelection = selectedRow !== undefined;
+  const isScratchSelected = selectedRow?.kind === "scratch";
+  const hint = getProjectSwitcherEnterHint(selectedRow, modifiers.meta, canOpenWindow);
 
   return (
     // Container-queried rather than fixed: the same footer serves the anchored
@@ -2208,14 +2288,12 @@ function ProjectPaletteInner({
           e.stopPropagation();
           if (results.length > 0 && selectedIndex >= 0 && selectedIndex < results.length) {
             const selected = results[selectedIndex]!;
-            // A scratch has no second window to open, so ⌘↵ falls through to
-            // the plain switch rather than swallowing the keypress.
+            // Anything ⌘↵ can't open a window for falls through to the plain
+            // switch rather than swallowing the keypress.
             if (
               (e.metaKey || e.ctrlKey) &&
               onSelectNewWindow &&
-              selected.kind === "project" &&
-              !selected.isActive &&
-              !selected.isMissing
+              modEnterOpensWindow(selected, true)
             ) {
               onSelectNewWindow(selected);
             } else {
@@ -2424,8 +2502,8 @@ function ProjectPaletteInner({
 
       <AppPaletteDialog.Footer>
         <ProjectSwitcherFooter
-          hasSelection={activeResult !== undefined}
-          isScratchSelected={activeResult?.kind === "scratch"}
+          selectedRow={activeResult}
+          canOpenWindow={onSelectNewWindow !== undefined}
           onOpenPilot={() => {
             onClose();
             usePilotStore.getState().open();

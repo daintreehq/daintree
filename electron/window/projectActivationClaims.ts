@@ -1,3 +1,5 @@
+import { notifyProjectPresenceChanged } from "./projectPresenceChanges.js";
+
 /**
  * Projects a window has committed to activating whose view the window's manager
  * hasn't registered yet (#12596) — the guard passed, but repository checks, the
@@ -9,9 +11,10 @@
  * activations of a project in flight (a menu open landing on an IPC switch), and
  * the first to settle must not drop the other's protection.
  *
- * A leaf module with no Electron imports, so both owner lookups read it: the
- * in-app one (`projectOwnership.ts`) and the external-open world snapshot
- * (`windowOpenState.ts`), which sees a claimed window as having an open in flight.
+ * A leaf module with no Electron imports, so every owner lookup reads it: the
+ * in-app one (`projectOwnership.ts`), the external-open world snapshot
+ * (`windowOpenState.ts`), which sees a claimed window as having an open in flight,
+ * and the project switcher's presence snapshot (`projectPresence.ts`).
  */
 const pendingActivations = new Map<string, Set<{ windowId: number }>>();
 
@@ -34,10 +37,12 @@ export function claimProjectActivation(
     pendingActivations.set(projectId, claims);
   }
   claims.add(claim);
+  notifyProjectPresenceChanged();
   return () => {
     const current = pendingActivations.get(projectId);
     if (!current?.delete(claim)) return;
     if (current.size === 0) pendingActivations.delete(projectId);
+    notifyProjectPresenceChanged();
   };
 }
 

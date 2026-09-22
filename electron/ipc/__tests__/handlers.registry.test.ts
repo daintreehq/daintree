@@ -86,6 +86,7 @@ const registerMocks = vi.hoisted(() => ({
   registerPluginMcpHandlers: vi.fn(),
   registerPerfHandlers: vi.fn(),
   registerConnectivityHandlers: vi.fn(),
+  registerProjectPresenceHandlers: vi.fn(),
   registerScratchHandlers: vi.fn(),
   registerWatchdogHandlers: vi.fn(),
 }));
@@ -290,6 +291,9 @@ vi.mock("../handlers/perf.js", () => ({
 }));
 vi.mock("../handlers/connectivity.js", () => ({
   registerConnectivityHandlers: registerMocks.registerConnectivityHandlers,
+}));
+vi.mock("../handlers/projectPresence.js", () => ({
+  registerProjectPresenceHandlers: registerMocks.registerProjectPresenceHandlers,
 }));
 vi.mock("../handlers/scratch/index.js", () => ({
   registerScratchHandlers: registerMocks.registerScratchHandlers,

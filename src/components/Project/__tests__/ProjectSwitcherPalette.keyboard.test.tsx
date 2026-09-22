@@ -549,3 +549,98 @@ describe("ProjectSwitcherPalette keyboard on a scratch row", () => {
     expect(document.getElementById(activeDescendant!)).not.toBeNull();
   });
 });
+
+describe("ProjectSwitcherPalette with a project open in another window (#12597)", () => {
+  const baseProps = {
+    isOpen: true,
+    query: "",
+    selectedIndex: 0,
+    onQueryChange: vi.fn(),
+    onSelectPrevious: vi.fn(),
+    onSelectNext: vi.fn(),
+    onSelect: vi.fn(),
+    onClose: vi.fn(),
+    mode: "modal" as const,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    modifierKeysState.meta = false;
+    modifierKeysState.alt = false;
+  });
+
+  it("says Go to window instead of Switch for the highlighted row", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ openInOtherWindow: "foreground" })]}
+        onSelectNewWindow={vi.fn()}
+      />
+    );
+
+    const footer = screen.getByTestId("palette-footer");
+    expect(footer.textContent).toContain("Go to window");
+    expect(footer.textContent).not.toContain("Switch");
+  });
+
+  it("says Go to window, not New window, while ⌘ is held", () => {
+    modifierKeysState.meta = true;
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ openInOtherWindow: "cached" })]}
+        onSelectNewWindow={vi.fn()}
+      />
+    );
+
+    const footer = screen.getByTestId("palette-footer");
+    expect(footer.textContent).toContain("⌘↵");
+    expect(footer.textContent).toContain("Go to window");
+    expect(footer.textContent).not.toContain("New window");
+  });
+
+  it("says Switch, not New window, for a project this window already holds", () => {
+    modifierKeysState.meta = true;
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ isOpenInThisWindow: true })]}
+        onSelectNewWindow={vi.fn()}
+      />
+    );
+
+    const footer = screen.getByTestId("palette-footer");
+    expect(footer.textContent).toContain("Switch");
+    expect(footer.textContent).not.toContain("New window");
+  });
+
+  it("no longer promises a new window where ⌘↵ can't open one", () => {
+    // No new-window handler: ⌘↵ is a plain switch, so the hint says that.
+    modifierKeysState.meta = true;
+    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject()]} />);
+
+    expect(screen.getByTestId("palette-footer").textContent).not.toContain("New window");
+  });
+
+  it("leaves routing to main: the keys dispatch exactly as before", () => {
+    // Presence is advisory. Main re-checks ownership when the pick runs, so the
+    // palette must not reroute on what it last heard.
+    const onSelectNewWindow = vi.fn();
+    const row = makeProject({ openInOtherWindow: "foreground" });
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[row]}
+        onSelectNewWindow={onSelectNewWindow}
+      />
+    );
+    const input = screen.getByTestId("palette-input");
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(baseProps.onSelect).toHaveBeenCalledWith(row, "keyboard");
+    expect(onSelectNewWindow).not.toHaveBeenCalled();
+
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+    expect(onSelectNewWindow).toHaveBeenCalledWith(row);
+  });
+});

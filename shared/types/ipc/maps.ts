@@ -1506,6 +1506,10 @@ export interface IpcEventMap {
   // Per-service connectivity state push
   "connectivity:service-changed": ServiceConnectivityPayload;
 
+  // Where projects are open may have changed — re-read with
+  // `project-presence:get-snapshot`, which answers per window (#12597).
+  "project-presence:changed": void;
+
   /**
    * MCP server runtime-state transition. Distinct from
    * `connectivity:service-changed` because the renderer needs the derived

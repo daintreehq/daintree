@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { ProjectStatus } from "@shared/types";
+import type { ProjectPresenceSnapshot, ProjectStatus } from "@shared/types";
 
 /**
  * `status` is widened to the full union so a describe can pin a fixture to any
@@ -133,9 +133,25 @@ const {
   };
 });
 
+const { getPresenceSnapshotMock, presenceListeners } = vi.hoisted(() => ({
+  getPresenceSnapshotMock: vi.fn<() => Promise<ProjectPresenceSnapshot>>(() =>
+    Promise.resolve({ thisWindow: [], otherWindows: [] })
+  ),
+  presenceListeners: new Set<() => void>(),
+}));
+
 vi.mock("@/clients", () => ({
   projectClient: {
     getBulkStats: getBulkStatsMock,
+  },
+  projectPresenceClient: {
+    getSnapshot: getPresenceSnapshotMock,
+    onChanged: (callback: () => void) => {
+      presenceListeners.add(callback);
+      return () => {
+        presenceListeners.delete(callback);
+      };
+    },
   },
 }));
 
@@ -3880,5 +3896,241 @@ describe("assistant presence banding (#11806)", () => {
     await waitFor(() => {
       expect(asProject(result.current.results[0]).section).toBe("current");
     });
+  });
+});
+
+describe("useProjectSwitcherPalette window presence (#12597)", () => {
+  const presenceProjects: ProjectFixture[] = [
+    {
+      id: "here",
+      name: "Here",
+      path: "/repo/here",
+      emoji: "🌲",
+      lastOpened: 300,
+      frecencyScore: 3.0,
+      status: "active",
+    },
+    {
+      id: "elsewhere",
+      name: "Elsewhere",
+      path: "/repo/elsewhere",
+      emoji: "🌲",
+      lastOpened: 200,
+      frecencyScore: 3.0,
+      status: "background",
+    },
+    {
+      id: "cached-here",
+      name: "Cached here",
+      path: "/repo/cached-here",
+      emoji: "🌲",
+      lastOpened: 100,
+      frecencyScore: 3.0,
+      status: "background",
+    },
+  ];
+
+  const snapshot = (
+    otherWindows: ProjectPresenceSnapshot["otherWindows"],
+    thisWindow: ProjectPresenceSnapshot["thisWindow"] = []
+  ): ProjectPresenceSnapshot => ({ thisWindow, otherWindows });
+
+  let savedProjects: typeof projectState.projects;
+
+  beforeEach(() => {
+    savedProjects = projectState.projects;
+    projectState.projects = presenceProjects;
+    vi.clearAllMocks();
+    presenceListeners.clear();
+    projectState.currentProject = { id: "here" };
+    projectStatsState.stats = {};
+    getBulkStatsMock.mockResolvedValue(emptyBulkStats(presenceProjects.map((p) => p.id)));
+    getPresenceSnapshotMock.mockImplementation(() => Promise.resolve(snapshot([])));
+    setStatsMock.mockImplementation((stats: typeof projectStatsState.stats) => {
+      projectStatsState.stats = stats;
+    });
+    usePaletteStore.setState({ activePaletteId: null });
+    usePreferencesStore.setState({ projectSwitcherCollapsedBands: {} });
+  });
+
+  afterEach(() => {
+    projectState.projects = savedProjects;
+  });
+
+  function rowFor(
+    result: { current: ReturnType<typeof useProjectSwitcherPalette> },
+    id: string
+  ): ProjectSwitcherProjectRow {
+    return asProject(result.current.results.find((row) => row.id === id));
+  }
+
+  function emitPresenceChanged(): void {
+    act(() => {
+      for (const listener of [...presenceListeners]) listener();
+    });
+  }
+
+  it("asks nothing and listens to nothing while the palette is closed", () => {
+    renderHook(() => useProjectSwitcherPalette());
+
+    expect(getPresenceSnapshotMock).not.toHaveBeenCalled();
+    expect(presenceListeners.size).toBe(0);
+  });
+
+  it("marks a project another window owns, and leaves isActive local", async () => {
+    getPresenceSnapshotMock.mockImplementation(() =>
+      Promise.resolve(
+        snapshot(
+          [{ projectId: "elsewhere", windowId: 2, state: "foreground" }],
+          [
+            { projectId: "here", windowId: 1, state: "foreground" },
+            { projectId: "cached-here", windowId: 1, state: "cached" },
+          ]
+        )
+      )
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
+    });
+    expect(rowFor(result, "elsewhere").isActive).toBe(false);
+    expect(rowFor(result, "elsewhere").isOpenInThisWindow).toBe(false);
+
+    expect(rowFor(result, "here").isActive).toBe(true);
+    expect(rowFor(result, "here").openInOtherWindow).toBeUndefined();
+    expect(rowFor(result, "here").isOpenInThisWindow).toBe(true);
+
+    expect(rowFor(result, "cached-here").openInOtherWindow).toBeUndefined();
+    expect(rowFor(result, "cached-here").isOpenInThisWindow).toBe(true);
+  });
+
+  it("never marks the current project as open elsewhere, whatever main says", async () => {
+    // A legacy fleet can hold the project twice. Where you are is still here.
+    getPresenceSnapshotMock.mockImplementation(() =>
+      Promise.resolve(snapshot([{ projectId: "here", windowId: 2, state: "cached" }]))
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(getPresenceSnapshotMock).toHaveBeenCalled();
+    });
+    await act(async () => {});
+    expect(rowFor(result, "here").openInOtherWindow).toBeUndefined();
+    expect(rowFor(result, "here").isActive).toBe(true);
+  });
+
+  it("re-reads on a change event while open", async () => {
+    getPresenceSnapshotMock.mockImplementationOnce(() =>
+      Promise.resolve(snapshot([{ projectId: "elsewhere", windowId: 2, state: "cached" }]))
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("cached");
+    });
+
+    // The owning window closed.
+    getPresenceSnapshotMock.mockImplementationOnce(() => Promise.resolve(snapshot([])));
+    emitPresenceChanged();
+
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBeUndefined();
+    });
+    expect(getPresenceSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("subscribes before the first read, so a change mid-request still gets its own read", () => {
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    getPresenceSnapshotMock.mockImplementationOnce(() => {
+      // The listener must already be there when the first request goes out.
+      expect(presenceListeners.size).toBe(1);
+      return Promise.resolve(snapshot([]));
+    });
+    act(() => {
+      result.current.open();
+    });
+
+    expect(getPresenceSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("lets only the newest read land when an older one resolves last", async () => {
+    let resolveFirst: (value: ProjectPresenceSnapshot) => void = () => {};
+    getPresenceSnapshotMock.mockImplementationOnce(
+      () =>
+        new Promise<ProjectPresenceSnapshot>((resolve) => {
+          resolveFirst = resolve;
+        })
+    );
+    getPresenceSnapshotMock.mockImplementationOnce(() =>
+      Promise.resolve(snapshot([{ projectId: "elsewhere", windowId: 2, state: "foreground" }]))
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    emitPresenceChanged();
+
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
+    });
+
+    // The first read saw the world before the change; it must not put it back.
+    await act(async () => {
+      resolveFirst(snapshot([]));
+    });
+    expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
+  });
+
+  it("stops listening on close and starts the next session unmarked", async () => {
+    getPresenceSnapshotMock.mockImplementationOnce(() =>
+      Promise.resolve(snapshot([{ projectId: "elsewhere", windowId: 2, state: "foreground" }]))
+    );
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(rowFor(result, "elsewhere").openInOtherWindow).toBe("foreground");
+    });
+
+    act(() => {
+      result.current.close();
+    });
+    expect(presenceListeners.size).toBe(0);
+
+    // The reopen's own read hasn't landed yet: nothing from the last session
+    // may show in the meantime.
+    getPresenceSnapshotMock.mockImplementationOnce(() => new Promise(() => {}));
+    act(() => {
+      result.current.open();
+    });
+    await waitFor(() => {
+      expect(result.current.results.length).toBeGreaterThan(0);
+    });
+    expect(rowFor(result, "elsewhere").openInOtherWindow).toBeUndefined();
+    expect(getPresenceSnapshotMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves rows unmarked when the read fails", async () => {
+    getPresenceSnapshotMock.mockImplementationOnce(() => Promise.reject(new Error("gone")));
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => {
+      result.current.open();
+    });
+
+    await waitFor(() => {
+      expect(getPresenceSnapshotMock).toHaveBeenCalled();
+    });
+    await act(async () => {});
+    expect(rowFor(result, "elsewhere").openInOtherWindow).toBeUndefined();
   });
 });

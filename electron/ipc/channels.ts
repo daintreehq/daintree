@@ -1180,6 +1180,10 @@ export const CHANNELS = {
   CONNECTIVITY_GET_STATE: "connectivity:get-state",
   CONNECTIVITY_SERVICE_CHANGED: "connectivity:service-changed",
 
+  // Which windows hold a live view of which projects (#12597)
+  PROJECT_PRESENCE_GET_SNAPSHOT: "project-presence:get-snapshot",
+  PROJECT_PRESENCE_CHANGED: "project-presence:changed",
+
   // Scratch (throwaway one-off agent workspace) channels
   SCRATCH_GET_ALL: "scratch:get-all",
   SCRATCH_GET_CURRENT: "scratch:get-current",

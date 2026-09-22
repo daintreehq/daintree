@@ -67,6 +67,7 @@ import { buildSentryPreloadBindings } from "./ipc/handlers/sentry.preload.js";
 import { buildPrivacyPreloadBindings } from "./ipc/handlers/privacy.preload.js";
 import { buildTelemetryPreloadBindings } from "./ipc/handlers/telemetry.preload.js";
 import { buildConnectivityPreloadBindings } from "./ipc/handlers/connectivity.preload.js";
+import { buildProjectPresencePreloadBindings } from "./ipc/handlers/projectPresence.preload.js";
 import { buildDiffMediaPreloadBindings } from "./ipc/handlers/diffMedia.preload.js";
 import { buildFileBrowserPreloadBindings } from "./ipc/handlers/fileBrowser.preload.js";
 import { buildFileWatchPreloadBindings } from "./ipc/handlers/fileWatch.preload.js";
@@ -2113,6 +2114,13 @@ function buildElectronApi(): ElectronAPI {
 
       onServiceChanged: (callback: (payload: ServiceConnectivityPayload) => void) =>
         _typedOn(CHANNELS.CONNECTIVITY_SERVICE_CHANGED, callback),
+    },
+
+    // Which windows hold a live view of which projects (#12597)
+    projectPresence: {
+      ...buildProjectPresencePreloadBindings(_unwrappingInvoke),
+
+      onChanged: (callback: () => void) => _typedOn(CHANNELS.PROJECT_PRESENCE_CHANGED, callback),
     },
 
     // Dev Preview API

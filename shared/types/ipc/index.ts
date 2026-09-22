@@ -26,6 +26,7 @@ export * from "./fileWatch.js";
 export * from "./config.js";
 export * from "./devPreview.js";
 export * from "./connectivity.js";
+export * from "./projectPresence.js";
 export * from "./maps.js";
 export * from "./agentSessionHistory.js";
 export * from "./agentSubagents.js";

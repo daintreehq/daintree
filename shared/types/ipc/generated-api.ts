@@ -800,6 +800,11 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["project-history:peek"]["args"]
     ): Promise<IpcInvokeMap["project-history:peek"]["result"]>;
   };
+  projectPresence: {
+    getSnapshot(
+      ...args: IpcInvokeMap["project-presence:get-snapshot"]["args"]
+    ): Promise<IpcInvokeMap["project-presence:get-snapshot"]["result"]>;
+  };
   projectRelocation: {
     apply(
       ...args: IpcInvokeMap["project-relocation:apply"]["args"]
