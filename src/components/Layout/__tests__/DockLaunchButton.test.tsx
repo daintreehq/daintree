@@ -2519,6 +2519,14 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       );
     });
 
+    it("keeps the launch outcome behind the category in search", () => {
+      mockAgentSettings = { agents: { claude: { presetId: "fast" } } };
+      const { container } = renderButton({ agents: READY, placement: "toolbar" });
+      fireEvent.change(searchInput(container), { target: { value: "claude" } });
+
+      expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("Agent · Default");
+    });
+
     it("states no outcome when nothing named is saved", () => {
       const { container } = renderButton({ agents: READY });
       expect(qualifierTextOf(rowByName(container, "Claude"))).toBe("");

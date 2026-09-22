@@ -1508,7 +1508,11 @@ function DockLaunchOption({
                       // named Work are otherwise indistinguishable in results.
                       item!.category === "recipe"
                       ? `${DOCK_LAUNCH_CATEGORY_LABELS.recipe} · ${item!.scopeLabel}`
-                      : DOCK_LAUNCH_CATEGORY_LABELS[item!.category]
+                      : // The launch outcome rides behind the category, so a
+                        // searched agent still says which preset Enter uses.
+                        [DOCK_LAUNCH_CATEGORY_LABELS[item!.category], launchOutcome]
+                          .filter(Boolean)
+                          .join(" · ")
                     : item!.category === "recipe"
                       ? item!.scopeLabel
                       : undefined;
