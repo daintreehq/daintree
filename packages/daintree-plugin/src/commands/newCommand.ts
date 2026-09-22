@@ -37,12 +37,16 @@ export function newCommand(): Command {
 /**
  * Parse `argv` (user arguments only, no node/script prefix) exactly as
  * `daintree-plugin new` would and run the scaffold. Rejects rather than exiting
- * so the caller owns the process.
+ * so the caller owns the process. `version` is what `--version` prints; the
+ * create shim passes its own, since the two packages version independently.
  */
-export async function runNewFromArgv(argv: readonly string[]): Promise<void> {
+export async function runNewFromArgv(
+  argv: readonly string[],
+  version: string = CLI_VERSION
+): Promise<void> {
   const command = newCommand()
     .name("create-daintree-plugin")
-    .version(CLI_VERSION)
+    .version(version)
     .exitOverride()
     // The caller prints the rejection; without this commander would print the
     // same "unknown option" line itself first.

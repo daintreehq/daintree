@@ -1,5 +1,10 @@
 #!/usr/bin/env node
+import { createRequire } from "node:module";
 import { runNewFromArgv } from "daintree-plugin";
+
+// `--version` reports this package, not `daintree-plugin`; `../package.json`
+// resolves from both `src/` and `dist/`.
+const { version } = createRequire(import.meta.url)("../package.json") as { version: string };
 
 /**
  * `npm create daintree-plugin <name> [options]` / `npx create-daintree-plugin
@@ -12,7 +17,7 @@ function messageOf(err: unknown): string {
   return String(err);
 }
 
-runNewFromArgv(process.argv.slice(2)).catch((err: unknown) => {
+runNewFromArgv(process.argv.slice(2), version).catch((err: unknown) => {
   console.error(messageOf(err));
   process.exit(1);
 });

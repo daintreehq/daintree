@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
+import { createRequire } from "node:module";
 import { runNewFromArgv } from "daintree-plugin";
+
+const { version: ownVersion } = createRequire(import.meta.url)("../../package.json") as {
+  version: string;
+};
 
 vi.mock("daintree-plugin", () => ({
   runNewFromArgv: vi.fn(async () => undefined),
@@ -18,7 +23,10 @@ describe("create-daintree-plugin bin", () => {
     // The bin runs on import; argv beyond node + script is the user's.
     process.argv = ["node", "create.js", "my-plugin", "--publisher", "acme", "--yes"];
     await import("../create.js");
-    expect(runNewFromArgv).toHaveBeenCalledWith(["my-plugin", "--publisher", "acme", "--yes"]);
+    expect(runNewFromArgv).toHaveBeenCalledWith(
+      ["my-plugin", "--publisher", "acme", "--yes"],
+      ownVersion
+    );
   });
 
   it("prints the failure message and exits 1 when the scaffold rejects", async () => {

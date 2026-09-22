@@ -60,6 +60,17 @@ describe("runNewFromArgv", () => {
     expect(runNew).not.toHaveBeenCalled();
   });
 
+  it("prints the caller's version for --version when one is passed", async () => {
+    const write = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    try {
+      await expect(runNewFromArgv(["--version"], "9.8.7")).resolves.toBeUndefined();
+      expect(write).toHaveBeenCalledWith("9.8.7\n");
+    } finally {
+      write.mockRestore();
+    }
+    expect(runNew).not.toHaveBeenCalled();
+  });
+
   it("rejects on an unknown option instead of exiting the process", async () => {
     const exit = vi.spyOn(process, "exit").mockImplementation(() => {
       throw new Error("process.exit called");
