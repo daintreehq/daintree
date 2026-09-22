@@ -1438,31 +1438,33 @@ export function FilePane({
                       Retry
                     </Button>
                   )}
-                {/* A PDF the viewer can't frame is still a perfectly good file,
-                    so hand it to something that can show it (#12598). The OS
-                    open is root-contained, so a file no project owns gets the
-                    reveal instead — its guarded out-of-root fallback is the one
-                    route to the file that still works there. */}
-                {isPdfFilePath(filePath) &&
-                  (isInsideGovernedRoot ? (
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => void handleOpenExternal("default-app")}
-                    >
-                      <ExternalLink />
-                      Open in default app
-                    </Button>
-                  ) : (
-                    <Button
-                      variant="subtle"
-                      size="sm"
-                      onClick={() => void handleOpenExternal("reveal")}
-                    >
-                      <FolderOpen />
-                      {reveal.label}
-                    </Button>
-                  ))}
+                {/* A PDF the viewer can't frame may still be a perfectly good
+                    file, so hand it to something that can show it (#12598).
+                    The OS open is root-contained and checks the canonical
+                    path, so it is only offered inside a governed root — and
+                    even there a link can resolve outside it. Reveal carries a
+                    guarded out-of-root fallback, so it is always offered as
+                    the route that still works when the open can't. */}
+                {isPdfFilePath(filePath) && isInsideGovernedRoot && (
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => void handleOpenExternal("default-app")}
+                  >
+                    <ExternalLink />
+                    Open in default app
+                  </Button>
+                )}
+                {isPdfFilePath(filePath) && (
+                  <Button
+                    variant="subtle"
+                    size="sm"
+                    onClick={() => void handleOpenExternal("reveal")}
+                  >
+                    <FolderOpen />
+                    {reveal.label}
+                  </Button>
+                )}
               </div>
             </div>
           )}

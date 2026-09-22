@@ -1590,15 +1590,18 @@ describe("FilePane diff mode (#11274)", () => {
   });
 
   describe("PDF preview (#11427)", () => {
-    // The frame mounts only once a HEAD on its URL answers 200 (#12598).
+    // The frame mounts only once a HEAD on its URL answers 200 (#12598). Only
+    // `fetch` is restored: `vi.unstubAllGlobals()` would also strip what
+    // vitest.setup.ts installs for every later test.
     const pdfProbeMock = vi.fn();
+    const realFetch = globalThis.fetch;
     beforeEach(() => {
       pdfProbeMock.mockResolvedValue({ ok: true, status: 200 });
       vi.stubGlobal("fetch", pdfProbeMock);
     });
     afterEach(() => {
-      vi.unstubAllGlobals();
       pdfProbeMock.mockReset();
+      vi.stubGlobal("fetch", realFetch);
     });
 
     function buttonByText(container: HTMLElement, text: string): HTMLButtonElement | undefined {
@@ -1667,6 +1670,27 @@ describe("FilePane diff mode (#11274)", () => {
         // The code is shared with the text path, whose message names its own
         // 500 KB ceiling — a PDF refused under a different cap must not borrow it.
         expect(message).not.toBe(FILE_READ_ERROR_MESSAGES.FILE_TOO_LARGE);
+      });
+
+      it("always offers the guarded reveal beside the open, which a link out of the root defeats", async () => {
+        // Containment here is lexical; the OS open checks the canonical path,
+        // so `/repo/report.pdf` linking outside every root passes one and fails
+        // the other. Reveal is the route that still reaches such a file.
+        seedWorktree([]);
+        pdfProbeMock.mockResolvedValue({ ok: false, status: 404 });
+        const { container } = await renderPane({ filePath: "/repo/docs/report.pdf" });
+
+        await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
+        expect(buttonByText(container, "Open in default app")).toBeDefined();
+        const reveal = buttonByText(container, revealCopy().label);
+        if (!reveal) throw new Error("no reveal action in the error state");
+        await clickButton(reveal);
+
+        expect(dispatchMock).toHaveBeenCalledWith(
+          "file.showItemInFolder",
+          { path: "/repo/docs/report.pdf", allowOutsideRoots: true },
+          { source: "user" }
+        );
       });
 
       it("offers to open a PDF inside a governed root in the default app", async () => {
@@ -1753,6 +1777,7 @@ describe("FilePane diff mode (#11274)", () => {
 
         await waitFor(() => expect(buttonByText(container, "Retry")).toBeDefined());
         expect(buttonByText(container, "Open in default app")).toBeUndefined();
+        expect(buttonByText(container, revealCopy().label)).toBeUndefined();
       });
     });
   });

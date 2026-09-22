@@ -147,14 +147,19 @@ export function FilePdfPreview({
     return () => controller.abort();
   }, [documentUrl, src]);
 
-  if (admitted !== null) {
+  // Gated on the document at render time, not left to the effect: the render
+  // that first sees a new file commits before its probe starts, and would
+  // otherwise show the previous file's frame under the new file's name.
+  const frameSrc = admitted?.documentUrl === documentUrl ? admitted.src : null;
+
+  if (frameSrc !== null) {
     return (
       <iframe
         // Empty string, never {true}: React omits an unknown attribute given a
         // boolean value, which would silently drop the credentialless behavior
         // the COEP shell depends on.
         credentialless=""
-        src={admitted.src}
+        src={frameSrc}
         title={label}
         referrerPolicy="no-referrer"
         className="h-full w-full border-0 bg-surface-canvas"
@@ -162,7 +167,9 @@ export function FilePdfPreview({
     );
   }
 
-  if (!probing) return null;
+  // Settled with nothing admitted: the caller owns the error surface. A stale
+  // admission instead means this document's probe hasn't started — loading.
+  if (!probing && admitted === null) return null;
 
   return (
     // The probe is a realpath and a stat, so `SkeletonBone`'s 400ms gate

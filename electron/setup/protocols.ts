@@ -599,8 +599,10 @@ async function readContainedDaintreeFile(
 /**
  * The size of a contained file, or an error Response — the HEAD half of
  * {@link readContainedDaintreeFile}. It passes the same containment, gate, cap
- * and O_NOFOLLOW open a GET would, so a probe can't admit a request the read
- * then refuses, but it never reads the bytes it only has to measure.
+ * and O_NOFOLLOW open a GET would, so a probe refuses everything the read
+ * refuses structurally, but it never reads the bytes it only has to measure.
+ * A read can still fail where the stat passed — a rewrite in between, or an
+ * I/O error only the read surfaces — so this is admission, not a guarantee.
  */
 async function statContainedDaintreeFile(
   normalizedRoot: string,

@@ -899,15 +899,23 @@ describe("DiffPane — audio current-version mode (#11425)", () => {
 });
 
 describe("DiffPane — PDF current-version mode (#11427)", () => {
-  // The frame mounts only once a HEAD on its URL answers 200 (#12598).
+  // The frame mounts only once a HEAD on its URL answers 200 (#12598). Only
+  // `fetch` is restored: `vi.unstubAllGlobals()` would also strip what
+  // vitest.setup.ts installs for every later test.
   const pdfProbeMock = vi.fn();
+  const realFetch = globalThis.fetch;
+  let dispatchSpy: ReturnType<typeof vi.spyOn> | null = null;
   beforeEach(() => {
     pdfProbeMock.mockResolvedValue({ ok: true, status: 200 });
     vi.stubGlobal("fetch", pdfProbeMock);
   });
   afterEach(() => {
-    vi.unstubAllGlobals();
     pdfProbeMock.mockReset();
+    vi.stubGlobal("fetch", realFetch);
+    // Restored here, not at the end of the test, so a failing assertion can't
+    // leave the real ActionService stubbed for the rest of the file.
+    dispatchSpy?.mockRestore();
+    dispatchSpy = null;
   });
 
   function pdfFrame(container: HTMLElement): HTMLIFrameElement | null {
@@ -1001,6 +1009,7 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
     const dispatch = vi
       .spyOn(actionService, "dispatch")
       .mockResolvedValue({ ok: true, result: undefined });
+    dispatchSpy = dispatch;
     pdfProbeMock.mockResolvedValue({ ok: false, status: 413 });
     seedPanel({
       filePath: "docs/spec.pdf",
@@ -1023,7 +1032,6 @@ describe("DiffPane — PDF current-version mode (#11427)", () => {
       { path: "/repo/docs/spec.pdf" },
       { source: "user" }
     );
-    dispatch.mockRestore();
   });
 
   it("tries the document again from the toolbar Refresh after a refusal", async () => {

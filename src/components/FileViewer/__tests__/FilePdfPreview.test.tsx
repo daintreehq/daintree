@@ -12,6 +12,7 @@
  * The frame mounts only after a HEAD on its URL answers 200 (#12598), so
  * `fetch` is stubbed at that boundary.
  */
+import { StrictMode, useLayoutEffect } from "react";
 import { describe, it, expect, afterEach, beforeEach, vi } from "vitest";
 import { render, cleanup, waitFor, act } from "@testing-library/react";
 import { FilePdfPreview, type PdfPreviewError } from "../FilePdfPreview";
@@ -247,6 +248,89 @@ describe("FilePdfPreview", () => {
       expect(onError).not.toHaveBeenCalled();
       const src = new URL(container.querySelector("iframe")?.getAttribute("src") ?? "");
       expect(src.searchParams.get("path")).toBe("/repo/b.pdf");
+    });
+
+    it("never commits the previous document's frame under the next one's props", async () => {
+      // RTL's rerender flushes passive effects, which is where the probe
+      // resets — so read the DOM from a layout effect instead, which runs on
+      // the very commit that first renders the new file, before that reset.
+      const committedPaths: Array<string | null> = [];
+      function CommitProbe() {
+        useLayoutEffect(() => {
+          const src = document.querySelector("iframe")?.getAttribute("src");
+          committedPaths.push(src ? new URL(src).searchParams.get("path") : null);
+        });
+        return null;
+      }
+      const { container, rerender } = render(
+        <>
+          <FilePdfPreview filePath="/repo/a.pdf" rootPath="/repo" label="a.pdf" />
+          <CommitProbe />
+        </>
+      );
+      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+
+      fetchMock.mockReturnValue(new Promise(() => {}));
+      committedPaths.length = 0;
+      rerender(
+        <>
+          <FilePdfPreview filePath="/repo/b.pdf" rootPath="/repo" label="b.pdf" />
+          <CommitProbe />
+        </>
+      );
+
+      expect(committedPaths).not.toContain("/repo/a.pdf");
+      expect(container.querySelector("iframe")).toBeNull();
+      expect(container.querySelector('[role="status"]')).not.toBeNull();
+    });
+
+    it("drops a success that settles after the file changed", async () => {
+      let admitFirst: (response: ProbeResponse) => void = () => {};
+      fetchMock.mockReturnValueOnce(
+        new Promise((resolve) => {
+          admitFirst = resolve;
+        })
+      );
+      fetchMock.mockReturnValueOnce(new Promise(() => {}));
+      const { container, rerender } = render(
+        <FilePdfPreview filePath="/repo/a.pdf" rootPath="/repo" label="a.pdf" />
+      );
+      rerender(<FilePdfPreview filePath="/repo/b.pdf" rootPath="/repo" label="b.pdf" />);
+
+      await act(async () => admitFirst(status(200)));
+
+      expect(container.querySelector("iframe")).toBeNull();
+    });
+
+    it("treats a new root for the same path as a different document", async () => {
+      const { container, rerender } = render(
+        <FilePdfPreview filePath="/repo/spec.pdf" rootPath="/repo" label="spec.pdf" />
+      );
+      await waitFor(() => expect(container.querySelector("iframe")).not.toBeNull());
+
+      fetchMock.mockReturnValue(new Promise(() => {}));
+      rerender(<FilePdfPreview filePath="/repo/spec.pdf" rootPath="/" label="spec.pdf" />);
+
+      expect(container.querySelector("iframe")).toBeNull();
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("settles into one frame under StrictMode's double effect", async () => {
+      const onError = vi.fn();
+      const { container } = render(
+        <StrictMode>
+          <FilePdfPreview
+            filePath="/repo/spec.pdf"
+            rootPath="/repo"
+            label="spec.pdf"
+            onError={onError}
+          />
+        </StrictMode>
+      );
+
+      await waitFor(() => expect(container.querySelectorAll("iframe")).toHaveLength(1));
+      // The first mount's probe is aborted by its own cleanup, never reported.
+      expect(onError).not.toHaveBeenCalled();
     });
 
     it("never shows the previous document while a different one is probed", async () => {
