@@ -135,7 +135,7 @@ function TerminalRow({ term, onClick, padY }: TerminalRowProps) {
             <span className="flex min-w-0 flex-1 flex-col">
               <span
                 ref={ref}
-                className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-text-primary"
+                className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-text-primary group-has-[:focus-visible]/termrow:text-text-primary"
               >
                 {term.title}
               </span>
@@ -504,10 +504,12 @@ export function WorktreeTerminalSection({
             strategy={verticalListSortingStrategy}
           >
             {eligibleTerminals.length >= 2 && armedIdsSize === 0 && !hintDismissed && (
-              <div className="flex items-center justify-between gap-2 py-1 pl-6 pr-2.5 text-2xs text-text-secondary">
+              <div className="flex items-center justify-between gap-2 border border-transparent py-1 pl-6 pr-2.5 text-2xs text-text-secondary">
                 {/* Every click toggles, modifier or not, so the hint names the
                     two gestures that exist rather than a Shift variant that
-                    does the same thing as a plain click. */}
+                    does the same thing as a plain click. The transparent
+                    border is the rows' own, so the text starts on their glyph
+                    column. */}
                 <span>Click or drag across sessions to select</span>
                 <button
                   type="button"
