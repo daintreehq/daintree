@@ -12,8 +12,8 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, act, cleanup } from "@testing-library/react";
-import type { ComponentType } from "react";
 import type { PanelKindConfig } from "@shared/config/panelKindRegistry";
+import type { PanelKindDefinition } from "@/panels/registry";
 
 const PROBE_KIND = "acme.probe";
 const PLUGIN_KIND = "acme.dashboard";
@@ -22,8 +22,8 @@ const registry = vi.hoisted(() => {
   const listeners = new Set<() => void>();
   return {
     listeners,
-    snapshot: {} as Record<string, { component: ComponentType<never> }>,
-    publish(kind: string, component: ComponentType<never>) {
+    snapshot: {} as Record<string, Pick<PanelKindDefinition, "component">>,
+    publish(kind: string, component: PanelKindDefinition["component"]) {
       this.snapshot = { ...this.snapshot, [kind]: { component } };
       for (const listener of listeners) listener();
     },
