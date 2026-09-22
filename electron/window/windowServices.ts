@@ -50,15 +50,19 @@ import { isE2EFaultMode, isFreezeHarness, isIdleHarness } from "../setup/runtime
 import {
   extractCliPath,
   hasCliPathFlag,
-  getPendingCliPath,
-  setPendingCliPath,
   extractDntrPaths,
   extractDirectoryPaths,
   queueDntrPaths,
 } from "../lifecycle/appLifecycle.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { getWindowRegistry } from "./windowRef.js";
-import { installOpenDirConsumer, drainPendingOpenDirs } from "./openDirHandler.js";
+import {
+  installOpenDirConsumer,
+  drainPendingOpenDirs,
+  type OpenDirHandlerDeps,
+} from "./openDirHandler.js";
+import { reserveWindowForOpen } from "./windowOpenState.js";
+import { DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW } from "../../shared/types/windowOpen.js";
 import { resetDeferredQueue } from "./deferredInitQueue.js";
 import { initGlobalServices } from "./globalServicesInit.js";
 import { initPerWindowServices, wireWatchdogDisabledBroadcast } from "./perWindowInit.js";
@@ -111,14 +115,24 @@ export {
 
 const DEFAULT_TERMINAL_ID = "default";
 
-// Folder-drop open dependencies for macOS `open-file` directories (#10976).
-// Stable singletons, so the deps object is module-level; the install-once guard
-// lives in openDirHandler.ts.
-const openDirDeps = {
-  openDirectory: (dirPath: string, win: BrowserWindow) =>
-    handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
-  resolvePrimaryWindow: () => getWindowRegistry()?.getPrimary()?.browserWindow,
-};
+// Dependencies for folders opened from outside the app (#10976, #12593). Only
+// window creation comes from main.ts, which owns it; the install-once guard
+// lives in openDirHandler.ts. Without a factory (a harness boot) a folder that
+// needs a new window waits in the queue for the next window instead.
+function createOpenDirDeps(
+  createWindowForPath: ((dirPath: string) => Promise<void>) | undefined
+): OpenDirHandlerDeps {
+  return {
+    resolveProject: (dirPath) => projectStore.addProject(dirPath),
+    openDirectory: (dirPath, win) =>
+      handleDirectoryOpen(dirPath, win, getCliAvailabilityServiceRef() ?? undefined),
+    createWindowForPath:
+      createWindowForPath ?? (async (dirPath) => queuePendingOpenDirPath(dirPath)),
+    getWindowRegistry,
+    // #12595 stores the user's choice; until then every open follows the default.
+    getPreference: () => DEFAULT_OPEN_FOLDERS_IN_NEW_WINDOW,
+  };
+}
 
 function createAndDistributePorts(win: BrowserWindow, ctx: WindowContext): void {
   const wc = getAppWebContents(win);
@@ -142,6 +156,8 @@ export interface SetupWindowServicesOptions {
    * policy of its own to apply.
    */
   backgroundProjectIds?: readonly string[];
+  /** Create a window bound to a folder, for opens from outside the app that need one. */
+  createWindowForPath?: (dirPath: string) => Promise<void>;
 }
 
 /**
@@ -655,7 +671,6 @@ export async function setupWindowServices(
       isIdleHarness ||
       opts.initialProjectPath ||
       processArgvCli ||
-      getPendingCliPath() ||
       restoreWorkspace ||
       getPendingOpenDirPaths().length > 0;
     if (skipDefaultSpawn) {
@@ -929,27 +944,35 @@ export async function setupWindowServices(
     // when it resolved: an unresolvable `--cli-path` is still consumed, so it
     // isn't re-parsed (and re-reported) by every window created afterwards.
     if (firstLaunchCliPath || hasCliPathFlag(process.argv)) setProcessArgvCliHandled(true);
-    const cliPath = firstLaunchCliPath ?? getPendingCliPath();
-    if (cliPath) {
-      setPendingCliPath(null);
-      console.log("[MAIN] Opening CLI path from launch args:", cliPath);
-      handleDirectoryOpen(cliPath, win, cliAvailabilityService ?? undefined).catch((err) =>
-        console.error("[MAIN] Failed to open CLI path:", err)
-      );
+    // Joins the pre-window folder queue the drain below routes, so a cold CLI
+    // launch picks its window by the same rule as every other external open.
+    if (firstLaunchCliPath) {
+      console.log("[MAIN] Opening CLI path from launch args:", firstLaunchCliPath);
+      queuePendingOpenDirPath(firstLaunchCliPath);
     }
   } else {
-    console.log("[MAIN] Window opened with initial project path:", opts.initialProjectPath);
-    handleDirectoryOpen(opts.initialProjectPath, win, cliAvailabilityService ?? undefined).catch(
-      (err) => console.error("[MAIN] Failed to open initial project path:", err)
-    );
+    const initialProjectPath = opts.initialProjectPath;
+    console.log("[MAIN] Window opened with initial project path:", initialProjectPath);
+    // Until this open lands the window's view manager reads as the picker, so
+    // it is claimed for its own folder — otherwise the next queued external
+    // open would take it for an empty window and replace the folder it was
+    // created for.
+    const releaseInitialOpen = reserveWindowForOpen(ctx.windowId, {
+      projectId: null,
+      projectPath: initialProjectPath,
+    });
+    handleDirectoryOpen(initialProjectPath, win, cliAvailabilityService ?? undefined)
+      .catch((err) => console.error("[MAIN] Failed to open initial project path:", err))
+      .finally(releaseInitialOpen);
   }
 
-  // Folder drops on the Dock icon / "Open With" arrive via macOS `open-file`
-  // (#10976). Cold-launch / zero-window drops queue in `environment.ts` before
-  // any window exists; the first window drains them here (mirroring the CLI-
-  // path drain above), and a one-shot consumer routes subsequent warm drops to
-  // the primary window. The queue/consumer lifecycle lives in openDirHandler.ts
-  // so it is unit-testable independent of this module's heavy setup.
+  // Folders opened from outside the app — Dock drops and "Open With" (macOS
+  // `open-file`), the CLI and `file://` folder arguments — arrive through the
+  // `environment.ts` directory consumer, or its queue while no window has
+  // finished setting up. The first window installs the consumer; every window
+  // drains the queue once it is ready, which is also what makes it eligible to
+  // be reused as an empty window. Routing lives in openDirHandler.ts (#12593).
+  const openDirDeps = createOpenDirDeps(opts.createWindowForPath);
   installOpenDirConsumer(openDirDeps);
   drainPendingOpenDirs(win, openDirDeps);
 

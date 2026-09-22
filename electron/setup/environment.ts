@@ -707,8 +707,10 @@ let _openFileConsumer: ((filePath: string) => void) | null = null;
 // Directories dropped on the Dock icon / picked via "Open With" open as
 // projects (#10976), not as `.dntr` plugin archives. They need a live window
 // for `handleDirectoryOpen`, so they get a separate queue + consumer drained
-// at window-creation time (mirroring `pendingCliPath`), independent of the
-// `.dntr` plugin drain in `activateOpenFileInstaller`.
+// at window-creation time, independent of the `.dntr` plugin drain in
+// `activateOpenFileInstaller`. The warm CLI and `file://` folder arguments join
+// the same path through `dispatchOpenDirPath`, so every folder opened from
+// outside the app is routed by one policy (#12593).
 const _pendingOpenDirPaths: string[] = [];
 let _openDirConsumer: ((dirPath: string) => void) | null = null;
 
@@ -747,10 +749,22 @@ export function setOpenDirConsumer(consumer: ((dirPath: string) => void) | null)
   _openDirConsumer = consumer;
 }
 
-/** Re-queue a directory the live consumer had no window for; dedupes bursts. */
+/** Queue a directory for the first window's drain; dedupes bursts. */
 export function queuePendingOpenDirPath(dirPath: string): void {
   if (!_pendingOpenDirPaths.includes(dirPath)) {
     _pendingOpenDirPaths.push(dirPath);
+  }
+}
+
+/**
+ * Hand a directory opened from outside the app to the live consumer, or queue
+ * it until the first window has finished setting up and installed one.
+ */
+export function dispatchOpenDirPath(dirPath: string): void {
+  if (_openDirConsumer) {
+    _openDirConsumer(dirPath);
+  } else {
+    queuePendingOpenDirPath(dirPath);
   }
 }
 
@@ -769,11 +783,7 @@ if (process.platform === "darwin") {
       // Missing path or stat failure — isDirectory stays false.
     }
     if (isDirectory) {
-      if (_openDirConsumer) {
-        _openDirConsumer(filePath);
-      } else {
-        queuePendingOpenDirPath(filePath);
-      }
+      dispatchOpenDirPath(filePath);
     } else if (_openFileConsumer) {
       _openFileConsumer(filePath);
     } else if (!_pendingOpenFilePaths.includes(filePath)) {

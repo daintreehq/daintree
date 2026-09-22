@@ -39,7 +39,11 @@ import {
   registerAppLifecycleHandlers,
   registerWindowSessionEndHandler,
 } from "./lifecycle/appLifecycle.js";
-import { resolveLaunchIntent, shouldRestoreWindowFleet } from "./lifecycle/launchIntent.js";
+import {
+  launchOpensFolder,
+  resolveLaunchIntent,
+  shouldRestoreWindowFleet,
+} from "./lifecycle/launchIntent.js";
 import {
   resolvePrimaryRestoreProjectId,
   restoreWindowFleet,
@@ -68,7 +72,6 @@ import {
   setPtyClientRef,
   getWorkspaceClientRef,
   getWorktreePortBrokerRef,
-  getCliAvailabilityServiceRef,
   getCleanupIpcHandlers,
   setCleanupIpcHandlers,
   getCleanupErrorHandlers,
@@ -665,6 +668,7 @@ if (!gotTheLock) {
       projectViewManager: pvm,
       initialAppView: appView,
       backgroundProjectIds: opts?.backgroundProjectIds,
+      createWindowForPath: (dirPath) => createWindow(dirPath).then(() => {}),
     });
 
     // The process is exiting, or the window never reached the registry and has
@@ -722,9 +726,7 @@ if (!gotTheLock) {
 
   registerAppLifecycleHandlers({
     onCreateWindow: () => createWindow().then(() => {}),
-    onCreateWindowForPath: (cliPath) => createWindow(cliPath).then(() => {}),
     getMainWindow,
-    getCliAvailabilityService: getCliAvailabilityServiceRef,
     windowRegistry,
   });
 
@@ -794,7 +796,7 @@ if (!gotTheLock) {
       // through the existing confirm/security gates, never silently.
       activateDeepLinkHandler(windowRegistry);
       setupWebviewCSP();
-      const launchIntent = resolveLaunchIntent({
+      const launchSignals = {
         argv: process.argv,
         hasCliPathFlag,
         extractDirectoryPaths,
@@ -802,7 +804,14 @@ if (!gotTheLock) {
         pendingOpenFilePaths: getPendingOpenFilePaths(),
         isSafeMode: getCrashLoopGuard().isSafeMode(),
         hasPendingCrash: getCrashRecoveryService().getPendingCrash() !== null,
-      });
+      };
+      const launchIntent = resolveLaunchIntent(launchSignals);
+      // A launch that opens a folder starts on the picker, so the folder routing
+      // fills that window instead of opening a second one beside the last-active
+      // project (#12593).
+      const fallbackProjectId = launchOpensFolder(launchSignals)
+        ? undefined
+        : (lastActiveProjectId ?? undefined);
 
       // A recovery launch deliberately opens one window. It must not then
       // persist that as the window set, or safe mode would overwrite the user's
@@ -830,7 +839,7 @@ if (!gotTheLock) {
       const primaryRestoreProjectId = resolvePrimaryRestoreProjectId(
         restoreRecords,
         hadManifest,
-        lastActiveProjectId ?? undefined
+        fallbackProjectId
       );
 
       // Prime the hydrate prefetch cache for the window that will take focus so
@@ -869,7 +878,7 @@ if (!gotTheLock) {
       await restoreWindowFleet({
         records: fleetRecords,
         hadManifest,
-        fallbackProjectId: lastActiveProjectId ?? undefined,
+        fallbackProjectId,
         createWindow: (projectId, opts) => createWindow(undefined, projectId, opts),
         suppressSaves: suppressOpenWindowsSaves,
         resumeSaves: resumeOpenWindowsSaves,
