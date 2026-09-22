@@ -2,6 +2,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, within } from "@testing-library/react";
 import { QuickStateFilterBar } from "../QuickStateFilterBar";
+import { EMPTY_BUCKET_GLYPH_CLASS } from "../quickStateGlyph";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { glyphBox, GLYPH_SELECTOR } from "@/components/icons/__tests__/glyphBox";
 
@@ -11,13 +12,16 @@ function renderBar(ui: Parameters<typeof render>[0]) {
   return render(ui, { wrapper: TooltipProvider });
 }
 
-// A faded glyph is its own hue with an alpha step, never a different colour —
-// the empty bucket must still be recognisably the same state. Asserted as a
-// shape rather than a literal so the step can move without a matching edit.
-function isFadedHue(glyphClass: string, hue: string): boolean {
-  return new RegExp(`(^|\\s)${hue}/\\d+(\\s|$)`).test(glyphClass);
+// A faded glyph keeps its own hue and is dimmed on top of it — the empty bucket
+// must still be recognisably the same state, never a different colour.
+function classes(glyphClass: string): string[] {
+  return glyphClass.split(/\s+/);
 }
-const FADED = /(^|\s)text-[a-z-]+\/\d+(\s|$)/;
+function isFadedHue(glyphClass: string, hue: string): boolean {
+  const list = classes(glyphClass);
+  return list.includes(hue) && list.includes(EMPTY_BUCKET_GLYPH_CLASS);
+}
+const FADED = new RegExp(`(^|\\s)${EMPTY_BUCKET_GLYPH_CLASS}(\\s|$)`);
 
 describe("QuickStateFilterBar", () => {
   it("renders all four segments addressable by accessible name when counts are omitted", () => {

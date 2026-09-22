@@ -54,6 +54,28 @@ const FIXTURES = [
   "no-counts",
 ] as const;
 
+/**
+ * Every built-in theme, for the contrast gate only — it loads a page per theme
+ * and captures nothing, so sweeping all of them costs seconds.
+ */
+const ALL_THEMES = [
+  "daintree",
+  "arashiyama",
+  "atacama",
+  "bali",
+  "bondi",
+  "fiordland",
+  "galapagos",
+  "highlands",
+  "hokkaido",
+  "movile",
+  "namib",
+  "redwoods",
+  "serengeti",
+  "svalbard",
+  "table-mountain",
+];
+
 test.use({ deviceScaleFactor: 3 });
 
 let server: Awaited<ReturnType<typeof startPreviewServer>> | undefined;
@@ -170,4 +192,79 @@ test("Quick state filter — states, widths and themes", async ({ page }) => {
   expect(onDisk.length).toBe(written.length);
   expect(onDisk.length).toBeGreaterThanOrEqual(THEMES.length * FIXTURES.length);
   console.log(`[quick-state-filter-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
+});
+
+/**
+ * An empty bucket's glyph is the segment's only visible name, so dimming it
+ * must not take it under 3:1 against the bar (WCAG 1.4.11) — wherever the
+ * populated hue has the headroom to allow that. A theme whose hue sits under
+ * 4.5:1 even at full strength is a palette limit, not something the fade step
+ * can fix, and is reported rather than failed.
+ */
+test("Quick state filter — empty glyphs hold 3:1 in every theme", async ({ page }) => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_QUICK_STATE is required for the quick-state-filter capture",
+  });
+  test.skip(!ENABLED, "set DAINTREE_SHOT_QUICK_STATE=1 to run the capture");
+
+  const failures: string[] = [];
+  const report: string[] = [];
+  for (const theme of ALL_THEMES) {
+    await open(page, "idle", theme);
+    const glyphs = await page.evaluate(() => {
+      const paint = (css: string): number[] => {
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const ctx = canvas.getContext("2d")!;
+        ctx.fillStyle = css;
+        ctx.fillRect(0, 0, 1, 1);
+        return Array.from(ctx.getImageData(0, 0, 1, 1).data).slice(0, 3);
+      };
+      const toolbar = document.querySelector('[role="toolbar"]')!;
+      let node: Element | null = toolbar;
+      let bg = "rgba(0, 0, 0, 0)";
+      while (node && (bg === "rgba(0, 0, 0, 0)" || bg === "transparent")) {
+        bg = getComputedStyle(node).backgroundColor;
+        node = node.parentElement;
+      }
+      return Array.from(toolbar.querySelectorAll("button[aria-pressed]"))
+        .map((button) => {
+          const glyph = button.querySelector("svg, [data-glyph-box]");
+          if (!glyph) return null;
+          const style = getComputedStyle(glyph);
+          return {
+            name: button.getAttribute("aria-label") ?? "",
+            color: paint(style.color),
+            opacity: Number(style.opacity),
+            bg: paint(bg),
+          };
+        })
+        .filter((g): g is NonNullable<typeof g> => g !== null);
+    });
+    const luminance = (c: number[]) => {
+      const f = (v: number) => {
+        const s = v / 255;
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * f(c[0]!) + 0.7152 * f(c[1]!) + 0.0722 * f(c[2]!);
+    };
+    const ratio = (a: number[], b: number[]) => {
+      const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+      return (hi! + 0.05) / (lo! + 0.05);
+    };
+    expect(glyphs.length, `${theme}: no glyphs measured`).toBe(3);
+    for (const g of glyphs) {
+      expect(g.opacity, `${theme} ${g.name}: empty glyph is not dimmed`).toBeLessThan(1);
+      const blended = g.color.map((v, i) => v * g.opacity + g.bg[i]! * (1 - g.opacity));
+      const full = ratio(g.color, g.bg);
+      const empty = ratio(blended, g.bg);
+      const line = `${theme} ${g.name.split(",")[0]}: full ${full.toFixed(2)} empty ${empty.toFixed(2)}`;
+      if (full < 4.5) report.push(`${line} (palette-limited, not gated)`);
+      else if (empty < 3) failures.push(line);
+      else report.push(line);
+    }
+  }
+  console.log(`[quick-state-filter-contrast]\n${report.join("\n")}`);
+  expect(failures, `empty glyphs under 3:1:\n${failures.join("\n")}`).toEqual([]);
 });

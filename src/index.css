@@ -680,6 +680,37 @@ body,
   will-change: transform;
 }
 
+/* An empty bucket's glyph in the quick state filters (sidebar and Pilot).
+ * Faded "slightly — it should still be clearly visible" (#10353): the glyph is
+ * the segment's only visible name, so it has to hold 3:1 against the bar while
+ * still reading as quieter than a populated one. Light themes get the lighter
+ * step because their state hues start with far less headroom — the same
+ * reduction that leaves a dark theme at 3-4:1 takes a light one under 2.5:1.
+ * Opacity rather than a slash-alpha colour so one rule covers every hue and
+ * the step can differ by colour mode. */
+.quick-state-glyph-empty {
+  opacity: 0.75;
+}
+
+:root[data-color-mode="light"] .quick-state-glyph-empty {
+  opacity: 0.8;
+}
+
+/* Increase Contrast and forced colors both want every mark at full strength;
+ * the digit beside the glyph still says the bucket is empty. Kept as two
+ * blocks, like every other pair in this file. */
+@media (prefers-contrast: more) {
+  .quick-state-glyph-empty {
+    opacity: 1;
+  }
+}
+
+@media (forced-colors: active) {
+  .quick-state-glyph-empty {
+    opacity: 1;
+  }
+}
+
 /* Delayed pulse animation for skeleton loading states
  * Prevents "flash of loading state" (FOLS) for fast operations (<400ms).
  * Skeleton starts invisible and fades in only when animation begins after delay.

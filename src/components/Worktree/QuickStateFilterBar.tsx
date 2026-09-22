@@ -6,6 +6,7 @@ import { CheckCircle2 } from "lucide-react";
 import { HollowCircle, SpinnerCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { STATE_COLORS } from "./terminalStateConfig";
+import { EMPTY_BUCKET_GLYPH_CLASS } from "./quickStateGlyph";
 
 /**
  * "Attention", not "Waiting", for the bucket that filters on a waiting agent.
@@ -33,25 +34,11 @@ const FILTER_OPTIONS: { value: QuickStateFilter; label: string }[] = [
 
 const FILTER_VISUALS: Record<
   Exclude<QuickStateFilter, "all">,
-  { Icon: React.ComponentType<{ className?: string }>; color: string; colorFaded: string }
+  { Icon: React.ComponentType<{ className?: string }>; color: string }
 > = {
-  // colorFaded must stay a complete class literal — Tailwind's scanner can't
-  // see dynamically assembled `${color}/60` strings. /60 rather than the old
-  // /40: at /40 an empty segment's glyph fell to about 2:1 on the dark themes
-  // and the Finished check all but vanished, which left an icon-only segment
-  // with no visible identity. /60 keeps it recognisable while still sitting at
-  // half the contrast of a populated one, so the zero still reads at a glance.
-  working: {
-    Icon: SpinnerCircle,
-    color: STATE_COLORS.working,
-    colorFaded: "text-state-working/60",
-  },
-  waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting, colorFaded: "text-state-waiting/60" },
-  finished: {
-    Icon: CheckCircle2,
-    color: "text-category-blue",
-    colorFaded: "text-category-blue/60",
-  },
+  working: { Icon: SpinnerCircle, color: STATE_COLORS.working },
+  waiting: { Icon: HollowCircle, color: STATE_COLORS.waiting },
+  finished: { Icon: CheckCircle2, color: "text-category-blue" },
 };
 
 interface QuickStateFilterBarProps {
@@ -127,8 +114,9 @@ export function QuickStateFilterBar({
                 {Icon && visual ? (
                   <Icon
                     className={cn(
-                      "w-3 h-3 shrink-0 transition-colors",
-                      shouldFadeIcon ? visual.colorFaded : visual.color,
+                      "w-3 h-3 shrink-0 transition-[color,opacity]",
+                      visual.color,
+                      shouldFadeIcon && EMPTY_BUCKET_GLYPH_CLASS,
                       isSpinningWorking && "animate-spin-slow motion-reduce:animate-none"
                     )}
                   />
