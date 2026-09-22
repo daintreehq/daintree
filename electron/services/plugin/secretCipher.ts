@@ -24,7 +24,6 @@ export interface SecretCipher {
   decrypt(ciphertextBase64: string): string;
 }
 
-/**
 type LinuxStorageBackend = ReturnType<typeof safeStorage.getSelectedStorageBackend>;
 
 /**
