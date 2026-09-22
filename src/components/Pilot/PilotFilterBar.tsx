@@ -13,12 +13,12 @@ import type { FleetBandCounts } from "@/lib/fleetAttention";
 
 /** The tone a segment falls back to when it holds no demand. */
 const NEUTRAL_TONE = "text-text-secondary";
-const NEUTRAL_TONE_FADED = "text-text-secondary/40";
+const NEUTRAL_TONE_FADED = "text-text-secondary/60";
 
 /**
  * Tone per segment, in complete class literals.
  *
- * Assembled strings like `${color}/40` are invisible to Tailwind's scanner, so
+ * Assembled strings like `${color}/60` are invisible to Tailwind's scanner, so
  * the faded variant is spelled out rather than derived — the same constraint
  * `QuickStateFilterBar` documents.
  *
@@ -37,7 +37,7 @@ const SEGMENT_TONE: Record<Exclude<PilotBandFilter, "all">, SegmentVisual> = {
   "needs-you": {
     Icon: BAND_GLYPH["needs-you"],
     tone: "text-state-waiting",
-    toneFaded: "text-state-waiting/40",
+    toneFaded: "text-state-waiting/60",
   },
   // The working mark in the waiting hue, and static — the same pairing the row
   // draws, because a silent run is a working run that may need a hand. No new
@@ -46,17 +46,17 @@ const SEGMENT_TONE: Record<Exclude<PilotBandFilter, "all">, SegmentVisual> = {
   quiet: {
     Icon: BAND_GLYPH.quiet,
     tone: "text-state-waiting",
-    toneFaded: "text-state-waiting/40",
+    toneFaded: "text-state-waiting/60",
   },
   working: {
     Icon: BAND_GLYPH.running,
     tone: "text-state-working",
-    toneFaded: "text-state-working/40",
+    toneFaded: "text-state-working/60",
   },
   finished: {
     Icon: BAND_GLYPH.review,
     tone: "text-category-blue",
-    toneFaded: "text-category-blue/40",
+    toneFaded: "text-category-blue/60",
   },
   // Parked never earns a hue: it is the user's own silence, and a coloured
   // segment would re-demand the attention parking just released.
@@ -125,7 +125,7 @@ function segmentVisual(
     return {
       Icon: BAND_GLYPH.blocked,
       tone: "text-status-danger",
-      toneFaded: "text-status-danger/40",
+      toneFaded: "text-status-danger/60",
     };
   }
   return SEGMENT_TONE[segment];

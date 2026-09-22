@@ -114,7 +114,7 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
  * Exported for the group header's demand chip, which has to speak the same
  * hue as the rows it summarises. The filter bar still spells its own segment
  * tones out in full because Tailwind's scanner cannot see an assembled
- * `${tone}/40`.
+ * `${tone}/60`.
  */
 export const BAND_GLYPH_TONE: Record<FleetBand, string> = {
   blocked: "text-status-danger",
