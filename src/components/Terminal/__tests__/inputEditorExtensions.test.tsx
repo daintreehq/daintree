@@ -274,6 +274,26 @@ describe("createAutoSize integration", () => {
 
       view.destroy();
     });
+
+    /**
+     * `useHostReparent` installs a fresh instance of the extension on every
+     * move between the compact bar and the Expanded Editor. A fresh instance
+     * that started from nothing would clear a marker the old one had set — on
+     * collapse, a draft that fits one line beside the rail would lose the
+     * rail, re-wrap without it, and set the marker again. The DOM attribute is
+     * the durable copy of the latch, and a new instance must adopt it.
+     */
+    it("carries the mark across a reinstalled extension", () => {
+      const view = mountWithHeight(11);
+      view.dom.dataset.composerMultiline = "true";
+
+      // First measurement of the fresh instance: one line, non-empty draft.
+      view.dispatch({ changes: { from: 0, insert: "hello" } });
+
+      expect(view.dom.dataset.composerMultiline).toBe("true");
+
+      view.destroy();
+    });
   });
 
   it("caps height and shows overflow for large content", () => {

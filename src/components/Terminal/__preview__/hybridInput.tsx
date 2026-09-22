@@ -46,6 +46,10 @@ const themeId = params.get("theme") ?? "daintree";
 const caseName = params.get("case") ?? "ladder";
 const draftName = params.get("draft") ?? "reported";
 const withStash = params.get("stash") === "1";
+// `voice=0` renders the composer as a user who has never set voice up sees it:
+// paperclip only. That is the sparsest the trailing group gets, and the case
+// the rail beneath a wrapped draft is hardest on.
+const withVoice = params.get("voice") !== "0";
 
 applyAppThemeToRoot(document.documentElement, resolveAppTheme(themeId));
 document.body.style.background = "var(--color-surface-canvas)";
@@ -67,7 +71,7 @@ useProjectStore.setState({ currentProject: PROJECT });
 // the harness would photograph a one-button trailing group and understate the
 // case this review is about — the composer as a user who has set voice up sees
 // it, with both the paperclip and the mic present on every pane.
-useVoiceRecordingStore.setState({ isConfigured: true });
+useVoiceRecordingStore.setState({ isConfigured: withVoice });
 
 // In the app exactly one pane is focused, and the focused shell is the only one
 // wearing a ring — so the tile sheet gets one too. Seeded at module scope: a
@@ -129,10 +133,36 @@ function Column({ width, label, children }: { width: number; label: string; chil
   );
 }
 
+const GROWTH_WIDTH = 360;
+const GROWTH_DRAFTS: DraftName[] = ["empty", "short", "reported", "overflow"];
+const SIDEBAR_WIDTHS = [380, 430] as const;
+const SIDEBAR_DRAFTS: DraftName[] = ["short", "reported", "sidebar"];
+
+// Every pane the chosen case will mount, seeded here at module scope so no
+// component writes a store during render — a re-render would repeat the write
+// and could clobber a draft the user has since typed into.
+switch (caseName) {
+  case "growth":
+    GROWTH_DRAFTS.forEach((d) => seedPane(`growth-${d}`, DRAFTS[d]));
+    break;
+  case "sidebar":
+    SIDEBAR_WIDTHS.forEach((w) =>
+      SIDEBAR_DRAFTS.forEach((d) => seedPane(`sidebar-${w}-${d}`, DRAFTS[d]))
+    );
+    break;
+  case "tiles":
+    TILE_AGENTS.forEach((_agent, i) => {
+      seedPane(`tile-${i}`, i % 3 === 0 ? DRAFTS.short : DRAFTS.empty);
+    });
+    break;
+  default: {
+    const draft = resolveDraft(draftName);
+    WIDTHS.forEach((w) => seedPane(`ladder-${w}`, draft));
+  }
+}
+
 /** The reflow ladder: one draft, every width, so the breakpoint behaviour is one picture. */
 function Ladder() {
-  const draft = resolveDraft(draftName);
-  WIDTHS.forEach((w) => seedPane(`ladder-${w}`, draft));
   return (
     <div className="flex flex-wrap items-start gap-6 p-8" data-preview-case="ladder">
       {WIDTHS.map((w) => (
@@ -146,15 +176,35 @@ function Ladder() {
 
 /** Vertical growth at one representative narrow width. */
 function Growth() {
-  const width = 360;
-  const drafts: DraftName[] = ["empty", "short", "reported", "overflow"];
-  drafts.forEach((d) => seedPane(`growth-${d}`, DRAFTS[d]));
+  const width = GROWTH_WIDTH;
   return (
     <div className="flex flex-wrap items-start gap-6 p-8" data-preview-case="growth">
-      {drafts.map((d) => (
+      {GROWTH_DRAFTS.map((d) => (
         <Column key={d} width={width} label={`${width}px · ${d}`}>
           <Bar terminalId={`growth-${d}`} agentId="claude" />
         </Column>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The second reported case: the Daintree Assistant sidebar. `HelpPanel` opens
+ * at `HELP_PANEL_DEFAULT_WIDTH` (380px) and the report was taken at ~430px, so
+ * both are rendered, each at one line, then two, then the reported draft, so
+ * the transition into the rail is one picture per width.
+ */
+function Sidebar() {
+  return (
+    <div className="flex items-start gap-8 p-8" data-preview-case="sidebar">
+      {SIDEBAR_WIDTHS.map((w) => (
+        <div key={w} className="flex flex-col gap-6">
+          {SIDEBAR_DRAFTS.map((d) => (
+            <Column key={d} width={w} label={`${w}px · ${d}`}>
+              <Bar terminalId={`sidebar-${w}-${d}`} agentId="claude" />
+            </Column>
+          ))}
+        </div>
       ))}
     </div>
   );
@@ -165,9 +215,6 @@ function Growth() {
  * trailing icons are actually judged in.
  */
 function Tiles() {
-  TILE_AGENTS.forEach((_agent, i) => {
-    seedPane(`tile-${i}`, i % 3 === 0 ? DRAFTS.short : DRAFTS.empty);
-  });
   return (
     <div
       className="grid gap-3 p-8"
@@ -190,6 +237,7 @@ function Tiles() {
 const CASES: Record<string, () => ReactNode> = {
   ladder: Ladder,
   growth: Growth,
+  sidebar: Sidebar,
   tiles: Tiles,
 };
 

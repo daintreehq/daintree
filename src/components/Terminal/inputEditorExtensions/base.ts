@@ -397,8 +397,8 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
 
         // "The draft has wrapped", published on the editor's own element so the
         // composer shell can read it with `:has()` — no React state, no
-        // re-render per keystroke. It gates whether a narrow pane moves its
-        // trailing controls onto their own row.
+        // re-render per keystroke. It gates whether the composer moves its
+        // controls onto a rail beneath the canvas.
         //
         // The latch is load-bearing, not caution. That row hands the canvas
         // back ~60px, often exactly enough for the draft that just wrapped to
@@ -410,8 +410,19 @@ export function createAutoSize(config: AutoSizeConfig = {}) {
         // Releasing only on an empty draft is what breaks the loop: emptiness
         // is the one condition no layout change can manufacture. Sending
         // clears the draft, so an ordinary submit resets it.
+        //
+        // The attribute is the latch's durable copy. `useHostReparent`
+        // installs a fresh instance of this extension on every move between
+        // the compact bar and the Expanded Editor, and a fresh instance that
+        // started from `null` would clear a marker the old one had set — on
+        // collapse, a draft that fits one line beside the rail would lose the
+        // rail, re-wrap without it, and set the marker again. Adopting what
+        // the DOM already says carries the latch across.
+        if (lastMultiline === null) {
+          lastMultiline = view.dom.dataset.composerMultiline === "true";
+        }
         const wrapped = measured.next > measured.lineHeight;
-        const isMultiline = measured.isEmpty ? false : lastMultiline === true || wrapped;
+        const isMultiline = measured.isEmpty ? false : lastMultiline || wrapped;
         if (isMultiline !== lastMultiline) {
           lastMultiline = isMultiline;
           if (isMultiline) view.dom.dataset.composerMultiline = "true";

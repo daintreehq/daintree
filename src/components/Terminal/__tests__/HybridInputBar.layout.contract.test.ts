@@ -31,16 +31,19 @@ function source(): string {
 }
 
 /**
- * The file with `//` comments removed.
+ * The file with comments removed — `//` lines and `{/* … *\/}` JSX blocks.
  *
  * Every rule below is about what the component *declares*, and the comments
  * beside those declarations necessarily name the utility that was replaced
  * ("`items-end` rather than `items-center`", "at `h-5 w-5` this was…"). Reading
  * them makes the contract fail on its own rationale, which is how the first
- * version of this test failed twice.
+ * version of this test failed twice. A commented-out `className` would
+ * otherwise satisfy a positive match too.
  */
 function declarations(): string {
-  return source().replace(/^[ \t]*\/\/.*$/gm, "");
+  return source()
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+    .replace(/^[ \t]*\/\/.*$/gm, "");
 }
 
 /**
@@ -91,14 +94,44 @@ describe("HybridInputBar layout contract", () => {
     expect(heights.filter((height) => height < FLOOR_STEPS)).toEqual([]);
   });
 
-  it("stacks the trailing controls on both a width and a wrap signal, not width alone", () => {
+  it("moves only the trailing group to a rail, and only when wrapped AND narrow", () => {
     const text = declarations();
+    const track = /className="[^"]*\bflex-1\b[^"]*"/.exec(text)?.[0] ?? "";
+    const trailing = /className="[^"]*\bpr-1\.5\b[^"]*"/.exec(text)?.[0] ?? "";
 
-    // A container-width condition...
-    expect(text).toMatch(/@max-\[[^\]]+\]\/composer:/);
-    // ...that is itself qualified by the multiline marker. Width alone put a
-    // near-empty button row under every pane of a tiled fleet.
-    expect(text).toMatch(/group-has-\[\[data-composer-multiline\]\]\/shell:/);
+    // One compound condition on ONE ancestor. Two chained group variants
+    // (`group-data-[…]/shell:group-has-[…]/shell:`) are each satisfied by any
+    // ancestor carrying that name, so a second `.group/shell` up the tree
+    // could satisfy one half each; a single `group-[…]/shell` selector cannot.
+    // Wrapped alone put a rail under a three-line draft in an 1800px pane,
+    // where the icon column costs 3% and the rail costs a row. Narrow alone
+    // would double the height of every one-line composer in a tiled fleet.
+    const rail = /group-\[\[data-composer-narrow\]:has\(\[data-composer-multiline\]\)\]\/shell:/;
+    expect(trailing).toMatch(new RegExp(rail.source + "basis-full"));
+    // The canvas answers the same condition (for its stand-in right inset),
+    // so the two can never disagree about which arrangement is showing. The
+    // utility it applies is its own business.
+    expect(track).toMatch(rail);
+    // The canvas stays on the picker's row: it never reorders and never takes
+    // a row of its own, so the text column does not shift and the `❯` keeps
+    // pointing at the line being typed.
+    expect(track).not.toMatch(/\border-/);
+    expect(track).not.toMatch(/\bbasis-full\b/);
+    expect(text).not.toMatch(/@max-\[[^\]]+\]\/composer:/);
+  });
+
+  it("measures the content-sized inner trailing group, never the rail wrapper", () => {
+    // The wrapper takes a full basis on the rail, so its width would be the
+    // whole row and "narrow" would confirm itself. The ref must sit on an
+    // inner group that is sized by its buttons alone: no basis, no growth, no
+    // width utility — any of those would make it fill the rail too.
+    const text = declarations();
+    const inner = /<div ref=\{trailingGroupRef\} className="([^"]*)"/.exec(text)?.[1] ?? "";
+
+    expect(inner).toMatch(/\bshrink-0\b/);
+    expect(inner).not.toMatch(/\bbasis-/);
+    expect(inner).not.toMatch(/\b(flex-1|grow|flex-grow)\b/);
+    expect(inner).not.toMatch(/\bw-(full|screen|\[|\d)/);
   });
 
   it("gives the canvas track a zero min-width so it can actually shrink", () => {

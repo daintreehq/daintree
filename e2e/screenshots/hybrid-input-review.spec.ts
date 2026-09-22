@@ -171,11 +171,12 @@ async function snap(target: Locator, file: string): Promise<string> {
 
 async function open(
   page: Page,
-  query: { case: string; theme: string; draft?: string; stash?: boolean }
+  query: { case: string; theme: string; draft?: string; stash?: boolean; voice?: false }
 ): Promise<Locator> {
   const params = new URLSearchParams({ case: query.case, theme: query.theme });
   if (query.draft) params.set("draft", query.draft);
   if (query.stash) params.set("stash", "1");
+  if (query.voice === false) params.set("voice", "0");
   await page.goto(`${baseURL}/hybrid-input-preview.html?${params.toString()}`);
   await page.addStyleTag({ content: FREEZE_CSS });
   const sheet = page.locator(ROOT_SHEET);
@@ -191,16 +192,23 @@ async function open(
  * `.cm-content` is present in every pane is what stops this harness producing a
  * believable picture of a component that never rendered.
  */
-async function proveComposersMounted(page: Page, expected: number): Promise<void> {
+async function proveComposersMounted(
+  page: Page,
+  expected: number,
+  { mic = true }: { mic?: boolean } = {}
+): Promise<void> {
   const roots = page.locator("[data-hybrid-input-root]");
   await expect(roots).toHaveCount(expected);
   await expect(page.locator(".cm-content")).toHaveCount(expected);
-  // Both trailing controls, on every pane. The mic renders only once voice is
-  // configured, and the first run of this harness quietly captured a one-button
-  // trailing group — a believable picture that understated the exact thing the
-  // review is about. Counting them is what stops that recurring.
+  // The trailing controls, on every pane, and exactly the ones the capture
+  // means to show. The mic renders only once voice is configured, and the
+  // first run of this harness quietly captured a one-button trailing group — a
+  // believable picture that understated the exact thing the review was about.
+  // Counting both ways is what stops that recurring in either direction.
   await expect(page.getByRole("button", { name: "Attach files" })).toHaveCount(expected);
-  await expect(page.locator("[data-hybrid-input-root] .lucide-mic")).toHaveCount(expected);
+  await expect(page.locator("[data-hybrid-input-root] .lucide-mic")).toHaveCount(
+    mic ? expected : 0
+  );
   // Every composer must also have a real box. A zero-height bar is the failure
   // mode a column-width harness is most likely to produce by accident.
   const heights = await roots.evaluateAll((els) =>
@@ -209,6 +217,44 @@ async function proveComposersMounted(page: Page, expected: number): Promise<void
   const dead = heights.filter((h) => h < 8);
   if (dead.length > 0) {
     throw new Error(`${dead.length} of ${expected} composers have no height — refusing to write`);
+  }
+}
+
+/**
+ * Prove which arrangement each named composer is showing before it is
+ * photographed. A rail is the trailing group sitting below the editor's
+ * bottom edge; inline is the two sharing a row. Without this, a capture
+ * of six empty editors with the right buttons would satisfy every other
+ * check and photograph nothing the review is about.
+ */
+async function proveArrangement(
+  page: Page,
+  expected: Record<string, "rail" | "inline">
+): Promise<void> {
+  const actual = await page.evaluate((ids) => {
+    const out: Record<string, string> = {};
+    for (const id of ids) {
+      const root = document.querySelector(`[data-hybrid-input-root="${id}"]`);
+      const editor = root?.querySelector(".cm-editor");
+      const trailing = root?.querySelector('[aria-label="Attach files"]')?.parentElement
+        ?.parentElement;
+      if (!root || !editor || !trailing) {
+        out[id] = "missing";
+        continue;
+      }
+      const e = editor.getBoundingClientRect();
+      const t = trailing.getBoundingClientRect();
+      out[id] = t.top >= e.bottom - 2 ? "rail" : "inline";
+    }
+    return out;
+  }, Object.keys(expected));
+  const wrong = Object.entries(expected).filter(([id, want]) => actual[id] !== want);
+  if (wrong.length > 0) {
+    throw new Error(
+      `arrangement mismatch — refusing to write: ${wrong
+        .map(([id, want]) => `${id} wanted ${want}, got ${actual[id]}`)
+        .join("; ")}`
+    );
   }
 }
 
@@ -274,6 +320,12 @@ test("hybrid input layout review", async ({ page }) => {
     {
       const sheet = await open(page, { case: "growth", theme });
       await proveComposersMounted(page, 4);
+      await proveArrangement(page, {
+        "growth-empty": "inline",
+        "growth-short": "inline",
+        "growth-reported": "rail",
+        "growth-overflow": "rail",
+      });
       await fitViewport(page, sheet);
       written.push(await snap(sheet, `growth--${theme}.png`));
     }
@@ -285,12 +337,40 @@ test("hybrid input layout review", async ({ page }) => {
       await fitViewport(page, sheet);
       written.push(await snap(sheet, `tiles--${theme}.png`));
     }
+
+    // A wide pane, one to three lines, with the mic and without. The rail
+    // beneath a wrapped draft has the most empty width to carry here, and the
+    // paperclip-only variant is the sparsest it ever gets.
+    // At both sidebar widths the icon column is well over 6% of the shell,
+    // so a wrapped draft takes the rail and a one-line draft stays inline.
+    const sidebarArrangement = {
+      "sidebar-380-short": "inline",
+      "sidebar-380-reported": "rail",
+      "sidebar-380-sidebar": "rail",
+      "sidebar-430-short": "inline",
+      "sidebar-430-reported": "rail",
+      "sidebar-430-sidebar": "rail",
+    } as const;
+    {
+      const sheet = await open(page, { case: "sidebar", theme });
+      await proveComposersMounted(page, 6);
+      await proveArrangement(page, sidebarArrangement);
+      await fitViewport(page, sheet);
+      written.push(await snap(sheet, `sidebar--${theme}.png`));
+    }
+    {
+      const sheet = await open(page, { case: "sidebar", theme, voice: false });
+      await proveComposersMounted(page, 6, { mic: false });
+      await proveArrangement(page, sidebarArrangement);
+      await fitViewport(page, sheet);
+      written.push(await snap(sheet, `sidebar--${theme}--no-mic.png`));
+    }
   }
 
   // Count the files ourselves. A harness that trusts its own exit code is how a
   // review ends up reasoning about screenshots that were never written.
   const onDisk = readdirSync(OUT_DIR).filter((f) => f.endsWith(".png"));
   expect(onDisk.length).toBe(written.length);
-  expect(onDisk.length).toBe(THEMES.length * 5);
+  expect(onDisk.length).toBe(THEMES.length * 7);
   console.log(`[hybrid-input-shots] ${onDisk.length} PNGs in ${OUT_DIR}`);
 });

@@ -9,7 +9,7 @@
  */
 
 /** Column widths, in px, spanning the range the content grid actually produces. */
-export const WIDTHS = [720, 520, 420, 360, 300, 260, 220] as const;
+export const WIDTHS = [1100, 720, 520, 420, 360, 300, 260, 220] as const;
 
 export type Width = (typeof WIDTHS)[number];
 
@@ -30,6 +30,9 @@ export const DRAFTS = {
   overflow: Array.from({ length: 14 }, (_, i) => `Line ${i + 1} of a long standing draft`).join(
     "\n"
   ),
+  /** The second reported case, from the Daintree Assistant sidebar: three lines at ~430px. */
+  sidebar:
+    "afsJ FDASLJHF ADSKJHF SDA F JDSKAFH SAD FSADH FKJDSHAF DSKJFH SDAKJFHSD KAFHKDSJ FHKJASDFHDSAK JFHAKSDJFH DSAKHF DSKJFHASDKFH DASKFA",
 } as const;
 
 export type DraftName = keyof typeof DRAFTS;

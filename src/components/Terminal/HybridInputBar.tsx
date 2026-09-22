@@ -63,6 +63,7 @@ import { useCompartmentDriver } from "./hooks/useCompartmentDriver";
 import { usePasteExtensions } from "./hooks/usePasteExtensions";
 import { useAutocompleteState } from "./hooks/useAutocompleteState";
 import { useAutocompletePositioning } from "./hooks/useAutocompletePositioning";
+import { useComposerMeasure } from "./hooks/useComposerMeasure";
 import { useAutocompleteApply } from "./hooks/useAutocompleteApply";
 import { useFleetMirror } from "./hooks/useFleetMirror";
 import { useEditorDomHandlers } from "./hooks/useEditorDomHandlers";
@@ -245,6 +246,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const handledEnterRef = useRef(false);
     const historyPaletteOpenRef = useRef<(() => void) | null>(null);
     const inputShellRef = useRef<HTMLDivElement | null>(null);
+    const pickerRef = useRef<HTMLButtonElement | null>(null);
+    const trailingGroupRef = useRef<HTMLDivElement | null>(null);
     const menuRef = useRef<HTMLDivElement | null>(null);
     const rootRef = useRef<HTMLDivElement | null>(null);
     const lastEmittedValueRef = useRef<string>(value);
@@ -478,6 +481,8 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         isExpanded,
       };
     });
+
+    useComposerMeasure({ editorViewRef, inputShellRef, pickerRef, trailingGroupRef });
 
     useAutocompletePositioning({
       editorViewRef,
@@ -960,10 +965,9 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               "group/shell relative",
               // `items-end`, not `items-center`: centred controls tracked the
               // canvas midpoint, so the attach target sat at a different height
-              // for every draft length. `flex-wrap` lets the trailing group drop
-              // to its own row (see below) by wrapping rather than reordering,
-              // which leaves DOM and focus order untouched.
-              "flex w-full flex-wrap items-end gap-1.5 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
+              // for every draft length. `flex-wrap` is what lets the canvas take
+              // a row of its own once the draft wraps (see the track below).
+              "flex w-full flex-wrap items-end gap-x-1.5 gap-y-1 rounded-md border py-2 transition-[border-color,background-color,box-shadow] duration-150",
               !isSpecialState && [
                 "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
                 "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
@@ -1043,6 +1047,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               </div>
             )}
             <button
+              ref={pickerRef}
               type="button"
               onClick={openPicker}
               disabled={disabled}
@@ -1064,8 +1069,19 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                     one-line canvas is 20px against 24px controls, so bottom
                     anchoring alone would sit it 2px low — the track holds the
                     control height and centres the canvas inside it, and once
-                    the draft grows past 24px both are moot. */}
-                <div className="relative flex min-h-6 min-w-0 flex-1 items-center">
+                    the draft grows past 24px both are moot.
+
+                    The canvas shares its row with the picker in every state:
+                    the `❯` is a prompt marker and sits beside the line being
+                    typed, and the column it takes is paid on every line of a
+                    wrapped draft on purpose, the same way it is elsewhere in
+                    the app. When the trailing group moves to the rail beneath
+                    (see below), only it moves, so the text column never
+                    shifts. The `pr-2` on that state stands in for the inset the
+                    group provided while it was on the row — without it the
+                    text runs to within 4px of the shell edge. Same two
+                    conditions as the rail itself, so they cannot disagree. */}
+                <div className="relative flex min-h-6 min-w-0 flex-1 items-center group-[[data-composer-narrow]:has([data-composer-multiline])]/shell:pr-2">
                   <div
                     ref={(node) => {
                       editorHostRef.current = node;
@@ -1091,67 +1107,78 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 {selectionFilePath && <SelectedFileMenuItems absolutePath={selectionFilePath} />}
               </ContextMenuContent>
             </ContextMenu>
-            {/* Drops to its own row — handing the canvas back the ~60px (~80px
-                with the stash button) it otherwise reserves beside every line —
-                only when the pane is under 320px AND the draft has wrapped.
+            {/* The trailing group takes a full basis — wrapping onto a rail
+                beneath the text, right-aligned — when BOTH hold: the draft has
+                wrapped, and the pane is narrow enough that the icon column
+                would push the text's measure under 45 characters
+                (`useComposerMeasure`). Either alone is wrong. Wrapped-only put
+                a rail under a three-line draft in an 1800px pane, where the
+                column costs 3% and the rail costs a whole row; narrow-only
+                would double the height of every one-line composer in a tiled
+                fleet. Inline, the column costs ~60px (~84px with the stash
+                button) beside every line, which is nothing at 1800px and
+                fourteen percent at 430px.
 
-                Both halves are load-bearing. 320px is the knee: at 360px the
-                draft still reads, at 300px it is starved. But width alone put a
-                near-empty button row under all ten panes of a tiled fleet,
-                where one-line drafts were paying nothing for the gutter. */}
-            <div className="flex items-center justify-end pr-1.5 @max-[20rem]/composer:group-has-[[data-composer-multiline]]/shell:basis-full">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    type="button"
-                    onClick={() => void handleAttachFiles()}
-                    disabled={disabled}
-                    className={cn(
-                      "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
-                      "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
-                      "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
-                      "disabled:pointer-events-none disabled:opacity-40"
-                    )}
-                    aria-label="Attach files"
-                  >
-                    <Paperclip className="h-3.5 w-3.5" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Attach files</TooltipContent>
-              </Tooltip>
-              {hasStash && (
+                The inner group is what `useComposerMeasure` observes: it is
+                content-sized, so its width is the buttons' and nothing else,
+                in either arrangement. Measuring this wrapper would read the
+                whole rail once it had a full basis, and "narrow" would then
+                confirm itself. */}
+            <div className="flex items-center justify-end pr-1.5 group-[[data-composer-narrow]:has([data-composer-multiline])]/shell:basis-full">
+              <div ref={trailingGroupRef} className="flex shrink-0 items-center">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onClick={handlePopStash}
-                      // 24px to clear the WCAG 2.5.8 floor. The spacing
-                      // exception cannot rescue a smaller one here — its circle
-                      // overlaps the attach and mic targets either side.
-                      className="flex items-center justify-center h-6 w-6 rounded-full text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
-                      aria-label="Restore stashed input"
+                      onClick={() => void handleAttachFiles()}
+                      disabled={disabled}
+                      className={cn(
+                        "flex items-center justify-center h-6 w-6 rounded-full transition-colors cursor-pointer",
+                        "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
+                        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
+                        "disabled:pointer-events-none disabled:opacity-40"
+                      )}
+                      aria-label="Attach files"
                     >
-                      <Archive className="h-3.5 w-3.5" />
+                      <Paperclip className="h-3.5 w-3.5" />
                     </button>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {createTooltipContent("Restore stashed input", popStashShortcut)}
-                  </TooltipContent>
+                  <TooltipContent side="bottom">Attach files</TooltipContent>
                 </Tooltip>
-              )}
-              <VoiceInputButton
-                panelId={terminalId}
-                panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
-                projectId={currentProject?.id}
-                projectName={currentProject?.name}
-                worktreeId={panelWorktreeId}
-                worktreeLabel={
-                  panelWorktree?.isMainWorktree
-                    ? panelWorktree?.name
-                    : panelWorktree?.branch || panelWorktree?.name
-                }
-                disabled={disabled}
-              />
+                {hasStash && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        onClick={handlePopStash}
+                        // 24px to clear the WCAG 2.5.8 floor. The spacing
+                        // exception cannot rescue a smaller one here — its circle
+                        // overlaps the attach and mic targets either side.
+                        className="flex items-center justify-center h-6 w-6 rounded-full text-daintree-accent/55 hover:text-daintree-accent/80 hover:bg-tint/[0.06] transition-colors cursor-pointer"
+                        aria-label="Restore stashed input"
+                      >
+                        <Archive className="h-3.5 w-3.5" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {createTooltipContent("Restore stashed input", popStashShortcut)}
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+                <VoiceInputButton
+                  panelId={terminalId}
+                  panelTitle={agentId ? getAgentConfig(agentId)?.name : undefined}
+                  projectId={currentProject?.id}
+                  projectName={currentProject?.name}
+                  worktreeId={panelWorktreeId}
+                  worktreeLabel={
+                    panelWorktree?.isMainWorktree
+                      ? panelWorktree?.name
+                      : panelWorktree?.branch || panelWorktree?.name
+                  }
+                  disabled={disabled}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -1162,14 +1189,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       <>
         <div
           ref={rootRef}
-          // The shell reflows against the pane's own width, not the window's:
-          // one window holds panes from ~220px to full width depending on the
-          // split. Same mechanism as `@container/header` on `PanelHeader`.
-          className={cn(
-            "@container/composer relative w-full shrink-0",
-            disabled && "pointer-events-none",
-            className
-          )}
+          className={cn("relative w-full shrink-0", disabled && "pointer-events-none", className)}
           onPointerDownCapture={(e) => {
             if (disabled) return;
             if (e.button !== 0) return;
