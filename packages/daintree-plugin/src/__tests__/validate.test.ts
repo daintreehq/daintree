@@ -158,7 +158,7 @@ describe("runValidate", () => {
     await writeManifest({ name: "acme.demo", version: "1.0.0" });
     const result = await runValidate({ dir: tmpDir });
     expect(result.warnings.join("\n")).toMatch(/>=0\.11\.0/);
-    // The old caret suggestion would be rejected by the host past 0.11.x.
+    // The old caret suggestion would draw the host's engine warning past 0.11.x.
     expect(result.warnings.join("\n")).not.toMatch(/\^0\.11\.0/);
   });
 

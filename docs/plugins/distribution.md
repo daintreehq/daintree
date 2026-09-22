@@ -165,7 +165,7 @@ A user with a `.dntr` file can install it by:
 Daintree:
 
 1. Computes a SHA-256 hash of the archive.
-2. Validates the manifest (Zod schema + `engines.daintree` semver compatibility against the running app version).
+2. Validates the manifest against the Zod schema. An unmet `engines.daintree` range doesn't fail the install; the plugin loads with a compatibility warning.
 3. Extracts into a temp dir and atomically swaps into `~/.daintree/plugins/{publisher}.{name}/`.
 4. Loads the plugin.
 
@@ -239,7 +239,7 @@ For authors who want to share plugins publicly:
 - **GitHub Releases** is the default recommendation. `.dntr` files are small; releases are free; versioning maps cleanly to git tags.
 - **README with install instructions.** Include the literal URL to paste into Daintree.
 - **Semver your releases.** Daintree uses `semver` only for the `engines.daintree` host-compatibility gate — not for update detection. "Check for update" re-fetches the original URL and compares the SHA-256 archive hash against the installed one, so a new build is detected by content change regardless of its version string.
-- **Set `engines.daintree` honestly** — an open-ended lower bound at the version you tested against (`">=0.34.0"`), never a caret. Under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so a caret rejects the plugin on the very next Daintree minor. Don't set `*` either — you'll get bug reports from users on versions you never supported. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
+- **Set `engines.daintree` honestly** — an open-ended lower bound at the version you tested against (`">=0.34.0"`), never a caret. Under semver's 0.x rule `"^0.34.0"` means `>=0.34.0 <0.35.0`, so a caret flags the plugin as possibly incompatible from the very next Daintree minor. Don't set `*` either — you'll get bug reports from users on versions you never supported. See [Manifest → `engines.daintree`](./manifest.md#enginesdaintree).
 - **Don't commit `.dntr` files to the source repo.** Build them in CI on release-tag.
 - **Pin `@daintreehq/plugin-sdk` tightly.** Pre-1.0, minor versions can break APIs.
 

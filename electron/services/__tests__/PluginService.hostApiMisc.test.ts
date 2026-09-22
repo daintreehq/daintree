@@ -371,22 +371,26 @@ describe("capabilities declaration logging", () => {
     expect(permLogs).toHaveLength(0);
   });
 
-  it("does not log capabilities for incompatible plugins", async () => {
+  it("logs capabilities for a plugin outside its engine range, which still loads", async () => {
     await writePlugin("incompatible-perms", {
       name: "acme.incompatible-perms",
       version: "1.0.0",
       capabilities: ["fs:project-read"],
       engines: { daintree: "^1.0.0" },
     });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const service = new PluginService(tmpDir, "0.7.5");
-    await service.initialize();
+    try {
+      const service = new PluginService(tmpDir, "0.7.5");
+      await service.initialize();
 
-    expect(service.listPlugins()).toEqual([]);
-    const permLogs = logSpy.mock.calls.filter(
-      (call: unknown[]) => typeof call[0] === "string" && call[0].includes("declares capabilities")
-    );
-    expect(permLogs).toHaveLength(0);
+      expect(service.listPlugins()).toHaveLength(1);
+      expect(logSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Plugin "acme.incompatible-perms" declares capabilities')
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("includes capabilities in loaded plugin manifest", async () => {

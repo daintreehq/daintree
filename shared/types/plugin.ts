@@ -1548,7 +1548,6 @@ export interface InstalledPluginRecord {
  * - `lock_failed` — couldn't acquire the cross-process `install.lock`
  * - `archive_invalid` — `.dntr` extraction failed (bad zip, path traversal, oversize)
  * - `manifest_invalid` — `plugin.json` failed the strict Zod schema
- * - `engine_incompatible` — `engines.daintree` range doesn't satisfy the running version
  * - `namespace_unauthorized` — reserved `daintree.*` name or publisher/name disagreement
  * - `name_collision` — the id matches a built-in or a launch-reserved plugin name; rejected before the swap so no broken dir is left
  * - `hash_failed` — couldn't compute the archive SHA-256
@@ -1572,7 +1571,6 @@ export type PluginInstallErrorCode =
   | "archive_invalid"
   | "extraction_timeout"
   | "manifest_invalid"
-  | "engine_incompatible"
   | "namespace_unauthorized"
   | "name_collision"
   | "hash_failed"

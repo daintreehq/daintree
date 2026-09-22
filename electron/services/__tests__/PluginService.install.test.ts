@@ -117,6 +117,8 @@ import * as PluginArchive from "../PluginArchive.js";
 import { pluginInstallJobs } from "../plugin/PluginInstallJobRegistry.js";
 import { resilientRename } from "../../utils/fs.js";
 import { PluginBlocklistService } from "../plugin/PluginBlocklistService.js";
+import { broadcastToRenderer } from "../../ipc/utils.js";
+import { CHANNELS } from "../../ipc/channels.js";
 
 /** A PluginBlocklistService backed by an in-memory list (no network/disk). */
 function fakeBlocklist(entries: Array<Record<string, unknown>>): PluginBlocklistService {
@@ -365,23 +367,32 @@ describe("installPlugin — validation failures (rollback)", () => {
     service.dispose();
   });
 
-  it("rejects an incompatible engines.daintree range", async () => {
+  it("installs and loads a plugin outside its engines.daintree range, with a warning", async () => {
     const archive = await makeArchive({
       name: "acme.future",
       version: "1.0.0",
       engines: { daintree: ">=99.0.0" },
     });
     const service = new PluginService(pluginsRoot, "0.0.0");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const result = await service.installPlugin(archive);
+    try {
+      const result = await service.installPlugin(archive);
 
-    expect(result.status).toBe("failed");
-    if (result.status === "failed") {
-      expect(result.errors[0].code).toBe("engine_incompatible");
+      expect(result.status).toBe("installed");
+      expect(await exists(path.join(pluginsRoot, "acme.future"))).toBe(true);
+      expect(service.hasPlugin("acme.future")).toBe(true);
+      expect(vi.mocked(broadcastToRenderer)).toHaveBeenCalledWith(
+        CHANNELS.NOTIFICATION_SHOW_TOAST,
+        expect.objectContaining({
+          type: "warning",
+          message: expect.stringContaining('"acme.future" targets Daintree >=99.0.0'),
+        })
+      );
+    } finally {
+      warnSpy.mockRestore();
+      service.dispose();
     }
-    expect(await exists(path.join(pluginsRoot, "acme.future"))).toBe(false);
-
-    service.dispose();
   });
 
   it("returns archive_invalid for a missing source path", async () => {
@@ -611,6 +622,64 @@ describe("installPlugin — load + provenance edge cases", () => {
     expect(installed.source).toBe("sideload");
 
     service.dispose();
+  });
+
+  it("installs a disabled out-of-range plugin without loading it or warning", async () => {
+    storeState.set("plugins", { disabled: ["acme.disabled-future"] });
+    const archive = await makeArchive({
+      name: "acme.disabled-future",
+      version: "1.0.0",
+      engines: { daintree: ">=99.0.0" },
+    });
+    const service = new PluginService(pluginsRoot, "0.0.0");
+
+    try {
+      const result = await service.installPlugin(archive);
+
+      expect(result).toEqual({ status: "installed", pluginId: "acme.disabled-future" });
+      expect(service.hasPlugin("acme.disabled-future")).toBe(false);
+      expect(
+        vi
+          .mocked(broadcastToRenderer)
+          .mock.calls.filter(([channel]) => channel === CHANNELS.NOTIFICATION_SHOW_TOAST)
+      ).toHaveLength(0);
+    } finally {
+      service.dispose();
+    }
+  });
+
+  it("upgrades to an out-of-range version, loading it with a warning", async () => {
+    const service = new PluginService(pluginsRoot, "0.0.0");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      const v1 = await makeArchive({ name: "acme.future-up", version: "1.0.0" });
+      expect((await service.installPlugin(v1)).status).toBe("installed");
+
+      const v2 = await makeArchive(
+        { name: "acme.future-up", version: "2.0.0", engines: { daintree: ">=99.0.0" } },
+        { "v2.txt": "two" }
+      );
+      expect((await service.installPlugin(v2)).status).toBe("installed");
+
+      expect(service.listPlugins().find((p) => p.manifest.name === "acme.future-up")).toMatchObject(
+        { manifest: { version: "2.0.0" } }
+      );
+      expect(await exists(path.join(pluginsRoot, "acme.future-up", "v2.txt"))).toBe(true);
+      expect((await fs.readdir(pluginsRoot)).filter((e) => e.includes(".old-"))).toHaveLength(0);
+      expect(
+        vi
+          .mocked(broadcastToRenderer)
+          .mock.calls.filter(
+            ([channel, payload]) =>
+              channel === CHANNELS.NOTIFICATION_SHOW_TOAST &&
+              (payload as { message?: string }).message?.includes('"acme.future-up"')
+          )
+      ).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+      service.dispose();
+    }
   });
 
   it("does not leak a parked old dir when a disabled plugin is upgraded", async () => {

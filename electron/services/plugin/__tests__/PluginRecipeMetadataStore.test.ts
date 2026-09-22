@@ -114,7 +114,7 @@ describe("PluginRecipeMetadataStore (#11860)", () => {
 
     await store.reconcile({
       // `disabled.plugin` is installed but contributed no known recipe set,
-      // which is what a disabled/blocked/incompatible plugin looks like.
+      // which is what a disabled/blocked plugin looks like.
       installedPluginIds: new Set(["acme.tools", "disabled.plugin"]),
       knownQualifiedIdsByPlugin: new Map([["acme.tools", new Set(["acme.tools.kept"])]]),
     });
