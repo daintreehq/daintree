@@ -765,7 +765,7 @@ export function GitInitDialog({
           // part-way, so the only honest footer is the escape hatch, visibly
           // unavailable — rather than a primary button wearing a spinner over
           // its own label.
-          <Button variant="outline" data-testid="git-init-cancel" disabled>
+          <Button variant="ghost" size="sm" data-testid="git-init-cancel" disabled>
             Cancel
           </Button>
         ) : error ? (
