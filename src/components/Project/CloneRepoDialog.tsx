@@ -121,10 +121,46 @@ function normalizeCloneUrl(input: string, shorthandHost: string | null): string 
   return trimmed;
 }
 
-function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
-  const normalized = normalizeCloneUrl(url, shorthandHost);
-  return /^https?:\/\//i.test(normalized) || /^git@/i.test(normalized);
+type CloneUrlCheck = "empty" | "ok" | "unsupported-scheme" | "needs-host" | "malformed";
+
+/**
+ * Structure, not just a prefix: a bare `https://` or a host with a space in it
+ * used to pass and enable Clone. The schemes mirror the main-process clone
+ * handler, which accepts HTTP(S) and scp-style `git@` only.
+ */
+function checkCloneUrl(url: string, shorthandHost: string | null): CloneUrlCheck {
+  const trimmed = url.trim();
+  if (trimmed === "") return "empty";
+  if (/\s/.test(trimmed)) return "malformed";
+  if (isOwnerRepoShorthand(trimmed) && !shorthandHost) return "needs-host";
+  const normalized = normalizeCloneUrl(trimmed, shorthandHost);
+  if (/^https?:\/\//i.test(normalized)) {
+    try {
+      const parsed = new URL(normalized);
+      return parsed.hostname !== "" && parsed.pathname.split("/").some(Boolean)
+        ? "ok"
+        : "malformed";
+    } catch {
+      return "malformed";
+    }
+  }
+  if (/^git@/i.test(normalized)) {
+    return /^git@[^\s/:@]+:[^\s]*[^\s/:]$/i.test(normalized) ? "ok" : "malformed";
+  }
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalized)) return "unsupported-scheme";
+  return "malformed";
 }
+
+function isValidCloneUrl(url: string, shorthandHost: string | null): boolean {
+  return checkCloneUrl(url, shorthandHost) === "ok";
+}
+
+const URL_PROBLEM_COPY: Record<Exclude<CloneUrlCheck, "ok">, string> = {
+  empty: "Paste a repository URL to continue",
+  "unsupported-scheme": "Use an https:// or git@ address",
+  "needs-host": "Use a full repository URL",
+  malformed: "Check the repository URL",
+};
 
 export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialogProps) {
   const folderNameErrorId = useId();
@@ -495,15 +531,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
   // What pressing Clone will do, said once — or, until it can, what is still
   // missing. Replaces the path caption that used to hang under the name field.
-  const urlProblem =
-    url.trim() === ""
-      ? "Paste a repository URL to continue"
-      : !isValidCloneUrl(url, shorthandHost)
-        ? shorthandHost
-          ? "Use a repository URL or owner/repo"
-          : "Use a full repository URL"
-        : null;
-  const urlIsInvalid = urlProblem !== null && url.trim() !== "";
+  const urlCheck = checkCloneUrl(url, shorthandHost);
+  const urlProblem = urlCheck === "ok" ? null : URL_PROBLEM_COPY[urlCheck];
+  const urlIsInvalid = urlCheck !== "ok" && urlCheck !== "empty";
 
   // What pressing Clone will do, said once — or, until it can, the first thing
   // still in the way. Blockers are checked before the summary so a path from an
@@ -770,7 +800,8 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="owner/repo or repository URL"
+                    // Only offer the shorthand when one forge makes it resolvable.
+                    placeholder={shorthandHost ? "owner/repo or repository URL" : "Repository URL"}
                     disabled={isCloning}
                     aria-invalid={urlIsInvalid || undefined}
                     aria-describedby={urlIsInvalid ? urlProblemId : undefined}

@@ -90,7 +90,7 @@ export function DirectoryPickerField({
   browseLabel: string;
 }) {
   return (
-    <div className={cn(COMPOUND_FIELD, !disabled && "hover:border-border-default")}>
+    <div className={COMPOUND_FIELD}>
       <input
         id={id}
         type="text"

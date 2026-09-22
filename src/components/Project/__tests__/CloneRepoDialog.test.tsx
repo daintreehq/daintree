@@ -255,7 +255,7 @@ describe("CloneRepoDialog", () => {
   it("auto-derives folder name from URL", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/my-repo.git" } });
 
     const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
@@ -268,7 +268,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/test-repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -294,7 +294,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -326,7 +326,7 @@ describe("CloneRepoDialog", () => {
     const onCancel = vi.fn();
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={onCancel} />);
 
-    fireEvent.change(screen.getByPlaceholderText("owner/repo or repository URL"), {
+    fireEvent.change(screen.getByLabelText(/^url$/i), {
       target: { value: "https://github.com/user/my-repo.git" },
     });
     await act(async () => {
@@ -350,7 +350,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={onSuccess} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/my-repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -395,7 +395,7 @@ describe("CloneRepoDialog", () => {
     );
     fireEvent.click(screen.getByRole("radio", { name: "New window" }));
 
-    fireEvent.change(screen.getByPlaceholderText("owner/repo or repository URL"), {
+    fireEvent.change(screen.getByLabelText(/^url$/i), {
       target: { value: "https://github.com/user/my-repo.git" },
     });
     await act(async () => {
@@ -423,7 +423,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    fireEvent.change(screen.getByPlaceholderText("owner/repo or repository URL"), {
+    fireEvent.change(screen.getByLabelText(/^url$/i), {
       target: { value: "https://github.com/user/my-repo.git" },
     });
     await act(async () => {
@@ -450,7 +450,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -475,7 +475,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
     await act(async () => {
       fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
@@ -522,6 +522,39 @@ describe("CloneRepoDialog", () => {
     expect(hint.contains(description)).toBe(true);
   });
 
+  it.each([
+    ["https://", "Check the repository URL"],
+    ["https://bad host/repo.git", "Check the repository URL"],
+    ["git@github.com:", "Check the repository URL"],
+    ["ssh://git@github.com/team/repo.git", "Use an https:// or git@ address"],
+  ])("keeps Clone off and says why for %s", async (value, guidance) => {
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+    });
+    fireEvent.change(screen.getByLabelText(/^url$/i), { target: { value } });
+    fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: "repo" } });
+
+    expect(screen.getByRole<HTMLButtonElement>("button", { name: "Clone" }).disabled).toBe(true);
+    expect(screen.getByTestId("footer-hint").textContent).toBe(guidance);
+  });
+
+  it.each(["https://github.com/team/repo.git", "git@github.com:team/repo.git", "team/repo"])(
+    "accepts %s",
+    async (value) => {
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: "Browse for a location" }));
+      });
+      fireEvent.change(screen.getByLabelText(/^url$/i), { target: { value } });
+      await waitFor(() =>
+        expect(screen.getByRole<HTMLButtonElement>("button", { name: "Clone" }).disabled).toBe(
+          false
+        )
+      );
+    }
+  );
+
   it("doesn't submit on the Enter that confirms an IME composition", async () => {
     cloneRepoMock.mockImplementation(() => new Promise(() => {}));
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
@@ -557,7 +590,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, {
       target: { value: "https://github.com/acme/private.git" },
     });
@@ -609,7 +642,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, {
       target: { value: "https://github.com/acme/private.git" },
     });
@@ -649,7 +682,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "acme/private" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -677,7 +710,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, {
       target: { value: "https://gitlab.com/acme/private.git" },
     });
@@ -708,7 +741,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, {
       target: { value: "https://github.com/acme/private.git" },
     });
@@ -734,7 +767,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -762,7 +795,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "vercel/next.js" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -802,7 +835,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "vercel/next.js" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -820,7 +853,7 @@ describe("CloneRepoDialog", () => {
   it("auto-derives folder name from owner/repo shorthand", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "facebook/react" } });
 
     const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
@@ -833,7 +866,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -862,7 +895,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -895,7 +928,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -931,7 +964,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -983,7 +1016,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -1017,7 +1050,7 @@ describe("CloneRepoDialog", () => {
   it("preserves Unicode characters in derived folder name", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/foo/café.git" } });
 
     const inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
@@ -1028,7 +1061,7 @@ describe("CloneRepoDialog", () => {
   it("re-enables auto-derive when manually-edited folder name is cleared", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/first.git" } });
 
     let inputs = screen.getAllByRole("textbox") as HTMLInputElement[];
@@ -1052,7 +1085,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -1072,7 +1105,7 @@ describe("CloneRepoDialog", () => {
   it("does not submit on Enter when form is invalid", async () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     // No parent path picked yet — canClone is false.
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
@@ -1088,7 +1121,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -1160,7 +1193,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -1189,7 +1222,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -1233,7 +1266,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -1271,7 +1304,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -1305,7 +1338,7 @@ describe("CloneRepoDialog", () => {
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://gitlab.com/user/repo.git" } });
 
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
@@ -1326,7 +1359,7 @@ describe("CloneRepoDialog", () => {
   });
 
   async function startActiveClone() {
-    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    const urlInput = screen.getByLabelText(/^url$/i);
     fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
     const browseBtn = screen.getByRole("button", { name: "Browse for a location" });
     await act(async () => {
@@ -1414,7 +1447,7 @@ describe("CloneRepoDialog", () => {
       expect(screen.queryByRole("progressbar")).toBeNull();
       expect(screen.queryByTestId("spinner")).toBeNull();
       // Still the configuration form, untouched.
-      expect(screen.getByPlaceholderText("owner/repo or repository URL")).toBeTruthy();
+      expect(screen.getByLabelText(/^url$/i)).toBeTruthy();
 
       act(() => {
         vi.advanceTimersByTime(400);
