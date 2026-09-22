@@ -10,17 +10,15 @@ import {
   type PilotBandFilterCounts,
 } from "./pilotRows";
 import type { FleetBandCounts } from "@/lib/fleetAttention";
+import { EMPTY_BUCKET_GLYPH_CLASS } from "@/components/Worktree/quickStateGlyph";
 
 /** The tone a segment falls back to when it holds no demand. */
 const NEUTRAL_TONE = "text-text-secondary";
-const NEUTRAL_TONE_FADED = "text-text-secondary/60";
 
 /**
- * Tone per segment, in complete class literals.
- *
- * Assembled strings like `${color}/60` are invisible to Tailwind's scanner, so
- * the faded variant is spelled out rather than derived — the same constraint
- * `QuickStateFilterBar` documents.
+ * Tone per segment. An empty segment keeps this tone and is dimmed by the
+ * shared `EMPTY_BUCKET_GLYPH_CLASS`, the same step the sidebar's
+ * `QuickStateFilterBar` uses.
  *
  * `working` and `quiet` are hued unconditionally — see `segmentIsHued`. The
  * others carry the hue of the demand they can reveal, and only while they are
@@ -30,14 +28,12 @@ const NEUTRAL_TONE_FADED = "text-text-secondary/60";
 interface SegmentVisual {
   Icon: ComponentType<{ className?: string }> | null;
   tone: string;
-  toneFaded: string;
 }
 
 const SEGMENT_TONE: Record<Exclude<PilotBandFilter, "all">, SegmentVisual> = {
   "needs-you": {
     Icon: BAND_GLYPH["needs-you"],
     tone: "text-state-waiting",
-    toneFaded: "text-state-waiting/60",
   },
   // The working mark in the waiting hue, and static — the same pairing the row
   // draws, because a silent run is a working run that may need a hand. No new
@@ -46,24 +42,20 @@ const SEGMENT_TONE: Record<Exclude<PilotBandFilter, "all">, SegmentVisual> = {
   quiet: {
     Icon: BAND_GLYPH.quiet,
     tone: "text-state-waiting",
-    toneFaded: "text-state-waiting/60",
   },
   working: {
     Icon: BAND_GLYPH.running,
     tone: "text-state-working",
-    toneFaded: "text-state-working/60",
   },
   finished: {
     Icon: BAND_GLYPH.review,
     tone: "text-category-blue",
-    toneFaded: "text-category-blue/60",
   },
   // Parked never earns a hue: it is the user's own silence, and a coloured
   // segment would re-demand the attention parking just released.
   parked: {
     Icon: BAND_GLYPH.parked,
     tone: NEUTRAL_TONE,
-    toneFaded: NEUTRAL_TONE_FADED,
   },
   // No glyph at all. "Other" holds a snooze and an exited shell, which share
   // nothing but their absence from the four questions this bar asks — any mark
@@ -72,7 +64,6 @@ const SEGMENT_TONE: Record<Exclude<PilotBandFilter, "all">, SegmentVisual> = {
   other: {
     Icon: null,
     tone: NEUTRAL_TONE,
-    toneFaded: NEUTRAL_TONE_FADED,
   },
 };
 
@@ -125,7 +116,6 @@ function segmentVisual(
     return {
       Icon: BAND_GLYPH.blocked,
       tone: "text-status-danger",
-      toneFaded: "text-status-danger/60",
     };
   }
   return SEGMENT_TONE[segment];
@@ -286,7 +276,6 @@ export function PilotFilterBar({
         const tone = isHued ? visual?.tone : NEUTRAL_TONE;
         // An empty bucket keeps its glyph and its "0" but mutes the glyph, so
         // the zero registers without having to be read.
-        const fadedTone = isHued ? visual?.toneFaded : NEUTRAL_TONE_FADED;
 
         return (
           <button
@@ -328,8 +317,9 @@ export function PilotFilterBar({
               <Icon
                 aria-hidden="true"
                 className={cn(
-                  "h-3 w-3 shrink-0 transition-colors",
-                  count === 0 ? fadedTone : tone,
+                  "h-3 w-3 shrink-0 transition-[color,opacity]",
+                  tone,
+                  count === 0 && EMPTY_BUCKET_GLYPH_CLASS,
                   isSpinning && "animate-spin-slow motion-reduce:animate-none"
                 )}
               />
